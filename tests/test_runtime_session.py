@@ -496,33 +496,6 @@ async def test_run_meeting_session_reports_terminal_outcome(
     assert browser.closed == 1
 
 
-async def test_lobby_timeout_retries_twice_before_terminal(journal: RecordingJournal) -> None:
-    browser = FakePageSession(meet_page([LOBBY] * 15))
-    clock = FakeClock()
-    config = session_config(lobby_timeout_seconds=5.0, join_poll_interval_seconds=2.0)
-    result = await run_meeting_session(
-        config,
-        SessionWiring(
-            open_page=browser.open,
-            sleep=clock.sleep,
-            monotonic=clock.monotonic,
-            journal=journal,
-        ),
-    )
-
-    assert result.phase == "ended"
-    assert result.terminal_reason == "lobby_timeout_reached"
-    rows = journal.events()
-    attempts = [
-        (row["attempt"], row["outcome"]) for row in rows if row["event"] == "join_attempt_finished"
-    ]
-    assert attempts == [(1, "retry"), (2, "retry"), (3, "failed")]
-    finished = [row for row in rows if row["event"] == "join_finished"]
-    assert len(finished) == 1
-    assert finished[0]["attempts"] == 3
-    assert [row["event"] for row in rows].count("join_requested") == 1
-
-
 async def test_run_meeting_session_journals_why_the_join_failed() -> None:
     browser = FakePageSession(meet_page([], counts={NAME_SELECTOR: [0]}))
     journal = RecordingJournal()

@@ -303,7 +303,7 @@ class MeetingWorker:
             self.record("join_requested", source="runtime")
         self.watch_perception_sync()
         result = await self._attempt_guest_join()
-        if attempt.retries(result.status):
+        if attempt.retries(result):
             if not self.stop.is_set():
                 return JoinStep(result, {})
             result = JoinResult(status="aborted", detail=_STOPPED_BEFORE_RETRY)
@@ -315,7 +315,7 @@ class MeetingWorker:
                 self.page,
                 self._join_request(),
                 self.signals,
-                JoinPolling(self.sleep, self.monotonic, self.stop.is_set),
+                JoinPolling(self.sleep, self.monotonic, self.stop.is_set, self.protocol_admitted),
                 self._probe_scripts(),
             ),
             self.stop,
@@ -874,6 +874,10 @@ class MeetingWorker:
         if sensors is None or not sensors.drained_within(DRAIN_STALE_SECONDS):
             return None
         return protocol_call_state(sensors.roster.own_user(), sensors.peer_states)
+
+    def protocol_admitted(self) -> bool:
+        observation = self.protocol_call_state()
+        return observation is not None and observation.state == "in_call"
 
     async def observe_call(self, page: Page, signals: MeetSignals) -> CallObservation:
         protocol = self.protocol_call_state()

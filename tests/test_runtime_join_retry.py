@@ -3,16 +3,21 @@ from typing import Any, cast
 
 import pytest
 
-from fakeyou.config.identifiers import SessionId
-from fakeyou.conversation.session import SessionConfig
 from fakeyou.conversation.state import LifecycleState
 from fakeyou.meet.meet import DEFAULT_MEET_SIGNALS, JoinResult
 from fakeyou.orchestration.lifecycle import JoinAttempt, initial_lifecycle_state
 from fakeyou.orchestration.runtime import MeetingWorker, SessionWiring, run_meeting_session
-from tests._fakes_common import LINK, FakeClock
-from tests._meet_browser_fakes import ENDED, IN_CALL, LOBBY, FakePageSession, meet_page
+from tests._fakes_common import FakeClock
+from tests._meet_browser_fakes import (
+    ASK_SELECTOR,
+    ENDED,
+    IN_CALL,
+    WAITING,
+    FakePageSession,
+    meet_page,
+)
 from tests._persistence_fakes import RecordingJournal
-from tests._runtime_support import INSTANT_JOIN_RETRY, pin_join_jitter, session_config
+from tests._runtime_support import pin_join_jitter, session_config
 
 
 @pytest.fixture(autouse=True)
@@ -57,12 +62,12 @@ async def test_worker_retryable_attempt_defers_to_the_node_policy(
 ) -> None:
     stop = asyncio.Event()
     journal = RecordingJournal()
-    guest_join = ScriptedGuestJoin(stop, JoinResult(status="timeout", detail="lobby timeout"))
+    guest_join = ScriptedGuestJoin(stop, JoinResult(status="failed", detail="name field missing"))
     monkeypatch.setattr("fakeyou.orchestration.runtime.request_guest_join", guest_join)
 
     step = await _worker(stop, journal).join(_joining(), JoinAttempt(number=1, last=False))
 
-    assert step.result.status == "timeout"
+    assert step.result.status == "failed"
     assert step.update == {}
     assert guest_join.calls == 1
     assert journal.events("join_finished") == []
@@ -75,7 +80,7 @@ async def test_worker_stop_after_a_retryable_attempt_aborts_before_backoff(
     stop = asyncio.Event()
     journal = RecordingJournal()
     guest_join = ScriptedGuestJoin(
-        stop, JoinResult(status="timeout", detail="lobby timeout"), stop_after=1
+        stop, JoinResult(status="failed", detail="name field missing"), stop_after=1
     )
     monkeypatch.setattr("fakeyou.orchestration.runtime.request_guest_join", guest_join)
 
@@ -127,82 +132,78 @@ async def test_worker_stop_before_the_first_attempt_never_requests_a_join(
     assert journal.events() == []
 
 
+async def test_a_lobby_timeout_after_the_knock_is_never_retried(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stop = asyncio.Event()
+    journal = RecordingJournal()
+    guest_join = ScriptedGuestJoin(
+        stop, JoinResult(status="timeout", detail="no admission", knocked=True)
+    )
+    monkeypatch.setattr("fakeyou.orchestration.runtime.request_guest_join", guest_join)
+
+    step = await _worker(stop, journal).join(_joining(), JoinAttempt(number=1, last=False))
+
+    assert step.update["terminal_reason"] == "lobby_timeout_reached"
+    assert guest_join.calls == 1
+
+
 async def test_worker_last_attempt_keeps_the_retryable_status(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     stop = asyncio.Event()
     journal = RecordingJournal()
     guest_join = ScriptedGuestJoin(
-        stop, JoinResult(status="timeout", detail="lobby timeout"), stop_after=1
+        stop, JoinResult(status="failed", detail="name field missing"), stop_after=1
     )
     monkeypatch.setattr("fakeyou.orchestration.runtime.request_guest_join", guest_join)
 
     step = await _worker(stop, journal).join(_joining(), JoinAttempt(number=3, last=True))
 
-    assert step.result.status == "timeout"
-    assert step.update["terminal_reason"] == "lobby_timeout_reached"
+    assert step.result.status == "failed"
+    assert step.update["terminal_reason"] == "browser_failure"
     [finished] = journal.events("join_finished")
     assert finished["attempts"] == 3
 
 
-async def test_worker_join_retries_timeout_then_admits() -> None:
-    contents = [LOBBY] * 5 + [IN_CALL, IN_CALL, ENDED]
-    browser = FakePageSession(meet_page(contents))
+async def test_an_admit_after_six_minutes_lands_without_a_second_knock() -> None:
+    page = meet_page([WAITING] * 12 + [IN_CALL, IN_CALL, ENDED])
+    browser = FakePageSession(page)
     journal = RecordingJournal()
     clock = FakeClock()
-    config = SessionConfig(
-        owner_id=SessionId("owner-1"),
-        twin_id=SessionId("twin-1"),
-        meeting_id=SessionId("meeting-1"),
-        link=LINK,
-        twin_name="Twin",
-        lobby_timeout_seconds=5.0,
-        join_poll_interval_seconds=2.0,
-        join_max_attempts=3,
-        **INSTANT_JOIN_RETRY,
-    )
 
     result = await run_meeting_session(
-        config,
+        session_config(lobby_timeout_seconds=600.0, join_poll_interval_seconds=30.0),
         SessionWiring(
-            open_page=browser.open,
-            sleep=clock.sleep,
-            monotonic=clock.monotonic,
-            journal=journal,
+            open_page=browser.open, sleep=clock.sleep, monotonic=clock.monotonic, journal=journal
         ),
     )
 
     assert result.terminal_reason == "ended_by_host"
-    [finished] = journal.events("join_finished")
-    assert finished["status"] == "admitted"
-    assert finished["attempts"] == 2
     attempts = journal.events("join_attempt_finished")
-    assert [(row["attempt"], row["outcome"]) for row in attempts] == [(1, "retry"), (2, "joined")]
-    assert {row["source"] for row in attempts} == {"runtime"}
-    assert len(journal.events("join_requested")) == 1
+    assert [(row["attempt"], row["outcome"]) for row in attempts] == [(1, "joined")]
+    assert page.clicked.count(ASK_SELECTOR) == 1
+    assert page.visited == [page.visited[0]]
 
 
-async def test_session_join_attempts_follow_the_configured_maximum() -> None:
-    browser = FakePageSession(meet_page([LOBBY] * 15))
+async def test_a_lobby_timeout_ends_after_a_single_knock() -> None:
+    page = meet_page([WAITING] * 15)
+    browser = FakePageSession(page)
     journal = RecordingJournal()
     clock = FakeClock()
 
     result = await run_meeting_session(
         session_config(
-            lobby_timeout_seconds=5.0, join_poll_interval_seconds=2.0, join_max_attempts=2
+            lobby_timeout_seconds=5.0, join_poll_interval_seconds=2.0, join_max_attempts=3
         ),
         SessionWiring(
-            open_page=browser.open,
-            sleep=clock.sleep,
-            monotonic=clock.monotonic,
-            journal=journal,
+            open_page=browser.open, sleep=clock.sleep, monotonic=clock.monotonic, journal=journal
         ),
     )
 
     assert result.terminal_reason == "lobby_timeout_reached"
     attempts = journal.events("join_attempt_finished")
-    assert [(row["attempt"], row["outcome"]) for row in attempts] == [(1, "retry"), (2, "failed")]
-    assert {row["status"] for row in attempts} == {"timeout"}
-    assert all(row["detail"] for row in attempts)
-    [finished] = journal.events("join_finished")
-    assert finished["attempts"] == 2
+    assert [(row["attempt"], row["outcome"], row["status"]) for row in attempts] == [
+        (1, "failed", "timeout")
+    ]
+    assert page.clicked.count(ASK_SELECTOR) == 1
