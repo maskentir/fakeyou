@@ -1,6 +1,7 @@
 import importlib.util
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from datetime import datetime
 from pathlib import Path
 from types import ModuleType
 from typing import override
@@ -10,7 +11,9 @@ import pytest
 
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
+from fakeyou.db.session_status import DesiredState, PhaseUpdate, SessionStatus
 from fakeyou.observability.journal import journal_path
+from tests._session_status_fakes import MemorySessionStatus
 from tests.test_api_events import ApiEventsHarness, SeededTransport
 from tests.test_api_sessions import STATUS_AT
 
@@ -44,22 +47,29 @@ def example() -> ModuleType:
     return module
 
 
-class _FinishingWorkerTransport(SeededTransport):
-    def __init__(self, on_join: Callable[[str], Awaitable[None]]) -> None:
+class _JobRecordingTransport(SeededTransport):
+    def __init__(self) -> None:
         super().__init__()
         self.jobs: list[tuple[str, dict[str, str]]] = []
-        self._on_join = on_join
-
-    @override
-    async def publish_command(self, meeting_id: str, fields: Mapping[str, str]) -> str:
-        entry = await super().publish_command(meeting_id, fields)
-        if fields["type"] == "join":
-            await self._on_join(meeting_id)
-        return entry
 
     async def publish_job(self, stream: str, fields: Mapping[str, str]) -> str:
         self.jobs.append((stream, dict(fields)))
         return f"{len(self.jobs)}-0"
+
+
+class _FinishingStatus(MemorySessionStatus):
+    def __init__(self, on_join: Callable[[str], Awaitable[None]]) -> None:
+        super().__init__()
+        self._on_join = on_join
+
+    @override
+    async def desire(
+        self, meeting_id: str, state: DesiredState, at: datetime
+    ) -> SessionStatus | None:
+        wanted = await super().desire(meeting_id, state, at)
+        if wanted is not None and state == "joined":
+            await self._on_join(meeting_id)
+        return wanted
 
 
 @pytest.fixture
@@ -79,7 +89,7 @@ async def api(settings: Settings) -> AsyncIterator[ApiEventsHarness]:
             ],
         )
         await harness.status.record_phase(
-            meeting_id, "ended", STATUS_AT, terminal_reason="stopped_by_owner"
+            meeting_id, PhaseUpdate("ended", STATUS_AT, terminal_reason="stopped_by_owner")
         )
         path = journal_path(harness.settings.paths.journal_dir, SessionId(meeting_id))
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -98,8 +108,9 @@ async def api(settings: Settings) -> AsyncIterator[ApiEventsHarness]:
             encoding="utf-8",
         )
 
-    harness.seeded = _FinishingWorkerTransport(finish_session)
+    harness.seeded = _JobRecordingTransport()
     harness.transport = harness.seeded
+    harness.status = _FinishingStatus(finish_session)
     try:
         yield harness
     finally:

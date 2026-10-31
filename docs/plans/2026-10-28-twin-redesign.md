@@ -352,6 +352,22 @@ token: perpanjangan lease dan `record_phase` difilter `lease_owner` dan
 Advisory lock tidak dipakai (terikat satu koneksi). Bangun reconciler
 dengan polling 2-5 s; LISTEN/NOTIFY psycopg opsional.
 
+Implementasi A2a (2026-10-31): migration 0003 menambah `lease_owner`,
+`lease_expires_at`, dan `attempts`. Worker mengklaim satu baris dengan
+`UPDATE ... WHERE meeting_id = (SELECT ... FOR UPDATE SKIP LOCKED LIMIT 1)`
+memakai `now()` database; klaim memberi `attempt_id` baru dan menaikkan
+`attempts`. Lease 30 detik diperpanjang tiap 2 detik; perpanjangan juga
+membawa `desired_state`, jadi stop owner tidak lagi lewat Redis. Lease yang
+direbut menghentikan sesi lokal segera; gagal menghubungi database baru
+menghentikannya setelah lease lokal habis. `record_phase` difilter
+`attempt_id`. Kegagalan yang bisa diulang (OSError, ProviderFault, record
+terkunci) tidak melepas lease, sehingga klaim berikutnya menunggu lease
+kedaluwarsa; lebih dari lima attempt berakhir `failed`/`infra_failure`.
+Command join/stop/resume dan lease Redis untuk sesi dihapus; Redis tetap
+untuk event SSE, override key, dan job ingestion/debrief/reembed. A2b
+(rejoin browser di attempt yang sama) dan A2c (rehydrate kernel dari
+`record.jsonl`) menyusul.
+
 ### A3: Join dan lobby
 
 - Knock sekali. Hanya kegagalan sebelum knock (navigasi, nama, tombol join)

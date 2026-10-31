@@ -1,6 +1,6 @@
 import logging
 from collections.abc import Mapping
-from typing import Any, override
+from typing import Any
 
 import pytest
 from pydantic import SecretStr
@@ -9,11 +9,9 @@ from fakeyou.api.overrides import overrides_from_headers
 from fakeyou.api.sessions import SESSION_FILE_NAME
 from fakeyou.catalog.config import PROVIDER_ROLES, ROLE_ATTRIBUTE_PATH, ROLE_HEADER_SUFFIX
 from fakeyou.config.settings import Settings
-from fakeyou.transport.schemas import command_stream
 from fakeyou.worker.keys import apply_role_overrides
 from tests._sanitize_support import SYNTHETIC_MARKERS, assert_no_synthetic_markers
 from tests.test_api_sessions import (
-    AT,
     OWNER_TOKEN,
     SESSION_PAYLOAD,
     ApiHarness,
@@ -69,11 +67,6 @@ class FieldRecordingTransport(RecordingTransport):
 
     async def take_overrides(self, meeting_id: str) -> dict[str, str]:
         return self.overrides.pop(meeting_id, {})
-
-    @override
-    async def publish_command(self, meeting_id: str, fields: Mapping[str, str]) -> str:
-        self.records.append((command_stream(meeting_id), dict(fields)))
-        return f"{len(self.records)}-0"
 
 
 def _role_node(settings: Settings, role: str) -> Any:
@@ -131,13 +124,6 @@ async def test_session_keys_never_leak_and_reach_only_the_worker_copy(
 
         session_file = settings.paths.record_dir / meeting_id / SESSION_FILE_NAME
         assert_no_synthetic_markers(session_file.read_text(encoding="utf-8"))
-        assert recorder.records == [
-            (
-                command_stream(meeting_id),
-                {"v": "1", "type": "join", "at": AT, "meeting_id": meeting_id},
-            )
-        ]
-        assert_no_synthetic_markers([fields for _, fields in recorder.records])
         assert_no_synthetic_markers(created.text)
         assert_no_synthetic_markers(joined.text)
         assert_no_synthetic_markers(status.text)

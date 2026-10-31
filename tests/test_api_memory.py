@@ -12,6 +12,7 @@ from fakeyou.api.schemas import SessionCreate, build_snapshot
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
+from fakeyou.db.session_status import PhaseUpdate
 from fakeyou.memory.operator_access import OperatorAccess
 from fakeyou.memory.owner_note_service import NoteCommand
 from fakeyou.memory.owner_notes import NOTE_CONFLICT_CODES, NoteConflictError, OwnerNoteResult
@@ -447,7 +448,7 @@ async def test_forget_refuses_a_meeting_that_is_still_running(
 ) -> None:
     api.seed_twin("m-1")
     await api.status.create("m-1", "demo_owner", STATUS_AT)
-    await api.status.record_phase("m-1", "active", STATUS_AT)
+    await api.status.record_phase("m-1", PhaseUpdate("active", STATUS_AT))
 
     response = await api.post("/v1/sessions/m-1/forget", json={"keep_record": keep_record})
 

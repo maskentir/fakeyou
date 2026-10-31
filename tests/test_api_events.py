@@ -14,6 +14,7 @@ from fakeyou.api.sessions import SessionStore
 from fakeyou.api.status import session_status
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
+from fakeyou.db.session_status import PhaseUpdate
 from fakeyou.foundation.taxonomy import PublicPhase, TerminalReason
 from tests._session_status_fakes import MemorySessionStatus
 from tests.test_api_sessions import (
@@ -245,7 +246,7 @@ class ApiEventsHarness(ApiHarness):
             await self.status.create(meeting_id, create.owner_id, STATUS_AT)
         if phase != "created" or terminal_reason is not None:
             await self.status.record_phase(
-                meeting_id, phase, STATUS_AT, terminal_reason=terminal_reason
+                meeting_id, PhaseUpdate(phase, STATUS_AT, terminal_reason=terminal_reason)
             )
         self.seeded.seed_events(meeting_id, entries)
 

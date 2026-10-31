@@ -12,22 +12,10 @@ from redis.typing import EncodableT, FieldT
 
 from fakeyou.catalog.config import ConfigKey
 from fakeyou.config.settings import Settings, require_secret
-from fakeyou.transport.schemas import command_stream, event_stream, validate_event
+from fakeyou.transport.schemas import event_stream, validate_event
 
-_LEASE_RENEW = (
-    "if redis.call('GET', KEYS[1]) == ARGV[1] "
-    "then return redis.call('PEXPIRE', KEYS[1], ARGV[2]) "
-    "else return 0 end"
-)
-_LEASE_RELEASE = (
-    "if redis.call('GET', KEYS[1]) == ARGV[1] "
-    "then return redis.call('DEL', KEYS[1]) "
-    "else return 0 end"
-)
 _CLAIM_BATCH = 100
-_SCAN_MATCH = "fakeyou:meeting:*:commands"
 OVERRIDE_TTL_SECONDS = 120.0
-_SCAN_COUNT = 100
 _FIRST_ENTRY_ID = "0-0"
 CONNECTION_ERRORS: tuple[type[Exception], ...] = (RedisConnectionError, RedisTimeoutError)
 
@@ -36,10 +24,6 @@ CONNECTION_ERRORS: tuple[type[Exception], ...] = (RedisConnectionError, RedisTim
 class PendingDelivery:
     entry_id: str
     deliveries: int
-
-
-def _lease_key(meeting_id: str) -> str:
-    return f"fakeyou:meeting:{meeting_id}:lease"
 
 
 def _overrides_key(scope: str) -> str:
@@ -51,10 +35,9 @@ def _entry_pairs(entries: Any) -> list[tuple[str, dict[str, str]]]:
 
 
 class StreamTransport:
-    def __init__(self, client: Redis, *, stream_max_len: int, lease_seconds: float) -> None:
+    def __init__(self, client: Redis, *, stream_max_len: int) -> None:
         self._client = client
         self._stream_max_len = stream_max_len
-        self._lease_ms = max(1, int(lease_seconds * 1000))
 
     async def _publish(self, stream: str, fields: Mapping[str, str]) -> str:
         payload: dict[FieldT, EncodableT] = {name: value for name, value in fields.items()}
@@ -62,9 +45,6 @@ class StreamTransport:
             str,
             await self._client.xadd(stream, payload, maxlen=self._stream_max_len, approximate=True),
         )
-
-    async def publish_command(self, meeting_id: str, fields: Mapping[str, str]) -> str:
-        return await self._publish(command_stream(meeting_id), fields)
 
     async def publish_event(self, meeting_id: str, fields: Mapping[str, str]) -> str:
         validated = validate_event(fields, meeting_id=meeting_id)
@@ -114,14 +94,6 @@ class StreamTransport:
 
     async def ack(self, stream: str, group: str, entry_id: str) -> None:
         await self._client.xack(stream, group, entry_id)
-
-    async def claim_stale(
-        self, stream: str, group: str, consumer: str, *, min_idle_ms: int
-    ) -> list[tuple[str, dict[str, str]]]:
-        _next_id, claimed, *_deleted = await self._client.xautoclaim(
-            stream, group, consumer, min_idle_ms, count=_CLAIM_BATCH
-        )
-        return _entry_pairs(entry for entry in claimed if entry[0] is not None)
 
     async def pending_deliveries(
         self, stream: str, group: str, *, min_idle_ms: int
@@ -184,40 +156,8 @@ class StreamTransport:
                 return fields
         return None
 
-    async def acquire_lease(self, meeting_id: str, owner: str) -> bool:
-        result = await self._client.set(_lease_key(meeting_id), owner, nx=True, px=self._lease_ms)
-        return bool(result)
-
-    async def renew_lease(self, meeting_id: str, owner: str) -> bool:
-        result = await cast(
-            "Awaitable[str]",
-            self._client.eval(_LEASE_RENEW, 1, _lease_key(meeting_id), owner, str(self._lease_ms)),
-        )
-        return bool(result)
-
-    async def release_lease(self, meeting_id: str, owner: str) -> None:
-        await cast(
-            "Awaitable[str]",
-            self._client.eval(_LEASE_RELEASE, 1, _lease_key(meeting_id), owner),
-        )
-
     async def aclose(self) -> None:
         await self._client.aclose()
-
-    async def candidate_meetings(self) -> list[str]:
-        found: set[str] = set()
-        cursor = 0
-        while True:
-            cursor, keys = await self._client.scan(
-                cursor=cursor, match=_SCAN_MATCH, count=_SCAN_COUNT
-            )
-            for key in keys:
-                name = str(key)
-                if name.startswith("fakeyou:meeting:") and name.endswith(":commands"):
-                    found.add(name[len("fakeyou:meeting:") : -len(":commands")])
-            if cursor == 0:
-                break
-        return sorted(found)
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "StreamTransport":
@@ -231,5 +171,4 @@ class StreamTransport:
         return cls(
             client,
             stream_max_len=redis_settings.stream_max_len,
-            lease_seconds=redis_settings.lease_seconds,
         )

@@ -3,10 +3,10 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Literal, Protocol, cast
 
-from sqlalchemy import Executable, delete, select, update
+from sqlalchemy import ColumnElement, Executable, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.exc import DisconnectionError, OperationalError
@@ -33,10 +33,20 @@ class SessionStatus:
     attempt_id: str | None
     created_at: datetime
     updated_at: datetime
+    attempts: int = 0
+    lease_owner: str | None = None
 
     @property
     def terminal(self) -> bool:
         return self.phase in TERMINAL_PHASES
+
+
+@dataclass(frozen=True, slots=True)
+class PhaseUpdate:
+    phase: PublicPhase
+    at: datetime
+    terminal_reason: TerminalReason | None = None
+    detail: str | None = None
 
 
 class SessionStatusRepository(Protocol):
@@ -53,16 +63,20 @@ class SessionStatusRepository(Protocol):
     ) -> SessionStatus | None: ...
 
     async def record_phase(
-        self,
-        meeting_id: str,
-        phase: PublicPhase,
-        at: datetime,
-        *,
-        terminal_reason: TerminalReason | None = None,
-        detail: str | None = None,
+        self, meeting_id: str, change: PhaseUpdate, *, attempt_id: str | None = None
     ) -> SessionStatus | None: ...
 
     async def discard(self, meeting_id: str) -> None: ...
+
+    async def claim(
+        self, worker_id: str, attempt_id: str, lease_seconds: float
+    ) -> SessionStatus | None: ...
+
+    async def renew(
+        self, meeting_id: str, worker_id: str, attempt_id: str, lease_seconds: float
+    ) -> SessionStatus | None: ...
+
+    async def release(self, meeting_id: str, worker_id: str, attempt_id: str) -> None: ...
 
 
 def _status(row: RowMapping) -> SessionStatus:
@@ -76,6 +90,8 @@ def _status(row: RowMapping) -> SessionStatus:
         attempt_id=row["attempt_id"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+        attempts=row["attempts"],
+        lease_owner=row["lease_owner"],
     )
 
 
@@ -149,22 +165,79 @@ class SessionStatusStore:
         )
 
     async def record_phase(
-        self,
-        meeting_id: str,
-        phase: PublicPhase,
-        at: datetime,
-        *,
-        terminal_reason: TerminalReason | None = None,
-        detail: str | None = None,
+        self, meeting_id: str, change: PhaseUpdate, *, attempt_id: str | None = None
     ) -> SessionStatus | None:
+        fenced = [] if attempt_id is None else [meeting_sessions.c.attempt_id == attempt_id]
         return await self._first(
             update(meeting_sessions)
             .where(
                 meeting_sessions.c.meeting_id == meeting_id,
                 meeting_sessions.c.phase.not_in(sorted(TERMINAL_PHASES)),
+                *fenced,
             )
-            .values(phase=phase, terminal_reason=terminal_reason, detail=detail, updated_at=at)
+            .values(
+                phase=change.phase,
+                terminal_reason=change.terminal_reason,
+                detail=change.detail,
+                updated_at=change.at,
+            )
             .returning(meeting_sessions)
+        )
+
+    async def claim(
+        self, worker_id: str, attempt_id: str, lease_seconds: float
+    ) -> SessionStatus | None:
+        free = (
+            select(meeting_sessions.c.meeting_id)
+            .where(
+                meeting_sessions.c.desired_state.in_(("joined", "stopped")),
+                meeting_sessions.c.phase.not_in(sorted(TERMINAL_PHASES)),
+                or_(
+                    meeting_sessions.c.lease_expires_at.is_(None),
+                    meeting_sessions.c.lease_expires_at < func.now(),
+                ),
+            )
+            .order_by(meeting_sessions.c.updated_at, meeting_sessions.c.meeting_id)
+            .limit(1)
+            .with_for_update(skip_locked=True)
+            .scalar_subquery()
+        )
+        return await self._first(
+            update(meeting_sessions)
+            .where(meeting_sessions.c.meeting_id == free)
+            .values(
+                lease_owner=worker_id,
+                lease_expires_at=func.now() + timedelta(seconds=lease_seconds),
+                attempt_id=attempt_id,
+                attempts=meeting_sessions.c.attempts + 1,
+            )
+            .returning(meeting_sessions)
+        )
+
+    async def renew(
+        self, meeting_id: str, worker_id: str, attempt_id: str, lease_seconds: float
+    ) -> SessionStatus | None:
+        return await self._first(
+            update(meeting_sessions)
+            .where(*self._held(meeting_id, worker_id, attempt_id))
+            .values(lease_expires_at=func.now() + timedelta(seconds=lease_seconds))
+            .returning(meeting_sessions)
+        )
+
+    async def release(self, meeting_id: str, worker_id: str, attempt_id: str) -> None:
+        await self._first(
+            update(meeting_sessions)
+            .where(*self._held(meeting_id, worker_id, attempt_id))
+            .values(lease_owner=None, lease_expires_at=None)
+            .returning(meeting_sessions)
+        )
+
+    @staticmethod
+    def _held(meeting_id: str, worker_id: str, attempt_id: str) -> tuple[ColumnElement[bool], ...]:
+        return (
+            meeting_sessions.c.meeting_id == meeting_id,
+            meeting_sessions.c.lease_owner == worker_id,
+            meeting_sessions.c.attempt_id == attempt_id,
         )
 
     async def discard(self, meeting_id: str) -> None:

@@ -1,6 +1,5 @@
 from collections.abc import Mapping
 
-COMMAND_TYPES: tuple[str, ...] = ("join", "stop", "resume")
 EVENT_TYPES: tuple[str, ...] = (
     "phase_changed",
     "transcript.final",
@@ -15,30 +14,11 @@ INGESTION_STREAM = "fakeyou:jobs:ingestion"
 DEBRIEF_STREAM = "fakeyou:jobs:debrief"
 REEMBED_STREAM = "fakeyou:jobs:reembed"
 
-_RESERVED_FIELDS = frozenset({"v", "type", "at", "meeting_id"})
 _FORBIDDEN_EVENT_FIELDS = frozenset({"evidence", "api-key"})
-
-
-def command_stream(meeting_id: str) -> str:
-    return f"fakeyou:meeting:{meeting_id}:commands"
 
 
 def event_stream(meeting_id: str) -> str:
     return f"fakeyou:meeting:{meeting_id}:events"
-
-
-def encode_command(
-    command_type: str, *, meeting_id: str, at: str, fields: Mapping[str, str] | None = None
-) -> dict[str, str]:
-    if command_type not in COMMAND_TYPES:
-        raise ValueError(f"unknown command type: {command_type!r}")
-    encoded = {"v": "1", "type": command_type, "at": at, "meeting_id": meeting_id}
-    if fields is not None:
-        reserved = _RESERVED_FIELDS.intersection(fields)
-        if reserved:
-            raise ValueError(f"command fields must not override {sorted(reserved)}")
-        encoded.update(fields)
-    return encoded
 
 
 def encode_ingestion_job(*, meeting_id: str, kind: str, at: str) -> dict[str, str]:
