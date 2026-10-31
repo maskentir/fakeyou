@@ -12,6 +12,7 @@ from typing import Any, Protocol
 
 from graphiti_core import Graphiti
 from langchain.agents.middleware import AgentMiddleware, ModelFallbackMiddleware
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
 
 from fakeyou.audio.graph import TurnAudioTap
@@ -216,6 +217,16 @@ class AgentWiring:
 DEFAULT_AGENT_WIRING = AgentWiring()
 
 
+@dataclass(frozen=True, slots=True)
+class ModelWiring:
+    reply: Callable[[], BaseChatModel] | None = None
+    judge: Callable[[Sequence[str]], TurnJudge | None] | None = None
+    verifier: Callable[[], GroundingVerifier] | None = None
+
+
+DEFAULT_MODEL_WIRING = ModelWiring()
+
+
 class MeetCommands(CommandPort, Protocol):
     @property
     def available(self) -> bool: ...
@@ -272,11 +283,13 @@ class _ConversationBuilder:
         agent: AgentWiring,
         behavior: TurnBehavior,
         diagnostics: Diagnostics,
+        models: ModelWiring,
     ) -> None:
         self._settings = settings
         self._agent = agent
         self._behavior = behavior
         self._diagnostics = diagnostics
+        self._models = models
         self._tools: list[BaseTool] = []
         self._middleware: list[AgentMiddleware[Any, Any, Any]] = []
         self._persona = ""
@@ -407,8 +420,25 @@ class _ConversationBuilder:
         if self._behavior.kernel is not None:
             self._behavior.kernel.memory_outcome(outcome)
 
+    def build_reply_model(self) -> BaseChatModel:
+        factory = self._models.reply
+        if factory is not None:
+            return factory()
+        return create_chat_model(self._settings)
+
+    def build_verifier(self) -> GroundingVerifier:
+        factory = self._models.verifier
+        if factory is not None:
+            return factory()
+        return build_grounding_verifier(self._settings, self._diagnostics.journal)
+
     def _judge(self, names: Sequence[str]) -> TurnJudge | None:
-        judge = build_turn_judge(self._settings, names, self._diagnostics.journal)
+        factory = self._models.judge
+        judge = (
+            factory(names)
+            if factory is not None
+            else build_turn_judge(self._settings, names, self._diagnostics.journal)
+        )
         kernel = self._behavior.kernel
         if judge is None or kernel is None:
             return judge
@@ -506,10 +536,11 @@ async def open_conversation(
     agent: AgentWiring = DEFAULT_AGENT_WIRING,
     behavior: TurnBehavior,
     diagnostics: Diagnostics = DEFAULT_DIAGNOSTICS,
+    models: ModelWiring = DEFAULT_MODEL_WIRING,
 ) -> AsyncIterator[MeetingTurns]:
-    builder = _ConversationBuilder(settings, agent, behavior, diagnostics)
+    builder = _ConversationBuilder(settings, agent, behavior, diagnostics, models)
     builder.build_persona()
-    model = journal_model_inputs(create_chat_model(settings), diagnostics.journal, "reply")
+    model = journal_model_inputs(builder.build_reply_model(), diagnostics.journal, "reply")
     async with TeardownStack(faults=diagnostics.faults) as resources:
         builder.add_memory()
         builder.add_perception()
@@ -519,9 +550,7 @@ async def open_conversation(
         responder = builder.build_responder(
             builder.build_agent(model),
             builder.build_contributor(model) if config.attention_enabled else None,
-            build_grounding_verifier(settings, diagnostics.journal)
-            if config.attention_enabled
-            else None,
+            builder.build_verifier() if config.attention_enabled else None,
         )
         turns = builder.build_turns(
             responder, participant_policy_enabled=config.participant_policy_enabled

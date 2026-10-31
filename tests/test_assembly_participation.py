@@ -11,6 +11,7 @@ from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.orchestration import assembly
 from fakeyou.orchestration.assembly import (
     DEFAULT_AGENT_WIRING,
+    DEFAULT_MODEL_WIRING,
     TurnBehavior,
     _ConversationBuilder,
 )
@@ -28,6 +29,7 @@ def _builder(settings: Settings) -> _ConversationBuilder:
         DEFAULT_AGENT_WIRING,
         TurnBehavior(on_transition=lambda *_args: None, twin_names=("Rani",)),
         Diagnostics(),
+        DEFAULT_MODEL_WIRING,
     )
 
 
