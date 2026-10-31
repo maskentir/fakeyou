@@ -5,10 +5,11 @@ from datetime import UTC, datetime
 from logging import LogRecord
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any, cast, override
+from typing import Any, override
 
 import pytest
 
+from fakeyou.foundation.clock import using_clock
 from fakeyou.observability.journal import Journal, JournalFile
 
 HANDLER_SEAM = "fakeyou.observability.journal.RotatingFileHandler"
@@ -131,23 +132,20 @@ def test_journal_should_omit_text_content_from_every_nested_event(tmp_path: Path
     assert "private" not in path.read_text()
 
 
-def test_timed_should_correlate_success_and_preserve_result_fields(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import fakeyou.observability.journal as module
-
+def test_timed_should_correlate_success_and_preserve_result_fields() -> None:
     lines: list[str] = []
     journal = Journal("timed", emit=lines.append)
     ticks = iter([1.0, 1.25])
-    module_any = cast(Any, module)
-    monkeypatch.setattr(module_any.time, "monotonic", lambda: next(ticks))
-    with journal.timed(
-        source="tts",
-        started="synthesis_started",
-        finished="synthesis_finished",
-        failed="synthesis_failed",
-        chars=4,
-    ) as timing:
+    with (
+        using_clock(lambda: next(ticks)),
+        journal.timed(
+            source="tts",
+            started="synthesis_started",
+            finished="synthesis_finished",
+            failed="synthesis_failed",
+            chars=4,
+        ) as timing,
+    ):
         timing.fields["bytes_out"] = 128
     rows = [json.loads(line) for line in lines]
     assert [row["event"] for row in rows] == ["synthesis_started", "synthesis_finished"]

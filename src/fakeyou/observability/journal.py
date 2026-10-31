@@ -2,7 +2,6 @@ import asyncio
 import json
 import logging
 import sys
-import time
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -13,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from fakeyou.config.identifiers import SessionId
+from fakeyou.foundation.clock import monotonic
 from fakeyou.foundation.taxonomy import Subsystem
 from fakeyou.observability.provider_faults import ProviderFault, trim_detail
 
@@ -56,7 +56,7 @@ class JournalTiming:
 
     @property
     def elapsed_ms(self) -> float:
-        return (time.monotonic() - self.started_at) * 1000
+        return (monotonic() - self.started_at) * 1000
 
 
 def _safe_value(key: str, value: Any) -> Any:
@@ -169,7 +169,7 @@ class Journal:
         **fields: Any,
     ) -> Iterator[JournalTiming]:
         timing = JournalTiming(
-            {"request_id": uuid.uuid4().hex, "source": source, **fields}, time.monotonic()
+            {"request_id": uuid.uuid4().hex, "source": source, **fields}, monotonic()
         )
         if started is not None:
             self.record(started, **timing.fields)
@@ -191,7 +191,7 @@ class Journal:
     ) -> str:
         identifier = request_id or uuid.uuid4().hex
         timing = JournalTiming(
-            {"request_id": identifier, "source": source, "operation": operation}, time.monotonic()
+            {"request_id": identifier, "source": source, "operation": operation}, monotonic()
         )
         self._started[identifier] = timing
         self.record("request_started", **{**timing.fields, **fields})

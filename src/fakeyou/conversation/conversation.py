@@ -1,5 +1,4 @@
 import json
-import time
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
@@ -38,6 +37,7 @@ from fakeyou.conversation.reply_planner import (
 )
 from fakeyou.conversation.sentence_stream import SentenceStream
 from fakeyou.conversation.speech_book import BookSource, TurnEvidence, fact_book
+from fakeyou.foundation.clock import monotonic
 from fakeyou.foundation.protocols import SupportsAclose
 from fakeyou.foundation.sentences import split_sentences
 from fakeyou.foundation.transcript import TranscriptEvent
@@ -469,7 +469,7 @@ def _record_stream_failure(state: _SentenceStream, started: float) -> None:
             "agent_failed",
             source="agent",
             request_id=state.request_id,
-            duration_ms=(time.monotonic() - started) * 1000,
+            duration_ms=(monotonic() - started) * 1000,
             detail="stream",
         )
 
@@ -518,7 +518,7 @@ async def stream_sentences(
 ) -> AsyncIterator[SpokenChunk]:
     if max_sentences <= 0:
         raise ValueError("max_sentences must be positive")
-    started = time.monotonic()
+    started = monotonic()
     phase = _StreamPhase(trace.on_tool_start, trace.journal, transcript_id=trace.transcript_id)
     state = _SentenceStream(
         trace.request_id, trace.transcript_id, max_sentences, trace.language, trace.journal

@@ -518,6 +518,48 @@ Gate B dan C butuh replay yang tidak bergantung pada sesi live.
 Gate: replay oue-4 dengan komponen sekarang mereproduksi metrik baseline
 dalam toleransi 10%.
 
+Desain V0 (2026-10-31):
+
+- Data: journal oue-4 mencatat waktu VAD, `stt_turn_recorded` (jumlah
+  interim dan `first_interim_to_final_ms`, tanpa teks interim),
+  `transcript_finalized` (id dan speaker, tanpa teks), verdict judge lengkap
+  di `policy_decided`, durasi request LLM, `answer_sentence_emitted`, dan
+  `synthesis_*` (`first_chunk_ms`, `duration_ms`, `bytes_out`). Teks final ada
+  di `record.jsonl` dengan id yang sama, dan id transcript bisa dihitung ulang
+  dari `[source, spoken_at, text, stream_id]`, jadi giliran asli dan replay
+  bisa dipasangkan.
+- Seam: `TranscriptDrain` dari `build_transcript_callback`, dirangkai seperti
+  di `join.py`. Yang berjalan asli: drain dan early turn, `KernelPort`,
+  `open_conversation` (ingress, lifecycle, turn graph, agent, grounding,
+  sentence stream), `PlaybackEngine`, dan `journaled_stream`. Yang diputar
+  ulang: VAD, interim (prefix teks final sejumlah `interims`), final, chat,
+  roster, dan layar (tanpa model vision). Backend playback diganti pacer.
+- Clock: `foundation/clock.py` (`monotonic`, `using_clock`) berbasis
+  `ContextVar` dengan default `time.monotonic`, jadi produksi tidak berubah;
+  conversation, audio, dan journal membaca jam lewat modul ini. Replay
+  memakai event loop dengan waktu virtual yang melompat ke timer berikutnya
+  saat idle dan menahan waktu selama ada kerja di executor.
+- Latensi: judge, LLM balasan, dan TTS diganti fake yang memutar latensi
+  rekaman per `transcript_id` dan `sentence_index` (median sesi bila kunci
+  tidak ada). Mode model asli dipakai untuk memeriksa isi keputusan, bukan
+  gate latensi. `open_conversation` menerima factory model.
+- Output: journal baru, dibandingkan dengan `baseline_metrics` journal asli.
+  p50 latensi ±10% (gate), p95 hanya dilaporkan, hitungan ±max(10%, 1),
+  nilai yang berasal dari input harus sama persis.
+
+Batas gate di oue-4: `vad_stop_to_final` sama karena kedua ujungnya input
+rekaman; `final_to_first_audio`, `barge_in_to_silence`, dan `sentence_gap`
+tidak punya data karena oue-4 lebih tua dari A0. Satu-satunya metrik latensi
+yang benar-benar diuji adalah `final_to_first_pcm` (p50 2081 ms, n=21):
+latensi rekaman ditambah orkestrasi dan antrean yang berjalan asli. Itu yang
+diubah B5 dan B1, jadi V0 tetap menjadi penjaga regresinya. Baseline lengkap
+butuh journal baru dari sesi pasca-A0 (bersama live validation A).
+
+Urutan PR V0: clock yang bisa disuntik; event loop waktu virtual; loader
+fixture; fake rekaman dan pacer; injeksi model di `open_conversation`;
+harness, CLI `fakeyou replay`, dan pembanding; run gate oue-4 dengan uji
+sensitivitas (latensi LLM ×0,5 harus menggeser `final_to_first_pcm`).
+
 ### B5a: Lookahead sintesis dan writer audio berumur panjang
 
 Dikerjakan sebelum B1 karena barge-in (B3) butuh pause dan flush. B5a tidak

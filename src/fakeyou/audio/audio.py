@@ -1,7 +1,6 @@
 import asyncio
 import random
 import sys
-import time
 from collections.abc import (
     AsyncIterator,
     Callable,
@@ -40,6 +39,7 @@ from fakeyou.audio.voice_activity import VoiceActivityTracker
 from fakeyou.catalog.config import ConfigKey
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import DEFAULTS, STTSettings, TTSSettings, VADSettings, require_secret
+from fakeyou.foundation.clock import monotonic
 from fakeyou.foundation.invariants import (
     AGENT_SINK_NAME,
     CAPTURE_SAMPLE_RATE,
@@ -195,7 +195,7 @@ class StreamSource:
 
 @dataclass(frozen=True, slots=True)
 class SessionRuntime:
-    now: Callable[[], float] = time.monotonic
+    now: Callable[[], float] = monotonic
     stream_id: str | None = None
     stt_idle_reconnect_seconds: float = 0.0
 
@@ -558,10 +558,10 @@ class MeetingAudioSession:
         self._stopping = True
         self.activity.mark_unavailable()
         failures: list[Exception] = []
-        deadline = time.monotonic() + STOP_DEADLINE_SECONDS
+        deadline = monotonic() + STOP_DEADLINE_SECONDS
 
         def remaining() -> float:
-            return max(0.0, deadline - time.monotonic())
+            return max(0.0, deadline - monotonic())
 
         reconnect = self._reconnect_task
         if reconnect is not None and not reconnect.done():

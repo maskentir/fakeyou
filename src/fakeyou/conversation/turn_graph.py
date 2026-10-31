@@ -1,5 +1,4 @@
 import asyncio
-import time
 from collections.abc import (
     AsyncIterator,
     Awaitable,
@@ -51,6 +50,7 @@ from fakeyou.conversation.turn_recovery import (
     turn_request_id,
     within_sentence_budget,
 )
+from fakeyou.foundation.clock import monotonic
 from fakeyou.foundation.participation import ParticipationContext
 from fakeyou.foundation.protocols import SupportsAclose
 from fakeyou.foundation.transcript import TranscriptEvent
@@ -97,7 +97,7 @@ class ActiveSpeech:
 
 
 class SpeechFloor:
-    def __init__(self, generation: int = 0, *, clock: Callable[[], float] = time.monotonic) -> None:
+    def __init__(self, generation: int = 0, *, clock: Callable[[], float] = monotonic) -> None:
         self.generation = generation
         self.last_reason = ""
         self._clock = clock

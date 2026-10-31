@@ -1,6 +1,5 @@
 import asyncio
 import json
-import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from functools import partial
@@ -19,6 +18,7 @@ from fakeyou.conversation.turn_graph import (
 )
 from fakeyou.conversation.turn_judge import JudgeWindow, TurnJudgement
 from fakeyou.conversation.turn_lifecycle import TurnLifecycle
+from fakeyou.foundation.clock import monotonic
 from fakeyou.foundation.participation import (
     ParticipationContext,
     is_vocative,
@@ -61,7 +61,7 @@ def is_stop_command(text: str, names: Sequence[str]) -> bool:
 @dataclass(frozen=True, slots=True)
 class IngressTiming:
     barge_in_min_words: int = DEFAULTS.conversation.barge_in_min_words
-    clock: Callable[[], float] = time.monotonic
+    clock: Callable[[], float] = monotonic
 
 
 @dataclass(frozen=True, slots=True)

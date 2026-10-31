@@ -1,4 +1,3 @@
-import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -43,6 +42,7 @@ from fakeyou.conversation.turn_lifecycle import (
     reply_mode,
 )
 from fakeyou.conversation.turn_recovery import RecoveryOptions
+from fakeyou.foundation.clock import monotonic
 from fakeyou.foundation.taxonomy import Subsystem
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.foundation.triggers import ReplyChannel
@@ -86,7 +86,7 @@ class TurnTiming:
     quiet_gap_seconds: float = DEFAULTS.perception.attention.floor_gap_seconds
     deferred_ttl_seconds: float = DEFAULTS.perception.attention.ttl_seconds
     thinking_cue_after_seconds: float | None = None
-    clock: Callable[[], float] = time.monotonic
+    clock: Callable[[], float] = monotonic
 
 
 @dataclass(frozen=True, slots=True)

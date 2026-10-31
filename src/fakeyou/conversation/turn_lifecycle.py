@@ -1,5 +1,4 @@
 import asyncio
-import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
@@ -48,6 +47,7 @@ from fakeyou.conversation.turn_queue import (
     QuietFloor,
 )
 from fakeyou.conversation.turn_recovery import RecoveryOptions, TurnRecovery
+from fakeyou.foundation.clock import monotonic
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.foundation.triggers import ReplyChannel
 from fakeyou.observability.faults import ConsumerSink, guard_observer
@@ -151,7 +151,7 @@ class TurnLifecycle:
         journal: JournalSink,
         responder: Responder | None = None,
         judging: TurnJudging | None = None,
-        clock: Callable[[], float] = time.monotonic,
+        clock: Callable[[], float] = monotonic,
     ) -> None:
         self._graph = graph
         self._speech = build_speech_graph()
