@@ -7,13 +7,10 @@ import numpy as np
 from fakeyou.audio.audio import SessionRun
 from fakeyou.audio.graph import AudioGraph, PcmQueue
 from fakeyou.audio.playback import (
-    PlaybackBackend,
     PlaybackEngine,
     PlaybackEvent,
     PlaybackPort,
     PlaybackTiming,
-    PlayStream,
-    SetMuted,
 )
 from fakeyou.audio.vad import VadAnalyzer, VadController, VadParams
 from fakeyou.observability.diagnostics import Diagnostics
@@ -161,42 +158,41 @@ class FakeSynth:
         self.closed = True
 
 
-class FakePlayer:
-    def __init__(self, error: Exception | None = None) -> None:
+class FakeWriter:
+    def __init__(self, error: Exception | None = None, buffer_seconds: float = 0.0) -> None:
         self.error = error
-        self.played: list[bytes] = []
+        self.buffer_seconds = buffer_seconds
+        self.written: list[bytes] = []
         self.cancelled: list[bytes] = []
+        self.drains = 0
+        self.closed = False
         self.started = asyncio.Event()
         self.release = asyncio.Event()
         self.release.set()
 
-    async def __call__(self, chunks: AsyncIterator[bytes]) -> None:
-        data = b"".join([chunk async for chunk in chunks])
-        self.played.append(data)
+    @property
+    def heard(self) -> bytes:
+        return b"".join(self.written)
+
+    async def write(self, pcm: bytes) -> None:
         self.started.set()
         try:
             await self.release.wait()
         except asyncio.CancelledError:
-            self.cancelled.append(data)
+            self.cancelled.append(pcm)
             raise
         if self.error is not None:
             raise self.error
+        self.written.append(pcm)
 
+    async def drain(self) -> None:
+        self.drains += 1
 
-class FakeMuter:
-    def __init__(self, error: Exception | None = None) -> None:
-        self.error = error
-        self.calls: list[bool] = []
-
-    async def __call__(self, *, muted: bool) -> None:
-        self.calls.append(muted)
-        if self.error is not None:
-            raise self.error
+    async def close(self) -> None:
+        self.closed = True
 
 
 class EngineScript(TypedDict, total=False):
-    tail_seconds: float
-    stream_audio: PlayStream
     journal: RecordingJournal
     faults: FaultReporter
     cleanup_timeout_seconds: float
@@ -204,18 +200,14 @@ class EngineScript(TypedDict, total=False):
 
 def build_engine(
     synth: SpeechSynthesizer,
-    player: PlayStream,
-    muter: SetMuted,
+    writer: FakeWriter,
     events: list[PlaybackEvent],
     **script: Unpack[EngineScript],
 ) -> PlaybackEngine:
     return PlaybackEngine(
         synth,
-        PlaybackBackend(muter, script.get("stream_audio", player)),
+        writer,
         on_event=events.append,
-        timing=PlaybackTiming(
-            tail_seconds=script.get("tail_seconds", 0.5),
-            cleanup_timeout_seconds=script.get("cleanup_timeout_seconds", 5.0),
-        ),
+        timing=PlaybackTiming(cleanup_timeout_seconds=script.get("cleanup_timeout_seconds", 5.0)),
         diagnostics=Diagnostics(faults=script.get("faults"), journal=script.get("journal")),
     )

@@ -397,7 +397,6 @@ class AudioSettings(Section):
     retention_days: int = Field(default=30, gt=0)
     drain_max_consecutive_failures: int = Field(default=40, gt=0)
     drain_failure_journal_every: int = Field(default=10, gt=0)
-    pactl_timeout_seconds: PositiveSeconds = 5.0
 
 
 class AudioHealthSettings(Section):

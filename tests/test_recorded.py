@@ -24,7 +24,7 @@ from fakeyou.replay.fixture import (
     SynthesisTiming,
     load_fixture,
 )
-from fakeyou.replay.pacer import BYTES_PER_SECOND, create_pacer_backend
+from fakeyou.replay.pacer import BYTES_PER_SECOND, PacedWriter
 from fakeyou.replay.recorded import RecordedJudge, RecordedModel, RecordedSynthesizer
 from fakeyou.replay.virtual_time import VirtualTimeLoop
 
@@ -295,16 +295,21 @@ def test_the_model_says_nothing_for_a_turn_without_a_recorded_reply() -> None:
     assert '"intent": "silent"' in raw
 
 
+async def play_through(writer: PacedWriter, chunks: AsyncIterator[bytes]) -> None:
+    async for chunk in chunks:
+        await writer.write(chunk)
+    await writer.drain()
+
+
 def test_the_pacer_plays_the_audio_at_the_pcm_rate() -> None:
     async def main() -> float:
         loop = asyncio.get_running_loop()
-        backend = create_pacer_backend()
 
         async def chunks() -> AsyncIterator[bytes]:
             yield b"\x00" * 4800
             yield b"\x00" * 4800
 
-        await backend.stream_audio(chunks())
+        await play_through(PacedWriter(), chunks())
         return loop.time()
 
     elapsed = run_virtual(main)
@@ -317,9 +322,8 @@ def test_a_chunk_that_arrives_late_leaves_a_gap_before_it_plays() -> None:
 
     async def main() -> float:
         loop = asyncio.get_running_loop()
-        backend = create_pacer_backend()
         stream = RecordedSynthesizer(timings).stream("hello", sentence_index=0, transcript_id="t1")
-        await backend.stream_audio(stream)
+        await play_through(PacedWriter(), stream)
         return loop.time()
 
     elapsed = run_virtual(main)
@@ -327,8 +331,9 @@ def test_a_chunk_that_arrives_late_leaves_a_gap_before_it_plays() -> None:
     assert elapsed == pytest.approx(0.9 + 4800 / BYTES_PER_SECOND)
 
 
-def test_the_pacer_takes_the_audio_faster_than_it_plays_it() -> None:
+def test_the_pacer_takes_the_audio_only_a_buffer_ahead_of_the_listener() -> None:
     received: list[float] = []
+    writer = PacedWriter(buffer_seconds=0.05)
 
     async def main() -> float:
         loop = asyncio.get_running_loop()
@@ -338,12 +343,12 @@ def test_the_pacer_takes_the_audio_faster_than_it_plays_it() -> None:
                 yield b"\x00" * 4800
             received.append(loop.time())
 
-        await create_pacer_backend().stream_audio(chunks())
+        await play_through(writer, chunks())
         return loop.time()
 
     elapsed = run_virtual(main)
 
-    assert received == [pytest.approx(0.0)]
+    assert received == [pytest.approx(48000 / BYTES_PER_SECOND - writer.buffer_seconds)]
     assert elapsed == pytest.approx(48000 / BYTES_PER_SECOND)
 
 
@@ -352,9 +357,8 @@ def test_the_pacer_plays_the_audio_longer_than_the_provider_took() -> None:
 
     async def main() -> float:
         loop = asyncio.get_running_loop()
-        backend = create_pacer_backend()
         stream = RecordedSynthesizer(timings).stream("hello", sentence_index=0, transcript_id="t1")
-        await backend.stream_audio(stream)
+        await play_through(PacedWriter(), stream)
         return loop.time()
 
     elapsed = run_virtual(main)
@@ -363,10 +367,13 @@ def test_the_pacer_plays_the_audio_longer_than_the_provider_took() -> None:
 
 
 def test_the_pacer_needs_no_sound_device() -> None:
-    async def main() -> None:
-        await create_pacer_backend().set_muted(muted=True)
+    async def main() -> float:
+        writer = PacedWriter()
+        await writer.drain()
+        await writer.close()
+        return asyncio.get_running_loop().time()
 
-    run_virtual(main)
+    assert run_virtual(main) == 0.0
 
 
 def test_the_replay_fakes_run_without_real_time() -> None:

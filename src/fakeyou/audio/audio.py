@@ -25,14 +25,12 @@ from fakeyou.audio.graph import AudioGraph, GraphParts, OnVad, TurnAudioTap
 from fakeyou.audio.own_speech import FinalGate, OwnSpeech
 from fakeyou.audio.playback import (
     CuePlayback,
-    PlaybackBackend,
     PlaybackEngine,
     PlaybackError,
     PlaybackEvent,
     PlaybackPort,
-    create_pactl_muter,
-    create_paplay_stream_runner,
 )
+from fakeyou.audio.pulse_writer import PulseWriter
 from fakeyou.audio.stream_input import StreamAudioInput
 from fakeyou.audio.vad import VadAnalyzer, VadController, VadParams
 from fakeyou.audio.voice_activity import VoiceActivityTracker
@@ -175,7 +173,6 @@ class SpeechPipelineSettings:
     tts_fallback: TTSSettings | None = None
     speech_language: str = DEFAULTS.speech.language
     vad_settings: VADSettings = field(default_factory=lambda: DEFAULTS.vad)
-    pactl_timeout_seconds: float = DEFAULTS.audio.pactl_timeout_seconds
 
 
 @dataclass(frozen=True, slots=True)
@@ -641,14 +638,7 @@ def create_playback_engine(
             journal=diagnostics.journal,
             fallback=speech.tts_fallback,
         ),
-        PlaybackBackend(
-            set_muted=create_pactl_muter(
-                sink=AGENT_SINK_NAME, timeout_seconds=speech.pactl_timeout_seconds
-            ),
-            stream_audio=create_paplay_stream_runner(
-                sink=AGENT_SINK_NAME, rate=PLAYBACK_SAMPLE_RATE
-            ),
-        ),
+        PulseWriter(sink=AGENT_SINK_NAME, rate=PLAYBACK_SAMPLE_RATE),
         on_event=on_event,
         diagnostics=diagnostics,
     )
@@ -877,10 +867,10 @@ async def open_meeting_audio(
             _adopt(slot, session)
         except (asyncio.CancelledError, FakeYouError):
             raise
-        except (OSError, RuntimeError, ValueError, CaptureError, TranscriptionError) as error:
-            raise MeetingAudioError("meeting audio initialization failed") from error
         except TimeoutError:
             raise MeetingAudioError("meeting audio startup timed out") from None
+        except (OSError, RuntimeError, ValueError, CaptureError, TranscriptionError) as error:
+            raise MeetingAudioError("meeting audio initialization failed") from error
         session.raise_if_failed()
         yield session
     finally:
@@ -1016,10 +1006,10 @@ async def open_stream_audio(
             _adopt(slot, session)
         except (asyncio.CancelledError, FakeYouError):
             raise
-        except (OSError, RuntimeError, ValueError, CaptureError, TranscriptionError) as error:
-            raise MeetingAudioError("meeting audio initialization failed") from error
         except TimeoutError:
             raise MeetingAudioError("meeting audio startup timed out") from None
+        except (OSError, RuntimeError, ValueError, CaptureError, TranscriptionError) as error:
+            raise MeetingAudioError("meeting audio initialization failed") from error
         session.raise_if_failed()
         yield session
     finally:

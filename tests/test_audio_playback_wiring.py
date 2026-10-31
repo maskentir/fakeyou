@@ -1,4 +1,3 @@
-from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -77,24 +76,26 @@ async def test_default_playback_engine_closes_speech_client(
     assert owned.is_closed()
 
 
-def test_default_playback_engine_streams_tts_to_paplay(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_default_playback_engine_streams_tts_to_the_agent_sink(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import inspect
 
-    from fakeyou.audio.playback import create_paplay_stream_runner
+    from fakeyou.audio.pulse_writer import PulseWriter
     from fakeyou.foundation.invariants import AGENT_SINK_NAME, PLAYBACK_SAMPLE_RATE
 
-    runners: list[dict[str, Any]] = []
+    writers: list[dict[str, Any]] = []
 
-    def recording_runner(**kwargs: Any) -> Any:
-        runners.append(kwargs)
-        return create_paplay_stream_runner(**kwargs)
+    def recording_writer(**kwargs: Any) -> PulseWriter:
+        writers.append(kwargs)
+        return PulseWriter(**kwargs)
 
-    monkeypatch.setattr(audio, "create_paplay_stream_runner", recording_runner)
+    monkeypatch.setattr(audio, "PulseWriter", recording_writer)
     engine = create_playback_engine(
         speech=SpeechPipelineSettings(tts_settings=OpenAITTS(api_key=SecretStr("k")))
     )
 
-    assert runners == [{"sink": AGENT_SINK_NAME, "rate": PLAYBACK_SAMPLE_RATE}]
+    assert writers == [{"sink": AGENT_SINK_NAME, "rate": PLAYBACK_SAMPLE_RATE}]
     assert inspect.isasyncgen(engine.synthesizer.stream("hello"))
 
 
@@ -128,61 +129,3 @@ async def test_default_playback_engine_wires_faults_and_journal() -> None:
         assert synth.journal is journal
     finally:
         await engine.close()
-
-
-async def test_playback_engine_threads_pactl_timeout_to_the_muter(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import os
-    import stat
-    from collections.abc import AsyncIterator
-
-    from fakeyou.audio.playback import PlaybackEvent
-    from fakeyou.config.settings import TTSSettings
-    from fakeyou.speech.contract import SpeechSynthesizer
-
-    pactl = tmp_path / "pactl"
-    pactl.write_text("#!/bin/sh\nexec sleep 30\n")
-    pactl.chmod(pactl.stat().st_mode | stat.S_IXUSR)
-    paplay = tmp_path / "paplay"
-    paplay.write_text("#!/bin/sh\ncat >/dev/null\nexit 0\n")
-    paplay.chmod(paplay.stat().st_mode | stat.S_IXUSR)
-    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
-
-    class _StubSynth:
-        async def stream(self, text: str, **_kwargs: Any) -> AsyncIterator[bytes]:
-            del text
-            yield b"\x00" * 480
-
-        async def aclose(self) -> None:
-            return None
-
-    def _stub_synth(
-        settings: TTSSettings,
-        *,
-        language: str = "id",
-        journal: Any = None,
-        fallback: TTSSettings | None = None,
-    ) -> SpeechSynthesizer:
-        del fallback
-        del journal
-        del language
-        del settings
-        return _StubSynth()
-
-    monkeypatch.setattr(audio, "build_speech_synthesizer", _stub_synth)
-    events: list[PlaybackEvent] = []
-    engine = create_playback_engine(
-        speech=SpeechPipelineSettings(
-            tts_settings=OpenAITTS(api_key=SecretStr("k")), pactl_timeout_seconds=0.05
-        ),
-        on_event=events.append,
-    )
-    try:
-        await engine.speak("hi")
-    finally:
-        await engine.close()
-
-    assert any(
-        event.kind == "mute_failed" and "timed out after 0.05s" in event.detail for event in events
-    )

@@ -3,7 +3,7 @@ import struct
 
 from fakeyou.audio.playback import CUE_RENDER_ATTEMPTS, CuePlayback, PlaybackEvent
 from fakeyou.foundation.invariants import PLAYBACK_SAMPLE_RATE
-from tests._audio_support import FakeMuter, FakePlayer, FakeSynth, build_engine
+from tests._audio_support import FakeSynth, FakeWriter, build_engine
 from tests._persistence_fakes import RecordingJournal
 
 FRAME = PLAYBACK_SAMPLE_RATE // 50
@@ -22,9 +22,9 @@ CUE_AUDIO = voiced(20)
 
 async def test_prepared_cue_plays_from_cache_without_new_synthesis() -> None:
     synth = FakeSynth(audio=CUE_AUDIO)
-    player = FakePlayer()
+    writer = FakeWriter()
     events: list[PlaybackEvent] = []
-    engine = build_engine(synth, player, FakeMuter(), events, tail_seconds=0.01)
+    engine = build_engine(synth, writer, events)
 
     await engine.prepare_cue("Hmm…")
     await engine.prepare_cue("Hmm…")
@@ -34,7 +34,7 @@ async def test_prepared_cue_plays_from_cache_without_new_synthesis() -> None:
     assert isinstance(engine, CuePlayback)
     assert played is True
     assert synth.texts == ["Hmm…"]
-    assert player.played == [CUE_AUDIO]
+    assert writer.heard == CUE_AUDIO
     assert [(event.kind, event.text, event.cue) for event in events] == [
         ("playback_started", "Hmm…", True),
         ("playback_finished", "Hmm…", True),
@@ -43,31 +43,31 @@ async def test_prepared_cue_plays_from_cache_without_new_synthesis() -> None:
 
 async def test_cue_is_refused_until_it_is_prepared() -> None:
     synth = FakeSynth()
-    player = FakePlayer()
+    writer = FakeWriter()
     events: list[PlaybackEvent] = []
-    engine = build_engine(synth, player, FakeMuter(), events)
+    engine = build_engine(synth, writer, events)
 
     played = await engine.play_cue("Hmm…")
     await engine.close()
 
     assert played is False
-    assert player.played == []
+    assert writer.written == []
     assert events == []
 
 
 async def test_cue_is_refused_while_the_twin_is_already_speaking() -> None:
     synth = FakeSynth(audio=CUE_AUDIO)
-    player = FakePlayer()
-    player.release.clear()
+    writer = FakeWriter()
+    writer.release.clear()
     events: list[PlaybackEvent] = []
-    engine = build_engine(synth, player, FakeMuter(), events)
+    engine = build_engine(synth, writer, events)
     await engine.prepare_cue("Hmm…")
     synth.texts.clear()
 
     reply = asyncio.create_task(engine.speak("Friday."))
-    await player.started.wait()
+    await writer.started.wait()
     played = await engine.play_cue("Hmm…")
-    player.release.set()
+    writer.release.set()
     await reply
     await engine.close()
 
@@ -78,9 +78,9 @@ async def test_cue_is_refused_while_the_twin_is_already_speaking() -> None:
 
 async def test_reply_that_arrives_during_a_cue_plays_right_after_it() -> None:
     synth = FakeSynth(audio=CUE_AUDIO)
-    player = FakePlayer()
+    writer = FakeWriter()
     events: list[PlaybackEvent] = []
-    engine = build_engine(synth, player, FakeMuter(), events, tail_seconds=0.01)
+    engine = build_engine(synth, writer, events)
     await engine.prepare_cue("Hmm…")
     cue_audio = synth.audio
     synth.audio = voiced(10, level=4000)
@@ -91,7 +91,7 @@ async def test_reply_that_arrives_during_a_cue_plays_right_after_it() -> None:
     await cue
     await engine.close()
 
-    assert player.played == [cue_audio, synth.audio]
+    assert writer.heard == cue_audio + synth.audio
     assert [(event.text, event.cue) for event in events if event.kind == "playback_finished"] == [
         ("Hmm…", True),
         ("Friday.", False),
@@ -100,20 +100,20 @@ async def test_reply_that_arrives_during_a_cue_plays_right_after_it() -> None:
 
 async def test_silence_around_a_rendered_cue_is_trimmed_before_it_is_cached() -> None:
     synth = FakeSynth(audio=silent(40) + CUE_AUDIO + silent(200))
-    player = FakePlayer()
-    engine = build_engine(synth, player, FakeMuter(), [], tail_seconds=0.01)
+    writer = FakeWriter()
+    engine = build_engine(synth, writer, [])
 
     await engine.prepare_cue("Hmm.")
     await engine.play_cue("Hmm.")
     await engine.close()
 
-    assert player.played == [silent(2) + CUE_AUDIO + silent(2)]
+    assert writer.heard == silent(2) + CUE_AUDIO + silent(2)
 
 
 async def test_a_cue_that_keeps_rendering_with_a_long_pause_is_rejected() -> None:
     journal = RecordingJournal()
     synth = FakeSynth(audio=voiced(10) + silent(50) + voiced(10))
-    engine = build_engine(synth, FakePlayer(), FakeMuter(), [], journal=journal)
+    engine = build_engine(synth, FakeWriter(), [], journal=journal)
 
     await engine.prepare_cue("Let me see.")
     played = await engine.play_cue("Let me see.")

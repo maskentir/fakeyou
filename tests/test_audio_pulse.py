@@ -20,12 +20,8 @@ from fakeyou.audio.audio import (
     StreamPolicy,
     open_meeting_audio,
 )
-from fakeyou.audio.playback import (
-    PlaybackBackend,
-    PlaybackEngine,
-    create_pactl_muter,
-    create_paplay_stream_runner,
-)
+from fakeyou.audio.playback import PlaybackEngine
+from fakeyou.audio.pulse_writer import PulseWriter
 from fakeyou.catalog.config import ConfigKey
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import Settings, require_secret
@@ -75,11 +71,7 @@ class _ToneSynth:
 
 def _container_playback() -> PlaybackEngine:
     return PlaybackEngine(
-        _ToneSynth(),
-        PlaybackBackend(
-            create_pactl_muter(sink=AGENT_SINK_NAME),
-            create_paplay_stream_runner(sink=AGENT_SINK_NAME, rate=PLAYBACK_SAMPLE_RATE),
-        ),
+        _ToneSynth(), PulseWriter(sink=AGENT_SINK_NAME, rate=PLAYBACK_SAMPLE_RATE)
     )
 
 

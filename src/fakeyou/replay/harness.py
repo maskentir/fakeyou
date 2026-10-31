@@ -36,7 +36,7 @@ from fakeyou.perception.percepts import MEETING_CONTENT
 from fakeyou.persistence.record import ChatEntry, MeetingRecord, ScreenEntry, TranscriptEntry
 from fakeyou.replay.compare import Comparison, compare_journals
 from fakeyou.replay.fixture import ReplayFixture
-from fakeyou.replay.pacer import create_pacer_backend
+from fakeyou.replay.pacer import PacedWriter
 from fakeyou.replay.recorded import RecordedJudge, RecordedModel, RecordedSynthesizer
 from fakeyou.session.contracts import ScreenObserved
 from fakeyou.session.kernel import SessionKernel
@@ -225,7 +225,7 @@ async def _replay(
     behavior = options.behavior
     engine = PlaybackEngine(
         RecordedSynthesizer(fixture.syntheses, faults=fixture.synthesis_faults, journal=journal),
-        create_pacer_backend(),
+        PacedWriter(),
         on_event=_playback_journal(journal, record, kernel),
         diagnostics=Diagnostics(journal=journal),
     )
