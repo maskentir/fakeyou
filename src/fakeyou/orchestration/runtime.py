@@ -449,13 +449,14 @@ class MeetingWorker:
         except (PlaywrightError, TimeoutError) as error:
             if self.faults is not None:
                 self.faults.record(classify_exception("browser", error, operation="leave"))
-            self._send("browser_failed", "system_fault", "Meeting leave cleanup failed")
+            self._send("leave_failed", "system_fault", "Meeting leave cleanup failed")
             self.detail = origin_detail
             return self._commit()
         if left.status == "left":
             self._send("leave_sent", self.origin_attribution or "policy", left.detail)
         else:
-            self._send("browser_failed", "system_fault", left.detail)
+            self.record("leave_failed", source="runtime", detail=left.detail)
+            self._send("leave_failed", "system_fault", left.detail)
         keeps_origin = self.origin_kind in ("audio_failed", "conversation_failed")
         self.detail = origin_detail if keeps_origin else left.detail
         return self._commit()

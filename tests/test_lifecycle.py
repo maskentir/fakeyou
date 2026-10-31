@@ -455,3 +455,29 @@ async def test_a_failure_after_the_knock_is_not_retried(pinned_join_jitter: Jitt
     assert lifecycle.state["terminal_reason"] == "browser_failure"
     assert driver.outcomes() == [(1, "failed")]
     assert pinned_join_jitter.draws == []
+
+
+@pytest.mark.parametrize(
+    ("pending", "expected"),
+    [
+        ("alone_limit_reached", "alone_limit_reached"),
+        ("stopped_by_owner", "stopped_by_owner"),
+        (None, "browser_failure"),
+    ],
+)
+def test_a_failed_leave_keeps_the_reason_the_twin_was_leaving_for(
+    pending: str | None, expected: str
+) -> None:
+    lifecycle = _lifecycle("leaving", terminal_reason=pending)
+
+    lifecycle.send("leave_failed", "system_fault")
+
+    assert (lifecycle.phase, lifecycle.state["terminal_reason"]) == ("ended", expected)
+
+
+def test_a_browser_crash_while_leaving_still_reports_the_crash() -> None:
+    lifecycle = _lifecycle("leaving", terminal_reason="alone_limit_reached")
+
+    lifecycle.send("browser_failed", "system_fault")
+
+    assert lifecycle.state["terminal_reason"] == "browser_failure"
