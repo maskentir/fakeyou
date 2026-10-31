@@ -300,9 +300,7 @@ class WorkerConsumer:
 
     async def _start_join(self, meeting_id: str, entry_id: str, *, resume: bool) -> bool:
         snapshot = self._store.load(meeting_id)
-        status, error = await capture_error(
-            partial(asyncio.to_thread, self._status.get, meeting_id)
-        )
+        status, error = await capture_error(partial(self._status.get, meeting_id))
         if error is not None:
             logger.warning("status of meeting %s is unreadable: %s", meeting_id, error)
             return False

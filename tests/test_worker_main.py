@@ -18,6 +18,13 @@ class _ClosableTransport:
         return None
 
 
+class _ClosableStatus(MemorySessionStatus):
+    closed = 0
+
+    async def close(self) -> None:
+        type(self).closed += 1
+
+
 async def _started_roles(monkeypatch: pytest.MonkeyPatch, role: str) -> list[type[Any]]:
     started: list[type[Any]] = []
 
@@ -29,10 +36,12 @@ async def _started_roles(monkeypatch: pytest.MonkeyPatch, role: str) -> list[typ
 
     monkeypatch.setattr(worker_main, "run_consumers", capture)
     monkeypatch.setattr(worker_main, "verify_boot_dependencies", boot_ok)
-    monkeypatch.setattr(worker_main, "verify_session_schema", lambda _settings: None)
-    monkeypatch.setattr(
-        worker_main, "create_session_status", lambda _settings: MemorySessionStatus()
-    )
+
+    async def schema_is_current(_settings: Settings) -> None:
+        return None
+
+    monkeypatch.setattr(worker_main, "verify_session_schema", schema_is_current)
+    monkeypatch.setattr(worker_main, "create_session_status", lambda _settings: _ClosableStatus())
     monkeypatch.setattr(StreamTransport, "from_settings", lambda _settings: _ClosableTransport())
     await asyncio.wait_for(worker_main.serve(role), timeout=10)
     return started
@@ -42,7 +51,10 @@ async def _started_roles(monkeypatch: pytest.MonkeyPatch, role: str) -> list[typ
 async def test_sessions_role_runs_only_the_session_consumer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(_ClosableStatus, "closed", 0)
+
     assert await _started_roles(monkeypatch, "sessions") == [WorkerConsumer]
+    assert _ClosableStatus.closed == 1
 
 
 @pytest.mark.usefixtures("settings")

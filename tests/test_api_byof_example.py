@@ -1,6 +1,6 @@
 import importlib.util
 import json
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from pathlib import Path
 from types import ModuleType
 from typing import override
@@ -45,7 +45,7 @@ def example() -> ModuleType:
 
 
 class _FinishingWorkerTransport(SeededTransport):
-    def __init__(self, on_join: Callable[[str], None]) -> None:
+    def __init__(self, on_join: Callable[[str], Awaitable[None]]) -> None:
         super().__init__()
         self.jobs: list[tuple[str, dict[str, str]]] = []
         self._on_join = on_join
@@ -54,7 +54,7 @@ class _FinishingWorkerTransport(SeededTransport):
     async def publish_command(self, meeting_id: str, fields: Mapping[str, str]) -> str:
         entry = await super().publish_command(meeting_id, fields)
         if fields["type"] == "join":
-            self._on_join(meeting_id)
+            await self._on_join(meeting_id)
         return entry
 
     async def publish_job(self, stream: str, fields: Mapping[str, str]) -> str:
@@ -66,7 +66,7 @@ class _FinishingWorkerTransport(SeededTransport):
 async def api(settings: Settings) -> AsyncIterator[ApiEventsHarness]:
     harness = ApiEventsHarness(settings)
 
-    def finish_session(meeting_id: str) -> None:
+    async def finish_session(meeting_id: str) -> None:
         harness.seeded.seed_events(
             meeting_id,
             [
@@ -78,7 +78,7 @@ async def api(settings: Settings) -> AsyncIterator[ApiEventsHarness]:
                 ),
             ],
         )
-        harness.status.record_phase(
+        await harness.status.record_phase(
             meeting_id, "ended", STATUS_AT, terminal_reason="stopped_by_owner"
         )
         path = journal_path(harness.settings.paths.journal_dir, SessionId(meeting_id))

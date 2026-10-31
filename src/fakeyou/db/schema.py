@@ -40,15 +40,24 @@ def head_revision() -> str:
 
 def status(engine: Engine) -> SchemaStatus:
     with engine.connect() as connection:
-        return SchemaStatus(
-            current=_current_revision(connection),
-            head=head_revision(),
-            differences=_differences(connection),
-        )
+        return status_on(connection)
+
+
+def status_on(connection: Connection) -> SchemaStatus:
+    return SchemaStatus(
+        current=_current_revision(connection),
+        head=head_revision(),
+        differences=_differences(connection),
+    )
 
 
 def require_current(engine: Engine) -> None:
-    state = status(engine)
+    with engine.connect() as connection:
+        require_current_on(connection)
+
+
+def require_current_on(connection: Connection) -> None:
+    state = status_on(connection)
     if state.current != state.head:
         if state.current is None:
             raise FakeYouError(ErrorCode.DATABASE_SCHEMA_EMPTY, expected=state.head)

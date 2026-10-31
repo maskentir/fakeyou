@@ -12,6 +12,7 @@ from pydantic import SecretStr
 from fakeyou.api.app import ApiDeps, create_app
 from fakeyou.api.schemas import SessionCreate, build_snapshot
 from fakeyou.api.sessions import SessionStore
+from fakeyou.api.status import session_status
 from fakeyou.config.identifiers import SessionId, is_identifier
 from fakeyou.config.settings import Settings
 from fakeyou.foundation.taxonomy import PublicPhase, TerminalReason
@@ -74,10 +75,10 @@ class ApiHarness:
             ApiDeps(
                 transport=lambda: self.transport,
                 snapshot_store=lambda: self.store,
-                session_status=lambda: self.status,
                 now_iso=lambda: AT,
             ),
         )
+        self.app.dependency_overrides[session_status] = lambda: self.status
         self.client = httpx2.AsyncClient(
             transport=httpx2.ASGITransport(app=self.app), base_url=BASE_URL
         )
@@ -125,8 +126,10 @@ class ApiHarness:
         payload = {**SESSION_PAYLOAD, "meeting_id": session_id}
         create = SessionCreate.model_validate(payload)
         self.store.save_new(build_snapshot(create, meeting_id=session_id, at=AT))
-        self.status.create(session_id, create.owner_id, STATUS_AT)
-        self.status.record_phase(session_id, phase, STATUS_AT, terminal_reason=terminal_reason)
+        await self.status.create(session_id, create.owner_id, STATUS_AT)
+        await self.status.record_phase(
+            session_id, phase, STATUS_AT, terminal_reason=terminal_reason
+        )
         return session_id
 
     async def aclose(self) -> None:
@@ -142,7 +145,7 @@ async def api(settings: Settings) -> AsyncIterator[ApiHarness]:
         await harness.aclose()
 
 
-def _seed_foreign_session(api: ApiHarness, meeting_id: str) -> None:
+async def _seed_foreign_session(api: ApiHarness, meeting_id: str) -> None:
     create = SessionCreate.model_validate(
         {
             "link": "https://meet.google.com/abc-defg-hij",
@@ -152,7 +155,7 @@ def _seed_foreign_session(api: ApiHarness, meeting_id: str) -> None:
         }
     )
     api.store.save_new(build_snapshot(create, meeting_id=meeting_id, at=AT))
-    api.status.create(meeting_id, "other_owner", STATUS_AT)
+    await api.status.create(meeting_id, "other_owner", STATUS_AT)
 
 
 def _property_names(node: object) -> set[str]:
@@ -250,7 +253,7 @@ async def test_resume_and_stop_publish_exactly_their_commands(api: ApiHarness) -
 
 
 async def test_cross_owner_snapshot_is_a_404(api: ApiHarness) -> None:
-    _seed_foreign_session(api, "other-owner-1")
+    await _seed_foreign_session(api, "other-owner-1")
     response = await api.get("/v1/sessions/other-owner-1")
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "api.not_found"
@@ -258,7 +261,7 @@ async def test_cross_owner_snapshot_is_a_404(api: ApiHarness) -> None:
 
 async def test_list_returns_only_the_principal_sessions(api: ApiHarness) -> None:
     mine = (await api.post("/v1/sessions", json=SESSION_PAYLOAD)).json()
-    _seed_foreign_session(api, "other-owner-1")
+    await _seed_foreign_session(api, "other-owner-1")
     listed = (await api.get("/v1/sessions")).json()
     assert [item["meeting_id"] for item in listed] == [mine["meeting_id"]]
 
@@ -333,7 +336,7 @@ async def test_the_api_records_what_the_owner_wants_and_never_the_phase(api: Api
 
 async def test_a_finished_session_shows_why_it_ended(api: ApiHarness) -> None:
     meeting_id = (await api.post("/v1/sessions", json=SESSION_PAYLOAD)).json()["meeting_id"]
-    api.status.record_phase(
+    await api.status.record_phase(
         meeting_id,
         "ended",
         STATUS_AT,
@@ -386,4 +389,4 @@ async def test_a_session_whose_snapshot_cannot_be_written_leaves_no_status(
     with pytest.raises(OSError, match="disk full"):
         await api.post("/v1/sessions", json={**SESSION_PAYLOAD, "meeting_id": "m-disk"})
 
-    assert api.status.get("m-disk") is None
+    assert await api.status.get("m-disk") is None

@@ -3,12 +3,16 @@ from typing import cast
 from unittest.mock import patch
 
 import httpx2
+import pytest
 from fastapi import Request
 from pydantic import SecretStr
 
 from fakeyou.api.app import create_app
+from fakeyou.api.status import session_status
 from fakeyou.api.transport import shared_stream_transport
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import Settings
+from fakeyou.db.session_status import SessionStatusStore
 from fakeyou.transport.streams import StreamTransport
 
 
@@ -76,3 +80,38 @@ async def test_one_stream_transport_serves_every_request_and_closes_at_shutdown(
             assert isinstance(first, StreamTransport)
             assert first is second
     assert closed == [True]
+
+
+async def test_the_session_status_store_lives_for_the_app_and_closes_at_shutdown(
+    settings: Settings,
+) -> None:
+    app = create_app(settings)
+    request = cast(Request, SimpleNamespace(app=app))
+    closed: list[bool] = []
+
+    async def close(_store: SessionStatusStore) -> None:
+        closed.append(True)
+
+    async def current(_store: SessionStatusStore) -> None:
+        return None
+
+    with (
+        patch.object(SessionStatusStore, "close", close),
+        patch.object(SessionStatusStore, "require_current", current),
+    ):
+        async with app.router.lifespan_context(app):
+            first = await session_status(request)
+            second = await session_status(request)
+            assert isinstance(first, SessionStatusStore)
+            assert first is second
+    assert closed == [True]
+
+
+async def test_the_api_refuses_to_start_without_a_database(settings: Settings) -> None:
+    settings.database.url = None
+    app = create_app(settings)
+
+    with pytest.raises(FakeYouError, match="DATABASE__URL") as caught:
+        async with app.router.lifespan_context(app):
+            pass
+    assert caught.value.code is ErrorCode.DATABASE_URL_MISSING

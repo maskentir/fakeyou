@@ -21,6 +21,7 @@ from pydantic import SecretStr
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 import fakeyou.db.checkpoint as checkpoint_module
 import tests._join_runner as cli_join
@@ -39,7 +40,7 @@ from fakeyou.config.settings import (
     Settings,
     StoreSettings,
 )
-from fakeyou.db.engine import create_engine_for_url
+from fakeyou.db.engine import create_async_engine_for_url, create_engine_for_url
 from fakeyou.db.schema import upgrade
 from fakeyou.memory.persona import OperatorIdentity
 from fakeyou.orchestration import assembly
@@ -334,6 +335,17 @@ def migrated_engine(migrated_database_url: str) -> Iterator[Engine]:
         yield engine
     finally:
         engine.dispose()
+
+
+@pytest.fixture
+async def migrated_async_engine(migrated_database_url: str) -> AsyncIterator[AsyncEngine]:
+    engine = create_async_engine_for_url(
+        migrated_database_url, connect_timeout_seconds=5.0, statement_timeout_seconds=30.0
+    )
+    try:
+        yield engine
+    finally:
+        await engine.dispose()
 
 
 @pytest.fixture

@@ -6,15 +6,16 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, Protocol, cast
 
-from sqlalchemy import Engine, delete, select, update
+from sqlalchemy import Executable, delete, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.exc import DisconnectionError, OperationalError
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import Settings
-from fakeyou.db.engine import configured_url, create_engine_for_url, require_url
-from fakeyou.db.schema import require_current
+from fakeyou.db.engine import configured_url, create_async_engine_for_url, require_url
+from fakeyou.db.schema import require_current_on
 from fakeyou.db.tables import meeting_sessions
 from fakeyou.foundation.taxonomy import TERMINAL_PHASES, PublicPhase, TerminalReason
 
@@ -39,17 +40,19 @@ class SessionStatus:
 
 
 class SessionStatusRepository(Protocol):
-    def create(self, meeting_id: str, owner_id: str, at: datetime) -> SessionStatus | None: ...
+    async def create(
+        self, meeting_id: str, owner_id: str, at: datetime
+    ) -> SessionStatus | None: ...
 
-    def get(self, meeting_id: str) -> SessionStatus | None: ...
+    async def get(self, meeting_id: str) -> SessionStatus | None: ...
 
-    def list_for(self, owner_id: str) -> list[SessionStatus]: ...
+    async def list_for(self, owner_id: str) -> list[SessionStatus]: ...
 
-    def desire(
+    async def desire(
         self, meeting_id: str, state: DesiredState, at: datetime
     ) -> SessionStatus | None: ...
 
-    def record_phase(
+    async def record_phase(
         self,
         meeting_id: str,
         phase: PublicPhase,
@@ -59,15 +62,7 @@ class SessionStatusRepository(Protocol):
         detail: str | None = None,
     ) -> SessionStatus | None: ...
 
-    def discard(self, meeting_id: str) -> None: ...
-
-
-@contextmanager
-def _reachable() -> Iterator[None]:
-    try:
-        yield
-    except (OperationalError, DisconnectionError) as error:
-        raise FakeYouError(ErrorCode.DATABASE_UNREACHABLE) from error
+    async def discard(self, meeting_id: str) -> None: ...
 
 
 def _status(row: RowMapping) -> SessionStatus:
@@ -84,19 +79,32 @@ def _status(row: RowMapping) -> SessionStatus:
     )
 
 
+@contextmanager
+def _reachable() -> Iterator[None]:
+    try:
+        yield
+    except (OperationalError, DisconnectionError) as error:
+        raise FakeYouError(ErrorCode.DATABASE_UNREACHABLE) from error
+
+
 class SessionStatusStore:
-    def __init__(self, engine: Engine) -> None:
+    def __init__(self, engine: AsyncEngine) -> None:
         self._engine = engine
+        self._schema_current = False
 
-    def close(self) -> None:
-        self._engine.dispose()
+    async def close(self) -> None:
+        await self._engine.dispose()
 
-    def require_current(self) -> None:
+    async def require_current(self) -> None:
+        if self._schema_current:
+            return
         with _reachable():
-            require_current(self._engine)
+            async with self._engine.connect() as connection:
+                await connection.run_sync(require_current_on)
+        self._schema_current = True
 
-    def create(self, meeting_id: str, owner_id: str, at: datetime) -> SessionStatus | None:
-        statement = (
+    async def create(self, meeting_id: str, owner_id: str, at: datetime) -> SessionStatus | None:
+        return await self._first(
             insert(meeting_sessions)
             .values(
                 meeting_id=meeting_id,
@@ -109,28 +117,27 @@ class SessionStatusStore:
             .on_conflict_do_nothing(index_elements=[meeting_sessions.c.meeting_id])
             .returning(meeting_sessions)
         )
-        with _reachable(), self._engine.begin() as connection:
-            row = connection.execute(statement).mappings().first()
-        return None if row is None else _status(row)
 
-    def get(self, meeting_id: str) -> SessionStatus | None:
-        statement = select(meeting_sessions).where(meeting_sessions.c.meeting_id == meeting_id)
-        with _reachable(), self._engine.connect() as connection:
-            row = connection.execute(statement).mappings().first()
-        return None if row is None else _status(row)
+    async def get(self, meeting_id: str) -> SessionStatus | None:
+        return await self._first(
+            select(meeting_sessions).where(meeting_sessions.c.meeting_id == meeting_id)
+        )
 
-    def list_for(self, owner_id: str) -> list[SessionStatus]:
+    async def list_for(self, owner_id: str) -> list[SessionStatus]:
         statement = (
             select(meeting_sessions)
             .where(meeting_sessions.c.owner_id == owner_id)
             .order_by(meeting_sessions.c.created_at, meeting_sessions.c.meeting_id)
         )
-        with _reachable(), self._engine.connect() as connection:
-            rows = connection.execute(statement).mappings().all()
+        with _reachable():
+            async with self._engine.connect() as connection:
+                rows = (await connection.execute(statement)).mappings().all()
         return [_status(row) for row in rows]
 
-    def desire(self, meeting_id: str, state: DesiredState, at: datetime) -> SessionStatus | None:
-        statement = (
+    async def desire(
+        self, meeting_id: str, state: DesiredState, at: datetime
+    ) -> SessionStatus | None:
+        return await self._first(
             update(meeting_sessions)
             .where(
                 meeting_sessions.c.meeting_id == meeting_id,
@@ -140,11 +147,8 @@ class SessionStatusStore:
             .values(desired_state=state, updated_at=at)
             .returning(meeting_sessions)
         )
-        with _reachable(), self._engine.begin() as connection:
-            row = connection.execute(statement).mappings().first()
-        return None if row is None else _status(row)
 
-    def record_phase(
+    async def record_phase(
         self,
         meeting_id: str,
         phase: PublicPhase,
@@ -153,7 +157,7 @@ class SessionStatusStore:
         terminal_reason: TerminalReason | None = None,
         detail: str | None = None,
     ) -> SessionStatus | None:
-        statement = (
+        return await self._first(
             update(meeting_sessions)
             .where(
                 meeting_sessions.c.meeting_id == meeting_id,
@@ -162,21 +166,27 @@ class SessionStatusStore:
             .values(phase=phase, terminal_reason=terminal_reason, detail=detail, updated_at=at)
             .returning(meeting_sessions)
         )
-        with _reachable(), self._engine.begin() as connection:
-            row = connection.execute(statement).mappings().first()
-        return None if row is None else _status(row)
 
-    def discard(self, meeting_id: str) -> None:
-        statement = delete(meeting_sessions).where(meeting_sessions.c.meeting_id == meeting_id)
-        with _reachable(), self._engine.begin() as connection:
-            connection.execute(statement)
+    async def discard(self, meeting_id: str) -> None:
+        with _reachable():
+            async with self._engine.begin() as connection:
+                await connection.execute(
+                    delete(meeting_sessions).where(meeting_sessions.c.meeting_id == meeting_id)
+                )
+
+    async def _first(self, statement: Executable) -> SessionStatus | None:
+        with _reachable():
+            async with self._engine.begin() as connection:
+                row = (await connection.execute(statement)).mappings().first()
+        return None if row is None else _status(row)
 
 
 def create_session_status(settings: Settings) -> SessionStatusStore:
     database = settings.database
+    url = require_url(configured_url(settings))
     return SessionStatusStore(
-        create_engine_for_url(
-            require_url(configured_url(settings)),
+        create_async_engine_for_url(
+            url,
             connect_timeout_seconds=database.connect_timeout_seconds,
             statement_timeout_seconds=database.statement_timeout_seconds,
         )

@@ -9,7 +9,7 @@ class MemorySessionStatus:
     def __init__(self) -> None:
         self.rows: dict[str, SessionStatus] = {}
 
-    def create(self, meeting_id: str, owner_id: str, at: datetime) -> SessionStatus | None:
+    async def create(self, meeting_id: str, owner_id: str, at: datetime) -> SessionStatus | None:
         if meeting_id in self.rows:
             return None
         status = SessionStatus(
@@ -26,14 +26,16 @@ class MemorySessionStatus:
         self.rows[meeting_id] = status
         return status
 
-    def get(self, meeting_id: str) -> SessionStatus | None:
+    async def get(self, meeting_id: str) -> SessionStatus | None:
         return self.rows.get(meeting_id)
 
-    def list_for(self, owner_id: str) -> list[SessionStatus]:
+    async def list_for(self, owner_id: str) -> list[SessionStatus]:
         owned = [status for status in self.rows.values() if status.owner_id == owner_id]
         return sorted(owned, key=lambda status: (status.created_at, status.meeting_id))
 
-    def desire(self, meeting_id: str, state: DesiredState, at: datetime) -> SessionStatus | None:
+    async def desire(
+        self, meeting_id: str, state: DesiredState, at: datetime
+    ) -> SessionStatus | None:
         current = self.rows.get(meeting_id)
         if current is None or current.desired_state == state or current.phase in TERMINAL_PHASES:
             return None
@@ -41,7 +43,7 @@ class MemorySessionStatus:
         self.rows[meeting_id] = updated
         return updated
 
-    def record_phase(
+    async def record_phase(
         self,
         meeting_id: str,
         phase: PublicPhase,
@@ -59,5 +61,5 @@ class MemorySessionStatus:
         self.rows[meeting_id] = updated
         return updated
 
-    def discard(self, meeting_id: str) -> None:
+    async def discard(self, meeting_id: str) -> None:
         self.rows.pop(meeting_id, None)

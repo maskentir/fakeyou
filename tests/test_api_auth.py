@@ -13,6 +13,7 @@ from fakeyou.api.auth import Principal, TokenStore, require_owned
 from fakeyou.api.ratelimit import RateLimiter
 from fakeyou.api.schemas import SessionCreate, build_snapshot
 from fakeyou.api.sessions import SessionStore
+from fakeyou.api.status import session_status
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import Settings
 from tests._sanitize_support import SYNTHETIC_MARKERS, assert_no_synthetic_markers
@@ -74,8 +75,9 @@ async def _client(
     status = MemorySessionStatus()
     app = create_app(
         settings,
-        ApiDeps(test_routes=True, transport=transport_factory, session_status=lambda: status),
+        ApiDeps(test_routes=True, transport=transport_factory),
     )
+    app.dependency_overrides[session_status] = lambda: status
     async with httpx2.AsyncClient(
         transport=httpx2.ASGITransport(app=app), base_url="http://testserver"
     ) as client:
