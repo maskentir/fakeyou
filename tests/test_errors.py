@@ -194,6 +194,7 @@ def test_exit_code_classification_is_deliberate() -> None:
         ErrorCode.PERCEPTION_ROOT_MISSING,
         ErrorCode.PERSONA_IDENTITY_MISMATCH,
         ErrorCode.RECORD_VERSION_UNSUPPORTED,
+        ErrorCode.REPLAY_SCALE_INVALID,
         ErrorCode.REPLAY_SESSION_MISSING,
         ErrorCode.SESSION_ID_INVALID,
         ErrorCode.VOICEPRINT_AUDIO_FORMAT_UNSUPPORTED,

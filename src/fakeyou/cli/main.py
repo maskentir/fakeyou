@@ -1,5 +1,6 @@
 import asyncio
 import functools
+import math
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -32,7 +33,7 @@ from fakeyou.cli.memory import (
     twin_id_for,
 )
 from fakeyou.cli.output import emit_error, emit_json
-from fakeyou.cli.replay import replay_meeting, replay_report
+from fakeyou.cli.replay import ReplaySource, replay_meeting, replay_report
 from fakeyou.cli.sessions import (
     SessionOptions,
     resume_session,
@@ -73,6 +74,12 @@ def _note_id_value(value: str) -> UUID:
         return UUID(value)
     except ValueError:
         raise typer.BadParameter(render_error(ErrorCode.NOTE_ID_NOT_UUID, value=value)) from None
+
+
+def _latency_scale_value(value: float) -> float:
+    if not math.isfinite(value) or value < 0:
+        raise typer.BadParameter(render_error(ErrorCode.REPLAY_SCALE_INVALID, value=value))
+    return value
 
 
 def _load_settings() -> Settings:
@@ -333,15 +340,21 @@ def replay_command(
     journal_dir: Annotated[Path | None, typer.Option("--journal-dir")] = None,
     record_dir: Annotated[Path | None, typer.Option("--record-dir")] = None,
     out: Annotated[Path | None, typer.Option("--out")] = None,
+    reply_latency_scale: Annotated[
+        float,
+        typer.Option("--reply-latency-scale", callback=_latency_scale_value),
+    ] = 1.0,
 ) -> None:
     settings = _load_settings()
     parsed = parse_session_id(meeting_id, field="--meeting-id")
     result = replay_meeting(
         parsed,
         settings=settings,
-        journal_dir=journal_dir or settings.paths.journal_dir,
-        record_dir=record_dir or settings.paths.record_dir,
+        source=ReplaySource(
+            journal_dir or settings.paths.journal_dir, record_dir or settings.paths.record_dir
+        ),
         out=out,
+        reply_latency_scale=reply_latency_scale,
     )
     emit_json(replay_report(str(parsed), result))
     if not result.comparison.passed:
