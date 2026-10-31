@@ -160,6 +160,9 @@ def _terminal_result(
 _STOPPED_BEFORE_JOIN = "owner stopped before guest join"
 _STOPPED_BEFORE_RETRY = "owner stopped before join retry"
 OBSERVATION_GRACE_SECONDS = 60.0
+REJOIN_LIMIT = 3
+REJOIN_WINDOW_SECONDS = 600.0
+REJOIN = "the browser crashed and the twin joins again"
 DOM_PRESENCE_FRESH_SECONDS = 30.0
 NOTICE_DISMISS_SECONDS = 5.0
 
@@ -1376,6 +1379,50 @@ async def drive_session(
     journal = _resolve_journal(hooks, config)
     if lifecycle.terminal:
         return "session already ended"
+    rejoins: list[float] = []
+    while True:
+        drive = _Drive(config, hooks, stop_event, resources, lifecycle, journal, rejoins)
+        detail = await _drive_once(drive)
+        if detail != REJOIN:
+            return detail
+        if not _may_rejoin(rejoins, hooks.monotonic()):
+            return drive.detail
+        lifecycle.reset(initial_lifecycle_state(config.owner_id, config.twin_id, config.meeting_id))
+        journal.record(
+            "browser_rejoined",
+            source="runtime",
+            attempt=len(rejoins),
+            detail="the browser crashed and the twin joins again",
+        )
+
+
+def _may_rejoin(rejoins: list[float], now: float) -> bool:
+    while rejoins and now - rejoins[0] > REJOIN_WINDOW_SECONDS:
+        rejoins.pop(0)
+    return len(rejoins) <= REJOIN_LIMIT
+
+
+@dataclass(slots=True)
+class _Drive:
+    config: SessionConfig
+    hooks: SessionWiring
+    stop_event: asyncio.Event
+    resources: TeardownStack
+    lifecycle: SessionLifecycle
+    journal: Journal
+    rejoins: list[float]
+    crash: Exception = field(default_factory=lambda: RuntimeError("the browser crashed"))
+    detail: str = ""
+
+
+async def _drive_once(drive: _Drive) -> str:
+    config, hooks = drive.config, drive.hooks
+    stop_event, resources, lifecycle, journal = (
+        drive.stop_event,
+        drive.resources,
+        drive.lifecycle,
+        drive.journal,
+    )
 
     async def attempt() -> str:
         return await startup_session(config, hooks, stop_event, resources, lifecycle)
@@ -1403,9 +1450,27 @@ async def drive_session(
             return "owner requested stop"
         if isinstance(error, ConversationError):
             return await _record_conversation_failure(lifecycle, journal, error)
-        return await _record_browser_failure(lifecycle, journal, error)
+        leaving = lifecycle.phase == "leaving"
+        detail = await _record_browser_failure(lifecycle, journal, error)
+        if not leaving and _browser_crashed(lifecycle):
+            drive.rejoins.append(hooks.monotonic())
+            drive.crash = error
+            drive.detail = detail
+            return REJOIN
+        return detail
     assert outcome is not None
+    if _browser_crashed(lifecycle):
+        drive.rejoins.append(hooks.monotonic())
+        return REJOIN
     return outcome
+
+
+def _browser_crashed(lifecycle: SessionLifecycle) -> bool:
+    return (
+        lifecycle.state.get("terminal_reason") == "browser_failure"
+        and lifecycle.last_event == "browser_failed"
+        and lifecycle.phase != "leaving"
+    )
 
 
 async def run_meeting_session(

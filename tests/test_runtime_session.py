@@ -13,6 +13,7 @@ from fakeyou.meet.meet import CallObservation
 from fakeyou.observability.journal import Journal
 from fakeyou.orchestration.runtime import (
     OBSERVATION_GRACE_SECONDS,
+    REJOIN_LIMIT,
     SessionWiring,
     run_meeting_session,
     session_resources,
@@ -192,13 +193,13 @@ async def test_run_meeting_session_sanitizes_browser_failure_detail() -> None:
 
     assert result.phase == "ended"
     assert result.terminal_reason == "browser_failure"
-    assert result.detail == "browser session failed (RuntimeError)"
     assert "secret-token" not in result.detail
     rows = [json.loads(line) for line in events]
     details = [row for row in rows if row["event"] == "browser_error_recorded"]
-    assert len(details) == 1
+    assert len(details) == REJOIN_LIMIT + 1
     assert details[0]["error"] == "boom secret-token"
     assert details[0]["error_type"] == "RuntimeError"
+    assert len([row for row in rows if row["event"] == "browser_rejoined"]) == REJOIN_LIMIT
 
 
 async def test_run_meeting_session_records_bounded_traceback_on_browser_failure() -> None:
@@ -223,10 +224,12 @@ async def test_run_meeting_session_records_bounded_traceback_on_browser_failure(
 
     assert result.phase == "ended"
     rows = [json.loads(line) for line in events]
-    [detail] = [row for row in rows if row["event"] == "browser_error_recorded"]
-    assert "RuntimeError" in detail["traceback"]
-    assert "failing_open" in detail["traceback"]
-    assert len(detail["traceback"]) <= 2000
+    details = [row for row in rows if row["event"] == "browser_error_recorded"]
+    assert len(details) == REJOIN_LIMIT + 1
+    for detail in details:
+        assert "RuntimeError" in detail["traceback"]
+        assert "failing_open" in detail["traceback"]
+        assert len(detail["traceback"]) <= 2000
 
 
 async def test_run_meeting_session_records_bounded_traceback_on_conversation_failure() -> None:
@@ -479,7 +482,7 @@ async def test_monitor_poll_should_persist_through_the_supplied_journal(tmp_path
             "",
         ),
         ([], [], {NAME_SELECTOR: [0]}, {}, "browser_failure", "name field"),
-        ([RuntimeError("cdp gone")], [], {}, {}, "browser_failure", ""),
+        ([RuntimeError("cdp gone")], [], {}, {}, "browser_failure", "browser session failed"),
         ([IN_CALL, IN_CALL, REMOVED], [], {}, {}, "removed_by_host", ""),
         ([IN_CALL, IN_CALL, ENDED], [], {}, {}, "ended_by_host", ""),
     ],
@@ -494,7 +497,7 @@ async def test_run_meeting_session_reports_terminal_outcome(
     assert result.phase == "ended"
     assert result.terminal_reason == expected
     assert detail in result.detail
-    assert browser.closed == 1
+    assert browser.closed >= 1
 
 
 async def test_run_meeting_session_journals_why_the_join_failed() -> None:
@@ -608,3 +611,64 @@ async def test_run_meeting_session_fails_fast_when_the_page_itself_errors_twice(
     [lost] = journal.events("ui_observation_expired")
     assert lost["failing_ms"] < OBSERVATION_GRACE_SECONDS * 1000
     assert len(journal.events("watchdog_failed")) == 2
+
+
+async def test_a_crashed_browser_joins_again_before_the_session_ends() -> None:
+    events: list[str] = []
+    journal = Journal("meeting-1", emit=events.append, echo=False)
+    clock = FakeClock()
+    opened = 0
+
+    @asynccontextmanager
+    async def open_page(**kwargs: Any) -> AsyncIterator[FakePage]:
+        nonlocal opened
+        del kwargs
+        opened += 1
+        if opened == 1:
+            raise RuntimeError("the browser died")
+        yield meet_page([IN_CALL, IN_CALL, ENDED])
+
+    result = await run_meeting_session(
+        session_config(),
+        SessionWiring(
+            open_page=open_page,
+            sleep=clock.sleep,
+            monotonic=clock.monotonic,
+            journal=journal,
+        ),
+    )
+
+    rows = [json.loads(line) for line in events]
+    rejoined = [row for row in rows if row["event"] == "browser_rejoined"]
+    assert len(rejoined) == 1
+    assert rejoined[0]["attempt"] == 1
+    assert result.phase == "ended"
+    assert result.terminal_reason == "ended_by_host"
+    assert opened == 2
+
+
+async def test_a_browser_that_keeps_crashing_gives_up_after_three_rejoins() -> None:
+    events: list[str] = []
+    journal = Journal("meeting-1", emit=events.append, echo=False)
+    clock = FakeClock()
+
+    @asynccontextmanager
+    async def open_page(**kwargs: Any) -> AsyncIterator[FakePage]:
+        del kwargs
+        raise RuntimeError("the browser died")
+        yield
+
+    result = await run_meeting_session(
+        session_config(),
+        SessionWiring(
+            open_page=open_page,
+            sleep=clock.sleep,
+            monotonic=clock.monotonic,
+            journal=journal,
+        ),
+    )
+
+    rows = [json.loads(line) for line in events]
+    assert len([row for row in rows if row["event"] == "browser_rejoined"]) == REJOIN_LIMIT
+    assert (result.phase, result.terminal_reason) == ("ended", "browser_failure")
+    assert "RuntimeError" in result.detail

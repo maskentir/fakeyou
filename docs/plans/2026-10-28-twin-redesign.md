@@ -368,6 +368,14 @@ untuk event SSE, override key, dan job ingestion/debrief/reembed. A2b
 (rejoin browser di attempt yang sama) dan A2c (rehydrate kernel dari
 `record.jsonl`) menyusul.
 
+Implementasi A2b (2026-10-31): crash browser di dalam call membuka epoch
+browser baru dan join lagi, maksimal tiga kali per sepuluh menit
+(`REJOIN_LIMIT`, `REJOIN_WINDOW_SECONDS`); tiap rejoin mencatat event
+`browser_rejoined`. Crash saat leaving tetap terminal, dan crash yang terjadi
+setelah jatah habis mengakhiri sesi sebagai `browser_failure` dengan detail
+crash terakhir. Siklus hidup sesi di-reset ke `created` tiap rejoin, jadi
+phase, reason, dan detail terminal ikut hilang.
+
 ### A3: Join dan lobby
 
 - Knock sekali. Hanya kegagalan sebelum knock (navigasi, nama, tombol join)
