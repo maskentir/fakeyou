@@ -48,9 +48,14 @@ class FakeButton:
     def __init__(self, dialog: FakeDialog) -> None:
         self._dialog = dialog
 
-    @property
-    def first(self) -> "FakeButton":
+    async def count(self) -> int:
+        return self._dialog.roles.count("button")
+
+    def nth(self, _position: int) -> "FakeButton":
         return self
+
+    async def is_visible(self) -> bool:
+        return True
 
     async def click(self, **_kwargs: Any) -> None:
         self._dialog.clicks += 1
@@ -219,7 +224,7 @@ async def test_a_dialog_must_be_stable_for_two_checks_before_it_is_handled() -> 
     watchdog = watchdog_for(FakeDialogPage(dialog))
 
     first = await watchdog.check()
-    dialog.text = "Recording started for everyone Got it"
+    dialog.roles = ["button", "link"]
     second = await watchdog.check()
     third = await watchdog.check()
 
@@ -414,3 +419,31 @@ async def test_the_picker_the_sign_in_notice_and_the_countdown_never_end_the_ses
     assert "manual_action_required" not in kinds
     assert kinds.count("modal_dismissed") == 3
     assert remaining == 0
+
+
+async def test_a_ticking_countdown_keeps_its_fingerprint() -> None:
+    dialog = FakeDialog("Your call ends in 5 minutes", ["button", "button"])
+    watchdog = watchdog_for(FakeDialogPage(dialog))
+
+    await watchdog.check()
+    handled = await watchdog.check()
+    dialog.text = "Your call ends in 4 minutes"
+    later = await watchdog.check()
+
+    assert [event.kind for event in handled.events] == ["modal_observed"]
+    assert later.events == ()
+    assert dialog.pressed == ["Escape"]
+
+
+async def test_typing_into_an_escalated_form_keeps_its_deadline() -> None:
+    dialog = form()
+    now = [10.0]
+    watchdog = watchdog_for(FakeDialogPage(dialog), *[LOBBY] * 4, now=now)
+    await watchdog.check()
+    escalated = await watchdog.check()
+    dialog.text = "Enter your name Rani Continue"
+    now[0] = 400.0
+    expired = await watchdog.check()
+
+    assert [event.kind for event in escalated.events] == ["manual_action_required"]
+    assert [event.kind for event in expired.events] == ["manual_action_expired"]

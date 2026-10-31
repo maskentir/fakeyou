@@ -41,6 +41,11 @@ _INPUT_ROLES = frozenset(
         "switch",
         "slider",
         "spinbutton",
+        "tab",
+        "option",
+        "treeitem",
+        "menuitemcheckbox",
+        "menuitemradio",
     }
 )
 
@@ -90,7 +95,7 @@ async def _read_modals(page: Page) -> list[_Modal]:
         roles = [
             match.group(1) for match in map(_SNAPSHOT_ROLE.match, snapshot.splitlines()) if match
         ]
-        fingerprint = hashlib.sha256(snapshot.encode()).hexdigest()
+        fingerprint = hashlib.sha256("\n".join(roles).encode()).hexdigest()
         if fingerprint not in seen:
             result.append(
                 _Modal(
@@ -105,8 +110,20 @@ async def _read_modals(page: Page) -> list[_Modal]:
     return result
 
 
-def _dialog_button(index: int) -> str:
-    return f'xpath={_DIALOG_XPATH}[{index + 1}]//*[self::button or @role="button"]'
+def _dialog_buttons(index: int) -> str:
+    return (
+        f"xpath={_DIALOG_XPATH}[{index + 1}]//*[(self::button or @role='button') and "
+        "not(ancestor-or-self::*[@aria-hidden='true' or @hidden])]"
+    )
+
+
+async def _click_visible_button(page: Page, index: int) -> None:
+    buttons = page.locator(_dialog_buttons(index))
+    for position in range(await buttons.count()):
+        button = buttons.nth(position)
+        if await button.is_visible():
+            await button.click(timeout=2000)
+            return
 
 
 async def _current(page: Page, fingerprint: str) -> _Modal | None:
@@ -126,9 +143,9 @@ async def close_modal(page: Page, modal: _Modal) -> bool:
         if current is None:
             return True
         if current.notice and current.buttons == 1:
-            await page.locator(_dialog_button(current.index)).first.click(timeout=2000)
+            await _click_visible_button(page, current.index)
             return await _current(page, modal.fingerprint) is None
-    except (PlaywrightError, ActionabilityError):
+    except (PlaywrightError, ActionabilityError, TypeError):
         return False
     return False
 
@@ -220,8 +237,8 @@ class UIWatchdog:
             return
         if fingerprint in self._handled:
             return
-        self._handled.add(fingerprint)
         closed = not modal.inputs and await close_modal(self._page, modal)
+        self._handled.add(fingerprint)
         events.append(
             WatchdogEvent(
                 "modal_dismissed" if closed else "modal_observed", fingerprint, modal.text
