@@ -40,6 +40,26 @@ def test_the_window_holds_speech_and_the_twin_in_order(tmp_path: Path) -> None:
     record.close()
 
 
+def test_the_window_carries_the_transcript_it_came_from(tmp_path: Path) -> None:
+    record = _record(tmp_path)
+    latest = event("t9", "Rani, when is the beta?", participant_id="ayu")
+    record.add_transcript(latest)
+
+    window = WindowSource(record, window_lines=8).for_final(latest, twin_speaking=False)
+
+    assert window.transcript_id == "t9"
+    record.close()
+
+
+def test_an_interim_window_has_no_transcript(tmp_path: Path) -> None:
+    record = _record(tmp_path)
+
+    window = WindowSource(record, window_lines=8).for_interim("still talking", twin_speaking=True)
+
+    assert window.transcript_id is None
+    record.close()
+
+
 def test_the_window_keeps_only_the_latest_lines(tmp_path: Path) -> None:
     record = _record(tmp_path)
     for index in range(5):

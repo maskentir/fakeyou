@@ -156,6 +156,7 @@ class JudgeWindow:
     twin_speaking: bool = False
     names_twin: bool = False
     presence: PresenceFact | None = None
+    transcript_id: str | None = None
 
     @property
     def sole_human_responder(self) -> bool:
@@ -221,6 +222,7 @@ class WindowSource:
             twin_speaking,
             names_twin=self._names_twin(event.text),
             presence=self._presence(),
+            transcript_id=event.id,
         )
 
     def for_interim(self, text: str, *, twin_speaking: bool) -> JudgeWindow:

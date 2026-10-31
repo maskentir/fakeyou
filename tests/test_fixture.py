@@ -53,7 +53,7 @@ def session() -> tuple[list[dict[str, Any]], list[RecordEntry]]:
             request_id="r1",
             transcript_id="t1",
         ),
-        row("answer_sentence_emitted", 3.0, transcript_id="t1", sentence_index=0, chars=12),
+        row("answer_sentence_emitted", 3.0, transcript_id="t1", sentence_index=0, chars=11),
         row("answer_sentence_emitted", 3.5, transcript_id="t1", sentence_index=1, chars=20),
         row(
             "request_finished",
@@ -65,13 +65,23 @@ def session() -> tuple[list[dict[str, Any]], list[RecordEntry]]:
             duration_ms=1100.0,
         ),
         row(
+            "synthesis_started",
+            3.8,
+            request_id="s1",
+            transcript_id="t1",
+            sentence_index=0,
+            chars=11,
+        ),
+        row(
             "synthesis_finished",
             3.9,
+            request_id="s1",
             transcript_id="t1",
             sentence_index=0,
             first_chunk_ms=300.0,
             duration_ms=450.0,
             bytes_out=9600,
+            chars=11,
         ),
         row("synthesis_finished", 4.0, first_chunk_ms=200.0, duration_ms=300.0),
         row("transcript_finalized", 6.0, transcript_id="t2"),
@@ -136,7 +146,7 @@ def test_replies_keep_request_timing_sentences_and_spoken_text() -> None:
 
     answered = fixture.replies["t1"]
     assert answered.duration_ms == 1100.0
-    assert [(s.index, s.chars) for s in answered.sentences] == [(0, 12), (1, 20)]
+    assert [(s.index, s.chars) for s in answered.sentences] == [(0, 11)]
     assert answered.sentences[0].offset_ms == pytest.approx(500)
     assert answered.spoken == ("Yes, I can.",)
     cancelled = fixture.replies["t2"]
@@ -146,7 +156,24 @@ def test_replies_keep_request_timing_sentences_and_spoken_text() -> None:
 def test_only_keyed_syntheses_are_kept() -> None:
     fixture = build_fixture(*session())
 
-    assert fixture.syntheses == {("t1", 0): SynthesisTiming(300.0, 450.0, 9600)}
+    assert fixture.syntheses == {("t1", 0): SynthesisTiming(300.0, 450.0, 9600, 11)}
+    assert fixture.synthesized == {("t1", 0): 11}
+
+
+def test_a_sentence_takes_the_text_that_was_actually_spoken() -> None:
+    fixture = build_fixture(*session())
+
+    answered = fixture.replies["t1"]
+    assert [(sentence.index, sentence.text) for sentence in answered.sentences] == [
+        (0, "Yes, I can.")
+    ]
+    assert answered.spoken == ("Yes, I can.",)
+
+
+def test_a_sentence_that_never_reached_the_synthesizer_is_not_replayed() -> None:
+    fixture = build_fixture(*session())
+
+    assert [sentence.index for sentence in fixture.replies["t1"].sentences] == [0]
 
 
 def test_an_empty_journal_cannot_be_replayed() -> None:
