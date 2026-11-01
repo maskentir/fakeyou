@@ -976,6 +976,62 @@ Bentuk PR:
 - B5b-3, ElevenLabs websocket (multi-context). Belum ada key ElevenLabs di
   `.env`, jadi adapter ini diuji dengan fixture protokol dan menunggu key
   untuk verifikasi live.
+- B5b-3, implementasi (2026-11-01): adapter HTTP ElevenLabs diganti websocket
+  `multi-stream-input`. Mesin koneksi Cartesia (task penulis, task pembaca,
+  routing per context, kalimat terikat ke socket, reconnect) diangkat ke
+  `speech/websocket.py` dan dipakai kedua adapter; tiap provider hanya
+  memberi dialek (cara membaca context id, error tanpa context, arti kode
+  close). Keputusan yang berbeda dari Cartesia:
+  - Satu context per kalimat, bukan per turn. Protokol ElevenLabs tidak
+    punya penanda akhir flush (tidak ada `flush_id`/`flush_done`); satu-satunya
+    batas pasti adalah `isFinal` saat context ditutup. Jadi kalimat dikirim
+    sebagai `{"text": " "}`, `{"text": "<kalimat> ", "flush": true}`,
+    `{"close_context": true}` di context baru. Harganya prosodi tidak
+    menyambung antar kalimat; untungnya kalimat lookahead disintesis paralel.
+    Batas 5 context per koneksi cukup untuk kalimat aktif, dua lookahead,
+    dan cue.
+  - Satu socket per bahasa, karena `language_code` adalah query parameter
+    socket.
+  - Timing kata dirakit dari `alignment` per karakter (`chars`,
+    `charStartTimesMs`, `charDurationsMs`), yang menurut dokumen relatif ke
+    chunk, jadi digeser dengan durasi audio kalimat sebelum chunk itu; kata
+    yang terbelah dua chunk disambung.
+  - Error: pesan JSON berisi `message`/`error` tanpa audio, atau close dengan
+    kode selain 1000 (pola SDK resmi). Teksnya diklasifikasikan: kuota atau
+    kredit jadi `payment_required`, API key jadi `unauthorized`,
+    `max_active_conversations` atau rate jadi `rate_limited`; sisanya
+    `bad_request` untuk 1008 dan `unavailable` lainnya.
+  - `contextId`/`context_id` dan `isFinal`/`is_final` sama-sama dibaca, karena
+    dokumen ElevenLabs sendiri memakai keduanya.
+  - Pertahanan untuk hal yang belum terverifikasi: kalimat yang audionya
+    sudah datang lalu sunyi 2 s dianggap selesai walau `isFinal` tidak
+    datang (tanpa ini tiap kalimat tertahan 45 s oleh timeout engine);
+    alignment yang rusak hanya membuang timing, audionya tetap diputar;
+    `normalizedAlignment` tidak dipakai karena ejaannya bukan teks yang
+    ditulis twin ("25" jadi "twenty five").
+  - Context yang ditinggal engine (retry, pindah ke fallback, kalimat
+    lookahead yang dibuang) mengirim `close_context`, supaya slot dari batas
+    5 context tidak bocor; `finish` tidak lagi melupakan context yang masih
+    terbuka, jadi `cancel` sesudahnya tetap menutupnya.
+  - `language_code` hanya dikirim untuk model yang memakainya (bukan
+    `eleven_multilingual_v1/v2` dan `eleven_monolingual`); model itu memakai
+    satu socket untuk semua bahasa.
+  - `aclose` menutup synthesizer: kalimat yang datang sesudahnya gagal tanpa
+    membuka socket baru.
+  - Klasifikasi teks diperketat: "permission" dan "too many" tanpa
+    "requests" tidak lagi jadi `unauthorized`/`rate_limited`, karena dua-duanya
+    fault yang menahan provider.
+  Perbaikan bersama yang ikut ke Cartesia: error yang membawa id context yang
+  sudah ditutup tidak lagi menggagalkan context lain di socket itu;
+  `cancel`/`close_context` hanya dikirim untuk context yang sudah sampai ke
+  socket; kiriman pertama sebuah context yang gagal karena socket sudah mati
+  dicoba sekali di socket baru (socket yang ditutup server saat idle tidak
+  lagi menggagalkan kalimat berikutnya); socket yang hidup ≥ 10 s lalu
+  ditutup server dibuka lagi di background bila koneksi sudah di-warm, jadi
+  jawaban setelah diam lama tidak membayar connect; dial dijaga lock supaya
+  tidak ada dua socket. Belum terverifikasi live (menunggu key): `isFinal`
+  setelah `close_context`, alignment relatif per chunk, teks error asli, dan
+  apakah socket ditutup server setelah `inactivity_timeout` 180 s.
 
 ### B1: Floor actor
 

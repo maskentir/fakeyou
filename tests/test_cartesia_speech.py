@@ -13,14 +13,10 @@ from websockets.http11 import Response
 
 from fakeyou.config.settings import CartesiaTTS
 from fakeyou.observability.provider_faults import ProviderFault
-from fakeyou.speech.cartesia import (
-    CartesiaSocket,
-    CartesiaSpeechSynthesizer,
-    connect_cartesia,
-    socket_url,
-)
+from fakeyou.speech.cartesia import CartesiaSpeechSynthesizer, connect_cartesia, socket_url
 from fakeyou.speech.contract import SpeechSegment
 from fakeyou.speech.fallback import SpeechWithFallback
+from fakeyou.speech.websocket import SpeechSocket
 from tests._persistence_fakes import RecordingJournal
 from tests._prepared_support import SentenceSynth
 
@@ -66,7 +62,7 @@ class Opener:
         self.opened = 0
         self.opening = asyncio.Event()
 
-    async def __call__(self) -> CartesiaSocket:
+    async def __call__(self) -> SpeechSocket:
         self.opened += 1
         self.opening.set()
         return self._sockets.pop(0)
@@ -225,7 +221,7 @@ async def test_a_lost_socket_fails_the_open_sentences_and_the_next_one_reconnect
 
 
 async def test_a_failed_handshake_fails_the_sentence() -> None:
-    async def refuse() -> CartesiaSocket:
+    async def refuse() -> SpeechSocket:
         raise ProviderFault("tts", "unauthorized")
 
     voice = CartesiaSpeechSynthesizer(api_key="k", settings=SETTINGS, opener=refuse)
@@ -409,32 +405,80 @@ async def test_an_error_without_a_context_fails_the_sentences_on_that_socket() -
     await voice.aclose()
 
 
-async def test_a_stale_reader_does_not_fail_sentences_on_the_new_socket() -> None:
-    class FailingSend(FakeSocket):
-        @override
-        async def send(self, message: str) -> None:
-            raise OSError(f"broken pipe while sending {len(message)} bytes")
+class FailingSend(FakeSocket):
+    @override
+    async def send(self, message: str) -> None:
+        raise OSError(f"broken pipe while sending {len(message)} bytes")
 
+
+async def test_a_first_send_on_a_dead_socket_moves_to_a_fresh_one() -> None:
     stale, fresh = FailingSend(), FakeSocket()
-    voice = synthesizer(Opener(stale, fresh))
-    lost = voice.open_turn(transcript_id="t1").speak("Hello.")
-    with pytest.raises(ProviderFault):
-        await drained(lost)
+    opener = Opener(stale, fresh)
+    voice = synthesizer(opener)
+    alive = voice.open_turn(transcript_id="t1").speak("Hello.")
 
-    alive = voice.open_turn(transcript_id="t2").speak("Again.")
-    [two] = await sent(fresh, 1)
+    [one] = await sent(fresh, 1)
     stale.inbox.put_nowait(OSError("reset by peer"))
-    fresh.chunk(two["context_id"], 0, b"\x06\x00")
-    fresh.push(type="flush_done", context_id=two["context_id"], flush_id=0, done=False)
+    fresh.chunk(one["context_id"], 0, b"\x06\x00")
+    fresh.push(type="flush_done", context_id=one["context_id"], flush_id=0, done=False)
 
     assert await drained(alive) == b"\x06\x00"
+    assert (opener.opened, stale.closed) == (2, True)
+    await voice.aclose()
+
+
+async def test_a_sentence_whose_send_fails_twice_fails() -> None:
+    voice = synthesizer(Opener(FailingSend(), FailingSend()))
+    lost = voice.open_turn(transcript_id="t1").speak("Hello.")
+
+    with pytest.raises(ProviderFault) as caught:
+        await drained(lost)
+    assert caught.value.kind == "unavailable"
+    await voice.aclose()
+
+
+async def test_an_error_for_a_finished_context_leaves_the_others_alone() -> None:
+    socket = FakeSocket()
+    voice = synthesizer(Opener(socket))
+    first = voice.open_turn(transcript_id="t1")
+    done = first.speak("Done.")
+    [one] = await sent(socket, 1)
+    socket.chunk(one["context_id"], 0, b"\x01\x00")
+    socket.push(type="done", context_id=one["context_id"], done=True)
+    await drained(done)
+    alive = voice.open_turn(transcript_id="t2").speak("Alive.")
+    [_, two] = await sent(socket, 2)
+
+    socket.push(type="error", context_id=one["context_id"], status_code=400, message="gone")
+    socket.chunk(two["context_id"], 0, b"\x02\x00")
+    socket.push(type="done", context_id=two["context_id"], done=True)
+
+    assert await drained(alive) == b"\x02\x00"
+    await voice.aclose()
+
+
+async def test_a_turn_cancelled_before_its_text_was_sent_sends_no_cancel() -> None:
+    socket = FakeSocket()
+    voice = synthesizer(Opener(socket))
+    voice.open_turn(transcript_id="t1").speak("First.")
+    await sent(socket, 1)
+    turn = voice.open_turn(transcript_id="t2")
+    segment = turn.speak("Second.")
+
+    await turn.cancel()
+    assert await drained(segment) == b""
+    voice.open_turn(transcript_id="t3").speak("Third.")
+    [_, third] = await sent(socket, 2)
+
+    assert "cancel" not in third
+    assert len(socket.sent) == 2
     await voice.aclose()
 
 
 async def test_an_offline_provider_is_dialled_once_per_failed_context() -> None:
     attempts = 0
 
-    async def offline() -> CartesiaSocket:
+    async def offline() -> SpeechSocket:
         nonlocal attempts
         attempts += 1
         raise ProviderFault("tts", "unavailable")
@@ -463,7 +507,7 @@ async def test_a_blank_sentence_is_never_sent() -> None:
 
 
 async def test_a_refused_handshake_is_a_typed_fault(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def refuse(*_args: object, **_kwargs: object) -> CartesiaSocket:
+    async def refuse(*_args: object, **_kwargs: object) -> SpeechSocket:
         raise InvalidStatus(Response(401, "Unauthorized", Headers()))
 
     monkeypatch.setattr(websockets, "connect", refuse)
