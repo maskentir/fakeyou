@@ -7,10 +7,10 @@ from typing import Any, override
 
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation import turn_graph, turn_recovery
+from fakeyou.conversation.floor import SpeechFloor
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_events import TurnEvent
 from fakeyou.conversation.turn_graph import (
-    SpeechFloor,
     SpeechInput,
     SpeechRuntime,
     TurnRuntime,
@@ -123,7 +123,13 @@ async def start_held_speech(
             _run(
                 graph,
                 speech_input(floor.generation),
-                SpeechRuntime(responder=responder, sink=sink, journal=journal, floor=floor),
+                SpeechRuntime(
+                    responder=responder,
+                    sink=sink,
+                    journal=journal,
+                    floor=floor,
+                    held=True,
+                ),
             )
         )
     )

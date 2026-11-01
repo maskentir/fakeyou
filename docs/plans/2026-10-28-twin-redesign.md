@@ -1203,12 +1203,49 @@ Bentuk PR:
   (`turn_payload_dropped`); setelah call berakhir sinyal giliran tidak
   diteruskan. Interim yang dibuang mailbox saat jenuh tetap hilang (sifat
   ephemeral kernel).
-- B1b, actor. `FloorActor` dan `TurnRunner` menggantikan lifecycle, ingress,
-  queue, floor, latch, dan ketiga graph; `TurnFeed` menulis ke mailbox
-  actor; perbaikan bug di atas. Gate: tes property (Hypothesis, urutan acak
-  VAD, interim, final, chat, perhatian, verdict, event playback, pause)
-  bahwa tidak pernah ada dua giliran aktif, tidak ada `speak_prepared` setelah
-  yield, tidak ada ucapan saat pause; replay oue-4 tidak memburuk.
+- B1b dipecah menjadi tiga PR (2026-11-01), karena ketergantungannya:
+  `meeting_turns.py` dan `assembly.py` adalah pintu utama, sedangkan judge,
+  planner, recovery, dan gate composer tetap dipakai apa adanya.
+  - B1b-1, pemilik state floor. Implementasi (2026-11-01): `SpeechFloor`
+    dan `ActiveSpeech` pindah dari `turn_graph.py` ke `conversation/floor.py`
+    tanpa mengubah perilaku (nama tetap; rename ke `FloorActor` ditunda ke
+    B1b-3 ketika modulnya dibangun ulang). Dua perubahan perilaku:
+    `hold()` menolak turn kedua saat floor sedang dipegang (dulu turn kedua
+    diam-diam menimpa handle turn pertama, sehingga `interrupt()` hanya
+    membatalkan yang kedua dan turn pertama tetap berjalan sampai selesai;
+    ditemukan lewat probe), dan jalur non-held di `speak_reply` tidak lagi
+    dipanggil dari dalam turn yang sudah memegang floor (test helper
+    `start_held_speech` dipindah ke `held=True`, sama seperti produksi).
+    Koreksi setelah review: `interrupt()` tetap mengosongkan `_active`
+    secara eksplisit. Klaim sebelumnya bahwa itu redundan keliru: jika task
+    turn sudah selesai tetapi holder belum resume (jendela antara dua callback
+    di loop yang sama), `interrupt()` tidak menunggu, dan `hold()` berikutnya
+    ditolak palsu. Dibuktikan oleh test
+    `test_an_interrupt_in_the_gap_after_a_turn_ended_still_frees_the_floor`,
+    yang gagal saat pengosongan dibuang. Penolakan sekarang `FloorHeld` dan
+    di-raise lagi melewati recovery dan jalur deferred (bukan dihitung
+    sebagai kegagalan giliran). Logger clock memakai `foundation.clock`.
+    Jalur non-held di `speak_reply` (test-only, produksi selalu `held=True`)
+    dibiarkan sampai B1b-2, karena `TurnRunner` menggantikannya.
+    Property test `tests/test_floor_stateful.py` memakai
+    `hypothesis.stateful.RuleBasedStateMachine`: begin, second turn refused,
+    release, interrupt, interrupt-idle, advance, admission, dan
+    interrupt-lalu-ambil-floor-seketika; invariant generasi dan `busy`
+    selalu sama dengan model. Gate: suite penuh 10708 passed; replay oue-4
+    identik dengan sebelumnya.
+  - B1b-2, `TurnRunner` menggantikan turn graph dan speech graph. Fungsi yang
+    sama, urutan sama (action, jawaban state, chat, balasan), lookahead dan
+    pembersihan sama. Gate: `test_turn_graph*.py` dipindah ke runner dengan
+    perilaku yang sama; replay oue-4 tidak memburuk.
+  - B1b-3, participation sebagai fungsi, penghapusan `TurnLifecycle`,
+    `TurnIngress`, `turn_queue.py`, `turn_events.py`, `BargeLatch`,
+    `SpeechFloor`, dan `TurnRuntime`, plus dua keputusan owner: final yang
+    bukan untuk twin tidak membatalkan jawaban yang masih disiapkan, dan chat
+    berjalan di lane sendiri. Gate: property test lengkap (Hypothesis) untuk
+    urutan acak VAD, interim, final, chat, perhatian, verdict, event
+    playback, dan pause; tidak pernah ada dua giliran aktif, tidak ada
+    `speak_prepared` setelah yield, tidak ada ucapan saat pause; replay oue-4
+    tidak memburuk.
 - B1c, early commit di actor dan pembersihan sisa (`EarlyTurns`,
   arbitrasi, state floor kernel, tes checkpoint). Gate: alias
   `early_turn_verified` di baseline dan fixture tetap benar; replay oue-4.
