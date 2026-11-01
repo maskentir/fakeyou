@@ -1273,8 +1273,10 @@ Bentuk PR:
     seperti speech graph. `build_turn_graph()` tanpa parameter subgraph. Mutation
     check: menonaktifkan cabang floor gagal 4 tes. Replay oue-4 identik.
     Gate penuh 10709 passed; satu tes loopback (`test_local_transport_cancel_
-    closes_loopback_without_fallback`) gagal di bawah beban full suite dan lulus
-    3 dari 3 kali sendirian; flaky ini sudah muncul sebelum PR ini.
+    closes_loopback_without_fallback`) gagal di bawah beban full suite: request
+    ke server loopback belum sampai dalam 2 detik. Flaky ini ada juga di `main`
+    (diverifikasi di worktree origin/main), jadi bukan dari PR ini. Budget
+    tunggu di tes itu dinaikkan ke 10 detik; asersinya tidak diubah.
   - B1b-3b, aturan owner yang berubah perilaku dan lane chat: final yang bukan
     untuk twin tidak lagi membatalkan jawaban yang masih disiapkan (hanya saat
     twin terdengar); chat berjalan di lane sendiri. Ini menyentuh

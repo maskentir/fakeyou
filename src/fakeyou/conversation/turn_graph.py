@@ -1269,7 +1269,7 @@ class _TurnNodes:
     async def refresh(self, state: TurnGraphState, context: TurnRuntime) -> None:
         _prefetch_judgement(state, context)
 
-    async def participate(
+    async def decide(
         self, state: TurnGraphState, context: TurnRuntime
     ) -> dict[str, ParticipationDecision | DecisionSource | str | None]:
         return await _participate(state, context)
@@ -1312,7 +1312,7 @@ class TurnRunner:
             await self._nodes.refresh(state, context)
             return state
         if ingested == "participation":
-            state = cast(TurnGraphState, {**state, **await self._nodes.participate(state, context)})
+            state = cast(TurnGraphState, {**state, **await self._nodes.decide(state, context)})
             decided = route_after_participation(state)
             if decided == "failed":
                 await record_turn_failure(state, context)

@@ -154,28 +154,28 @@ def _hold_floor(state: ParticipationState, runtime: ParticipationRuntime) -> Par
     return _record(runtime.journal, state, verdict, "floor")
 
 
-async def _judge(state: ParticipationState, context: ParticipationRuntime) -> ParticipationVerdict:
-    cache, window = context.cache, state["window"]
+async def _judge(state: ParticipationState, runtime: ParticipationRuntime) -> ParticipationVerdict:
+    cache, window = runtime.cache, state["window"]
     if cache is None or window is None:
-        return _record(context.journal, state, fallback_decision(state["context"]), "fallback")
+        return _record(runtime.journal, state, fallback_decision(state["context"]), "fallback")
     judgement, error = await capture_error(partial(cache.judgement, window))
     if judgement is None:
-        return _fall_back(state, context, judge_failure_code(error))
+        return _fall_back(state, runtime, judge_failure_code(error))
     verdict = decision_of(
         judgement,
-        context.thresholds,
+        runtime.thresholds,
         named=state["context"].addressed,
         sole_human_responder=window.sole_human_responder,
     )
-    return _record(context.journal, state, verdict, "judge", judgement)
+    return _record(runtime.journal, state, verdict, "judge", judgement)
 
 
 async def participate(
-    state: ParticipationState, context: ParticipationRuntime
+    state: ParticipationState, runtime: ParticipationRuntime
 ) -> ParticipationVerdict:
     if state["context"].others_speaking:
-        return _hold_floor(state, context)
-    return await _judge(state, context)
+        return _hold_floor(state, runtime)
+    return await _judge(state, runtime)
 
 
 def _fall_back(
