@@ -1237,6 +1237,19 @@ Bentuk PR:
     sama, urutan sama (action, jawaban state, chat, balasan), lookahead dan
     pembersihan sama. Gate: `test_turn_graph*.py` dipindah ke runner dengan
     perilaku yang sama; replay oue-4 tidak memburuk.
+    Temuan (2026-11-01, belum ada perubahan kode): speech graph bukan cuma
+    routing. Saat `respond`/`speak_reply` dipanggil sebagai fungsi biasa
+    (tanpa `ainvoke` LangGraph), `ModelFallbackMiddleware` pada composer
+    rapat tidak menangkap error model utama di jalur streaming; tes
+    `test_streamed_reply_uses_fallback_model` gagal dengan `ProviderFault`
+    dan jawaban maaf. Pembungkus `RunnableLambda` tidak cukup. Di produksi
+    `_run_turn` juga jalan di drain task biasa, jadi `speech.ainvoke` adalah
+    konteks yang membuat fallback berfungsi (`assembly.py:332`). Model-level
+    `with_fallbacks` jalan di konteks biasa (dicek), tetapi `create_agent`
+    perlu `BaseChatModel`, dan itu belum diverifikasi. Keputusan yang
+    dibutuhkan sebelum B1b-2 bisa jalan: (a) fallback pindah ke level model
+    dan composer dipastikan mau menerimanya, atau (b) speech step tetap
+    dijalankan sebagai run LangGraph sampai composer dipecah (track C).
   - B1b-3, participation sebagai fungsi, penghapusan `TurnLifecycle`,
     `TurnIngress`, `turn_queue.py`, `turn_events.py`, `BargeLatch`,
     `SpeechFloor`, dan `TurnRuntime`, plus dua keputusan owner: final yang
