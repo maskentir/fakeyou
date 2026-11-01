@@ -1203,12 +1203,27 @@ Bentuk PR:
   (`turn_payload_dropped`); setelah call berakhir sinyal giliran tidak
   diteruskan. Interim yang dibuang mailbox saat jenuh tetap hilang (sifat
   ephemeral kernel).
-- B1b, actor. `FloorActor` dan `TurnRunner` menggantikan lifecycle, ingress,
-  queue, floor, latch, dan ketiga graph; `TurnFeed` menulis ke mailbox
-  actor; perbaikan bug di atas. Gate: tes property (Hypothesis, urutan acak
-  VAD, interim, final, chat, perhatian, verdict, event playback, pause)
-  bahwa tidak pernah ada dua giliran aktif, tidak ada `speak_prepared` setelah
-  yield, tidak ada ucapan saat pause; replay oue-4 tidak memburuk.
+- B1b dipecah menjadi tiga PR (2026-11-01), karena ketergantungannya:
+  `meeting_turns.py` dan `assembly.py` adalah pintu utama, sedangkan judge,
+  planner, recovery, dan gate composer tetap dipakai apa adanya.
+  - B1b-1, `FloorActor` sebagai pemilik state, tanpa mengubah eksekusi.
+    Actor memegang lease bicara, `TurnId`, generasi, dan status barge-in.
+    `TurnIngress`, `TurnLifecycle`, dan turn graph tetap menjalankan logika,
+    tetapi setiap perubahan state floor lewat actor. Gate: property test
+    urutan acak; replay oue-4 tidak memburuk.
+  - B1b-2, `TurnRunner` menggantikan turn graph dan speech graph. Fungsi yang
+    sama, urutan sama (action, jawaban state, chat, balasan), lookahead dan
+    pembersihan sama. Gate: `test_turn_graph*.py` dipindah ke runner dengan
+    perilaku yang sama; replay oue-4 tidak memburuk.
+  - B1b-3, participation sebagai fungsi, penghapusan `TurnLifecycle`,
+    `TurnIngress`, `turn_queue.py`, `turn_events.py`, `BargeLatch`,
+    `SpeechFloor`, dan `TurnRuntime`, plus dua keputusan owner: final yang
+    bukan untuk twin tidak membatalkan jawaban yang masih disiapkan, dan chat
+    berjalan di lane sendiri. Gate: property test lengkap (Hypothesis) untuk
+    urutan acak VAD, interim, final, chat, perhatian, verdict, event
+    playback, dan pause; tidak pernah ada dua giliran aktif, tidak ada
+    `speak_prepared` setelah yield, tidak ada ucapan saat pause; replay oue-4
+    tidak memburuk.
 - B1c, early commit di actor dan pembersihan sisa (`EarlyTurns`,
   arbitrasi, state floor kernel, tes checkpoint). Gate: alias
   `early_turn_verified` di baseline dan fixture tetap benar; replay oue-4.
