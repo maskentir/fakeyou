@@ -1,6 +1,6 @@
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 
-from fakeyou.speech.contract import PreparedSpeech, SpeechTurn
+from fakeyou.speech.contract import PreparedSpeech, SpeechTurn, WordTiming
 from fakeyou.speech.streaming import SentenceTurn
 
 
@@ -33,6 +33,10 @@ class FakePreparedSpeech:
     @property
     def transcript_id(self) -> str | None:
         return self._transcript_id
+
+    @property
+    def words(self) -> Sequence[WordTiming] | None:
+        return None
 
     def __aiter__(self) -> AsyncIterator[bytes]:
         return self

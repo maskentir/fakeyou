@@ -155,8 +155,8 @@ async def test_word_timings_are_relative_to_each_sentence() -> None:
     await drained(first)
     await drained(second)
 
-    assert [(w.text, w.start, w.end) for w in first.words] == [("Hello.", 0.2, 0.5)]
-    [word] = second.words
+    assert [(w.text, w.start, w.end) for w in first.words or ()] == [("Hello.", 0.2, 0.5)]
+    [word] = second.words or ()
     assert (word.text, word.start, word.end) == pytest.approx(("Two.", 0.25, 0.5))
     await voice.aclose()
 
@@ -323,8 +323,8 @@ async def test_the_live_message_order_is_split_into_sentences() -> None:
 
     assert await drained(first) == b"\x01\x00" * 4
     assert await drained(second) == b"\x02\x00"
-    assert [w.text for w in first.words] == ["Hello."]
-    [word] = second.words
+    assert [w.text for w in first.words or ()] == ["Hello."]
+    [word] = second.words or ()
     assert word.text == "Two."
     assert word.start == pytest.approx(0.2 - 8 / 48000)
     await voice.aclose()

@@ -56,6 +56,7 @@ class TwinSpeechEntry(_Entry):
     kind: Literal["twin_speech"] = "twin_speech"
     text: str
     interrupted: bool = False
+    planned: str | None = None
 
 
 class ResumeEntry(_Entry):
@@ -283,9 +284,14 @@ class MeetingRecord:
         return tuple(self._entries)
 
     def add_twin_speech(
-        self, text: str, *, interrupted: bool = False, causation_id: str | None = None
+        self,
+        text: str,
+        *,
+        interrupted: bool = False,
+        planned: str | None = None,
+        causation_id: str | None = None,
     ) -> None:
-        if text.strip():
+        if text.strip() or (planned or "").strip():
             self._append(
                 TwinSpeechEntry(
                     at=self._now(),
@@ -293,6 +299,7 @@ class MeetingRecord:
                     causation_id=causation_id,
                     text=text,
                     interrupted=interrupted,
+                    planned=planned,
                 )
             )
 

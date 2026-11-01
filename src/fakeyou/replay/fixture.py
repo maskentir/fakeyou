@@ -317,7 +317,7 @@ def _spoken_texts(entries: Iterable[RecordEntry]) -> dict[str, list[str]]:
     spoken: defaultdict[str, list[str]] = defaultdict(list)
     for entry in entries:
         if isinstance(entry, TwinSpeechEntry) and entry.causation_id is not None:
-            spoken[entry.causation_id].append(entry.text)
+            spoken[entry.causation_id].append(entry.planned or entry.text)
     return dict(spoken)
 
 

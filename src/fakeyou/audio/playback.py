@@ -1,7 +1,7 @@
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, Literal, Protocol, runtime_checkable
 
@@ -16,7 +16,13 @@ from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
 from fakeyou.observability.faults import ConsumerSink, FaultReporter, guard_observer
 from fakeyou.observability.journal import Journal
 from fakeyou.observability.provider_faults import ProviderFault, classify_exception
-from fakeyou.speech.contract import PreparedSpeech, SpeechSynthesizer, SpeechTurn
+from fakeyou.speech.contract import (
+    PreparedSpeech,
+    SpeechSegment,
+    SpeechSynthesizer,
+    SpeechTurn,
+    WordTiming,
+)
 
 PlaybackEventKind = Literal[
     "playback_started", "playback_finished", "playback_failed", "playback_dropped"
@@ -39,6 +45,7 @@ class PlaybackEvent:
     detail: str = ""
     cue: bool = False
     utterance: Utterance = NO_UTTERANCE
+    heard: str | None = None
 
 
 GAIN_STEP = 1.2
@@ -49,6 +56,7 @@ HALT_SECONDS = 0.1
 FRAME_BYTES = round(PLAYBACK_SAMPLE_RATE * FRAME_SECONDS) * PCM16_SAMPLE_BYTES
 FADE_BYTES = round(PLAYBACK_SAMPLE_RATE * FADE_SECONDS) * PCM16_SAMPLE_BYTES
 FADE_SAMPLE_COUNT = round(PLAYBACK_SAMPLE_RATE * FADE_SECONDS)
+BYTES_PER_SECOND = PLAYBACK_SAMPLE_RATE * PCM16_SAMPLE_BYTES
 
 
 SYNTH_TIMEOUT_SECONDS = 45.0
@@ -129,6 +137,35 @@ class CuePlayback(Protocol):
     async def play_cue(self, text: str) -> bool: ...
 
 
+class SpokenWords(Protocol):
+    @property
+    def words(self) -> Sequence[WordTiming] | None: ...
+
+
+@dataclass(slots=True)
+class _Voicing:
+    segment: SpeechSegment | None = None
+
+    @property
+    def words(self) -> Sequence[WordTiming] | None:
+        return None if self.segment is None else self.segment.words
+
+
+def heard_text(words: Sequence[WordTiming] | None, seconds: float) -> str | None:
+    if seconds <= 0:
+        return ""
+    if words is None:
+        return None
+    return " ".join(word.text for word in words if word.end <= seconds)
+
+
+@dataclass(frozen=True, slots=True)
+class _Line:
+    text: str
+    utterance: Utterance
+    language: str | None
+
+
 @dataclass(frozen=True, slots=True)
 class _OpenTurn:
     transcript_id: str
@@ -144,21 +181,20 @@ class _Clip:
     cue: bool = False
     utterance: Utterance = NO_UTTERANCE
     epoch: int = 0
+    spoken: SpokenWords = field(default_factory=_Voicing)
 
 
 class _PreparedSpeech:
     def __init__(
         self,
         source: AsyncIterator[bytes],
-        text: str,
-        language: str | None,
-        utterance: Utterance,
+        line: _Line,
         faults: FaultReporter | None,
+        voicing: _Voicing,
     ) -> None:
         self._source = source
-        self._text = text
-        self._language = language
-        self._utterance = utterance
+        self._voicing = voicing
+        self._line = line
         self._faults = faults
         self._chunks: asyncio.Queue[bytes | None] = asyncio.Queue()
         self._failure: BaseException | None = None
@@ -168,19 +204,23 @@ class _PreparedSpeech:
 
     @property
     def text(self) -> str:
-        return self._text
+        return self._line.text
 
     @property
     def language(self) -> str | None:
-        return self._language
+        return self._line.language
 
     @property
     def sentence_index(self) -> int | None:
-        return self._utterance.sentence_index
+        return self._line.utterance.sentence_index
 
     @property
     def transcript_id(self) -> str | None:
-        return self._utterance.transcript_id
+        return self._line.utterance.transcript_id
+
+    @property
+    def words(self) -> Sequence[WordTiming] | None:
+        return self._voicing.words
 
     async def _pull(self) -> None:
         async for chunk in self._source:
@@ -294,6 +334,7 @@ class PlaybackEngine:
         self._prepared: set[PreparedSpeech] = set()
         self._turn: _OpenTurn | None = None
         self._turn_endings: set[asyncio.Task[None]] = set()
+        self._clip_bytes = 0
 
     @property
     def is_speaking(self) -> bool:
@@ -389,19 +430,15 @@ class PlaybackEngine:
             yield chunk
 
     async def _retryable_stream(
-        self,
-        text: str,
-        sentence_index: int | None,
-        transcript_id: str | None,
-        language: str | None,
-        generation: int,
+        self, line: _Line, generation: int, voicing: _Voicing
     ) -> AsyncIterator[bytes]:
+        turn_id = line.utterance.transcript_id
         for attempt in range(2):
             emitted = False
             chunks: AsyncIterator[bytes] | None = None
             try:
-                chunks = self._turn_for(transcript_id, language).speak(
-                    text, sentence_index=sentence_index
+                chunks = voicing.segment = self._turn_for(turn_id, line.language).speak(
+                    line.text, sentence_index=line.utterance.sentence_index
                 )
                 async for chunk in self._paced_chunks(chunks):
                     if chunk:
@@ -435,13 +472,14 @@ class PlaybackEngine:
         if not any(char.isalnum() for char in text):
             self._emit("playback_dropped", text, "nothing_to_say")
             return
-        generation = self._generation
+        line = _Line(text, Utterance(transcript_id, sentence_index), language)
+        voicing = _Voicing()
         await self._play_queued(
-            self._retryable_stream(text, sentence_index, transcript_id, language, generation),
+            self._retryable_stream(line, self._generation, voicing),
             text,
-            utterance=Utterance(transcript_id, sentence_index),
+            utterance=line.utterance,
+            spoken=voicing,
         )
-        return
 
     async def prepare(
         self,
@@ -456,15 +494,10 @@ class PlaybackEngine:
         if not any(char.isalnum() for char in text):
             self._emit("playback_dropped", text, "nothing_to_say")
             return None
-        generation = self._generation
-        source = self._retryable_stream(text, sentence_index, transcript_id, language, generation)
-        prepared = _PreparedSpeech(
-            source,
-            text,
-            language,
-            Utterance(transcript_id, sentence_index),
-            self._faults,
-        )
+        line = _Line(text, Utterance(transcript_id, sentence_index), language)
+        voicing = _Voicing()
+        source = self._retryable_stream(line, self._generation, voicing)
+        prepared = _PreparedSpeech(source, line, self._faults, voicing)
         self._prepared.add(prepared)
         return prepared
 
@@ -477,6 +510,7 @@ class PlaybackEngine:
             prepared,
             prepared.text,
             utterance=Utterance(prepared.transcript_id, prepared.sentence_index),
+            spoken=prepared,
         )
 
     async def prepare_cue(self, text: str) -> None:
@@ -519,10 +553,12 @@ class PlaybackEngine:
         *,
         cue: bool = False,
         utterance: Utterance = NO_UTTERANCE,
+        spoken: SpokenWords | None = None,
     ) -> None:
         loop = asyncio.get_running_loop()
         done: asyncio.Future[None] = loop.create_future()
-        await self._queue.put(_Clip(audio, text, done, cue, utterance, self._stop_epoch))
+        clip = _Clip(audio, text, done, cue, utterance, self._stop_epoch, spoken or _Voicing())
+        await self._queue.put(clip)
         self._ensure_worker()
         try:
             await done
@@ -573,13 +609,7 @@ class PlaybackEngine:
     def _report_dropped(self, dropped: list[_Clip]) -> None:
         for clip in dropped:
             self._settle_done(clip.done)
-            self._emit(
-                "playback_dropped",
-                clip.text,
-                "interrupted",
-                cue=clip.cue,
-                utterance=clip.utterance,
-            )
+            self._emit_dropped(clip, "interrupted", heard="")
 
     async def _drop_queued(self) -> None:
         dropped, closing = self._take_queued()
@@ -633,6 +663,7 @@ class PlaybackEngine:
     async def _write_frame(self, frame: bytes, *, gain: bool) -> None:
         pcm = self._apply_gain(frame) if gain else frame
         self._last_sample = _pcm_last_sample(pcm)
+        self._clip_bytes += len(pcm)
         await self._writer.write(pcm)
 
     async def _fade_out(self) -> None:
@@ -698,10 +729,18 @@ class PlaybackEngine:
         cue: bool = False,
         utterance: Utterance = NO_UTTERANCE,
     ) -> None:
+        self._publish(PlaybackEvent(kind, text, detail, cue, utterance))
+
+    def _emit_dropped(self, clip: _Clip, detail: str, *, heard: str | None) -> None:
+        self._publish(
+            PlaybackEvent("playback_dropped", clip.text, detail, clip.cue, clip.utterance, heard)
+        )
+
+    def _publish(self, event: PlaybackEvent) -> None:
         if self._on_event is None:
             return
         guard_observer(
-            partial(self._on_event, PlaybackEvent(kind, text, detail, cue, utterance)),
+            partial(self._on_event, event),
             sink=ConsumerSink(faults=self._faults, journal=self._journal),
             source="playback",
             detail="playback_event",
@@ -748,13 +787,7 @@ class PlaybackEngine:
     async def _drop_stale(self, clip: _Clip) -> None:
         await self._close_audio(clip.audio)
         self._settle_done(clip.done)
-        self._emit(
-            "playback_dropped",
-            clip.text,
-            "cancelled" if clip.done.cancelled() else "interrupted",
-            cue=clip.cue,
-            utterance=clip.utterance,
-        )
+        self._emit_dropped(clip, "cancelled" if clip.done.cancelled() else "interrupted", heard="")
 
     def _must_raise_cancel(self, play_task: asyncio.Task[Any]) -> bool:
         current = asyncio.current_task()
@@ -775,7 +808,7 @@ class PlaybackEngine:
         except asyncio.CancelledError:
             if self._must_raise_cancel(play_task):
                 raise
-            self._emit("playback_dropped", text, "interrupted", cue=cue, utterance=utterance)
+            self._emit_interrupted(clip)
         except (OSError, PlaybackError, ProviderFault) as error:
             self._emit(
                 "playback_failed",
@@ -789,12 +822,16 @@ class PlaybackEngine:
             if played:
                 self._emit("playback_finished", text, cue=cue, utterance=utterance)
             else:
-                self._emit("playback_dropped", text, "interrupted", cue=cue, utterance=utterance)
+                self._emit_interrupted(clip)
         finally:
             self._play_tasks.discard(play_task)
             self._active_done = None
             self._active_play_task = None
             self._settle_done(clip.done)
+
+    def _emit_interrupted(self, clip: _Clip) -> None:
+        seconds = self._clip_bytes / BYTES_PER_SECOND
+        self._emit_dropped(clip, "interrupted", heard=heard_text(clip.spoken.words, seconds))
 
     async def _next_clip(self) -> _Clip:
         if self._speaking and self._queue.empty():
@@ -824,6 +861,7 @@ class PlaybackEngine:
                 self._burst_gain = self._gain
                 self._gain = 1.0
             self._emit("playback_started", clip.text, cue=clip.cue, utterance=clip.utterance)
+            self._clip_bytes = 0
             play_task = asyncio.create_task(
                 self._consume_audio(clip.audio, generation, gain=not clip.cue)
             )

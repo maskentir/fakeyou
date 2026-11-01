@@ -175,7 +175,7 @@ def _utterance(entry: RecordEntry, labels: Mapping[str, str] | None = None) -> U
         else:
             speaker = _entry_speaker(entry, labels)
         spoken: datetime | None = _spoken_moment(entry.spoken_at)
-    elif isinstance(entry, TwinSpeechEntry):
+    elif isinstance(entry, TwinSpeechEntry) and entry.text.strip():
         speaker = TWIN_SPEAKER
         spoken = None
     else:
