@@ -1,8 +1,9 @@
 import asyncio
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
-from time import monotonic
 from typing import Any
+
+from fakeyou.foundation.clock import monotonic
 
 
 @dataclass(slots=True)
@@ -12,6 +13,10 @@ class ActiveSpeech:
     started: float
     transcript_id: str | None
     request_id: str | None = None
+
+
+class FloorHeld(RuntimeError):
+    pass
 
 
 class SpeechFloor:
@@ -49,8 +54,8 @@ class SpeechFloor:
     ) -> bool:
         if self.busy:
             work.close()
-            raise RuntimeError("a turn already holds the floor")
-        task = asyncio.ensure_future(work)
+            raise FloorHeld("a turn already holds the floor")
+        task = asyncio.create_task(work)
         active = ActiveSpeech(
             task=task,
             generation=self.generation if generation is None else generation,
@@ -75,9 +80,12 @@ class SpeechFloor:
         self.advance()
         self.last_reason = reason
         active = self._active
-        if active is not None and not active.task.done():
-            active.task.cancel()
-            await asyncio.gather(active.task, return_exceptions=True)
+        if active is not None:
+            if not active.task.done():
+                active.task.cancel()
+                await asyncio.gather(active.task, return_exceptions=True)
+            if self._active is active:
+                self._active = None
         return self.generation
 
 

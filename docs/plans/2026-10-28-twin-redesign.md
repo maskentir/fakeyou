@@ -1216,6 +1216,17 @@ Bentuk PR:
     ditemukan lewat probe), dan jalur non-held di `speak_reply` tidak lagi
     dipanggil dari dalam turn yang sudah memegang floor (test helper
     `start_held_speech` dipindah ke `held=True`, sama seperti produksi).
+    Koreksi setelah review: `interrupt()` tetap mengosongkan `_active`
+    secara eksplisit. Klaim sebelumnya bahwa itu redundan keliru: jika task
+    turn sudah selesai tetapi holder belum resume (jendela antara dua callback
+    di loop yang sama), `interrupt()` tidak menunggu, dan `hold()` berikutnya
+    ditolak palsu. Dibuktikan oleh test
+    `test_an_interrupt_in_the_gap_after_a_turn_ended_still_frees_the_floor`,
+    yang gagal saat pengosongan dibuang. Penolakan sekarang `FloorHeld` dan
+    di-raise lagi melewati recovery dan jalur deferred (bukan dihitung
+    sebagai kegagalan giliran). Logger clock memakai `foundation.clock`.
+    Jalur non-held di `speak_reply` (test-only, produksi selalu `held=True`)
+    dibiarkan sampai B1b-2, karena `TurnRunner` menggantikannya.
     Property test `tests/test_floor_stateful.py` memakai
     `hypothesis.stateful.RuleBasedStateMachine`: begin, second turn refused,
     release, interrupt, interrupt-idle, advance, admission, dan

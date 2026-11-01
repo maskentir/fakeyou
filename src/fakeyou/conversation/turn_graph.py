@@ -18,7 +18,7 @@ from langgraph.runtime import Runtime
 
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.conversation import cap_spoken_reply
-from fakeyou.conversation.floor import ActiveSpeech, SpeechFloor, interrupt_speech
+from fakeyou.conversation.floor import ActiveSpeech, FloorHeld, SpeechFloor, interrupt_speech
 from fakeyou.conversation.participation_decision import ParticipationDecision
 from fakeyou.conversation.participation_graph import (
     DecisionSource,
@@ -1050,6 +1050,8 @@ async def _settle_outcome(
     transcript_id: str,
 ) -> None:
     completed, error = outcome
+    if isinstance(error, FloorHeld):
+        raise error
     if error is not None:
         await recover_turn(runtime, error, generation, transcript_id)
     elif completed:
@@ -1169,6 +1171,8 @@ async def run_deferred_turn(runtime: TurnRuntime, speech: SpeechGraph, turn: Def
     else:
         work = _run_turn(runtime, speech, (event,), scope, generation)
     completed, error = await capture_error(partial(_held, runtime, work, scope))
+    if isinstance(error, FloorHeld):
+        raise error
     if isinstance(error, TurnDropped) or (error is None and not completed):
         return False
     if error is not None:
