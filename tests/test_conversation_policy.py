@@ -205,9 +205,6 @@ async def test_interim_barge_in_rearms_for_the_next_reply() -> None:
     await loop.lifecycle.close()
 
 
-LOOPBACK_WAIT_SECONDS = 2
-
-
 async def test_local_transport_cancel_closes_loopback_without_fallback(
     journal: RecordingJournal,
 ) -> None:
@@ -252,10 +249,10 @@ async def test_local_transport_cancel_closes_loopback_without_fallback(
     loop.lifecycle.bind(audio)
     try:
         await loop.ingress.receive_final(event("t1", "hello"))
-        assert await asyncio.wait_for(arrived.wait(), LOOPBACK_WAIT_SECONDS)
+        assert await asyncio.wait_for(arrived.wait(), 2)
         assert connections == 1
         await loop.lifecycle.close()
-        assert await asyncio.wait_for(disconnected.wait(), LOOPBACK_WAIT_SECONDS)
+        assert await asyncio.wait_for(disconnected.wait(), 2)
         assert connections == 1
         assert audio.spoken == []
         assert journal.events("agent_failed") == []
