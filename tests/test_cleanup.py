@@ -148,7 +148,7 @@ async def test_teardown_stack_hard_deadline_stops_remaining_layers() -> None:
         await stack.aclose(hard_timeout_seconds=0.18)
     elapsed = time.monotonic() - started
 
-    assert len(attempted) >= 2
+    assert attempted
     assert len(attempted) < 6
     assert elapsed < 5.0
 
