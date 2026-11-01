@@ -7,7 +7,7 @@ from graphiti_core import Graphiti
 from langchain.chat_models import init_chat_model
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_openai import OpenAIEmbeddings
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 from fakeyou.catalog.config import ConfigKey
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
@@ -71,7 +71,13 @@ def _init_chat_model(role: ReplySettings, name: ConfigKey) -> BaseChatModel:
     )
     if isinstance(role, GoogleReply) and role.reasoning_effort == "minimal":
         _require_minimal_reasoning(model, role.model)
+    warm_streaming_client(model)
     return model
+
+
+def warm_streaming_client(model: BaseChatModel) -> None:
+    if isinstance(model, ChatOpenAI):
+        _ = model.root_async_client.beta
 
 
 def _require_minimal_reasoning(model: BaseChatModel, name: str) -> None:

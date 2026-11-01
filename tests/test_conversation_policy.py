@@ -210,6 +210,8 @@ async def test_local_transport_cancel_closes_loopback_without_fallback(
 ) -> None:
     from langchain_openai import ChatOpenAI
 
+    from fakeyou.orchestration.providers import warm_streaming_client
+
     arrived = asyncio.Event()
     disconnected = asyncio.Event()
     connections = 0
@@ -237,6 +239,7 @@ async def test_local_transport_cancel_closes_loopback_without_fallback(
         timeout=30,
         max_retries=0,
     )
+    warm_streaming_client(model)
     agent = create_meeting_agent(model)
     loop = build_meeting_turns(
         MeetingResponder(agent, NoHistory(), journal=journal),
