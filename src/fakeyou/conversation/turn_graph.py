@@ -1291,23 +1291,13 @@ class _TurnNodes:
         return await _admit_final(state, context, self.speech_graph)
 
 
-_OPTIONAL_TURN_KEYS: tuple[str, ...] = (
-    "transcript_event",
-    "history",
-    "addressing_names",
-    "pending",
-    "admission",
-    "judge_window",
-)
-
-
 class TurnRunner:
     def __init__(self, nodes: _TurnNodes) -> None:
         self._nodes = nodes
 
     async def run(self, model_input: TurnInput, context: TurnRuntime) -> TurnGraphState:
         optional: dict[str, object] = {
-            key: value for key, value in model_input.items() if key in _OPTIONAL_TURN_KEYS
+            key: value for key, value in model_input.items() if key in TurnInput.__optional_keys__
         }
         state = cast(
             TurnGraphState,

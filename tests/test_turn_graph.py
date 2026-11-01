@@ -252,6 +252,10 @@ async def test_speaking_generation_is_written_only_by_the_speak_node() -> None:
     assert stopped["speaking_generation"] == stop_input()["speaking_generation"] + 1
 
     silent = await graph.run(
-        turn_input(addressed=False), runtime(judge=ScriptedJudge(lambda _window: judged("silent")))
+        turn_input(addressed=False),
+        runtime(judge=ScriptedJudge(lambda _window: judged("stay_silent"))),
     )
     assert silent["speaking_generation"] == turn_input()["speaking_generation"]
+
+    admitted = await graph.run(turn_input(addressed=True), runtime())
+    assert admitted["speaking_generation"] == turn_input()["speaking_generation"]
