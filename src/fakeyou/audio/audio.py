@@ -60,7 +60,7 @@ from fakeyou.observability.provider_faults import (
     ProviderFault,
     classify_exception,
 )
-from fakeyou.speech.contract import PreparedSpeech
+from fakeyou.speech.contract import PreparedSpeech, SupportsWarmup
 from fakeyou.speech.registry import build_speech_synthesizer
 from fakeyou.transcription.contract import (
     SpeechSinks,
@@ -665,13 +665,16 @@ def create_playback_engine(
     on_event: Callable[[PlaybackEvent], None] | None = None,
     diagnostics: Diagnostics = DEFAULT_DIAGNOSTICS,
 ) -> PlaybackEngine:
+    synthesizer = build_speech_synthesizer(
+        settings=speech.tts_settings,
+        language=speech.speech_language,
+        journal=diagnostics.journal,
+        fallback=speech.tts_fallback,
+    )
+    if isinstance(synthesizer, SupportsWarmup):
+        synthesizer.warm()
     return PlaybackEngine(
-        build_speech_synthesizer(
-            settings=speech.tts_settings,
-            language=speech.speech_language,
-            journal=diagnostics.journal,
-            fallback=speech.tts_fallback,
-        ),
+        synthesizer,
         PulseWriter(sink=AGENT_SINK_NAME, rate=PLAYBACK_SAMPLE_RATE),
         on_event=on_event,
         diagnostics=diagnostics,

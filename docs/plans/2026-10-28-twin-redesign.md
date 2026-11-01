@@ -840,7 +840,7 @@ kita pakai sekarang; desainnya terikat ke kontrak netral di atas, bukan ke
 Cartesia. Source Pipecat (`base_output.py`, `services/cartesia/tts.py`)
 dipakai sebagai acuan.
 
-Desain B5b (2026-11-02), dari spike langsung ke API Cartesia (`sonic-3`,
+Desain B5b (2026-11-01), dari spike langsung ke API Cartesia (`sonic-3`,
 `cartesia_version=2026-03-01`, voice produksi, bahasa id, PCM s16le 24 kHz):
 
 | Yang diukur | Hasil |
@@ -920,6 +920,32 @@ Bentuk PR:
   buffer writer) lalu mencatat jumlahnya di journal dan teksnya di record,
   jadi riwayat percakapan memuat apa yang memang diucapkan. Gate: first chunk
   ≤ 300 ms p50 terukur di container; kata yang terdengar tercatat saat dipotong.
+- B5b-2a, implementasi (2026-11-01): adapter HTTP Cartesia diganti adapter
+  websocket (`speech/cartesia.py`). Socket mulai dibuka lewat `warm()` saat
+  engine sesi audio dibuat (bukan dari konstruktor, supaya membangun
+  synthesizer tidak pernah membuka jaringan), satu task penulis menjaga urutan
+  pesan, satu task pembaca membagi pesan per `context_id` lalu per kalimat
+  menurut `flush_id` yang pertama terlihat (tidak bergantung pada basis 0
+  atau 1); `timestamps` masuk ke kalimat tertua yang belum selesai, digeser
+  dengan durasi audio kalimat sebelumnya. Socket putus menggagalkan kalimat
+  yang masih menunggu dengan fault `unavailable`, dan kalimat berikutnya
+  membuka socket dan context baru. Hasil ke API asli lewat adapter (dua turn,
+  tiga kalimat): first chunk 182-212 ms tiap kalimat, kata terakhir berakhir
+  2,34 s untuk audio 2,37 s. Ujung ke ujung di container (Cartesia → lookahead
+  → `PulseWriter` → sink, tiga kalimat): 6,18 s audio tertulis dalam 6,12 s,
+  jeda terbesar antar write 25 ms, `playback_finished` ke `playback_started`
+  kalimat berikutnya 0 ms; sunyi 250-320 ms yang terlihat di sink adalah jeda
+  frasa di dalam suara Cartesia, bukan pipeline yang menunggu. Ketahanan dari
+  review: pesan rusak menggagalkan context-nya saja dan socket tetap hidup;
+  `flush_done` untuk kalimat ke-k mengakhiri juga kalimat sebelumnya yang
+  kehilangan `flush_done`-nya; pesan untuk context yang sudah gagal tidak
+  dikirim (provider offline dihubungi sekali, bukan sekali per pesan);
+  `cancel` hanya dikirim bila socket sudah ada; kalimat terikat ke socket
+  tempat ia dikirim, jadi pembaca socket lama tidak menggagalkan kalimat di
+  socket baru; error tanpa `context_id` menggagalkan kalimat di socket itu;
+  socket ditutup saat close walau pembacanya sedang dibatalkan. Tidak ada
+  timeout di adapter: batasnya timeout per chunk 45 s di engine, seperti
+  sebelumnya.
 - B5b-3, ElevenLabs websocket (multi-context). Belum ada key ElevenLabs di
   `.env`, jadi adapter ini diuji dengan fixture protokol dan menunggu key
   untuk verifikasi live.

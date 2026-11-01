@@ -87,12 +87,13 @@ class SentenceSynthesis(Protocol):
 
 
 class StreamedSegment:
-    def __init__(self, chunks: AsyncIterator[bytes]) -> None:
+    def __init__(self, chunks: AsyncIterator[bytes], *, words: Sequence[WordTiming] = ()) -> None:
         self._chunks = chunks
+        self._words = words
 
     @property
     def words(self) -> Sequence[WordTiming]:
-        return ()
+        return self._words
 
     def __aiter__(self) -> AsyncIterator[bytes]:
         return self

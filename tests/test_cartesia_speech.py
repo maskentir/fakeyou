@@ -1,109 +1,505 @@
+import asyncio
+import base64
 import json
-from collections.abc import Callable
+from collections.abc import AsyncIterator
+from typing import Any, override
 
-import httpx2
 import pytest
+import websockets
+from pydantic import SecretStr
+from websockets.datastructures import Headers
+from websockets.exceptions import InvalidStatus
+from websockets.http11 import Response
 
 from fakeyou.config.settings import CartesiaTTS
 from fakeyou.observability.provider_faults import ProviderFault
-from fakeyou.speech.cartesia import CARTESIA_API_VERSION, CartesiaSpeechSynthesizer
+from fakeyou.speech.cartesia import (
+    CartesiaSocket,
+    CartesiaSpeechSynthesizer,
+    connect_cartesia,
+    socket_url,
+)
+from fakeyou.speech.contract import SpeechSegment
+from fakeyou.speech.fallback import SpeechWithFallback
+from tests._persistence_fakes import RecordingJournal
+from tests._prepared_support import SentenceSynth
+
+SETTINGS = CartesiaTTS(api_key=SecretStr("k"), model="sonic-3", voice="voice-1")
 
 
-def _client(handler: Callable[[httpx2.Request], httpx2.Response]) -> httpx2.AsyncClient:
-    return httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
+class FakeSocket:
+    def __init__(self) -> None:
+        self.sent: list[dict[str, Any]] = []
+        self.inbox: asyncio.Queue[str | Exception] = asyncio.Queue()
+        self.closed = False
+        self.arrived = asyncio.Event()
+
+    async def send(self, message: str) -> None:
+        self.sent.append(json.loads(message))
+        self.arrived.set()
+
+    async def recv(self) -> str | bytes:
+        item = await self.inbox.get()
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    async def close(self) -> None:
+        self.closed = True
+
+    def push(self, **message: Any) -> None:
+        self.inbox.put_nowait(json.dumps(message))
+
+    def chunk(self, context: str, flush_id: int, pcm: bytes) -> None:
+        self.push(
+            type="chunk",
+            context_id=context,
+            flush_id=flush_id,
+            data=base64.b64encode(pcm).decode(),
+            done=False,
+        )
 
 
-async def test_cartesia_posts_the_transcript_to_the_bytes_endpoint_for_pcm_output() -> None:
-    requests: list[httpx2.Request] = []
+class Opener:
+    def __init__(self, *sockets: FakeSocket) -> None:
+        self._sockets = list(sockets)
+        self.opened = 0
+        self.opening = asyncio.Event()
 
-    def handler(request: httpx2.Request) -> httpx2.Response:
-        requests.append(request)
-        return httpx2.Response(200, content=b"\x00\x01" * 10)
+    async def __call__(self) -> CartesiaSocket:
+        self.opened += 1
+        self.opening.set()
+        return self._sockets.pop(0)
 
-    synthesizer = CartesiaSpeechSynthesizer(
-        api_key="cartesia-key",
-        settings=CartesiaTTS(),
-        language="id",
-        client=_client(handler),
+
+def synthesizer(
+    opener: Opener, journal: RecordingJournal | None = None
+) -> CartesiaSpeechSynthesizer:
+    return CartesiaSpeechSynthesizer(
+        api_key="k", settings=SETTINGS, language="id", journal=journal, opener=opener
     )
-    audio = b"".join([chunk async for chunk in synthesizer.stream("Hello.")])
-    await synthesizer.aclose()
 
-    assert audio == b"\x00\x01" * 10
-    [request] = requests
-    assert str(request.url) == "https://api.cartesia.ai/tts/bytes"
-    assert request.headers["X-API-Key"] == "cartesia-key"
-    assert request.headers["Cartesia-Version"] == CARTESIA_API_VERSION
-    assert json.loads(request.content) == {
-        "model_id": "sonic-3",
-        "transcript": "Hello.",
-        "voice": {"mode": "id", "id": CartesiaTTS().voice},
-        "language": "id",
-        "output_format": {"container": "raw", "encoding": "pcm_s16le", "sample_rate": 24000},
+
+async def sent(socket: FakeSocket, count: int) -> list[dict[str, Any]]:
+    async with asyncio.timeout(2):
+        while len(socket.sent) < count:
+            socket.arrived.clear()
+            await socket.arrived.wait()
+    return socket.sent
+
+
+async def drained(segment: SpeechSegment) -> bytes:
+    async with asyncio.timeout(2):
+        return b"".join([chunk async for chunk in segment])
+
+
+async def test_the_sentences_of_a_turn_share_one_context_and_continue() -> None:
+    socket = FakeSocket()
+    voice = synthesizer(Opener(socket))
+    turn = voice.open_turn(transcript_id="t1")
+
+    first = turn.speak("Hello everyone.", sentence_index=0)
+    second = turn.speak(" Two things today.", sentence_index=1)
+    await turn.finish()
+    one, two, end = await sent(socket, 3)
+
+    assert one["context_id"] == two["context_id"] == end["context_id"]
+    assert (one["transcript"], one["continue"], one["flush"]) == ("Hello everyone.", True, True)
+    assert (two["transcript"], two["continue"], two["flush"]) == (" Two things today.", True, True)
+    assert (end["transcript"], end["continue"]) == ("", False)
+    assert one["voice"] == {"mode": "id", "id": "voice-1"}
+    assert (one["model_id"], one["language"]) == ("sonic-3", "id")
+    assert (one["max_buffer_delay_ms"], one["add_timestamps"]) == (0, True)
+    assert one["output_format"] == {
+        "container": "raw",
+        "encoding": "pcm_s16le",
+        "sample_rate": 24000,
     }
+    context = one["context_id"]
+    socket.chunk(context, 0, b"\x01\x00" * 4)
+    socket.push(type="flush_done", context_id=context, flush_id=0, done=False)
+    socket.chunk(context, 1, b"\x02\x00" * 2)
+    socket.push(type="flush_done", context_id=context, flush_id=1, done=False)
+    socket.push(type="done", context_id=context, done=True)
+
+    assert await drained(first) == b"\x01\x00" * 4
+    assert await drained(second) == b"\x02\x00" * 2
+    await voice.aclose()
 
 
-async def test_cartesia_uses_the_configured_model_and_voice() -> None:
-    requests: list[httpx2.Request] = []
+async def test_word_timings_are_relative_to_each_sentence() -> None:
+    socket = FakeSocket()
+    voice = synthesizer(Opener(socket))
+    turn = voice.open_turn(transcript_id="t1")
+    first = turn.speak("Hello.", sentence_index=0)
+    second = turn.speak(" Two.", sentence_index=1)
+    [one, _] = await sent(socket, 2)
+    context = one["context_id"]
 
-    def handler(request: httpx2.Request) -> httpx2.Response:
-        requests.append(request)
-        return httpx2.Response(200, content=b"\x00\x01")
-
-    settings = CartesiaTTS(model="sonic-3-custom", voice="voice-123")
-    synthesizer = CartesiaSpeechSynthesizer(
-        api_key="k", settings=settings, language="en", client=_client(handler)
+    socket.push(
+        type="timestamps",
+        context_id=context,
+        done=False,
+        word_timestamps={"words": ["Hello."], "start": [0.2], "end": [0.5]},
     )
-    _ = [chunk async for chunk in synthesizer.stream("Hello.")]
+    socket.chunk(context, 0, b"\x00" * 48000)
+    socket.push(type="flush_done", context_id=context, flush_id=0, done=False)
+    socket.push(
+        type="timestamps",
+        context_id=context,
+        done=False,
+        word_timestamps={"words": ["Two."], "start": [1.25], "end": [1.5]},
+    )
+    socket.chunk(context, 1, b"\x00" * 4800)
+    socket.push(type="flush_done", context_id=context, flush_id=1, done=False)
+    await drained(first)
+    await drained(second)
 
-    body = json.loads(requests[0].content)
-    assert body["model_id"] == "sonic-3-custom"
-    assert body["voice"] == {"mode": "id", "id": "voice-123"}
-    assert body["language"] == "en"
+    assert [(w.text, w.start, w.end) for w in first.words] == [("Hello.", 0.2, 0.5)]
+    [word] = second.words
+    assert (word.text, word.start, word.end) == pytest.approx(("Two.", 0.25, 0.5))
+    await voice.aclose()
 
 
-async def test_cartesia_error_status_raises_a_typed_fault_without_the_key() -> None:
-    def handler(_request: httpx2.Request) -> httpx2.Response:
-        return httpx2.Response(401, json={"error": "invalid api key"})
+async def test_an_error_message_fails_the_sentence_with_a_typed_fault() -> None:
+    socket = FakeSocket()
+    voice = synthesizer(Opener(socket))
+    segment = voice.open_turn().speak("Hello.")
+    [one] = await sent(socket, 1)
 
-    synthesizer = CartesiaSpeechSynthesizer(
-        api_key="cartesia-secret-key", settings=CartesiaTTS(), client=_client(handler)
+    socket.push(
+        type="error",
+        context_id=one["context_id"],
+        status_code=401,
+        title="Unauthorized",
+        message="invalid api key",
+        done=True,
     )
 
     with pytest.raises(ProviderFault) as caught:
-        _ = [chunk async for chunk in synthesizer.stream("Hello.")]
-
+        await drained(segment)
     assert caught.value.kind == "unauthorized"
-    assert "cartesia-secret-key" not in str(caught.value)
+    await voice.aclose()
 
 
-async def test_cartesia_rejects_blank_text_before_any_request() -> None:
-    requests: list[httpx2.Request] = []
+async def test_cancel_drops_the_audio_that_keeps_arriving() -> None:
+    socket = FakeSocket()
+    voice = synthesizer(Opener(socket))
+    turn = voice.open_turn(transcript_id="t1")
+    segment = turn.speak("A long sentence.", sentence_index=0)
+    [one] = await sent(socket, 1)
+    context = one["context_id"]
+    socket.chunk(context, 0, b"\x01\x00")
+    assert await asyncio.wait_for(anext(segment), timeout=2) == b"\x01\x00"
 
-    def handler(request: httpx2.Request) -> httpx2.Response:
-        requests.append(request)
-        return httpx2.Response(200, content=b"\x00\x01")
+    await turn.cancel()
+    socket.chunk(context, 0, b"\x02\x00")
+    _, cancel = await sent(socket, 2)
 
-    synthesizer = CartesiaSpeechSynthesizer(
-        api_key="k", settings=CartesiaTTS(), client=_client(handler)
+    assert cancel == {"context_id": context, "cancel": True}
+    assert await drained(segment) == b""
+    await voice.aclose()
+
+
+async def test_a_lost_socket_fails_the_open_sentences_and_the_next_one_reconnects() -> None:
+    lost, fresh = FakeSocket(), FakeSocket()
+    opener = Opener(lost, fresh)
+    voice = synthesizer(opener)
+    turn = voice.open_turn(transcript_id="t1")
+    first = turn.speak("Hello.", sentence_index=0)
+    [one] = await sent(lost, 1)
+
+    lost.inbox.put_nowait(OSError("connection reset"))
+    with pytest.raises(ProviderFault) as caught:
+        await drained(first)
+    assert caught.value.kind == "unavailable"
+
+    second = turn.speak(" Two.", sentence_index=1)
+    [two] = await sent(fresh, 1)
+    assert opener.opened == 2
+    assert two["context_id"] != one["context_id"]
+    fresh.chunk(two["context_id"], 0, b"\x03\x00")
+    fresh.push(type="flush_done", context_id=two["context_id"], flush_id=0, done=False)
+    assert await drained(second) == b"\x03\x00"
+    await voice.aclose()
+
+
+async def test_a_failed_handshake_fails_the_sentence() -> None:
+    async def refuse() -> CartesiaSocket:
+        raise ProviderFault("tts", "unauthorized")
+
+    voice = CartesiaSpeechSynthesizer(api_key="k", settings=SETTINGS, opener=refuse)
+
+    with pytest.raises(ProviderFault) as caught:
+        await drained(voice.open_turn().speak("Hello."))
+    assert caught.value.kind == "unauthorized"
+    await voice.aclose()
+
+
+async def test_each_sentence_is_journaled_as_a_synthesis() -> None:
+    socket = FakeSocket()
+    journal = RecordingJournal()
+    voice = synthesizer(Opener(socket), journal)
+    segment = voice.open_turn(transcript_id="t1").speak("Hello.", sentence_index=0)
+    [one] = await sent(socket, 1)
+    socket.chunk(one["context_id"], 0, b"\x01\x00" * 3)
+    socket.push(type="flush_done", context_id=one["context_id"], flush_id=0, done=False)
+
+    await drained(segment)
+
+    [started] = journal.events("synthesis_started")
+    [finished] = journal.events("synthesis_finished")
+    [first_pcm] = journal.events("synthesis_pcm_emitted")
+    assert (started["provider"], started["transcript_id"], started["sentence_index"]) == (
+        "cartesia",
+        "t1",
+        0,
     )
+    assert finished["bytes_out"] == 6
+    assert first_pcm["first_chunk_ms"] is not None
+    await voice.aclose()
 
-    with pytest.raises(ValueError, match="blank text"):
-        _ = [chunk async for chunk in synthesizer.stream("   ")]
-    assert requests == []
+
+async def test_the_socket_opens_before_the_first_sentence() -> None:
+    socket = FakeSocket()
+    opener = Opener(socket)
+    voice = synthesizer(opener)
+    assert opener.opened == 0
+
+    voice.warm()
+    await asyncio.wait_for(opener.opening.wait(), timeout=2)
+
+    assert socket.sent == []
+    await voice.aclose()
+    assert socket.closed
 
 
-async def test_cartesia_closes_only_the_client_it_created(monkeypatch: pytest.MonkeyPatch) -> None:
-    created: list[httpx2.AsyncClient] = []
+def test_the_socket_url_follows_the_configured_base_url() -> None:
+    assert socket_url("https://api.cartesia.ai") == (
+        "wss://api.cartesia.ai/tts/websocket?cartesia_version=2026-03-01"
+    )
+    assert socket_url("http://localhost:8080").startswith("ws://localhost:8080/tts/websocket")
 
-    real_client = httpx2.AsyncClient
 
-    def factory(**_kwargs: object) -> httpx2.AsyncClient:
-        client = real_client(transport=httpx2.MockTransport(lambda _: httpx2.Response(200)))
-        created.append(client)
-        return client
+async def test_closing_fails_the_sentences_still_waiting() -> None:
+    socket = FakeSocket()
+    voice = synthesizer(Opener(socket))
+    segment = voice.open_turn().speak("Hello.")
+    await sent(socket, 1)
 
-    monkeypatch.setattr(httpx2, "AsyncClient", factory)
-    owned = CartesiaSpeechSynthesizer(api_key="k", settings=CartesiaTTS())
-    await owned.aclose()
-    assert created[0].is_closed
+    await voice.aclose()
+
+    with pytest.raises(ProviderFault):
+        await drained(segment)
+
+
+async def test_the_live_message_order_is_split_into_sentences() -> None:
+    socket = FakeSocket()
+    voice = synthesizer(Opener(socket))
+    turn = voice.open_turn(transcript_id="t1")
+    first = turn.speak("Hello.", sentence_index=0)
+    second = turn.speak(" Two.", sentence_index=1)
+    await turn.finish()
+    [one, _, _] = await sent(socket, 3)
+    context = one["context_id"]
+
+    def stamp(word: str, start: float, end: float) -> None:
+        socket.push(
+            type="timestamps",
+            context_id=context,
+            done=False,
+            word_timestamps={"words": [word], "start": [start], "end": [end]},
+        )
+
+    stamp("Hello.", 0.1, 0.4)
+    socket.chunk(context, 1, b"\x01\x00" * 2)
+    socket.chunk(context, 1, b"\x01\x00" * 2)
+    socket.push(type="flush_done", context_id=context, flush_id=1, flush_done=True, done=False)
+    stamp("Two.", 0.2, 0.3)
+    socket.chunk(context, 2, b"\x02\x00")
+    socket.push(type="flush_done", context_id=context, flush_id=2, flush_done=True, done=False)
+    socket.push(type="flush_done", context_id=context, flush_id=3, flush_done=True, done=False)
+    socket.push(type="done", context_id=context, done=True)
+
+    assert await drained(first) == b"\x01\x00" * 4
+    assert await drained(second) == b"\x02\x00"
+    assert [w.text for w in first.words] == ["Hello."]
+    [word] = second.words
+    assert word.text == "Two."
+    assert word.start == pytest.approx(0.2 - 8 / 48000)
+    await voice.aclose()
+
+
+async def test_sentences_read_in_parallel_each_get_their_own_audio() -> None:
+    socket = FakeSocket()
+    voice = synthesizer(Opener(socket))
+    turn = voice.open_turn(transcript_id="t1")
+    first = turn.speak("Hello.", sentence_index=0)
+    second = turn.speak(" Two.", sentence_index=1)
+    reading = asyncio.gather(drained(first), drained(second))
+    [one, _] = await sent(socket, 2)
+    context = one["context_id"]
+
+    socket.chunk(context, 0, b"\x01\x00")
+    socket.push(type="flush_done", context_id=context, flush_id=0, done=False)
+    socket.chunk(context, 1, b"\x02\x00")
+    socket.push(type="flush_done", context_id=context, flush_id=1, done=False)
+
+    assert list(await reading) == [b"\x01\x00", b"\x02\x00"]
+    await voice.aclose()
+
+
+async def test_a_malformed_message_fails_its_context_and_keeps_the_socket() -> None:
+    socket = FakeSocket()
+    opener = Opener(socket)
+    voice = synthesizer(opener)
+    broken = voice.open_turn(transcript_id="t1").speak("Hello.")
+    [one] = await sent(socket, 1)
+
+    socket.push(
+        type="timestamps",
+        context_id=one["context_id"],
+        done=False,
+        word_timestamps={"words": ["Hello."], "start": [None], "end": [0.4]},
+    )
+    socket.inbox.put_nowait("[1, 2]")
+    with pytest.raises(ProviderFault) as caught:
+        await drained(broken)
+    assert caught.value.kind == "unavailable"
+
+    healthy = voice.open_turn(transcript_id="t2").speak("Again.")
+    [_, two] = await sent(socket, 2)
+    socket.chunk(two["context_id"], 0, b"\x05\x00")
+    socket.push(type="flush_done", context_id=two["context_id"], flush_id=0, done=False)
+    assert await drained(healthy) == b"\x05\x00"
+    assert opener.opened == 1
+    await voice.aclose()
+
+
+async def test_a_flush_done_for_a_later_sentence_ends_the_earlier_ones() -> None:
+    socket = FakeSocket()
+    voice = synthesizer(Opener(socket))
+    turn = voice.open_turn(transcript_id="t1")
+    first = turn.speak("Hello.", sentence_index=0)
+    second = turn.speak(" Two.", sentence_index=1)
+    [one, _] = await sent(socket, 2)
+    context = one["context_id"]
+
+    socket.chunk(context, 0, b"\x01\x00")
+    socket.chunk(context, 1, b"\x02\x00")
+    socket.push(type="flush_done", context_id=context, flush_id=1, done=False)
+
+    assert await drained(first) == b"\x01\x00"
+    assert await drained(second) == b"\x02\x00"
+    await voice.aclose()
+
+
+async def test_an_error_without_a_context_fails_the_sentences_on_that_socket() -> None:
+    socket = FakeSocket()
+    voice = synthesizer(Opener(socket))
+    segment = voice.open_turn().speak("Hello.")
+    await sent(socket, 1)
+
+    socket.push(type="error", status_code=429, error="too many requests")
+
+    with pytest.raises(ProviderFault) as caught:
+        await drained(segment)
+    assert caught.value.kind == "rate_limited"
+    assert "too many requests" in str(caught.value)
+    await voice.aclose()
+
+
+async def test_a_stale_reader_does_not_fail_sentences_on_the_new_socket() -> None:
+    class FailingSend(FakeSocket):
+        @override
+        async def send(self, message: str) -> None:
+            raise OSError(f"broken pipe while sending {len(message)} bytes")
+
+    stale, fresh = FailingSend(), FakeSocket()
+    voice = synthesizer(Opener(stale, fresh))
+    lost = voice.open_turn(transcript_id="t1").speak("Hello.")
+    with pytest.raises(ProviderFault):
+        await drained(lost)
+
+    alive = voice.open_turn(transcript_id="t2").speak("Again.")
+    [two] = await sent(fresh, 1)
+    stale.inbox.put_nowait(OSError("reset by peer"))
+    fresh.chunk(two["context_id"], 0, b"\x06\x00")
+    fresh.push(type="flush_done", context_id=two["context_id"], flush_id=0, done=False)
+
+    assert await drained(alive) == b"\x06\x00"
+    await voice.aclose()
+
+
+async def test_an_offline_provider_is_dialled_once_per_failed_context() -> None:
+    attempts = 0
+
+    async def offline() -> CartesiaSocket:
+        nonlocal attempts
+        attempts += 1
+        raise ProviderFault("tts", "unavailable")
+
+    voice = CartesiaSpeechSynthesizer(api_key="k", settings=SETTINGS, opener=offline)
+    turn = voice.open_turn(transcript_id="t1")
+    segments = [turn.speak(text, sentence_index=index) for index, text in enumerate("ABC")]
+    await turn.finish()
+
+    for segment in segments:
+        with pytest.raises(ProviderFault):
+            await drained(segment)
+    assert attempts == 1
+    await voice.aclose()
+
+
+async def test_a_blank_sentence_is_never_sent() -> None:
+    socket = FakeSocket()
+    voice = synthesizer(Opener(socket))
+
+    with pytest.raises(ValueError, match="blank"):
+        await drained(voice.open_turn().speak("   "))
+
+    assert socket.sent == []
+    await voice.aclose()
+
+
+async def test_a_refused_handshake_is_a_typed_fault(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def refuse(*_args: object, **_kwargs: object) -> CartesiaSocket:
+        raise InvalidStatus(Response(401, "Unauthorized", Headers()))
+
+    monkeypatch.setattr(websockets, "connect", refuse)
+
+    with pytest.raises(ProviderFault) as caught:
+        await connect_cartesia("wss://example.test", "k")
+    assert caught.value.kind == "unauthorized"
+
+
+async def test_a_websocket_fault_moves_the_turn_to_the_fallback() -> None:
+    socket = FakeSocket()
+    primary = synthesizer(Opener(socket))
+    backup = FallbackVoice()
+    turn = SpeechWithFallback(primary, backup).open_turn(transcript_id="t1")
+    segment = turn.speak("Hello.", sentence_index=0)
+    reading = asyncio.ensure_future(drained(segment))
+    [one] = await sent(socket, 1)
+
+    socket.push(type="error", context_id=one["context_id"], status_code=503, message="busy")
+
+    assert await reading == b"backup"
+    await primary.aclose()
+
+
+class FallbackVoice(SentenceSynth):
+    @override
+    async def stream(
+        self,
+        text: str,
+        *,
+        sentence_index: int | None = None,
+        transcript_id: str | None = None,
+        language: str | None = None,
+    ) -> AsyncIterator[bytes]:
+        del text, sentence_index, transcript_id, language
+        yield b"backup"
+
+    async def aclose(self) -> None:
+        return None

@@ -1,6 +1,6 @@
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +35,11 @@ class SpeechSynthesizer(Protocol):
     ) -> SpeechTurn: ...
 
     async def aclose(self) -> None: ...
+
+
+@runtime_checkable
+class SupportsWarmup(Protocol):
+    def warm(self) -> None: ...
 
 
 class PreparedSpeech(Protocol):
