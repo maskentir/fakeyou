@@ -4,7 +4,13 @@ from fakeyou.foundation.taxonomy import ProviderFaultKind
 from fakeyou.observability.cleanup import close_safely
 from fakeyou.observability.journal import Journal
 from fakeyou.observability.provider_faults import ProviderFault
-from fakeyou.speech.contract import SpeechSegment, SpeechSynthesizer, SpeechTurn, WordTiming
+from fakeyou.speech.contract import (
+    SpeechSegment,
+    SpeechSynthesizer,
+    SpeechTurn,
+    SupportsWarmup,
+    WordTiming,
+)
 
 LASTING_FAULTS: frozenset[ProviderFaultKind] = frozenset({"payment_required", "unauthorized"})
 
@@ -21,6 +27,10 @@ class SpeechWithFallback:
         self._fallback = fallback
         self._journal = journal
         self._primary_lost = False
+
+    def warm(self) -> None:
+        if isinstance(self._primary, SupportsWarmup):
+            self._primary.warm()
 
     def open_turn(
         self, *, transcript_id: str | None = None, language: str | None = None
