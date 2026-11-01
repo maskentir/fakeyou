@@ -96,6 +96,18 @@ class DeferredTurns:
                 return turn
         return None
 
+    def next_ready_for(
+        self, channel: ReplyChannel, ready: Callable[[DeferredTurn], bool]
+    ) -> DeferredTurn | None:
+        for turn in self._turns:
+            if turn.channel == channel and ready(turn):
+                self._turns.remove(turn)
+                return turn
+        return None
+
+    def pending_for(self, channel: ReplyChannel) -> bool:
+        return any(turn.channel == channel for turn in self._turns)
+
     def retry(self, turn: DeferredTurn) -> bool:
         if turn.attempts >= DEFERRED_RETRIES:
             return False

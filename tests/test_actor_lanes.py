@@ -74,6 +74,22 @@ class HeldChatResponder(FixedResponder):
         return SpokenChunk(text=self._reply, language=DEFAULTS.speech.language)
 
 
+class FirstCallGatedResponder(FixedResponder):
+    def __init__(self, reply: str, gate: asyncio.Event) -> None:
+        super().__init__(reply)
+        self._gate = gate
+
+    @override
+    async def respond(
+        self, events: Sequence[TranscriptEvent], on_tool_start: Callable[[], None]
+    ) -> SpokenChunk:
+        self.calls.append(list(events))
+        if len(self.calls) == 1:
+            self.started.set()
+            await self._gate.wait()
+        return SpokenChunk(text=self._reply, language=DEFAULTS.speech.language)
+
+
 def attention(text: str) -> TranscriptEvent:
     return TranscriptEvent(
         id="attention-1",
@@ -245,6 +261,34 @@ async def test_without_a_chat_channel_the_reply_is_dropped_not_spoken() -> None:
 
     assert audio.spoken == []
     assert journal.events("chat_reply_dropped")[0]["reason"] == "no_chat_channel"
+    await turns.close()
+
+
+async def test_a_chat_reply_runs_while_a_final_is_still_being_prepared() -> None:
+    chat = FakeChat()
+    gate = asyncio.Event()
+    responder = FirstCallGatedResponder("Here is the deck link.", gate)
+    turns, audio = lanes(
+        responder,
+        interaction=interaction(commands=chat, planning=chat_permitted),
+    )
+
+    voice = asyncio.create_task(
+        turns.ingress.receive_final(event("t1", f"{TWIN}, can you share the deck?"))
+    )
+    await responder.started.wait()
+    accepted = turns.receive_chat(meeting_input("c1", f"{TWIN} ping", "meeting_chat"))
+    for _ in range(50):
+        if chat.sent:
+            break
+        await asyncio.sleep(0.02)
+
+    assert accepted is True
+    assert chat.sent == [("Here is the deck link.", "device-budi")]
+    assert not audio.spoken
+    gate.set()
+    decision = await asyncio.wait_for(voice, timeout=5)
+    assert decision is not None
     await turns.close()
 
 

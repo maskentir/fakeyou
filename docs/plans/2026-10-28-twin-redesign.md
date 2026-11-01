@@ -1378,6 +1378,29 @@ Bentuk PR:
     - B1b-3c-2, lane chat dan lane perhatian jadi task sendiri, jadi chat
       benar-benar paralel dengan giliran suara (sekarang keduanya masih
       drain task yang sama). Butuh actor yang sudah ada.
+    - B1b-3c-2, implementasi (2026-11-02): satu drain task dibagi jadi tiga
+      lane task di `actor.py`: lane final suara (`drain_turns` atas
+      `PendingFinals`), lane chat, dan lane perhatian — keduanya
+      `run_deferred_turn`, masing-masing task sendiri. `DeferredTurns`
+      mendapat filter per channel: `next_ready_for(channel, ready)` dan
+      `pending_for(channel)`. Lane chat siap kecuali pause atau shadow; lane
+      perhatian menunggu quiet floor seperti semula, plus dia tidak jalan
+      saat antrean final suara masih berisi atau lane final masih
+      berproses. Urutan kontrak dulu: final suara baru membatalkan turn
+      deferred yang memegang floor lewat `take_floor_for_final`, turn itu
+      dicoba sekali lagi lalu dibuang; saat retried, ia tidak bisa salip
+      final karena gate lane idle, dan lane perhatian kembali dilayan setelah
+      lane final selesai (`_drain_pending_finals` memanggil
+      `start_pending` di ujungnya). Gagal penuh bukti: dengan mutasi "lane
+      chat tidak pernah di-spawn", test paralel baru
+      `test_a_chat_reply_runs_while_a_final_is_still_being_prepared`
+      gagal; test itu juga bukti paralel sungguhan: balasan chat terkirim
+      pada saat responder final masih menunggu gate. Invariant journal pada
+      stateful actor test dinaikkan dari maksimum satu ke maksimum dua
+      giliran aktif (chat + lane floor boleh paralel). Uji kunci literal
+      `wait_idle` di `test_turn_graph_fault_close.py` ikut berubah dari
+      "the drain" ke "the lanes" karena satu drain task sudah dibagi tiga.
+      Replay oue-4 tidak berubah.
     - B1b-3c-3, penghapusan sisa: `TurnRuntime` sebagai dependency bag,
       `turn_events.py`, dan nama lama yang tidak lagi dipakai.
     - Plan awal B1b-3c sebelum dipecah: participation sebagai fungsi,
