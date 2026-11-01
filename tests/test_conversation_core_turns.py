@@ -4,8 +4,8 @@ from typing import Any, NoReturn, override
 import pytest
 
 from fakeyou.conversation.conversation import cap_spoken_reply
+from fakeyou.conversation.floor import SpeechFloor
 from fakeyou.conversation.meeting_turns import TurnInteraction, build_meeting_turns
-from fakeyou.conversation.turn_graph import SpeechFloor
 from fakeyou.observability.diagnostics import Diagnostics
 from tests._audio_fakes import FakeReplyAudio
 from tests._conversation_fakes import FakeResponder, ScriptedJudge, judged

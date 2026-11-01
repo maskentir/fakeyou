@@ -8,6 +8,7 @@ from langgraph.graph.state import CompiledStateGraph
 
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.control import ReplyControl
+from fakeyou.conversation.floor import SpeechFloor
 from fakeyou.conversation.participation_graph import TurnJudging
 from fakeyou.conversation.session import (
     ConversationError,
@@ -25,7 +26,6 @@ from fakeyou.conversation.turn_graph import (
     PlannedTurn,
     Responder,
     SentenceLimits,
-    SpeechFloor,
     StateSpeech,
     StreamTurnFactory,
     TurnGraphState,

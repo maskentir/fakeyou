@@ -8,10 +8,10 @@ from langchain_core.messages import AIMessageChunk
 
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation import turn_graph, turn_recovery
+from fakeyou.conversation.floor import SpeechFloor
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_graph import (
     SentenceLimits,
-    SpeechFloor,
     SpeechRuntime,
     TurnRuntime,
     build_turn_graph,

@@ -17,6 +17,7 @@ from fakeyou.conversation.agent import (
     create_meeting_agent,
 )
 from fakeyou.conversation.conversation import MeetingResponder
+from fakeyou.conversation.floor import ActiveSpeech
 from fakeyou.conversation.meeting_messages import NoHistory, request_messages
 from fakeyou.conversation.meeting_turns import (
     TurnGeneration,
@@ -32,7 +33,7 @@ from fakeyou.conversation.middleware import (
 from fakeyou.conversation.turn_events import (
     TurnEvent,
 )
-from fakeyou.conversation.turn_graph import ActiveSpeech, TurnInput, record_barge_in
+from fakeyou.conversation.turn_graph import TurnInput, record_barge_in
 from fakeyou.foundation.participation import ParticipationContext
 from fakeyou.foundation.speakers import UNIDENTIFIED_PARTICIPANT
 from fakeyou.foundation.transcript import TranscriptEvent

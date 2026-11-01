@@ -6,9 +6,9 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 
 from fakeyou.config.settings import DEFAULTS
+from fakeyou.conversation.floor import SpeechFloor
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_graph import (
-    SpeechFloor,
     SpeechInput,
     SpeechRuntime,
     TurnDropped,

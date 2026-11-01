@@ -1206,11 +1206,22 @@ Bentuk PR:
 - B1b dipecah menjadi tiga PR (2026-11-01), karena ketergantungannya:
   `meeting_turns.py` dan `assembly.py` adalah pintu utama, sedangkan judge,
   planner, recovery, dan gate composer tetap dipakai apa adanya.
-  - B1b-1, `FloorActor` sebagai pemilik state, tanpa mengubah eksekusi.
-    Actor memegang lease bicara, `TurnId`, generasi, dan status barge-in.
-    `TurnIngress`, `TurnLifecycle`, dan turn graph tetap menjalankan logika,
-    tetapi setiap perubahan state floor lewat actor. Gate: property test
-    urutan acak; replay oue-4 tidak memburuk.
+  - B1b-1, pemilik state floor. Implementasi (2026-11-01): `SpeechFloor`
+    dan `ActiveSpeech` pindah dari `turn_graph.py` ke `conversation/floor.py`
+    tanpa mengubah perilaku (nama tetap; rename ke `FloorActor` ditunda ke
+    B1b-3 ketika modulnya dibangun ulang). Dua perubahan perilaku:
+    `hold()` menolak turn kedua saat floor sedang dipegang (dulu turn kedua
+    diam-diam menimpa handle turn pertama, sehingga `interrupt()` hanya
+    membatalkan yang kedua dan turn pertama tetap berjalan sampai selesai;
+    ditemukan lewat probe), dan jalur non-held di `speak_reply` tidak lagi
+    dipanggil dari dalam turn yang sudah memegang floor (test helper
+    `start_held_speech` dipindah ke `held=True`, sama seperti produksi).
+    Property test `tests/test_floor_stateful.py` memakai
+    `hypothesis.stateful.RuleBasedStateMachine`: begin, second turn refused,
+    release, interrupt, interrupt-idle, advance, admission, dan
+    interrupt-lalu-ambil-floor-seketika; invariant generasi dan `busy`
+    selalu sama dengan model. Gate: suite penuh 10708 passed; replay oue-4
+    identik dengan sebelumnya.
   - B1b-2, `TurnRunner` menggantikan turn graph dan speech graph. Fungsi yang
     sama, urutan sama (action, jawaban state, chat, balasan), lookahead dan
     pembersihan sama. Gate: `test_turn_graph*.py` dipindah ke runner dengan
