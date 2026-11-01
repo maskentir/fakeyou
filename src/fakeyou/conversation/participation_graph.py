@@ -2,9 +2,6 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Literal, TypedDict
 
-from langgraph.graph import END, START, StateGraph
-from langgraph.graph.state import CompiledStateGraph
-from langgraph.runtime import Runtime
 from pydantic import ValidationError
 
 from fakeyou.conversation.participation_decision import (
@@ -152,46 +149,33 @@ def _record(
     return {"last_participation": verdict, "decision_source": source}
 
 
-def build_participation_subgraph() -> CompiledStateGraph[
-    ParticipationState, ParticipationRuntime, ParticipationState, ParticipationState
-]:
-    def hold_floor(
-        state: ParticipationState, runtime: Runtime[ParticipationRuntime]
-    ) -> ParticipationVerdict:
-        verdict = ParticipationDecision(
-            decision="silent", confidence=1.0, reason_code="floor_occupied"
-        )
-        return _record(runtime.context.journal, state, verdict, "floor")
+def _hold_floor(state: ParticipationState, runtime: ParticipationRuntime) -> ParticipationVerdict:
+    verdict = ParticipationDecision(decision="silent", confidence=1.0, reason_code="floor_occupied")
+    return _record(runtime.journal, state, verdict, "floor")
 
-    async def judge(
-        state: ParticipationState, runtime: Runtime[ParticipationRuntime]
-    ) -> ParticipationVerdict:
-        context = runtime.context
-        cache, window = context.cache, state["window"]
-        if cache is None or window is None:
-            return _record(context.journal, state, fallback_decision(state["context"]), "fallback")
-        judgement, error = await capture_error(partial(cache.judgement, window))
-        if judgement is None:
-            return _fall_back(state, context, judge_failure_code(error))
-        verdict = decision_of(
-            judgement,
-            context.thresholds,
-            named=state["context"].addressed,
-            sole_human_responder=window.sole_human_responder,
-        )
-        return _record(context.journal, state, verdict, "judge", judgement)
 
-    builder = StateGraph(ParticipationState, context_schema=ParticipationRuntime)
-    builder.add_node("hold_floor", hold_floor)
-    builder.add_node("judge", judge)
-    builder.add_conditional_edges(
-        START,
-        lambda state: "hold_floor" if state["context"].others_speaking else "judge",
-        {"hold_floor": "hold_floor", "judge": "judge"},
+async def _judge(state: ParticipationState, runtime: ParticipationRuntime) -> ParticipationVerdict:
+    cache, window = runtime.cache, state["window"]
+    if cache is None or window is None:
+        return _record(runtime.journal, state, fallback_decision(state["context"]), "fallback")
+    judgement, error = await capture_error(partial(cache.judgement, window))
+    if judgement is None:
+        return _fall_back(state, runtime, judge_failure_code(error))
+    verdict = decision_of(
+        judgement,
+        runtime.thresholds,
+        named=state["context"].addressed,
+        sole_human_responder=window.sole_human_responder,
     )
-    builder.add_edge("hold_floor", END)
-    builder.add_edge("judge", END)
-    return builder.compile()
+    return _record(runtime.journal, state, verdict, "judge", judgement)
+
+
+async def participate(
+    state: ParticipationState, runtime: ParticipationRuntime
+) -> ParticipationVerdict:
+    if state["context"].others_speaking:
+        return _hold_floor(state, runtime)
+    return await _judge(state, runtime)
 
 
 def _fall_back(

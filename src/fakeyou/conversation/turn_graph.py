@@ -25,7 +25,7 @@ from fakeyou.conversation.participation_graph import (
     ParticipationRuntime,
     ParticipationState,
     TurnJudging,
-    build_participation_subgraph,
+    participate,
 )
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.sentence_stream import shape_sentences
@@ -390,9 +390,6 @@ class TurnGraphState(TypedDict):
 
 TurnRoute = Literal["speak", "end", "failed"]
 IngestRoute = Literal["speak", "participation", "refresh"]
-ParticipationGraph = CompiledStateGraph[
-    ParticipationState, ParticipationRuntime, ParticipationState, ParticipationState
-]
 _ADMITTED: frozenset[str] = frozenset({"speak", "clarify"})
 
 
@@ -433,7 +430,6 @@ _NO_THRESHOLDS = JudgeThresholds(reply=1.0, clarify=1.0)
 async def _participate(
     state: TurnGraphState,
     runtime: TurnRuntime,
-    participation_graph: ParticipationGraph,
 ) -> dict[str, ParticipationDecision | DecisionSource | str | None]:
     if state.get("admission") == "admit":
         return {"failure": None}
@@ -446,7 +442,7 @@ async def _participate(
         if judging is not None
         else None
     )
-    result = await participation_graph.ainvoke(
+    result = await participate(
         ParticipationState(
             window=window,
             context=state["context"],
@@ -454,7 +450,7 @@ async def _participate(
             last_participation=None,
             decision_source=None,
         ),
-        context=ParticipationRuntime(
+        ParticipationRuntime(
             journal=runtime.journal,
             thresholds=judging.thresholds if judging is not None else _NO_THRESHOLDS,
             cache=judging.cache if judging is not None else None,
@@ -1268,16 +1264,15 @@ async def record_turn_failure(state: TurnGraphState, context: TurnRuntime) -> No
 
 @dataclass(frozen=True, slots=True)
 class _TurnNodes:
-    participation_graph: ParticipationGraph
     speech_graph: SpeechGraph
 
     async def refresh(self, state: TurnGraphState, context: TurnRuntime) -> None:
         _prefetch_judgement(state, context)
 
-    async def participate(
+    async def decide(
         self, state: TurnGraphState, context: TurnRuntime
     ) -> dict[str, ParticipationDecision | DecisionSource | str | None]:
-        return await _participate(state, context, self.participation_graph)
+        return await _participate(state, context)
 
     async def speak(
         self, state: TurnGraphState, context: TurnRuntime
@@ -1317,7 +1312,7 @@ class TurnRunner:
             await self._nodes.refresh(state, context)
             return state
         if ingested == "participation":
-            state = cast(TurnGraphState, {**state, **await self._nodes.participate(state, context)})
+            state = cast(TurnGraphState, {**state, **await self._nodes.decide(state, context)})
             decided = route_after_participation(state)
             if decided == "failed":
                 await record_turn_failure(state, context)
@@ -1328,18 +1323,8 @@ class TurnRunner:
         return state
 
 
-def build_turn_graph(
-    *,
-    participation: ParticipationGraph | None = None,
-) -> TurnRunner:
-    return TurnRunner(
-        _TurnNodes(
-            participation_graph=(
-                build_participation_subgraph() if participation is None else participation
-            ),
-            speech_graph=build_speech_graph(),
-        )
-    )
+def build_turn_graph() -> TurnRunner:
+    return TurnRunner(_TurnNodes(speech_graph=build_speech_graph()))
 
 
 class _RecordingSink:

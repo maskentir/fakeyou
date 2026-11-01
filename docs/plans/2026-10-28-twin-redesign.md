@@ -1266,7 +1266,27 @@ Bentuk PR:
     invariant `speaking_generation` sekarang struktural. Mutation check: buang
     penyalinan key opsional (38 gagal), dan lewati `refresh` untuk interim
     (16 gagal). Replay oue-4 identik. Gate penuh 10710 passed.
-  - B1b-3, participation sebagai fungsi, penghapusan `TurnLifecycle`,
+  - B1b-3a (2026-11-01, implementasi): participation subgraph menjadi fungsi
+    biasa `participate(state, context)` di `participation_graph.py`, dengan
+    cabang `hold_floor` (others_speaking) dan `judge` yang sama. Judge tidak
+    memakai middleware agent, jadi tidak ada ketergantungan konteks LangGraph
+    seperti speech graph. `build_turn_graph()` tanpa parameter subgraph. Mutation
+    check: menonaktifkan cabang floor gagal 4 tes. Replay oue-4 identik.
+    Gate penuh 10709 passed; satu tes loopback (`test_local_transport_cancel_
+    closes_loopback_without_fallback`) gagal di bawah beban full suite: request
+    ke server loopback belum sampai dalam 2 detik. Flaky ini ada juga di `main`
+    (diverifikasi di worktree origin/main), jadi bukan dari PR ini. Budget
+    tunggu di tes itu dinaikkan ke 10 detik; asersinya tidak diubah.
+  - B1b-3b, aturan owner yang berubah perilaku dan lane chat: final yang bukan
+    untuk twin tidak lagi membatalkan jawaban yang masih disiapkan (hanya saat
+    twin terdengar); chat berjalan di lane sendiri. Ini menyentuh
+    `TurnIngress._yield_floor` dan `_chat_turn`.
+  - B1b-3c, penghapusan `TurnLifecycle`, `TurnIngress`, `turn_queue.py`,
+    `turn_events.py`, `BargeLatch`, dan `TurnRuntime`. Mailbox actor
+    (satu task konsumen yang memiliki semua state giliran) belum dibangun;
+    B1b-3c adalah saat ia dibangun, bukan sekadar dihapus, karena antrean dan
+    latch yang sekarang menyimpan state itu.
+  - (rencana awal B1b-3, sekarang terbagi di atas) participation sebagai fungsi, penghapusan `TurnLifecycle`,
     `TurnIngress`, `turn_queue.py`, `turn_events.py`, `BargeLatch`,
     `SpeechFloor`, dan `TurnRuntime`, plus dua keputusan owner: final yang
     bukan untuk twin tidak membatalkan jawaban yang masih disiapkan, dan chat

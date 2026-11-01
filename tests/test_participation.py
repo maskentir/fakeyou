@@ -1,12 +1,16 @@
 import pytest
 
+from fakeyou.conversation.participation_decision import ParticipationDecision
 from fakeyou.conversation.participation_graph import (
     JudgeThresholds,
+    ParticipationRuntime,
+    ParticipationState,
     decision_of,
     fallback_decision,
     judge_failure_code,
+    participate,
 )
-from fakeyou.conversation.turn_judge import TurnJudgement
+from fakeyou.conversation.turn_judge import JudgeLine, JudgeWindow, TurnJudgement
 from fakeyou.foundation.participation import (
     ParticipationContext,
     is_vocative,
@@ -146,3 +150,74 @@ def test_an_unnamed_reply_needs_the_higher_threshold() -> None:
 def test_a_named_reply_keeps_the_reply_threshold() -> None:
     assert decision_of(judgement(confidence=0.65), THRESHOLDS, named=True).decision == "speak"
     assert decision_of(judgement(confidence=0.65), THRESHOLDS, named=False).decision == "silent"
+
+
+class RecordingJournal:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict[str, object]]] = []
+
+    def record(self, event: str, **fields: object) -> None:
+        self.events.append((event, fields))
+
+
+async def test_others_speaking_holds_the_floor_without_asking_the_judge() -> None:
+    journal = RecordingJournal()
+    state = ParticipationState(
+        window=None,
+        context=ParticipationContext(addressed=True, others_speaking=True),
+        transcript_id="t1",
+        last_participation=None,
+        decision_source=None,
+    )
+
+    verdict = await participate(
+        state,
+        ParticipationRuntime(journal=journal, thresholds=JudgeThresholds(reply=0.6, clarify=0.5)),
+    )
+
+    decision = verdict["last_participation"]
+    assert isinstance(decision, ParticipationDecision)
+    assert verdict["decision_source"] == "floor"
+    assert decision.reason_code == "floor_occupied"
+    assert [event for event, _ in journal.events] == ["policy_decided"]
+
+
+async def test_without_a_judge_the_named_line_falls_back_to_speaking() -> None:
+    journal = RecordingJournal()
+    state = ParticipationState(
+        window=None,
+        context=ParticipationContext(addressed=True),
+        transcript_id="t1",
+        last_participation=None,
+        decision_source=None,
+    )
+
+    verdict = await participate(
+        state,
+        ParticipationRuntime(journal=journal, thresholds=JudgeThresholds(reply=0.6, clarify=0.5)),
+    )
+
+    decision = verdict["last_participation"]
+    assert isinstance(decision, ParticipationDecision)
+    assert verdict["decision_source"] == "fallback"
+    assert decision.decision == "speak"
+
+
+async def test_a_window_without_a_judge_cache_falls_back_instead_of_judging() -> None:
+    journal = RecordingJournal()
+    window = JudgeWindow(earlier=(), latest=JudgeLine(speaker="ayu", text="Rani, are you there?"))
+    state = ParticipationState(
+        window=window,
+        context=ParticipationContext(addressed=True),
+        transcript_id="t1",
+        last_participation=None,
+        decision_source=None,
+    )
+
+    verdict = await participate(
+        state,
+        ParticipationRuntime(journal=journal, thresholds=JudgeThresholds(reply=0.6, clarify=0.5)),
+    )
+
+    assert verdict["decision_source"] == "fallback"
+    assert [event for event, _ in journal.events] == ["policy_decided"]
