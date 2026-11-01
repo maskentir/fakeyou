@@ -8,6 +8,8 @@ from typing import Any, override
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation import turn_graph, turn_recovery
 from fakeyou.conversation.floor import SpeechFloor
+from fakeyou.conversation.meeting_messages import NoHistory
+from fakeyou.conversation.participation_graph import JudgeThresholds, TurnJudging
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_events import TurnEvent
 from fakeyou.conversation.turn_graph import (
@@ -18,10 +20,12 @@ from fakeyou.conversation.turn_graph import (
     build_turn_graph,
 )
 from fakeyou.conversation.turn_ingress import TurnIngress
+from fakeyou.conversation.turn_judge import JudgeCache, TurnJudgement, WindowSource
 from fakeyou.conversation.turn_lifecycle import TurnLifecycle
 from fakeyou.foundation.participation import ParticipationContext
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.speech.contract import PreparedSpeech
+from tests._conversation_fakes import ScriptedJudge, judged
 from tests._prepared_support import PreparedSink, PreparedSpeaker
 
 
@@ -245,12 +249,25 @@ class BargeAudio(PreparedSpeaker):
 
 
 def barge_ingress(
-    journal: FakeJournal, addressing_names: tuple[str, ...], *, speaking: bool = True
+    journal: FakeJournal,
+    addressing_names: tuple[str, ...],
+    *,
+    speaking: bool = True,
+    verdict: TurnJudgement | None = None,
 ) -> tuple[TurnIngress, TurnLifecycle, BargeAudio]:
     lifecycle = TurnLifecycle(
         build_turn_graph(),
         journal=journal,
         responder=OneSentenceResponder(),
+        judging=(
+            TurnJudging(
+                cache=JudgeCache(ScriptedJudge(lambda _window: verdict)),
+                windows=WindowSource(NoHistory(), window_lines=8),
+                thresholds=JudgeThresholds(reply=0.6, clarify=0.5),
+            )
+            if verdict is not None
+            else None
+        ),
     )
     audio = BargeAudio(speaking=speaking)
     lifecycle.bind(audio)
@@ -306,7 +323,7 @@ async def test_final_during_speech_cancels_the_turn_and_journals_barge_in() -> N
     assert audio.spoken == ["Yes, I am here."]
 
 
-async def test_unaddressed_final_during_speech_yields_the_floor_and_cancels() -> None:
+async def test_a_final_for_someone_else_yields_the_floor_while_the_twin_speaks() -> None:
     journal = FakeJournal()
     ingress, lifecycle, audio = barge_ingress(journal, addressing_names=("twin",))
     speech = await start_speaking(lifecycle)
@@ -321,6 +338,43 @@ async def test_unaddressed_final_during_speech_yields_the_floor_and_cancels() ->
         "agent_cancelled",
     ]
     assert audio.stops == 1
+    assert await settle(speech) is False
+
+
+async def test_a_final_for_someone_else_does_not_yield_a_quiet_floor() -> None:
+    journal = FakeJournal()
+    ingress, lifecycle, audio = barge_ingress(journal, addressing_names=("twin",), speaking=False)
+    speech = await start_speaking(lifecycle)
+
+    decision = await ingress.handle_final(final_event("f1", "Alice, lunch at noon today?"))
+
+    assert decision is not None
+    assert decision.decision == "silent"
+    assert barge_names(journal) == []
+    assert audio.stops == 0
+    assert speech.done() is False
+
+
+async def test_a_final_for_the_twin_yields_a_quiet_floor() -> None:
+    journal = FakeJournal()
+    ingress, lifecycle, audio = barge_ingress(
+        journal,
+        addressing_names=("twin",),
+        speaking=False,
+        verdict=judged("stay_silent", addressee="twin"),
+    )
+    speech = await start_speaking(lifecycle)
+
+    decision = await ingress.handle_final(final_event("f1", "twin, that is not right"))
+
+    assert decision is not None
+    assert decision.decision == "silent"
+    assert barge_names(journal) == [
+        "barge_in_detected",
+        "agent_cancel_requested",
+        "agent_cancelled",
+    ]
+    assert audio.stops == 0
     assert await settle(speech) is False
 
 

@@ -1281,18 +1281,54 @@ Bentuk PR:
     untuk twin tidak lagi membatalkan jawaban yang masih disiapkan (hanya saat
     twin terdengar); chat berjalan di lane sendiri. Ini menyentuh
     `TurnIngress._yield_floor` dan `_chat_turn`.
-    - Aturan final-bukan-untuk-twin, implementasi (2026-11-01): `_yield_floor`
-      hanya membatalkan kalau `session.is_speaking` (twin terdengar). Sebelumnya
+    - Aturan final-bukan-untuk-twin, implementasi (2026-11-01, #79 lalu
+      dikoreksi): `_yield_floor` membatalkan kalau twin terdengar
+      (`session.is_speaking`) atau final-nya ditujukan ke twin. Sebelumnya
       dua syarat: `is_speaking` atau giliran masih jalan, sehingga final
       untuk orang lain membatalkan jawaban yang masih disiapkan dan
-      pertanyaannya tidak pernah terjawab. Keputusan owner (2026-11-01): begitu
+      pertanyaannya tidak pernah dijawab. Keputusan owner (2026-11-01): begitu
       twin bicara lalu diam, final untuk orang lain juga tidak membatalkan, jadi
       twin menyelesaikan gilirannya. Yang tetap dipotong: twin sedang bicara.
-      Bukti: dua tes baru di `tests/test_turn_graph_barge_in.py` (balasan yang
-      belum mulai, balasan yang sudah jatuh diam); mutasi mengembalikan syarat
-      lama membuat keduanya gagal. Replay oue-4 identik karena sesi itu tidak
-      punya kasus final-untuk-orang-lain saat twin mikir, jadi aturan ini tidak
-      terbukti dari replay melainkan dari tes.
+      `stop_playback()` hanya dipanggil saat twin terdengar, seperti semula.
+      Bukti: tes di `tests/test_turn_graph_barge_in.py` (final untuk orang lain
+      saat twin diam, final ke twin saat twin diam, final saat twin bicara);
+      mutasi mengembalikan syarat lama membuat tes gagal. Replay oue-4 identik
+      karena sesi itu tidak punya kasus final-untuk-orang-lain saat twin
+      mikir, jadi aturan ini tidak terbukti dari replay melainkan dari tes.
+    - Lane chat, implementasi (2026-11-01, #80 lalu dikoreksi): giliran chat
+      tidak lagi memegang lease bicara. Sebelumnya `run_deferred_turn` memakai
+      `_held`, jadi chat memegang floor seperti giliran suara; final suara baru
+      memanggil `take_floor_for_final` yang membatalkan task yang memegang
+      floor, sehingga balasan chat dibatalkan, dicoba sekali lagi, lalu
+      dibuang. Sekarang `_held` menerima channel dan tidak memegang floor untuk
+      channel chat. Plan chat selalu `output="chat"` (lihat
+      `planner._with_output`), jadi jalur chat tidak pernah bicara lewat suara.
+      Yang tetap berlaku: close menghentikan; giliran chat masih antre di
+      drain task yang sama, jadi chat belum paralel sungguhan dengan giliran
+      suara.
+    - Koreksi setelah review independen (#79 dan #80 masih salah, keduanya
+      diperbaiki di PR berikutnya):
+      - Aturan final-bukan-untuk-twin terlalu lebar. `_yield_floor` dipanggil
+        untuk semua verdict yang tidak di-admit, termasuk final yang
+        ditujukan ke twin tetapi di-silence judge, dan `floor_occupied`
+        (orang lain bicara sekarang). Verdict sekarang membawa `addressee`
+        (`ParticipationDecision.addressee`), dan syaratnya: twin terdengar,
+        final apa pun yang memicu yield menghentikan twin, seperti semula;
+        twin tidak terdengar, hanya final ke twin yang membatalkan.
+        `floor_occupied` masuk lewat `addressee="everyone"`.
+      - Chat masih dibuang, hanya jadi diam-diam lalu di-regenerate.
+        `_deliver_chat` masih memeriksa `_turn_current` dengan
+        `_admitted_count`, yang naik tiap final di-admit, jadi chat di-drop
+        dan dijawab ulang (probe: responder dipanggil `[['c1'], ['t1'],
+        ['c1']]`). Jalur chat sekarang punya aturan basi sendiri
+        (`_chat_current`: sesi hidup dan tidak paused), tidak terikat ke
+        penghitung admission lane suara. Probe setelah perbaikan: `[['c1'],
+        ['t1']]`, chat dijawab sekali dan terkirim.
+      - Tes chat diperkuat: bukan hanya "tidak ada `agent_cancelled`", tapi
+        jumlah pemanggilan responder untuk event chat tepat satu.
+      - Aturan ini bukan "twin tidak pernah dibatalkan": jalur interim
+        (barge-in dari suara) tetap membatalkan giliran yang belum
+        berbunyi, itu cakupan B3.
   - B1b-3c, penghapusan `TurnLifecycle`, `TurnIngress`, `turn_queue.py`,
     `turn_events.py`, `BargeLatch`, dan `TurnRuntime`. Mailbox actor
     (satu task konsumen yang memiliki semua state giliran) belum dibangun;
