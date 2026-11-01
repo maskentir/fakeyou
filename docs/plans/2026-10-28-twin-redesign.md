@@ -840,6 +840,90 @@ kita pakai sekarang; desainnya terikat ke kontrak netral di atas, bukan ke
 Cartesia. Source Pipecat (`base_output.py`, `services/cartesia/tts.py`)
 dipakai sebagai acuan.
 
+Desain B5b (2026-11-02), dari spike langsung ke API Cartesia (`sonic-3`,
+`cartesia_version=2026-03-01`, voice produksi, bahasa id, PCM s16le 24 kHz):
+
+| Yang diukur | Hasil |
+| --- | --- |
+| First chunk, websocket yang sudah terbuka | 227-268 ms (dua run, tiga kalimat) |
+| First chunk, HTTP `/tts/bytes` (jalur sekarang) | 505-626 ms |
+| Membuka koneksi websocket | 771 ms, sekali per sesi |
+| Kalimat lanjutan di context yang sama (`continue: true`) | 295-358 ms setelah teksnya dikirim |
+| Context dengan `continue: true` setelah jeda 4, 10, dan 25 s | tetap hidup, kalimat berikutnya keluar |
+| Socket idle 70 s | tetap hidup |
+| Audio setelah `cancel` | tetap datang (36 KB setelah cancel), lalu `done` |
+| Pemisahan kalimat | setiap chunk membawa `flush_id`; `flush_done` menutup tiap kalimat |
+| Timing kata | per kata, relatif ke awal audio context (kumulatif lintas kalimat); event `timestamps` tidak membawa `flush_id` tapi selalu berselang-seling dengan chunk flush yang sama |
+
+Catatan docs yang dibantah pengukuran: "context kedaluwarsa 1 detik setelah
+audio terakhir" tidak terjadi selama context belum ditutup dengan
+`continue: false`, jadi LLM yang lambat (2,7-4,3 s antar kalimat di oue-4)
+tidak memutus turn.
+
+Kontrak netral di `speech/contract.py`: `SpeechSynthesizer` tidak lagi
+punya `stream` per kalimat, bentuknya diganti menjadi turn.
+
+- `SpeechSynthesizer.open_turn(transcript_id, language) -> SpeechTurn`, dan
+  `aclose()`.
+- `SpeechTurn.speak(text, sentence_index) -> SpeechSegment` memulai sintesis
+  satu kalimat di turn itu dan langsung kembali; `finish()` menandai tidak ada
+  teks lagi; `cancel()` membuang semua yang belum selesai.
+- `SpeechSegment` adalah iterator chunk PCM satu kalimat plus `words`
+  (kata dengan start dan end dalam detik, relatif ke awal kalimat itu, kosong
+  bila provider tidak punya timing).
+
+Pemilik turn adalah `PlaybackEngine`, bukan percakapan: turn dibuka saat
+`prepare` pertama untuk sebuah `transcript_id`, diselesaikan (`finish`) saat
+turn lain dibuka, dan dibatalkan (`cancel`) saat `stop` dan saat engine
+ditutup (close menghentikan playback lebih dulu, jadi generasi yang belum
+selesai dibuang). Ucapan tanpa `transcript_id` (salam pembuka) dan cue
+masing-masing mendapat turn sendiri yang langsung diselesaikan. Kalimat yang datang
+setelah turn ditutup membuka turn baru di provider, jadi kasus itu hanya
+mengulang prosodi, tidak menggagalkan apa pun. Ini menghindari jalur "akhir
+turn" baru yang menembus sink, speaker, sesi audio, dan fleet.
+
+Retry dan fallback pindah ke tingkat turn. Timeout sebelum audio keluar
+mengulang kalimat itu sekali (perilaku sekarang). Fallback: provider yang
+gagal sebelum audio membuat kalimat itu diulang di provider cadangan; provider
+yang gagal setelah sebagian audio keluar mengakhiri kalimat itu di titik
+tersebut (tercatat `mid_sentence`). Dalam dua kasus itu sisa turn tetap di
+cadangan, karena suara tidak boleh berganti di tengah jawaban; turn berikutnya
+kembali ke primary, kecuali faultnya permanen (`unauthorized`,
+`payment_required`), yang memindahkan sesi ke cadangan seperti sekarang.
+Karena lookahead menyiapkan kalimat berikutnya lebih dulu, kalimat yang sudah
+dibuka di primary tetapi belum mengeluarkan audio saat turn berpindah ikut
+dialihkan ke cadangan; kalimat yang sudah mengeluarkan audio dibiarkan selesai
+di primary, karena berganti suara di tengah kalimat lebih buruk daripada di
+batas kalimat. Turn cadangan yang dibuka setelah turn ditutup ikut ditutup
+saat kalimatnya selesai, dan kegagalan menutup segmen primary tidak
+menghalangi perpindahan.
+Sekarang provider yang mati setelah satu chunk menggagalkan kalimat dan tidak
+berpindah.
+
+Bentuk PR:
+
+- B5b-1, kontrak. `SpeechSynthesizer.open_turn`/`SpeechTurn`/`SpeechSegment`; keempat
+  adapter HTTP memakai turn per kalimat (perilaku audio sama); engine
+  memiliki turn; retry dan fallback di tingkat turn dengan perpindahan
+  provider di tengah turn; fake replay dan cue lewat kontrak yang sama.
+  `stream` per kalimat hilang dari kontrak; adapter HTTP menyimpannya hanya
+  sebagai detail implementasi turn per kalimat. Gate: suite dan
+  replay oue-4 tidak berubah; fallback di tengah turn teruji.
+- B5b-2, Cartesia websocket. Satu socket per sesi dibuka saat engine dibuat
+  (biaya 771 ms di luar jalur kritis) dan disambung ulang bila putus; satu
+  context per turn; tiap kalimat dikirim dengan `continue: true`,
+  `flush: true`, `max_buffer_delay_ms: 0`, `add_timestamps: true`; audio
+  dipisah per kalimat dengan `flush_id`; timing kata dijadikan relatif per
+  kalimat dari byte audio kalimat sebelumnya; stop mengirim `cancel` dan
+  membuang audio yang masih datang. Saat playback dipotong, engine
+  menghitung kata yang benar-benar terdengar (byte yang sudah ditulis dikurangi
+  buffer writer) lalu mencatat jumlahnya di journal dan teksnya di record,
+  jadi riwayat percakapan memuat apa yang memang diucapkan. Gate: first chunk
+  ≤ 300 ms p50 terukur di container; kata yang terdengar tercatat saat dipotong.
+- B5b-3, ElevenLabs websocket (multi-context). Belum ada key ElevenLabs di
+  `.env`, jadi adapter ini diuji dengan fixture protokol dan menunggu key
+  untuk verifikasi live.
+
 ### B1: Floor actor
 
 - Satu actor asyncio memiliki commit giliran, state barge-in, generation

@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from functools import partial
@@ -16,7 +16,7 @@ from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
 from fakeyou.observability.faults import ConsumerSink, FaultReporter, guard_observer
 from fakeyou.observability.journal import Journal
 from fakeyou.observability.provider_faults import ProviderFault, classify_exception
-from fakeyou.speech.contract import PreparedSpeech, SpeechSynthesizer
+from fakeyou.speech.contract import PreparedSpeech, SpeechSynthesizer, SpeechTurn
 
 PlaybackEventKind = Literal[
     "playback_started", "playback_finished", "playback_failed", "playback_dropped"
@@ -127,6 +127,13 @@ class CuePlayback(Protocol):
     async def prepare_cue(self, text: str) -> None: ...
 
     async def play_cue(self, text: str) -> bool: ...
+
+
+@dataclass(frozen=True, slots=True)
+class _OpenTurn:
+    transcript_id: str
+    language: str | None
+    turn: SpeechTurn
 
 
 @dataclass(frozen=True, slots=True)
@@ -285,6 +292,8 @@ class PlaybackEngine:
         self._stop_epoch = 0
         self._stop_lock = asyncio.Lock()
         self._prepared: set[PreparedSpeech] = set()
+        self._turn: _OpenTurn | None = None
+        self._turn_endings: set[asyncio.Task[None]] = set()
 
     @property
     def is_speaking(self) -> bool:
@@ -302,17 +311,43 @@ class PlaybackEngine:
     def journal(self) -> Journal | None:
         return self._journal
 
-    def _stream_extra(
-        self, sentence_index: int | None, transcript_id: str | None, language: str | None
-    ) -> dict[str, Any]:
-        extra: dict[str, Any] = {}
-        if sentence_index is not None:
-            extra["sentence_index"] = sentence_index
-        if transcript_id is not None:
-            extra["transcript_id"] = transcript_id
-        if language is not None:
-            extra["language"] = language
-        return extra
+    def _turn_for(self, transcript_id: str | None, language: str | None) -> SpeechTurn:
+        current = self._turn
+        if (
+            transcript_id is not None
+            and current is not None
+            and current.transcript_id == transcript_id
+            and current.language == language
+        ):
+            return current.turn
+        turn = self._synthesizer.open_turn(transcript_id=transcript_id, language=language)
+        if transcript_id is None:
+            self._end_later(turn.finish)
+            return turn
+        self._end_turn_later()
+        self._turn = _OpenTurn(transcript_id, language, turn)
+        return turn
+
+    def _end_turn_later(self) -> None:
+        current, self._turn = self._turn, None
+        if current is not None:
+            self._end_later(current.turn.finish)
+
+    def _end_later(self, end: Callable[[], Awaitable[None]]) -> None:
+        task = asyncio.create_task(
+            close_safely(end, source="tts", operation="end_turn", faults=self._faults)
+        )
+        self._turn_endings.add(task)
+        task.add_done_callback(self._turn_endings.discard)
+
+    async def _end_turn(self, *, cancel: bool) -> None:
+        current, self._turn = self._turn, None
+        if current is not None:
+            end = current.turn.cancel if cancel else current.turn.finish
+            await close_safely(end, source="tts", operation="end_turn", faults=self._faults)
+        endings = list(self._turn_endings)
+        if endings:
+            await asyncio.gather(*endings, return_exceptions=True)
 
     def _should_retry(
         self, error: BaseException, attempt: int, *, emitted: bool, generation: int
@@ -365,11 +400,9 @@ class PlaybackEngine:
             emitted = False
             chunks: AsyncIterator[bytes] | None = None
             try:
-                chunks = self._synthesizer.stream(
-                    text, **self._stream_extra(sentence_index, transcript_id, language)
+                chunks = self._turn_for(transcript_id, language).speak(
+                    text, sentence_index=sentence_index
                 )
-                if not hasattr(chunks, "__aiter__"):
-                    raise TypeError("stream() must return an async iterator")
                 async for chunk in self._paced_chunks(chunks):
                     if chunk:
                         emitted = True
@@ -463,12 +496,14 @@ class PlaybackEngine:
             )
 
     async def _render(self, text: str) -> bytes:
-        chunks = self._synthesizer.stream(text)
+        turn = self._synthesizer.open_turn()
+        chunks = turn.speak(text)
         try:
             async with asyncio.timeout(self._synth_timeout_seconds):
                 return b"".join([chunk async for chunk in chunks])
         finally:
             await self._close_stream(chunks)
+            self._end_later(turn.finish)
 
     async def play_cue(self, text: str) -> bool:
         pcm = self._cues.get(text)
@@ -518,6 +553,7 @@ class PlaybackEngine:
             self._play_tasks.difference_update(closing)
             self._report_dropped(dropped)
         await self._drop_queued()
+        await self._end_turn(cancel=True)
         await self._settle_voice()
 
     def _take_queued(self) -> tuple[list[_Clip], list[asyncio.Task[Any]]]:
@@ -634,6 +670,7 @@ class PlaybackEngine:
                     faults=self._faults,
                 )
         finally:
+            await self._end_turn(cancel=True)
             await close_safely(self._writer.close, source="playback", faults=self._faults)
             await close_safely(self._synthesizer.aclose, source="tts", faults=self._faults)
 

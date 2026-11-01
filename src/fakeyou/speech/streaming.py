@@ -1,12 +1,14 @@
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
 from contextlib import aclosing
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 import httpx2
 
+from fakeyou.foundation.protocols import SupportsAclose
 from fakeyou.observability.journal import Journal, JournalTiming
 from fakeyou.observability.provider_faults import classify_exception
+from fakeyou.speech.contract import SpeechSegment, WordTiming
 
 TTS_HTTP_TIMEOUT = httpx2.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0)
 TTS_REQUEST_TIMEOUT_SECONDS = 45.0
@@ -71,3 +73,62 @@ async def journaled_stream(
             if fault is error:
                 raise
             raise fault from error
+
+
+class SentenceSynthesis(Protocol):
+    def __call__(
+        self,
+        text: str,
+        *,
+        sentence_index: int | None = None,
+        transcript_id: str | None = None,
+        language: str | None = None,
+    ) -> AsyncIterator[bytes]: ...
+
+
+class StreamedSegment:
+    def __init__(self, chunks: AsyncIterator[bytes]) -> None:
+        self._chunks = chunks
+
+    @property
+    def words(self) -> Sequence[WordTiming]:
+        return ()
+
+    def __aiter__(self) -> AsyncIterator[bytes]:
+        return self
+
+    async def __anext__(self) -> bytes:
+        return await anext(self._chunks)
+
+    async def aclose(self) -> None:
+        if isinstance(self._chunks, SupportsAclose):
+            await self._chunks.aclose()
+
+
+class SentenceTurn:
+    def __init__(
+        self,
+        synthesize: SentenceSynthesis,
+        *,
+        transcript_id: str | None = None,
+        language: str | None = None,
+    ) -> None:
+        self._synthesize = synthesize
+        self._transcript_id = transcript_id
+        self._language = language
+
+    def speak(self, text: str, *, sentence_index: int | None = None) -> SpeechSegment:
+        return StreamedSegment(
+            self._synthesize(
+                text,
+                sentence_index=sentence_index,
+                transcript_id=self._transcript_id,
+                language=self._language,
+            )
+        )
+
+    async def finish(self) -> None:
+        return None
+
+    async def cancel(self) -> None:
+        return None

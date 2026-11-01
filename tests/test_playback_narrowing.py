@@ -11,14 +11,16 @@ from fakeyou.observability.faults import FaultReporter
 from fakeyou.observability.provider_faults import ProviderFault
 from tests._audio_support import FakeWriter
 from tests._persistence_fakes import RecordingJournal
+from tests._prepared_support import SentenceSynth
 
 
-class _Synth:
+class _Synth(SentenceSynth):
     def __init__(self, error: Exception | None = None) -> None:
         self.audio = b"\x00" * 480
         self.error = error
         self.texts: list[str] = []
 
+    @override
     async def stream(
         self,
         text: str,

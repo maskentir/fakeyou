@@ -8,14 +8,16 @@ from fakeyou.audio.playback import FRAME_BYTES, PlaybackError, PlaybackEvent
 from fakeyou.observability.faults import FaultReporter
 from tests._audio_support import FakeSynth, FakeWriter, build_engine
 from tests._persistence_fakes import RecordingJournal
+from tests._prepared_support import SentenceSynth
 
 
-class _StreamSynth:
+class _StreamSynth(SentenceSynth):
     def __init__(self, chunks: Iterable[bytes] = (b"\x00" * 100, b"\x01" * 100)) -> None:
         self.chunks = list(chunks)
         self.texts: list[str] = []
         self.closed = False
 
+    @override
     async def stream(
         self,
         text: str,

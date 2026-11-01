@@ -7,10 +7,12 @@ from openai.types.audio.speech_create_params import SpeechCreateParams, Voice
 
 from fakeyou.config.settings import DEFAULTS, OpenAITTS
 from fakeyou.observability.journal import Journal
+from fakeyou.speech.contract import SpeechTurn
 from fakeyou.speech.languages import SPEECH_LANGUAGES
 from fakeyou.speech.streaming import (
     TTS_HTTP_TIMEOUT,
     TTS_REQUEST_TIMEOUT_SECONDS,
+    SentenceTurn,
     SpeechTag,
     journaled_stream,
 )
@@ -45,6 +47,11 @@ class OpenAISpeechSynthesizer:
         self._client = client or AsyncOpenAI(
             api_key=api_key, base_url=resolved.base_url, timeout=TTS_HTTP_TIMEOUT, max_retries=0
         )
+
+    def open_turn(
+        self, *, transcript_id: str | None = None, language: str | None = None
+    ) -> SpeechTurn:
+        return SentenceTurn(self.stream, transcript_id=transcript_id, language=language)
 
     def stream(
         self,

@@ -9,6 +9,7 @@ import unicodedata
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import override
 
 import pytest
 from playwright.async_api import Page
@@ -35,11 +36,12 @@ from fakeyou.foundation.invariants import (
 from fakeyou.foundation.transcript import TranscriptUpdate
 from fakeyou.meet.browser import open_direct_page
 from tests._audio_fakes import FakeSTT
+from tests._prepared_support import SentenceSynth
 
 PAGE = "<!doctype html><html><body><h1>Audio fixture</h1></body></html>"
 
 
-class _ToneSynth:
+class _ToneSynth(SentenceSynth):
     def _audio(self) -> bytes:
         samples = (
             round(10000 * math.sin(2 * math.pi * 440 * index / PLAYBACK_SAMPLE_RATE))
@@ -47,6 +49,7 @@ class _ToneSynth:
         )
         return struct.pack("<72000h", *samples)
 
+    @override
     async def stream(
         self,
         text: str,

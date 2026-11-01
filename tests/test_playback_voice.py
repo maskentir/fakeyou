@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator
+from typing import override
 
 import numpy as np
 
@@ -11,6 +12,7 @@ from fakeyou.audio.playback import (
     PlaybackEvent,
 )
 from fakeyou.speech.contract import SpeechSynthesizer
+from tests._prepared_support import SentenceSynth
 
 
 class GatedWriter:
@@ -40,12 +42,13 @@ class GatedWriter:
         self.closed = True
 
 
-class ScriptedSynth:
+class ScriptedSynth(SentenceSynth):
     def __init__(self, pcm: bytes, *, stall_after_first: bool = False) -> None:
         self.pcm = pcm
         self.stall_after_first = stall_after_first
         self.stalled = asyncio.Event()
 
+    @override
     async def stream(
         self,
         text: str,
@@ -176,11 +179,12 @@ async def test_close_releases_the_writer() -> None:
     assert writer.closed
 
 
-class StallingSynth:
+class StallingSynth(SentenceSynth):
     def __init__(self, pcm: bytes) -> None:
         self.pcm = pcm
         self.closed: list[str] = []
 
+    @override
     async def stream(
         self,
         text: str,
@@ -200,12 +204,13 @@ class StallingSynth:
         return None
 
 
-class RecordingSynth:
+class RecordingSynth(SentenceSynth):
     def __init__(self, pcm: bytes) -> None:
         self.pcm = pcm
         self.started: list[str] = []
         self.closed: list[str] = []
 
+    @override
     async def stream(
         self,
         text: str,
