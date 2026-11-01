@@ -3,6 +3,18 @@ from dataclasses import dataclass
 from typing import Any
 
 from fakeyou.config.settings import DEFAULTS
+from fakeyou.conversation.actor import (
+    ActorWiring,
+    DeferredOptions,
+    FloorActor,
+    IngressOptions,
+    IngressTiming,
+    PolicyOptions,
+    ReplyOptions,
+    TransitionObserver,
+    addressing_phrases,
+    reply_mode,
+)
 from fakeyou.conversation.control import ReplyControl
 from fakeyou.conversation.conversation import (
     ConversationResponder,
@@ -27,20 +39,7 @@ from fakeyou.conversation.turn_graph import (
     WholeTurnFactory,
     build_turn_graph,
 )
-from fakeyou.conversation.turn_ingress import (
-    IngressTiming,
-    PolicyOptions,
-    TurnIngress,
-    addressing_phrases,
-)
 from fakeyou.conversation.turn_judge import JudgeCache, TurnJudge, WindowSource
-from fakeyou.conversation.turn_lifecycle import (
-    DeferredOptions,
-    ReplyOptions,
-    TransitionObserver,
-    TurnLifecycle,
-    reply_mode,
-)
 from fakeyou.conversation.turn_recovery import RecoveryOptions
 from fakeyou.foundation.clock import monotonic
 from fakeyou.foundation.taxonomy import Subsystem
@@ -104,34 +103,41 @@ DEFAULT_TURN_GENERATION = TurnGeneration()
 
 @dataclass(frozen=True, slots=True)
 class MeetingTurns:
-    lifecycle: TurnLifecycle
-    ingress: TurnIngress
+    actor: FloorActor
     responder: MeetingReplier
 
     @property
+    def lifecycle(self) -> FloorActor:
+        return self.actor
+
+    @property
+    def ingress(self) -> FloorActor:
+        return self.actor
+
+    @property
     def is_busy(self) -> bool:
-        return self.lifecycle.is_busy
+        return self.actor.is_busy
 
     def receive_chat(self, event: TranscriptEvent) -> bool:
-        return self.ingress.receive_chat(event)
+        return self.actor.receive_chat(event)
 
     def receive_attention(self, event: TranscriptEvent, *, channel: ReplyChannel) -> bool:
-        return self.ingress.receive_attention(event, channel=channel)
+        return self.actor.receive_attention(event, channel=channel)
 
     def bind(self, session: MeetingAudio) -> None:
-        self.lifecycle.bind(session)
+        self.actor.bind(session)
 
     async def close(self) -> None:
-        await self.lifecycle.close()
+        await self.actor.close()
 
     def raise_if_failed(self) -> None:
-        self.lifecycle.raise_if_failed()
+        self.actor.raise_if_failed()
 
     async def pause(self) -> None:
-        await self.lifecycle.pause()
+        await self.actor.pause()
 
     def resume(self) -> None:
-        self.lifecycle.resume()
+        self.actor.resume()
 
 
 class _SilentJournal:
@@ -210,25 +216,37 @@ def build_meeting_turns(
 ) -> MeetingTurns:
     language = generation.turn_language
     reply = _reply_options(replier, generation)
-    lifecycle = TurnLifecycle(
+    wake_phrases = addressing_phrases(interaction.wake_phrases)
+    actor = FloorActor(
         build_turn_graph(),
-        journal=_SilentJournal() if diagnostics.journal is None else diagnostics.journal,
-        judging=_judging(interaction),
-        clock=timing.clock,
+        ActorWiring(
+            journal=_SilentJournal() if diagnostics.journal is None else diagnostics.journal,
+            judging=_judging(interaction),
+            clock=timing.clock,
+            ingress=IngressOptions(
+                addressing_names=wake_phrases or addressing_phrases(interaction.twin_names),
+                wake_phrases=wake_phrases,
+                timing=IngressTiming(
+                    barge_in_min_words=interaction.barge_in_min_words,
+                    clock=timing.clock,
+                ),
+                barge_in_judge_enabled=interaction.barge_in_judge_enabled,
+            ),
+        ),
     )
-    lifecycle.configure_control(interaction.control)
-    lifecycle.configure_recovery(
+    actor.configure_control(interaction.control)
+    actor.configure_recovery(
         RecoveryOptions(
             faults=diagnostics.faults,
             language=generation.language if language is None else language.read,
             response_timeout_seconds=timing.response_timeout_seconds,
         )
     )
-    lifecycle.configure_reply(reply)
-    lifecycle.configure_deferred(_deferred_options(replier, interaction, timing))
-    lifecycle.configure_barge_in(enabled=interaction.barge_in)
-    lifecycle.configure_shadow(enabled=interaction.shadow)
-    lifecycle.configure_cue(
+    actor.configure_reply(reply)
+    actor.configure_deferred(_deferred_options(replier, interaction, timing))
+    actor.configure_barge_in(enabled=interaction.barge_in)
+    actor.configure_shadow(enabled=interaction.shadow)
+    actor.configure_cue(
         thinking_cue_for(
             generation.language,
             timing.thinking_cue_after_seconds,
@@ -236,22 +254,11 @@ def build_meeting_turns(
         )
     )
     if interaction.on_transition is not None:
-        lifecycle.observe(interaction.on_transition)
-    wake_phrases = addressing_phrases(interaction.wake_phrases)
-    ingress = TurnIngress(
-        lifecycle,
-        addressing_names=wake_phrases or addressing_phrases(interaction.twin_names),
-        wake_phrases=wake_phrases,
-        timing=IngressTiming(
-            barge_in_min_words=interaction.barge_in_min_words,
-            clock=timing.clock,
-        ),
-        barge_in_judge_enabled=interaction.barge_in_judge_enabled,
-    )
-    ingress.configure_policy(
+        actor.observe(interaction.on_transition)
+    actor.configure_policy(
         PolicyOptions(
             enabled=interaction.participant_policy_enabled,
             others_speaking=interaction.others_speaking,
         )
     )
-    return MeetingTurns(lifecycle=lifecycle, ingress=ingress, responder=replier)
+    return MeetingTurns(actor=actor, responder=replier)

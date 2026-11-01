@@ -7,7 +7,8 @@ import pytest
 from langchain_core.messages import AIMessageChunk
 
 from fakeyou.config.settings import DEFAULTS
-from fakeyou.conversation import turn_graph, turn_lifecycle
+from fakeyou.conversation import actor, turn_graph
+from fakeyou.conversation.actor import ActorWiring, FloorActor, ReplyOptions
 from fakeyou.conversation.model_responder import ReplierWholeResponder
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_graph import (
@@ -16,15 +17,13 @@ from fakeyou.conversation.turn_graph import (
     ToolStartHook,
     build_turn_graph,
 )
-from fakeyou.conversation.turn_ingress import TurnIngress
-from fakeyou.conversation.turn_lifecycle import ReplyOptions, TurnLifecycle
 from fakeyou.foundation.transcript import TranscriptEvent
 from tests._model_responder import ModelResponder
 from tests._prepared_support import PreparedSpeaker
 
 MODEL_NODE = {"langgraph_node": "model"}
 GRAPH_SOURCE = Path(turn_graph.__file__).read_text(encoding="utf-8")
-LIFECYCLE_SOURCE = Path(turn_lifecycle.__file__).read_text(encoding="utf-8")
+LIFECYCLE_SOURCE = Path(actor.__file__).read_text(encoding="utf-8")
 TRANSCRIPT = "twin, what is the plan?"
 
 
@@ -119,11 +118,13 @@ class Harness:
         self.session = FakeSession(block_first=block_first)
         self.replier = FakeReplier()
         self.stream_batches: list[tuple[str, ...]] = []
-        self.lifecycle = TurnLifecycle(
+        self.lifecycle = FloorActor(
             build_turn_graph(),
-            journal=self.journal,
-            responder=ModelResponder(
-                chunks=unused_chunks, phase=ToolPhaseState(), max_sentences=3, language="en"
+            ActorWiring(
+                journal=self.journal,
+                responder=ModelResponder(
+                    chunks=unused_chunks, phase=ToolPhaseState(), max_sentences=3, language="en"
+                ),
             ),
         )
         sentences = SentenceLimits(max_sentences=2, language="en")
@@ -137,7 +138,7 @@ class Harness:
         self.lifecycle.configure_reply(options)
         if bound:
             self.lifecycle.bind(self.session)
-        self.ingress = TurnIngress(self.lifecycle, addressing_names=("twin",))
+        self.ingress = self.lifecycle
 
     def _stream_turn(
         self, events: tuple[TranscriptEvent, ...], _hook: ToolStartHook, _request_id: str

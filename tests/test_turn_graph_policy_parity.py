@@ -4,16 +4,15 @@ from pathlib import Path
 from typing import Any, override
 
 from fakeyou.config.settings import DEFAULTS
-from fakeyou.conversation import participation_graph, turn_ingress, turn_lifecycle
+from fakeyou.conversation import actor, participation_graph
+from fakeyou.conversation.actor import ActorWiring, FloorActor, IngressOptions, PolicyOptions
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_graph import build_turn_graph
-from fakeyou.conversation.turn_ingress import PolicyOptions, TurnIngress
-from fakeyou.conversation.turn_lifecycle import TurnLifecycle
 from fakeyou.foundation.transcript import TranscriptEvent
 from tests._audio_fakes import wait_until
 from tests._prepared_support import PreparedSpeaker
 
-INGRESS_SOURCE = Path(turn_ingress.__file__).read_text(encoding="utf-8")
+INGRESS_SOURCE = Path(actor.__file__).read_text(encoding="utf-8")
 PARTICIPATION_SOURCE = Path(participation_graph.__file__).read_text(encoding="utf-8")
 BARGE_NAMES = ("barge_in_detected", "agent_cancel_requested", "agent_cancelled")
 
@@ -63,20 +62,22 @@ def make_ingress(
     participant_policy: bool = False,
     others_speaking: Callable[[], bool] | None = None,
     barge_in: bool = True,
-) -> tuple[TurnIngress, TurnLifecycle, Audio]:
-    lifecycle = TurnLifecycle(
+) -> tuple[FloorActor, FloorActor, Audio]:
+    lifecycle = FloorActor(
         build_turn_graph(),
-        journal=journal,
-        responder=Responder(),
+        ActorWiring(
+            journal=journal,
+            responder=Responder(),
+            ingress=IngressOptions(addressing_names=addressing_names, wake_phrases=("twin",)),
+        ),
     )
     lifecycle.configure_barge_in(enabled=barge_in)
     audio = Audio()
     lifecycle.bind(audio)
-    ingress = TurnIngress(lifecycle, addressing_names=addressing_names, wake_phrases=("twin",))
-    ingress.configure_policy(
+    lifecycle.configure_policy(
         PolicyOptions(enabled=participant_policy, others_speaking=others_speaking)
     )
-    return ingress, lifecycle, audio
+    return lifecycle, lifecycle, audio
 
 
 def final(event_id: str, text: str, participant_id: str = "p1") -> TranscriptEvent:
@@ -99,7 +100,7 @@ def policy_reasons(journal: Journal) -> list[str]:
     ]
 
 
-async def start_speaking(lifecycle: TurnLifecycle) -> asyncio.Task[bool]:
+async def start_speaking(lifecycle: FloorActor) -> asyncio.Task[bool]:
     speech = asyncio.create_task(lifecycle.floor.hold(wait_until(asyncio.Event())))
     await asyncio.sleep(0)
     return speech
@@ -210,11 +211,10 @@ async def test_barge_in_off_ignores_an_unaddressed_final_during_speech() -> None
 async def test_reply_mode_maps_sentence_streaming_to_the_graph_mode() -> None:
     assert DEFAULTS.conversation.sentence_streaming is True
     assert (
-        turn_lifecycle.reply_mode(sentence_streaming=DEFAULTS.conversation.sentence_streaming)
-        == "streamed"
+        actor.reply_mode(sentence_streaming=DEFAULTS.conversation.sentence_streaming) == "streamed"
     )
-    assert turn_lifecycle.reply_mode(sentence_streaming=False) == "whole_turn"
-    assert turn_lifecycle.reply_mode(sentence_streaming=True) == "streamed"
+    assert actor.reply_mode(sentence_streaming=False) == "whole_turn"
+    assert actor.reply_mode(sentence_streaming=True) == "streamed"
 
 
 def test_policy_literals_are_in_the_graph_ingress_and_participation_source() -> None:
@@ -223,9 +223,8 @@ def test_policy_literals_are_in_the_graph_ingress_and_participation_source() -> 
         "others_speaking=self._others_speaking(),",
         "return self._participant_policy and signal is not None and signal()",
         "return bool(self._addressing_names) or self._participant_policy",
-        "if decision.backchannel or not lifecycle.barge_in or session is None:",
-        "if lifecycle.is_closed or lifecycle.is_failed or not lifecycle.barge_in "
-        "or session is None:",
+        "if decision.backchannel or not self._barge_in or session is None:",
+        "if self._closed or self._failure is not None or not self._barge_in or session is None:",
     )
     for literal in ingress_literals:
         assert literal in INGRESS_SOURCE, literal

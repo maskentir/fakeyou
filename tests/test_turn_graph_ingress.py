@@ -5,6 +5,7 @@ from typing import Any, override
 from langchain_core.messages import AIMessageChunk
 
 from fakeyou.config.settings import DEFAULTS
+from fakeyou.conversation.actor import ActorWiring, FloorActor, IngressOptions
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_graph import (
     SpeechInput,
@@ -12,8 +13,6 @@ from fakeyou.conversation.turn_graph import (
     build_speech_graph,
     build_turn_graph,
 )
-from fakeyou.conversation.turn_ingress import TurnIngress
-from fakeyou.conversation.turn_lifecycle import TurnLifecycle
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.speech.contract import PreparedSpeech
 from tests._model_responder import ModelResponder
@@ -90,15 +89,18 @@ def transcript(
     )
 
 
-def bound_ingress(journal: FakeJournal) -> tuple[TurnIngress, TurnLifecycle, FakeSession]:
-    lifecycle = TurnLifecycle(
+def bound_ingress(journal: FakeJournal) -> tuple[FloorActor, FloorActor, FakeSession]:
+    lifecycle = FloorActor(
         build_turn_graph(),
-        journal=journal,
-        responder=FakeResponder(),
+        ActorWiring(
+            journal=journal,
+            responder=FakeResponder(),
+            ingress=IngressOptions(addressing_names=("twin",)),
+        ),
     )
     session = FakeSession()
     lifecycle.bind(session)
-    return TurnIngress(lifecycle, addressing_names=("twin",)), lifecycle, session
+    return lifecycle, lifecycle, session
 
 
 async def test_addressed_final_reaches_participation_and_advances_speaking_generation() -> None:

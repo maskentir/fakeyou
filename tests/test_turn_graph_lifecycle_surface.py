@@ -5,10 +5,10 @@ from typing import Any, override
 import pytest
 
 from fakeyou.config.settings import DEFAULTS
+from fakeyou.conversation.actor import ActorWiring, FloorActor
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.session import ConversationError
 from fakeyou.conversation.turn_graph import build_turn_graph
-from fakeyou.conversation.turn_lifecycle import TurnLifecycle
 from tests._audio_fakes import wait_until
 from tests._prepared_support import PreparedSpeaker
 
@@ -49,10 +49,10 @@ class FakeJournal:
         self.events.append(event)
 
 
-def _lifecycle() -> tuple[TurnLifecycle, FakeJournal]:
+def _lifecycle() -> tuple[FloorActor, FakeJournal]:
     journal = FakeJournal()
     graph = build_turn_graph()
-    return TurnLifecycle(graph, journal=journal, responder=FakeResponder()), journal
+    return FloorActor(graph, ActorWiring(journal=journal, responder=FakeResponder())), journal
 
 
 async def test_bind_attaches_the_turn_runner_and_records_the_runtime() -> None:

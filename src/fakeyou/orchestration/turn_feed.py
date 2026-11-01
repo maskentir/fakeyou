@@ -4,7 +4,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from functools import partial
 
-from fakeyou.conversation.turn_ingress import TurnIngress
+from fakeyou.conversation.actor import FloorActor
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.observability.faults import (
     ConsumerSink,
@@ -69,7 +69,7 @@ class _Lane:
 
 
 class _EarlyAnswering:
-    def __init__(self, ingress: TurnIngress, feed: "TurnFeed") -> None:
+    def __init__(self, ingress: FloorActor, feed: "TurnFeed") -> None:
         self._ingress = ingress
         self._feed = feed
 
@@ -92,7 +92,7 @@ class EarlyCommit:
 class TurnFeed:
     def __init__(
         self,
-        ingress: TurnIngress,
+        ingress: FloorActor,
         *,
         journal: Journal,
         faults: FaultReporter | None = None,

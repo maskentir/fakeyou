@@ -8,6 +8,7 @@ from langchain_core.messages import AIMessageChunk
 
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation import meeting_turns, turn_graph
+from fakeyou.conversation.actor import ActorWiring, DeferredOptions, FloorActor, ReplyOptions
 from fakeyou.conversation.model_responder import ReplierWholeResponder
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_graph import (
@@ -17,8 +18,6 @@ from fakeyou.conversation.turn_graph import (
     build_turn_graph,
     tool_start_hook,
 )
-from fakeyou.conversation.turn_ingress import TurnIngress
-from fakeyou.conversation.turn_lifecycle import DeferredOptions, ReplyOptions, TurnLifecycle
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.session.commands import CommandOutcome, CommandSpec
 from fakeyou.session.intent import Reading
@@ -120,11 +119,13 @@ class Harness:
         self.journal = FakeJournal()
         self.session = FakeSession()
         self.moves: list[str] = []
-        self.lifecycle = TurnLifecycle(
+        self.lifecycle = FloorActor(
             build_turn_graph(),
-            journal=self.journal,
-            responder=ModelResponder(
-                chunks=unused_chunks, phase=ToolPhaseState(), max_sentences=3, language="en"
+            ActorWiring(
+                journal=self.journal,
+                responder=ModelResponder(
+                    chunks=unused_chunks, phase=ToolPhaseState(), max_sentences=3, language="en"
+                ),
             ),
         )
         self.lifecycle.observe(self._record_move)
@@ -141,9 +142,7 @@ class Harness:
         self.moves.append(phase)
 
     async def say(self, event_id: str, text: str) -> None:
-        await TurnIngress(self.lifecycle, addressing_names=("twin",)).handle_final(
-            transcript(event_id, text)
-        )
+        await self.lifecycle.handle_final(transcript(event_id, text))
 
 
 async def test_adapter_passes_the_events_tuple_and_tool_hook_and_returns_the_text() -> None:

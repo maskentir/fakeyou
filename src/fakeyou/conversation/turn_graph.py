@@ -38,7 +38,7 @@ from fakeyou.conversation.thinking_cue import (
 )
 from fakeyou.conversation.turn_events import JournalSink, TurnEvent
 from fakeyou.conversation.turn_judge import JudgeWindow
-from fakeyou.conversation.turn_queue import AdmittedFinals, DeferredTurn, PendingFinals
+from fakeyou.conversation.turn_queue import AdmittedFinals, BargeLatch, DeferredTurn, PendingFinals
 from fakeyou.conversation.turn_recovery import (
     TurnRecovery,
     TurnScope,
@@ -190,17 +190,6 @@ class CommandPort(Protocol):
 class SentenceLimits:
     max_sentences: int
     language: str
-
-
-@dataclass(slots=True)
-class BargeLatch:
-    interrupted: bool = False
-    last_interim: str | None = None
-    stream_stops: int = 0
-
-    def rearm(self) -> None:
-        self.interrupted = False
-        self.last_interim = None
 
 
 class TurnScheduler(Protocol):
@@ -1181,6 +1170,8 @@ async def run_deferred_turn(runtime: TurnRuntime, speech: SpeechGraph, turn: Def
     completed, error = await capture_error(partial(_held, runtime, work, scope, turn.channel))
     if isinstance(error, FloorHeld):
         raise error
+    if turn.channel == "chat" and scope is not None:
+        _journal_chat_turn_end(runtime, scope, error)
     if isinstance(error, TurnDropped) or (error is None and not completed):
         return False
     if error is not None:
@@ -1195,6 +1186,24 @@ async def run_deferred_turn(runtime: TurnRuntime, speech: SpeechGraph, turn: Def
         )
         _move_phase(runtime, "waiting", event.id)
     return True
+
+
+def _journal_chat_turn_end(runtime: TurnRuntime, scope: TurnScope, error: Exception | None) -> None:
+    if isinstance(error, TurnDropped):
+        runtime.journal.record(
+            "agent_cancelled",
+            source="agent",
+            request_id=scope.request_id,
+            transcript_id=scope.transcript_id,
+            generation=scope.generation,
+            reason=str(error),
+            duration_ms=scope.duration_ms(),
+        )
+        return
+    if error is not None:
+        record_agent_failed(runtime.journal, scope)
+        return
+    record_agent_finished(runtime.journal, scope)
 
 
 def _final_of(state: TurnGraphState) -> TranscriptEvent:

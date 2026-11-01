@@ -5,6 +5,13 @@ from typing import Any, override
 import pytest
 
 from fakeyou.config.settings import DEFAULTS
+from fakeyou.conversation.actor import (
+    ActorWiring,
+    FloorActor,
+    IngressOptions,
+    PublicPhase,
+    public_phase,
+)
 from fakeyou.conversation.meeting_messages import NoHistory
 from fakeyou.conversation.participation_graph import JudgeThresholds, TurnJudging
 from fakeyou.conversation.reply_planner import SpokenChunk
@@ -15,7 +22,6 @@ from fakeyou.conversation.turn_graph import (
     TurnRuntime,
     build_turn_graph,
 )
-from fakeyou.conversation.turn_ingress import TurnIngress
 from fakeyou.conversation.turn_judge import (
     SPEAKING_NOW,
     JudgeCache,
@@ -24,7 +30,6 @@ from fakeyou.conversation.turn_judge import (
     TurnJudgement,
     WindowSource,
 )
-from fakeyou.conversation.turn_lifecycle import PublicPhase, TurnLifecycle, public_phase
 from fakeyou.foundation.participation import ParticipationContext
 from fakeyou.foundation.transcript import TranscriptEvent
 from tests._audio_fakes import SilentSpeaker
@@ -156,12 +161,15 @@ def bound(
     journal: FakeJournal,
     *,
     on_transition: Any = None,
-) -> tuple[TurnLifecycle, FakeSession]:
-    lifecycle = TurnLifecycle(
+) -> tuple[FloorActor, FakeSession]:
+    lifecycle = FloorActor(
         build_turn_graph(),
-        journal=journal,
-        responder=FakeResponder(),
-        judging=judging(judge),
+        ActorWiring(
+            journal=journal,
+            responder=FakeResponder(),
+            judging=judging(judge),
+            ingress=IngressOptions(addressing_names=("twin",)),
+        ),
     )
     if on_transition is not None:
         lifecycle.observe(on_transition)
@@ -170,11 +178,11 @@ def bound(
     return lifecycle, session
 
 
-def ingress_for(lifecycle: TurnLifecycle) -> TurnIngress:
-    return TurnIngress(lifecycle, addressing_names=("twin",))
+def ingress_for(lifecycle: FloorActor) -> FloorActor:
+    return lifecycle
 
 
-async def settle(lifecycle: TurnLifecycle) -> None:
+async def settle(lifecycle: FloorActor) -> None:
     judging = lifecycle.judging
     assert judging is not None
     await judging.cache.wait_idle()

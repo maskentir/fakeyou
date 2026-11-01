@@ -56,13 +56,13 @@ async def test_assembly_reads_history_from_the_meeting_record(
 async def test_assembly_teardown_budgets_a_hanging_close(
     settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from fakeyou.conversation.turn_lifecycle import TurnLifecycle
+    from fakeyou.conversation.actor import FloorActor
 
     async def hanging_close(self: Any) -> None:
         del self
         await asyncio.sleep(30.0)
 
-    monkeypatch.setattr(TurnLifecycle, "close", hanging_close)
+    monkeypatch.setattr(FloorActor, "close", hanging_close)
     config = SessionConfig(
         owner_id=settings.identity.owner_id,
         twin_id=settings.identity.twin_id,

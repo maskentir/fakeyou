@@ -5,8 +5,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
+from fakeyou.conversation.actor import judge_yields_the_floor
 from fakeyou.conversation.participation_graph import JudgeThresholds
-from fakeyou.conversation.turn_ingress import judge_yields_the_floor
 from fakeyou.conversation.turn_judge import JudgeLine, JudgeWindow, TurnJudge, TurnJudgement
 from fakeyou.observability.faults import capture_error
 
