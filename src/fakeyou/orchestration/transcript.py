@@ -1,18 +1,9 @@
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
 from fakeyou.audio.voice_activity import SlotBinder, VoiceActivityTracker
-from fakeyou.conversation.turn_events import (
-    ArbitrationResult,
-    TurnEvent,
-    TurnEventKind,
-    TurnState,
-    apply_arbitration,
-    arbitrate,
-)
-from fakeyou.conversation.turn_ingress import TurnIngress
 from fakeyou.foundation.speakers import voice_participant_id
 from fakeyou.foundation.transcript import (
     CaptureContext,
@@ -38,7 +29,6 @@ from fakeyou.observability.faults import (
 )
 from fakeyou.observability.journal import Journal
 from fakeyou.orchestration.assembly import VoiceprintLive
-from fakeyou.orchestration.early_turns import EarlyTurns
 from fakeyou.orchestration.kernel_port import KernelPort
 from fakeyou.persistence.record import MeetingRecord
 
@@ -105,15 +95,6 @@ def attribute_stream_frame(
     )
 
 
-def _turn_event(event: TranscriptEvent) -> TurnEvent:
-    return TurnEvent(
-        kind="final" if event.finalized else "interim",
-        event_id=event.id,
-        at=transcript_stamp(event).timestamp(),
-        payload=event.text,
-    )
-
-
 async def _emit_transcript(
     event: TranscriptEvent,
     *,
@@ -141,16 +122,13 @@ async def _emit_transcript(
 class TranscriptSinks:
     journal: Journal
     record: MeetingRecord
-    conversation: TurnIngress | None = None
     faults: FaultReporter | None = None
-    on_final: Callable[[TranscriptEvent], Awaitable[None]] | None = None
     kernel: KernelPort | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class DrainOptions:
     per_stream_enabled: bool = False
-    early_hold_seconds: float | None = None
 
 
 DEFAULT_DRAIN_OPTIONS = DrainOptions()
@@ -181,36 +159,19 @@ class TranscriptDrain:
         scoring: LiveScoring | None = None,
         options: DrainOptions = DEFAULT_DRAIN_OPTIONS,
     ) -> None:
-        per_stream_enabled = options.per_stream_enabled
-        early_hold_seconds = options.early_hold_seconds
         self._sinks = sinks
         self._binder = binder
         self._voice_activity = voice_activity
         self._scoring = scoring
-        self._per_stream_enabled = per_stream_enabled
+        self._per_stream_enabled = options.per_stream_enabled
         self._pending: list[TranscriptEvent] = []
         self._handled: set[str] = set()
         self._extras: dict[str, dict[str, Any]] = {}
         self._emitted_max: TranscriptEvent | None = None
-        self._turn_state: TurnState = TurnState(last_event_id=None, kind=None)
-        self._ingress_count = 0
-        conversation = sinks.conversation
-        self._early = (
-            EarlyTurns(
-                conversation,
-                hold_seconds=early_hold_seconds,
-                build_event=self._early_event,
-                journal=sinks.journal,
-            )
-            if conversation is not None
-            and early_hold_seconds is not None
-            and not per_stream_enabled
-            else None
-        )
 
-    async def close(self) -> None:
-        if self._early is not None:
-            await self._early.close()
+    @property
+    def per_stream(self) -> bool:
+        return self._per_stream_enabled
 
     async def __call__(self, update: TranscriptUpdate) -> None:
         if self._per_stream_enabled:
@@ -221,34 +182,10 @@ class TranscriptDrain:
     async def on_interim(self, update: TranscriptUpdate) -> None:
         if self._sinks.kernel is not None:
             self._sinks.kernel.interim(update.text)
-        winner = self._settle([self._ingress_event("interim", update.text)]).winner
-        conversation = self._sinks.conversation
-        if winner is not None and conversation is not None:
-            await conversation.handle_interim(update.text)
-            if self._early is not None:
-                await self._early.on_interim(update.text)
 
     async def on_vad(self, *, active: bool) -> None:
-        self._settle([self._ingress_event("vad", "active" if active else "inactive")])
-        if self._early is not None:
-            self._early.on_speech(active=active)
-
-    async def on_stop(self) -> TurnEvent | None:
-        return self._settle([self._ingress_event("stop", "")]).winner
-
-    def _ingress_event(self, kind: TurnEventKind, payload: str) -> TurnEvent:
-        self._ingress_count += 1
-        return TurnEvent(
-            kind=kind,
-            event_id=f"{kind}-{self._ingress_count}",
-            at=float(self._ingress_count),
-            payload=payload,
-        )
-
-    def _settle(self, events: Sequence[TurnEvent]) -> ArbitrationResult:
-        result = arbitrate(events)
-        self._turn_state = apply_arbitration(self._turn_state, result, self._sinks.journal)
-        return result
+        if self._sinks.kernel is not None:
+            self._sinks.kernel.voice(active=active)
 
     def _registry(self) -> SpeakerRegistry | None:
         return self._scoring.registry if self._scoring is not None else None
@@ -317,22 +254,7 @@ class TranscriptDrain:
             if isinstance(error, BUG_ERRORS):
                 raise
 
-    async def _route_window(self, emitted: Sequence[TranscriptEvent]) -> None:
-        if not emitted:
-            return
-        by_id = {event.id: event for event in emitted}
-        winner = self._settle([_turn_event(event) for event in emitted]).winner
-        conversation = self._sinks.conversation
-        if winner is not None and conversation is not None:
-            await conversation.receive_final(by_id[winner.event_id])
-        on_final = self._sinks.on_final
-        if on_final is not None:
-            for event in emitted:
-                if event.finalized:
-                    await on_final(event)
-
     async def _drain_ordered(self) -> None:
-        emitted: list[TranscriptEvent] = []
         for ordered in merge_transcripts(self._pending):
             if ordered.id in self._handled:
                 continue
@@ -359,9 +281,7 @@ class TranscriptDrain:
                 record=self._sinks.record,
                 extra=extra,
             )
-            emitted.append(ordered)
         self._pending[:] = [event for event in self._pending if event.id not in self._handled]
-        await self._route_window(emitted)
 
     async def _per_stream(self, update: TranscriptUpdate) -> None:
         participant_id, evidence_id, stream_id, extra, capture_ms, device = attribute_stream_frame(
@@ -394,7 +314,7 @@ class TranscriptDrain:
             attribution,
         )
 
-    def _early_event(self, text: str) -> TranscriptEvent:
+    def early_event(self, text: str) -> TranscriptEvent:
         update = TranscriptUpdate(text=text, final=True, timestamp=datetime.now(UTC).isoformat())
         return self._attributed(update)[0]
 
@@ -409,9 +329,6 @@ class TranscriptDrain:
             record=self._sinks.record,
             extra=extra,
         )
-        early = self._early
-        if early is None or not update.final or not await early.settle(event):
-            await self._route_window([event])
         await self._score_turn(speaker_uuid, "", None, finalized=update.final)
 
 

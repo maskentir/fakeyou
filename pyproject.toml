@@ -201,6 +201,13 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
+name = "transcripts reach the turns only through the session kernel"
+type = "forbidden"
+source_modules = ["fakeyou.orchestration.transcript"]
+forbidden_modules = ["fakeyou.conversation"]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
 name = "catalog never imports cli or db"
 type = "forbidden"
 source_modules = ["fakeyou.catalog"]

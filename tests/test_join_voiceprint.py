@@ -82,7 +82,7 @@ async def test_final_scores_turn_and_notes_honest_margin(
     journal = RecordingJournal()
     record = MeetingRecord(meeting_record_path(tmp_path, SessionId("meeting-9")))
     callback = build_transcript_callback(
-        sinks=TranscriptSinks(journal, record, None, faults=None),
+        sinks=TranscriptSinks(journal, record, faults=None),
         binder=binder,
         voice_activity=None,
         scoring=LiveScoring(live, registry),
@@ -114,7 +114,7 @@ async def test_scoring_timeout_records_a_fault_and_keeps_the_callback_alive(
     journal = RecordingJournal()
     record = MeetingRecord(meeting_record_path(tmp_path, SessionId("meeting-9")))
     callback = build_transcript_callback(
-        sinks=TranscriptSinks(journal, record, None, faults=None),
+        sinks=TranscriptSinks(journal, record, faults=None),
         binder=binder,
         voice_activity=None,
         scoring=LiveScoring(live, registry),
@@ -141,7 +141,7 @@ async def test_short_clip_skips_scoring_without_decision(
     journal = RecordingJournal()
     record = MeetingRecord(meeting_record_path(tmp_path, SessionId("meeting-9")))
     callback = build_transcript_callback(
-        sinks=TranscriptSinks(journal, record, None, faults=None),
+        sinks=TranscriptSinks(journal, record, faults=None),
         binder=binder,
         voice_activity=None,
         scoring=LiveScoring(live, registry),
@@ -169,7 +169,7 @@ async def test_skipped_final_discards_stale_tap_audio_per_stream(
     journal = RecordingJournal()
     record = MeetingRecord(meeting_record_path(tmp_path, SessionId("meeting-9")))
     callback = build_transcript_callback(
-        sinks=TranscriptSinks(journal, record, None, faults=None),
+        sinks=TranscriptSinks(journal, record, faults=None),
         binder=binder,
         voice_activity=None,
         scoring=LiveScoring(live, registry),
@@ -220,7 +220,7 @@ async def test_skipped_final_discards_stale_tap_audio_mixed(
     journal = RecordingJournal()
     record = MeetingRecord(meeting_record_path(tmp_path, SessionId("meeting-9")))
     callback = build_transcript_callback(
-        sinks=TranscriptSinks(journal, record, None, faults=None),
+        sinks=TranscriptSinks(journal, record, faults=None),
         binder=SlotBinder(registry=registry),
         voice_activity=cast(Any, voice_activity),
         scoring=LiveScoring(live, registry),
@@ -259,7 +259,7 @@ async def test_disabled_voiceprint_never_scores(tmp_path: Path) -> None:
     journal = RecordingJournal()
     record = MeetingRecord(meeting_record_path(tmp_path, SessionId("meeting-9")))
     callback = build_transcript_callback(
-        sinks=TranscriptSinks(journal, record, None),
+        sinks=TranscriptSinks(journal, record),
         binder=binder,
         voice_activity=None,
         options=DrainOptions(per_stream_enabled=True),
@@ -305,7 +305,7 @@ async def test_live_turn_binds_verified_name_when_claim_matches_voice(
     record_path = meeting_record_path(tmp_path, SessionId("meeting-9"))
     record = MeetingRecord(record_path)
     callback = build_transcript_callback(
-        sinks=TranscriptSinks(journal, record, None, faults=None),
+        sinks=TranscriptSinks(journal, record, faults=None),
         binder=binder,
         voice_activity=None,
         scoring=LiveScoring(live, registry),
@@ -355,7 +355,7 @@ async def test_mixed_stream_transcript_carries_display_claim(tmp_path: Path) -> 
     record_path = meeting_record_path(tmp_path, SessionId("meeting-9"))
     record = MeetingRecord(record_path)
     callback = build_transcript_callback(
-        sinks=TranscriptSinks(journal, record, None, faults=None),
+        sinks=TranscriptSinks(journal, record, faults=None),
         binder=binder,
         voice_activity=cast(Any, voice_activity),
         scoring=LiveScoring(None, registry),
@@ -384,7 +384,7 @@ async def test_scoring_bug_records_a_fault_then_propagates(
     journal = RecordingJournal()
     record = MeetingRecord(meeting_record_path(tmp_path, SessionId("meeting-9")))
     callback = build_transcript_callback(
-        sinks=TranscriptSinks(journal, record, None, faults=None),
+        sinks=TranscriptSinks(journal, record, faults=None),
         binder=binder,
         voice_activity=None,
         scoring=LiveScoring(live, registry),
@@ -418,7 +418,7 @@ async def test_scoring_operational_error_records_a_fault_and_keeps_callback_aliv
     journal = RecordingJournal()
     record = MeetingRecord(meeting_record_path(tmp_path, SessionId("meeting-9")))
     callback = build_transcript_callback(
-        sinks=TranscriptSinks(journal, record, None, faults=None),
+        sinks=TranscriptSinks(journal, record, faults=None),
         binder=binder,
         voice_activity=None,
         scoring=LiveScoring(live, registry),

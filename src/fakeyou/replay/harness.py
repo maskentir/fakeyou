@@ -33,13 +33,14 @@ from fakeyou.orchestration.transcript import (
     TranscriptSinks,
     build_transcript_callback,
 )
+from fakeyou.orchestration.turn_feed import EarlyCommit, TurnFeed
 from fakeyou.perception.percepts import MEETING_CONTENT
 from fakeyou.persistence.record import ChatEntry, MeetingRecord, ScreenEntry, TranscriptEntry
 from fakeyou.replay.compare import Comparison, compare_journals
 from fakeyou.replay.fixture import ReplayFixture
 from fakeyou.replay.pacer import PacedWriter
 from fakeyou.replay.recorded import RecordedJudge, RecordedModel, RecordedSynthesizer
-from fakeyou.session.contracts import ScreenObserved
+from fakeyou.session.contracts import ChatObserved, ScreenObserved
 from fakeyou.session.kernel import SessionKernel
 from fakeyou.speech.contract import PreparedSpeech
 
@@ -270,26 +271,29 @@ async def _replay(
             turns.bind(audio)
             turns.resume()
             drain = build_transcript_callback(
-                sinks=TranscriptSinks(
-                    journal=journal, record=record, conversation=turns.ingress, kernel=kernel
-                ),
+                sinks=TranscriptSinks(journal=journal, record=record, kernel=kernel),
                 binder=SlotBinder(),
                 voice_activity=None,
-                options=DrainOptions(
-                    per_stream_enabled=config.per_stream_enabled,
-                    early_hold_seconds=(
-                        settings.turn_judge.commit_hold_seconds
-                        if settings.turn_judge.early_commit_enabled
-                        else None
-                    ),
+                options=DrainOptions(per_stream_enabled=config.per_stream_enabled),
+            )
+            judge = settings.turn_judge
+            feed = TurnFeed(
+                turns.ingress,
+                journal=journal,
+                early=(
+                    EarlyCommit(judge.commit_hold_seconds, drain.early_event)
+                    if judge.early_commit_enabled and not config.per_stream_enabled
+                    else None
                 ),
             )
+            feed.attach(kernel)
             try:
                 inputs = schedule(fixture, attention=config.attention_enabled)
                 await _feed(inputs, _Sinks(drain, turns, journal, kernel))
+                await kernel.settled()
                 await turns.lifecycle.wait_idle()
             finally:
-                await drain.close()
+                await feed.close()
     finally:
         await audio.stop()
         record.close()
@@ -356,13 +360,15 @@ async def _deliver(item: ReplayInput, sinks: _Sinks) -> None:
             )
         case "chat" if isinstance(entry, ChatEntry):
             sinks.kernel.chat(
-                message_id=entry.ref,
-                device_id=entry.sender_id,
-                text=entry.text,
-                own=entry.own,
-                backlog=entry.backlog,
+                ChatObserved(
+                    message_id=entry.ref,
+                    device_id=entry.sender_id,
+                    text=entry.text,
+                    own=entry.own,
+                    backlog=entry.backlog,
+                ),
+                heard=None if entry.own or entry.backlog else _chat_event(entry),
             )
-            sinks.turns.receive_chat(_chat_event(entry))
         case "screen" if isinstance(entry, ScreenEntry):
             sinks.kernel.observe(
                 "vision",

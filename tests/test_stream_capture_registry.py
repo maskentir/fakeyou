@@ -1,7 +1,7 @@
 import json
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pytest
 
@@ -12,11 +12,31 @@ from fakeyou.audio.voice_activity import SlotBinder
 from fakeyou.config.identifiers import SessionId
 from fakeyou.foundation.transcript import TranscriptEvent, TranscriptUpdate
 from fakeyou.observability.journal import Journal
+from fakeyou.orchestration.kernel_port import HeardFinal, KernelPort, TurnSignal
 from fakeyou.orchestration.transcript import DrainOptions, TranscriptSinks
 from tests._capture_support import recording_registry
 from tests._fakes_common import FakeClock
 from tests._meet_browser_fakes import meet_page
 from tests._persistence_fakes import RecordingJournal
+
+
+class _HeardFinals:
+    def __init__(self) -> None:
+        self.events: list[TranscriptEvent] = []
+
+    def accept(self, signal: TurnSignal) -> None:
+        if isinstance(signal, HeardFinal):
+            self.events.append(signal.event)
+
+    async def idle(self) -> None:
+        return None
+
+
+def _heard_finals() -> tuple[KernelPort, _HeardFinals]:
+    kernel = KernelPort.for_meeting("meeting-9")
+    heard = _HeardFinals()
+    kernel.on_turn(heard)
+    return kernel, heard
 
 
 def _chunk(slot: int, seq: int, page_ms: float = 1000.0) -> StreamChunk:
@@ -214,13 +234,6 @@ async def test_flag_off_record_matches_stream_mode_except_identity(tmp_path: Pat
         ),
     ]
 
-    class _Conversation:
-        def __init__(self) -> None:
-            self.events: list[TranscriptEvent] = []
-
-        async def receive_final(self, event: TranscriptEvent) -> None:
-            self.events.append(event)
-
     async def run(
         *, per_stream: bool, tag: str
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[TranscriptEvent]]:
@@ -228,9 +241,9 @@ async def test_flag_off_record_matches_stream_mode_except_identity(tmp_path: Pat
         journal = Journal("meeting-9", emit=lines.append, now=lambda: now, echo=False)
         path = meeting_record_path(tmp_path, SessionId(tag))
         record = MeetingRecord(path, now=lambda: now)
-        conversation = _Conversation()
+        kernel, heard = _heard_finals()
         callback = build_transcript_callback(
-            sinks=TranscriptSinks(journal, record, cast(Any, conversation)),
+            sinks=TranscriptSinks(journal, record, kernel=kernel),
             binder=SlotBinder(),
             voice_activity=None,
             options=DrainOptions(per_stream_enabled=per_stream),
@@ -239,6 +252,7 @@ async def test_flag_off_record_matches_stream_mode_except_identity(tmp_path: Pat
             if per_stream:
                 frame = replace(frame, stream_id=f"slot-{index}")
             await callback(frame)
+        await kernel.settled()
         record.close()
         journal.close()
         rows = [
@@ -249,7 +263,7 @@ async def test_flag_off_record_matches_stream_mode_except_identity(tmp_path: Pat
             for line in path.read_text(encoding="utf-8").splitlines()
             if (row := json.loads(line))["kind"] != "header"
         ]
-        return rows, entries, conversation.events
+        return rows, entries, heard.events
 
     mixed_rows, mixed_entries, mixed_events = await run(per_stream=False, tag="mixed-9")
     stream_rows, stream_entries, stream_events = await run(per_stream=True, tag="stream-9")
@@ -305,7 +319,7 @@ async def test_flag_off_record_matches_stream_mode_except_identity(tmp_path: Pat
 async def test_stream_callback_attributes_via_binder(tmp_path: Path) -> None:
     from datetime import UTC, datetime
 
-    from fakeyou.foundation.transcript import TranscriptEvent, TranscriptUpdate
+    from fakeyou.foundation.transcript import TranscriptUpdate
     from fakeyou.observability.journal import Journal
     from fakeyou.orchestration.transcript import build_transcript_callback
     from fakeyou.persistence.record import MeetingRecord, meeting_record_path
@@ -330,23 +344,20 @@ async def test_stream_callback_attributes_via_binder(tmp_path: Path) -> None:
     frames[0] = replace(frames[0], stream_id="slot-0")
     frames[1] = replace(frames[1], stream_id="slot-1")
 
-    seen: list[TranscriptEvent] = []
-
-    class _Conversation:
-        async def receive_final(self, event: TranscriptEvent) -> None:
-            seen.append(event)
-
+    kernel, heard = _heard_finals()
     journal = Journal("meeting-9", emit=lambda _line: None, now=lambda: now, echo=False)
     path = meeting_record_path(tmp_path, SessionId("meeting-9"))
     record = MeetingRecord(path, now=lambda: now)
     callback = build_transcript_callback(
-        sinks=TranscriptSinks(journal, record, cast(Any, _Conversation())),
+        sinks=TranscriptSinks(journal, record, kernel=kernel),
         binder=binder,
         voice_activity=None,
         options=DrainOptions(per_stream_enabled=True),
     )
     for frame in frames:
         await callback(frame)
+    await kernel.settled()
+    seen = heard.events
     record.close()
     journal.close()
     assert [event.participant_id for event in seen] == ["speaker-a", "speaker-b"]

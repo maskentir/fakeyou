@@ -114,6 +114,7 @@ async def test_join_audio_transcript_reaches_conversation(
             timestamp="2026-09-28T00:00:00+00:00",
         )
         await kwargs["open_audio"].keywords["callbacks"].on_transcript(frame)
+        await kwargs["kernel"].settled()
         await loop.lifecycle.wait_idle()
         return SessionResult(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
 
@@ -234,6 +235,7 @@ async def test_join_wake_phrase_gates_agent_replies(
         for _ident, text in (("t1", "project status"), ("t2", "hey fakeyou hello")):
             frame = TranscriptUpdate(text=text, final=True, timestamp="2026-09-28T00:00:00+00:00")
             await kwargs["open_audio"].keywords["callbacks"].on_transcript(frame)
+        await kwargs["kernel"].settled()
         await loop.lifecycle.wait_idle()
         return SessionResult(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
 
@@ -286,6 +288,7 @@ async def test_join_barge_in_stops_speaking_session(
         )
         frame = TranscriptUpdate(text="wait", final=True, timestamp="2026-09-28T00:00:00+00:00")
         await kwargs["open_audio"].keywords["callbacks"].on_transcript(frame)
+        await kwargs["kernel"].settled()
         await loop.lifecycle.wait_idle()
         return SessionResult(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
 
@@ -410,6 +413,7 @@ async def test_join_routes_interim_transcripts_to_barge_in(
         interim = kwargs["open_audio"].keywords["callbacks"].on_interim
         await interim(TranscriptUpdate(text="wait", final=False))
         await interim(TranscriptUpdate(text="wait a moment", final=False))
+        await kwargs["kernel"].settled()
         return SessionResult(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
 
     session_run.effect = run
@@ -458,6 +462,7 @@ async def test_join_without_wake_phrase_answers_only_when_the_twin_is_named(
         ):
             frame = TranscriptUpdate(text=text, final=True, timestamp="2026-09-28T00:00:00+00:00")
             await kwargs["open_audio"].keywords["callbacks"].on_transcript(frame)
+        await kwargs["kernel"].settled()
         await loop.lifecycle.wait_idle()
         return SessionResult(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
 

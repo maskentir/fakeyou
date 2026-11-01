@@ -14,6 +14,7 @@ from fakeyou.orchestration.kernel_port import KernelPort
 from fakeyou.perception.meet_protocol import MeetUser
 from fakeyou.perception.roster import MeetRoster
 from fakeyou.session.commands import CommandOutcome, CommandSpec, CommandState
+from fakeyou.session.contracts import ChatObserved
 from fakeyou.session.intent import MeetAction, Reading
 from fakeyou.session.planner import TurnPlan
 from fakeyou.session.policy import Refusal
@@ -160,10 +161,14 @@ def _joined_kernel() -> KernelPort:
 def test_a_chat_sender_on_the_roster_is_the_actor() -> None:
     kernel = _joined_kernel()
     kernel.chat(
-        message_id="m1", device_id="dev-ayu", text="Rani, hand up", own=False, backlog=False
+        ChatObserved(
+            message_id="m1", device_id="dev-ayu", text="Rani, hand up", own=False, backlog=False
+        )
     )
     kernel.chat(
-        message_id="m2", device_id="dev-ghost", text="Rani, leave", own=False, backlog=False
+        ChatObserved(
+            message_id="m2", device_id="dev-ghost", text="Rani, leave", own=False, backlog=False
+        )
     )
     kernel.drain()
 
