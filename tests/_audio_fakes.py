@@ -14,9 +14,10 @@ from fakeyou.foundation.transcript import TranscriptUpdate
 from fakeyou.observability.faults import ConsumerSink, FaultReporter, guard_consumer
 from fakeyou.observability.journal import Journal
 from fakeyou.transcription.contract import SpeechSinks, SttConnectionLost, TranscriptionError
+from tests._prepared_support import PreparedSpeaker
 
 
-class FakeAudio:
+class FakeAudio(PreparedSpeaker):
     def __init__(self, events: list[str]) -> None:
         self.events = events
         self.stopped = False
@@ -32,6 +33,7 @@ class FakeAudio:
     def reconnect_state(self) -> str:
         return "queued" if self.reconnect_requests else "idle"
 
+    @override
     async def speak(
         self,
         text: str,
@@ -246,11 +248,12 @@ class FakeReplyAudio(FakeAudio):
         self.stops += 1
 
 
-class SilentSpeaker:
+class SilentSpeaker(PreparedSpeaker):
     @property
     def is_speaking(self) -> bool:
         return False
 
+    @override
     async def speak(self, utterance: str, **_: Any) -> None:
         del utterance
 

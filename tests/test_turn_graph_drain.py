@@ -14,15 +14,17 @@ from fakeyou.conversation.turn_ingress import TurnIngress
 from fakeyou.conversation.turn_lifecycle import ReplyOptions, TurnLifecycle
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.observability.faults import FaultReporter
+from tests._prepared_support import PreparedSpeaker
 
 
-class Session:
+class Session(PreparedSpeaker):
     def __init__(self) -> None:
         self.spoken: list[str] = []
         self.indices: list[int | None] = []
         self.transcripts: list[str | None] = []
         self.is_speaking = False
 
+    @override
     async def speak(
         self,
         text: str,

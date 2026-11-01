@@ -29,7 +29,9 @@ from fakeyou.foundation.taxonomy import Subsystem
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.observability.faults import FaultReporter
 from fakeyou.observability.journal import Journal
+from fakeyou.speech.contract import PreparedSpeech
 from tests._model_responder import ModelResponder
+from tests._prepared_support import PreparedSink, PreparedSpeaker
 
 MODEL_NODE = {"langgraph_node": "model"}
 GRAPH_SOURCE = "".join(
@@ -39,12 +41,13 @@ GRAPH_SOURCE = "".join(
 TURN_FAILED_EN: str = json.loads(read_package_text("spoken_lines.json"))["turn_failed"]["en"]
 
 
-class FakeSession:
+class FakeSession(PreparedSpeaker):
     def __init__(self) -> None:
         self.spoken: list[str] = []
         self.turns: list[str | None] = []
         self.is_speaking = False
 
+    @override
     async def speak(self, text: str, *, transcript_id: str | None = None, **_: Any) -> None:
         self.spoken.append(text)
         self.turns.append(transcript_id)
@@ -183,14 +186,13 @@ class StreamedReplies:
             yield SpokenChunk(text=sentence, language=DEFAULTS.speech.language)
 
 
-class AdvancingSink:
+class AdvancingSink(PreparedSink):
     def __init__(self, floor: SpeechFloor) -> None:
         self._floor = floor
         self.sentences: list[str] = []
 
-    async def say(self, sentence: str, language: str) -> None:
-        del language
-        self.sentences.append(sentence)
+    async def say(self, prepared: PreparedSpeech) -> None:
+        self.sentences.append(prepared.text)
         self._floor.advance()
 
 

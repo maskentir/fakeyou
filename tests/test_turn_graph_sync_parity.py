@@ -1,7 +1,7 @@
 import asyncio
 from collections.abc import AsyncIterator, Callable, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import pytest
 from langchain_core.messages import AIMessageChunk
@@ -20,6 +20,7 @@ from fakeyou.conversation.turn_ingress import TurnIngress
 from fakeyou.conversation.turn_lifecycle import ReplyOptions, TurnLifecycle
 from fakeyou.foundation.transcript import TranscriptEvent
 from tests._model_responder import ModelResponder
+from tests._prepared_support import PreparedSpeaker
 
 MODEL_NODE = {"langgraph_node": "model"}
 GRAPH_SOURCE = Path(turn_graph.__file__).read_text(encoding="utf-8")
@@ -27,13 +28,14 @@ LIFECYCLE_SOURCE = Path(turn_lifecycle.__file__).read_text(encoding="utf-8")
 TRANSCRIPT = "twin, what is the plan?"
 
 
-class FakeSession:
+class FakeSession(PreparedSpeaker):
     def __init__(self, *, block_first: bool = False) -> None:
         self.spoken: list[str] = []
         self.is_speaking = False
         self.speaking = asyncio.Event()
         self._block_first = block_first
 
+    @override
     async def speak(self, text: str, **_: Any) -> None:
         self.spoken.append(text)
         self.speaking.set()

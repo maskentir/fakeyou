@@ -21,7 +21,9 @@ from fakeyou.conversation.turn_graph import (
     SpeechRuntime,
     build_speech_graph,
 )
+from fakeyou.speech.contract import PreparedSpeech
 from tests._model_responder import model_text
+from tests._prepared_support import PreparedSink
 
 MODEL_NODE = {"langgraph_node": "model"}
 
@@ -221,13 +223,12 @@ class _CappingResponder:
             yield SpokenChunk(text=piece, language=DEFAULTS.speech.language)
 
 
-class _RecordingSink:
+class _RecordingSink(PreparedSink):
     def __init__(self) -> None:
         self.sentences: list[str] = []
 
-    async def say(self, sentence: str, language: str) -> None:
-        del language
-        self.sentences.append(sentence)
+    async def say(self, prepared: PreparedSpeech) -> None:
+        self.sentences.append(prepared.text)
 
 
 class _NamingJournal:

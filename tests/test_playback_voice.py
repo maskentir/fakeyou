@@ -10,6 +10,7 @@ from fakeyou.audio.playback import (
     PlaybackEngine,
     PlaybackEvent,
 )
+from fakeyou.speech.contract import SpeechSynthesizer
 
 
 class GatedWriter:
@@ -70,7 +71,7 @@ def tone(samples: int) -> bytes:
 
 
 def engine_for(
-    synth: ScriptedSynth, writer: GatedWriter, events: list[PlaybackEvent]
+    synth: SpeechSynthesizer, writer: GatedWriter, events: list[PlaybackEvent]
 ) -> PlaybackEngine:
     engine = PlaybackEngine(synth, writer, on_event=events.append)
     writer.engine = engine
@@ -173,3 +174,114 @@ async def test_close_releases_the_writer() -> None:
     await engine.close()
 
     assert writer.closed
+
+
+class StallingSynth:
+    def __init__(self, pcm: bytes) -> None:
+        self.pcm = pcm
+        self.closed: list[str] = []
+
+    async def stream(
+        self,
+        text: str,
+        *,
+        sentence_index: int | None = None,
+        transcript_id: str | None = None,
+        language: str | None = None,
+    ) -> AsyncIterator[bytes]:
+        del sentence_index, transcript_id, language
+        try:
+            yield self.pcm
+            await asyncio.Event().wait()
+        finally:
+            self.closed.append(text)
+
+    async def aclose(self) -> None:
+        return None
+
+
+class RecordingSynth:
+    def __init__(self, pcm: bytes) -> None:
+        self.pcm = pcm
+        self.started: list[str] = []
+        self.closed: list[str] = []
+
+    async def stream(
+        self,
+        text: str,
+        *,
+        sentence_index: int | None = None,
+        transcript_id: str | None = None,
+        language: str | None = None,
+    ) -> AsyncIterator[bytes]:
+        del sentence_index, transcript_id, language
+        self.started.append(text)
+        try:
+            yield self.pcm
+        finally:
+            self.closed.append(text)
+
+    async def aclose(self) -> None:
+        return None
+
+
+async def test_a_prepared_sentence_synthesises_before_it_is_played() -> None:
+    synth = RecordingSynth(tone(1250))
+    writer, events = GatedWriter(), list[PlaybackEvent]()
+    engine = engine_for(synth, writer, events)
+
+    prepared = await engine.prepare("Hello there.")
+    assert prepared is not None
+    await asyncio.sleep(0)
+    assert synth.started == ["Hello there."]
+    assert writer.writes == []
+
+    await engine.speak_prepared(prepared)
+
+    assert writer.writes
+    assert b"".join(writer.writes) == tone(1250)
+    assert kinds(events) == ["playback_started", "playback_finished"]
+    assert prepared.sentence_index is None
+    assert prepared.text == "Hello there."
+
+
+async def test_a_prepared_sentence_that_is_dropped_closes_its_synthesis() -> None:
+    synth = RecordingSynth(tone(1250))
+    writer, events = GatedWriter(), list[PlaybackEvent]()
+    engine = engine_for(synth, writer, events)
+
+    prepared = await engine.prepare("Never spoken.")
+    assert prepared is not None
+    await asyncio.sleep(0)
+    await prepared.aclose()
+
+    assert synth.closed == ["Never spoken."]
+    assert writer.writes == []
+    assert kinds(events) == []
+
+
+async def test_closing_a_running_synthesis_does_not_raise() -> None:
+    synth = StallingSynth(tone(1250))
+    writer, events = GatedWriter(), list[PlaybackEvent]()
+    engine = engine_for(synth, writer, events)
+
+    prepared = await engine.prepare("Never spoken.")
+    assert prepared is not None
+    await asyncio.sleep(0)
+
+    await prepared.aclose()
+    await engine.close()
+
+    assert synth.closed == ["Never spoken."]
+
+
+async def test_closing_the_engine_closes_the_prepared_syntheses() -> None:
+    synth = RecordingSynth(tone(1250))
+    writer, events = GatedWriter(), list[PlaybackEvent]()
+    engine = engine_for(synth, writer, events)
+
+    await engine.prepare("Never spoken.")
+    await asyncio.sleep(0)
+    await engine.close()
+
+    assert synth.closed == ["Never spoken."]

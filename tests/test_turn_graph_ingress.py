@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, override
 
 from langchain_core.messages import AIMessageChunk
 
@@ -15,17 +15,20 @@ from fakeyou.conversation.turn_graph import (
 from fakeyou.conversation.turn_ingress import TurnIngress
 from fakeyou.conversation.turn_lifecycle import TurnLifecycle
 from fakeyou.foundation.transcript import TranscriptEvent
+from fakeyou.speech.contract import PreparedSpeech
 from tests._model_responder import ModelResponder
+from tests._prepared_support import PreparedSink, PreparedSpeaker
 
 MODEL_NODE = {"langgraph_node": "model"}
 TOOLS_NODE = {"langgraph_node": "tools"}
 
 
-class FakeSession:
+class FakeSession(PreparedSpeaker):
     def __init__(self) -> None:
         self.spoken: list[str] = []
         self.is_speaking = False
 
+    @override
     async def speak(self, text: str, **_: Any) -> None:
         self.spoken.append(text)
 
@@ -50,13 +53,12 @@ class FakeJournal:
         self.names.append(event)
 
 
-class FakeSink:
+class FakeSink(PreparedSink):
     def __init__(self) -> None:
         self.sentences: list[str] = []
 
-    async def say(self, sentence: str, language: str) -> None:
-        del language
-        self.sentences.append(sentence)
+    async def say(self, prepared: PreparedSpeech) -> None:
+        self.sentences.append(prepared.text)
 
 
 class FakeResponder:

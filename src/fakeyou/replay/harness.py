@@ -40,6 +40,7 @@ from fakeyou.replay.pacer import PacedWriter
 from fakeyou.replay.recorded import RecordedJudge, RecordedModel, RecordedSynthesizer
 from fakeyou.session.contracts import ScreenObserved
 from fakeyou.session.kernel import SessionKernel
+from fakeyou.speech.contract import PreparedSpeech
 
 LANES = {
     "vad": "audio",
@@ -107,6 +108,21 @@ class EngineAudio:
         await self._engine.speak(
             text, sentence_index=sentence_index, transcript_id=transcript_id, language=language
         )
+
+    async def prepare(
+        self,
+        text: str,
+        *,
+        sentence_index: int | None = None,
+        transcript_id: str | None = None,
+        language: str | None = None,
+    ) -> PreparedSpeech | None:
+        return await self._engine.prepare(
+            text, sentence_index=sentence_index, transcript_id=transcript_id, language=language
+        )
+
+    async def speak_prepared(self, prepared: PreparedSpeech) -> None:
+        await self._engine.speak_prepared(prepared)
 
     async def stop_playback(self) -> None:
         await self._engine.stop()

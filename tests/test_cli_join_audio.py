@@ -28,8 +28,10 @@ from fakeyou.persistence.record import (
     load_meeting_record,
     meeting_record_path,
 )
+from fakeyou.speech.contract import PreparedSpeech
 from tests._cli_support import AudioJoin
 from tests._error_support import message_pattern
+from tests._prepared_support import FakePreparedSpeech
 from tests._runtime_fakes import SessionRun
 
 
@@ -105,7 +107,7 @@ async def test_join_audio_transcript_reaches_conversation(
         del config
         captured.update(kwargs)
         loop = kwargs["conversation"]
-        loop.bind(SimpleNamespace(speak=lambda _text, **_kwargs: asyncio.sleep(0)))
+        loop.bind(SimpleNamespace(**_audio_fakes()))
         frame = TranscriptUpdate(
             text="Settings Twin, hello.",
             final=True,
@@ -228,7 +230,7 @@ async def test_join_wake_phrase_gates_agent_replies(
     async def run(config: Any, **kwargs: Any) -> SessionResult:
         del config
         loop = kwargs["conversation"]
-        loop.bind(SimpleNamespace(speak=lambda _text, **_kwargs: asyncio.sleep(0)))
+        loop.bind(SimpleNamespace(**_audio_fakes()))
         for _ident, text in (("t1", "project status"), ("t2", "hey fakeyou hello")):
             frame = TranscriptUpdate(text=text, final=True, timestamp="2026-09-28T00:00:00+00:00")
             await kwargs["open_audio"].keywords["callbacks"].on_transcript(frame)
@@ -277,7 +279,7 @@ async def test_join_barge_in_stops_speaking_session(
         loop = kwargs["conversation"]
         loop.bind(
             SimpleNamespace(
-                speak=lambda _text: asyncio.sleep(0),
+                **_audio_fakes(),
                 is_speaking=True,
                 stop_playback=stop_playback,
             )
@@ -400,7 +402,7 @@ async def test_join_routes_interim_transcripts_to_barge_in(
         loop = kwargs["conversation"]
         loop.bind(
             SimpleNamespace(
-                speak=lambda _text: asyncio.sleep(0),
+                **_audio_fakes(),
                 is_speaking=True,
                 stop_playback=stop_playback,
             )
@@ -448,7 +450,7 @@ async def test_join_without_wake_phrase_answers_only_when_the_twin_is_named(
     async def run(config: Any, **kwargs: Any) -> SessionResult:
         del config
         loop = kwargs["conversation"]
-        loop.bind(SimpleNamespace(speak=lambda _text, **_kwargs: asyncio.sleep(0)))
+        loop.bind(SimpleNamespace(**_audio_fakes()))
         for _ident, text in (
             ("t1", "let's review the budget"),
             ("t2", "who owns the migration"),
@@ -464,3 +466,17 @@ async def test_join_without_wake_phrase_answers_only_when_the_twin_is_named(
     await audio_join(conversation_enabled=True)
 
     assert len(agent_calls) == 1
+
+
+def _audio_fakes() -> dict[str, Any]:
+    async def prepare(text: str, **_kwargs: Any) -> FakePreparedSpeech:
+        return FakePreparedSpeech(text, None, None, None)
+
+    async def speak_prepared(_prepared: PreparedSpeech) -> None:
+        return None
+
+    return {
+        "speak": lambda _text, **_kwargs: asyncio.sleep(0),
+        "prepare": prepare,
+        "speak_prepared": speak_prepared,
+    }

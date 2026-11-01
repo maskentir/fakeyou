@@ -2,7 +2,7 @@ import asyncio
 import inspect
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 from langchain_core.messages import AIMessageChunk
 
@@ -13,6 +13,7 @@ from fakeyou.conversation.turn_ingress import TurnIngress
 from fakeyou.conversation.turn_lifecycle import TurnLifecycle
 from fakeyou.foundation.transcript import TranscriptEvent
 from tests._model_responder import ModelResponder, ReplyTrace
+from tests._prepared_support import PreparedSpeaker
 
 MODEL_NODE = {"langgraph_node": "model"}
 TOOLS_NODE = {"langgraph_node": "tools"}
@@ -22,11 +23,12 @@ GRAPH_SOURCE = "".join(
 )
 
 
-class FakeSession:
+class FakeSession(PreparedSpeaker):
     def __init__(self) -> None:
         self.spoken: list[str] = []
         self.is_speaking = False
 
+    @override
     async def speak(self, text: str, **_: Any) -> None:
         self.spoken.append(text)
 

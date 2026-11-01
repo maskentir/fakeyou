@@ -10,13 +10,14 @@ from fakeyou.audio.stream_input import StreamAudioInput
 from fakeyou.audio.voice_activity import SlotBinder
 from fakeyou.observability.journal import Journal
 from tests._audio_fakes import FakeSTT
+from tests._prepared_support import PreparedSpeaker
 
 
 def echo_stt(text: str) -> FakeSTT:
     return FakeSTT(text, finalized=(True,))
 
 
-class FakePlayback:
+class FakePlayback(PreparedSpeaker):
     def __init__(self) -> None:
         self.closed = False
 
@@ -27,6 +28,7 @@ class FakePlayback:
     def louder(self) -> None:
         pass
 
+    @override
     async def speak(self, text: str, **extra: object) -> None:
         pass
 

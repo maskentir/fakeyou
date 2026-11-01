@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from typing import override
 
 from fakeyou.conversation import turn_graph
 from fakeyou.conversation.turn_graph import (
@@ -17,6 +18,7 @@ from fakeyou.session.intent import MeetAction, Reading
 from fakeyou.session.planner import TurnPlan
 from fakeyou.session.policy import Refusal
 from tests._persistence_fakes import RecordingJournal
+from tests._prepared_support import PreparedSpeaker
 
 
 @dataclass
@@ -33,9 +35,10 @@ class FakeCommands:
         return CommandOutcome(f"{plan_id}:{ordinal}", spec.kind, self.state)
 
 
-class SilentSpeaker:
+class SilentSpeaker(PreparedSpeaker):
     is_speaking = False
 
+    @override
     async def speak(self, utterance: str, **_kwargs: object) -> None:
         raise AssertionError(utterance)
 
@@ -169,12 +172,13 @@ def test_a_chat_sender_on_the_roster_is_the_actor() -> None:
     assert kernel.actor("missing").kind == "unattributed"
 
 
-class RecordingSpeaker:
+class RecordingSpeaker(PreparedSpeaker):
     is_speaking = False
 
     def __init__(self) -> None:
         self.spoken: list[str] = []
 
+    @override
     async def speak(self, utterance: str, **_kwargs: object) -> None:
         self.spoken.append(utterance)
 

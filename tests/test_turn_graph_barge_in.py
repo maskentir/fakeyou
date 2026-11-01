@@ -3,7 +3,7 @@ import inspect
 import json
 from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation import turn_graph, turn_recovery
@@ -21,6 +21,8 @@ from fakeyou.conversation.turn_ingress import TurnIngress
 from fakeyou.conversation.turn_lifecycle import TurnLifecycle
 from fakeyou.foundation.participation import ParticipationContext
 from fakeyou.foundation.transcript import TranscriptEvent
+from fakeyou.speech.contract import PreparedSpeech
+from tests._prepared_support import PreparedSink, PreparedSpeaker
 
 
 class SilentResponder:
@@ -44,34 +46,33 @@ class HeldResponder:
             yield SpokenChunk(text=sentence, language=DEFAULTS.speech.language)
 
 
-class FakeSink:
+class FakeSink(PreparedSink):
     def __init__(self) -> None:
         self.sentences: list[str] = []
         self.first_spoken = asyncio.Event()
 
-    async def say(self, sentence: str, language: str) -> None:
-        del language
-        self.sentences.append(sentence)
+    async def say(self, prepared: PreparedSpeech) -> None:
+        self.sentences.append(prepared.text)
         self.first_spoken.set()
 
 
-class SupersedingSink:
+class SupersedingSink(PreparedSink):
     def __init__(self, floor: SpeechFloor) -> None:
         self._floor = floor
         self.sentences: list[str] = []
 
-    async def say(self, sentence: str, language: str) -> None:
-        del language
-        self.sentences.append(sentence)
+    async def say(self, prepared: PreparedSpeech) -> None:
+        self.sentences.append(prepared.text)
         if len(self.sentences) == 1:
             self._floor.advance()
 
 
-class FakeSpeaker:
+class FakeSpeaker(PreparedSpeaker):
     def __init__(self) -> None:
         self.utterances: list[str] = []
         self.is_speaking = False
 
+    @override
     async def speak(self, utterance: str, **_: Any) -> None:
         self.utterances.append(utterance)
 
@@ -214,12 +215,13 @@ class OneSentenceResponder:
         yield SpokenChunk(text="Yes, I am here.", language=DEFAULTS.speech.language)
 
 
-class BargeAudio:
+class BargeAudio(PreparedSpeaker):
     def __init__(self) -> None:
         self.spoken: list[str] = []
         self.stops = 0
         self.is_speaking = True
 
+    @override
     async def speak(self, text: str, **_: Any) -> None:
         self.spoken.append(text)
 

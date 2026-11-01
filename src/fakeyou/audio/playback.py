@@ -16,7 +16,7 @@ from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
 from fakeyou.observability.faults import ConsumerSink, FaultReporter, guard_observer
 from fakeyou.observability.journal import Journal
 from fakeyou.observability.provider_faults import ProviderFault, classify_exception
-from fakeyou.speech.contract import SpeechSynthesizer
+from fakeyou.speech.contract import PreparedSpeech, SpeechSynthesizer
 
 PlaybackEventKind = Literal[
     "playback_started", "playback_finished", "playback_failed", "playback_dropped"
@@ -106,6 +106,17 @@ class PlaybackPort(Protocol):
         language: str | None = None,
     ) -> None: ...
 
+    async def prepare(
+        self,
+        text: str,
+        *,
+        sentence_index: int | None = None,
+        transcript_id: str | None = None,
+        language: str | None = None,
+    ) -> PreparedSpeech | None: ...
+
+    async def speak_prepared(self, prepared: PreparedSpeech) -> None: ...
+
     async def stop(self) -> None: ...
 
     async def close(self) -> None: ...
@@ -126,6 +137,92 @@ class _Clip:
     cue: bool = False
     utterance: Utterance = NO_UTTERANCE
     epoch: int = 0
+
+
+class _PreparedSpeech:
+    def __init__(
+        self,
+        source: AsyncIterator[bytes],
+        text: str,
+        language: str | None,
+        utterance: Utterance,
+        faults: FaultReporter | None,
+    ) -> None:
+        self._source = source
+        self._text = text
+        self._language = language
+        self._utterance = utterance
+        self._faults = faults
+        self._chunks: asyncio.Queue[bytes | None] = asyncio.Queue()
+        self._failure: BaseException | None = None
+        self._closed = False
+        self._fill = asyncio.create_task(self._pull())
+        self._fill.add_done_callback(self._capture)
+
+    @property
+    def text(self) -> str:
+        return self._text
+
+    @property
+    def language(self) -> str | None:
+        return self._language
+
+    @property
+    def sentence_index(self) -> int | None:
+        return self._utterance.sentence_index
+
+    @property
+    def transcript_id(self) -> str | None:
+        return self._utterance.transcript_id
+
+    async def _pull(self) -> None:
+        async for chunk in self._source:
+            self._chunks.put_nowait(chunk)
+
+    def _capture(self, fill: asyncio.Task[None]) -> None:
+        self._chunks.put_nowait(None)
+        if fill.cancelled():
+            return
+        failure = fill.exception()
+        if failure is not None:
+            self._failure = failure
+
+    def __aiter__(self) -> AsyncIterator[bytes]:
+        return self
+
+    async def __anext__(self) -> bytes:
+        chunk = await self._chunks.get()
+        if chunk is None:
+            failure = self._failure
+            if failure is not None:
+                raise failure
+            raise StopAsyncIteration
+        return chunk
+
+    async def aclose(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._fill.cancel()
+
+        async def drain() -> None:
+            with suppress(asyncio.CancelledError):
+                await self._fill
+
+        await close_safely(
+            drain,
+            source="playback",
+            operation="close_prepared",
+            faults=self._faults,
+        )
+        source = self._source
+        if isinstance(source, SupportsAclose):
+            await close_safely(
+                source.aclose,
+                source="playback",
+                operation="close_prepared",
+                faults=self._faults,
+            )
 
 
 def _fits_cue(clip: VoicedClip) -> bool:
@@ -187,6 +284,7 @@ class PlaybackEngine:
         self._stopping = 0
         self._stop_epoch = 0
         self._stop_lock = asyncio.Lock()
+        self._prepared: set[PreparedSpeech] = set()
 
     @property
     def is_speaking(self) -> bool:
@@ -311,6 +409,42 @@ class PlaybackEngine:
             utterance=Utterance(transcript_id, sentence_index),
         )
         return
+
+    async def prepare(
+        self,
+        text: str,
+        *,
+        sentence_index: int | None = None,
+        transcript_id: str | None = None,
+        language: str | None = None,
+    ) -> PreparedSpeech | None:
+        if self._closed:
+            return None
+        if not any(char.isalnum() for char in text):
+            self._emit("playback_dropped", text, "nothing_to_say")
+            return None
+        generation = self._generation
+        source = self._retryable_stream(text, sentence_index, transcript_id, language, generation)
+        prepared = _PreparedSpeech(
+            source,
+            text,
+            language,
+            Utterance(transcript_id, sentence_index),
+            self._faults,
+        )
+        self._prepared.add(prepared)
+        return prepared
+
+    async def speak_prepared(self, prepared: PreparedSpeech) -> None:
+        self._prepared.discard(prepared)
+        if self._closed:
+            await prepared.aclose()
+            return
+        await self._play_queued(
+            prepared,
+            prepared.text,
+            utterance=Utterance(prepared.transcript_id, prepared.sentence_index),
+        )
 
     async def prepare_cue(self, text: str) -> None:
         if self._closed or text in self._cues:
@@ -486,11 +620,19 @@ class PlaybackEngine:
         self._closed = True
         await self.stop()
         worker, self._worker = self._worker, None
+        prepared, self._prepared = self._prepared, set()
         try:
             if worker is not None:
                 worker.cancel()
                 with suppress(asyncio.CancelledError):
                     await worker
+            for speech in prepared:
+                await close_safely(
+                    speech.aclose,
+                    source="playback",
+                    operation="close_prepared",
+                    faults=self._faults,
+                )
         finally:
             await close_safely(self._writer.close, source="playback", faults=self._faults)
             await close_safely(self._synthesizer.aclose, source="tts", faults=self._faults)
