@@ -59,6 +59,21 @@ class FixedResponder(FakeResponder):
         return SpokenChunk(text=self._reply, language=DEFAULTS.speech.language)
 
 
+class HeldChatResponder(FixedResponder):
+    def __init__(self, reply: str, gate: asyncio.Event) -> None:
+        super().__init__(reply)
+        self._gate = gate
+
+    @override
+    async def respond(
+        self, events: Sequence[TranscriptEvent], on_tool_start: Callable[[], None]
+    ) -> SpokenChunk:
+        self.calls.append(list(events))
+        self.started.set()
+        await self._gate.wait()
+        return SpokenChunk(text=self._reply, language=DEFAULTS.speech.language)
+
+
 def attention(text: str) -> TranscriptEvent:
     return TranscriptEvent(
         id="attention-1",
@@ -128,6 +143,32 @@ async def test_a_chat_that_names_the_twin_is_answered_in_chat() -> None:
     assert accepted
     assert chat.sent == [("Here is the deck link.", "device-budi")]
     assert audio.spoken == []
+    await turns.close()
+
+
+async def test_a_final_does_not_cancel_a_chat_reply_that_is_still_being_written() -> None:
+    chat = FakeChat()
+    journal = RecordingJournal()
+    gate = asyncio.Event()
+    responder = HeldChatResponder("Here is the deck link.", gate)
+    turns, _ = lanes(
+        responder,
+        interaction=interaction(commands=chat, planning=chat_permitted),
+        journal=journal,
+    )
+
+    accepted = turns.ingress.receive_chat(
+        meeting_input("c1", f"{TWIN}, can you share the deck?", "meeting_chat")
+    )
+    await responder.started.wait()
+    await turns.ingress.receive_final(event("t1", f"{TWIN}, quick question"))
+    gate.set()
+    await settle(turns)
+
+    assert accepted
+    assert chat.sent == [("Here is the deck link.", "device-budi")]
+    assert not journal.events("deferred_turn_dropped")
+    assert not journal.events("agent_cancelled")
     await turns.close()
 
 
