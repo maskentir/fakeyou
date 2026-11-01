@@ -1329,20 +1329,66 @@ Bentuk PR:
       - Aturan ini bukan "twin tidak pernah dibatalkan": jalur interim
         (barge-in dari suara) tetap membatalkan giliran yang belum
         berbunyi, itu cakupan B3.
-  - B1b-3c, penghapusan `TurnLifecycle`, `TurnIngress`, `turn_queue.py`,
-    `turn_events.py`, `BargeLatch`, dan `TurnRuntime`. Mailbox actor
-    (satu task konsumen yang memiliki semua state giliran) belum dibangun;
-    B1b-3c adalah saat ia dibangun, bukan sekadar dihapus, karena antrean dan
-    latch yang sekarang menyimpan state itu.
-  - (rencana awal B1b-3, sekarang terbagi di atas) participation sebagai fungsi, penghapusan `TurnLifecycle`,
-    `TurnIngress`, `turn_queue.py`, `turn_events.py`, `BargeLatch`,
-    `SpeechFloor`, dan `TurnRuntime`, plus dua keputusan owner: final yang
-    bukan untuk twin tidak membatalkan jawaban yang masih disiapkan, dan chat
-    berjalan di lane sendiri. Gate: property test lengkap (Hypothesis) untuk
-    urutan acak VAD, interim, final, chat, perhatian, verdict, event
-    playback, dan pause; tidak pernah ada dua giliran aktif, tidak ada
-    `speak_prepared` setelah yield, tidak ada ucapan saat pause; replay oue-4
-    tidak memburuk.
+  - B1b-3c, mailbox actor. Dipecah lagi jadi tiga PR supaya tiap langkah
+    bisa di-review dan diukur:
+    - B1b-3c-1, `FloorActor` sebagai pemilik state giliran. Satu kelas
+      (`conversation/actor.py`) yang memegang `PendingFinals`,
+      `DeferredTurns`, `QuietFloor`, `AdmittedFinals`, `BargeLatch`, dan
+      penanda id yang sudah dilihat, plus satu task konsumen dari satu
+      mailbox. Yang berubah: tidak ada lagi state giliran yang dibaca dari
+      luar actor; `TurnLifecycle` dan `TurnIngress` jadi tipis (hanya
+      meneruskan ke actor). Antrian dan latch yang ada **dipakai apa adanya**
+      dan dipindah ke dalam actor, bukan ditulis ulang: rewrite dari nol
+      berisiko mengubah perilaku yang tidak terlihat, dan dua aturan owner
+      baru saja menunjukkan seberapa halus perilakunya. Gate: suite, replay
+      oue-4 tidak memburuk, dan property test actor (Hypothesis) yang
+      mengacak urutan VAD, interim, final, chat, perhatian, verdict, dan
+      event playback, lalu memeriksa tidak ada dua giliran aktif, tidak ada
+      `speak_prepared` setelah yield, dan tidak ada ucapan saat pause.
+    - B1b-3c-1, implementasi (2026-11-02): `turn_lifecycle.py` (581 baris) dan
+      `turn_ingress.py` (404) digabung jadi satu `FloorActor`
+      (`conversation/actor.py`). `BargeLatch` pindah ke `turn_queue.py`
+      menyusul antriannya; antrian dan latch dipakai apa adanya di dalam
+      actor. `MeetingTurns` membawa satu `actor`, dan `lifecycle`/`ingress`
+      jadi alias-nya supaya runtime dan `TurnFeed` tidak berubah di langkah
+      ini (dibuang di B1b-3c-3). Perilaku baru: `_seen` dan anchor overlap
+      kini hidup di satu objek, jadi dedupe lintas `handle_final` bertahan —
+      di lama `TurnIngress` dibuat baru tiap panggilan, dupes tak pernah
+      bertahan (keluar saat merge). Heuristik overlap dikoreksi bersamaan:
+      teks identik dari peserta yang sama bukan duplikat STT (dua giliran);
+      yang duplikat adalah final yang memperpanjang final sebelumnya di
+      prefix atau suffix. Property test actor
+      `tests/test_actor_stateful.py` (`RuleBasedStateMachine`, 100 contoh,
+      25 langkah): rules ambil/lepas floor, final, chat, attention, interim,
+      aktivitas, pause, resume; invariants: satu giliran memegang floor,
+      actor paused tidak menerima ingress, journal tidak melapor dua
+      giliran aktif. Mutation check: `accepts_ingress` dibiarkan menerima
+      saat `_paused` membuat invariant paused gagal; penolakan turn kedua
+      dibuang dari `SpeechFloor.hold()` membuat kedua machine (floor dan
+      actor) tidak selesai di bawah mutasi (tidak lulus diam-diam).
+      Temuan property test: `run_deferred_turn` mengjournal `agent_started`
+      untuk lane chat tanpa penutup sejak sebelum B1. Diperbaiki: lane chat
+      kini diakhiri `agent_finished` (selesai), `agent_failed` (error), atau
+      `agent_cancelled` (TurnDropped dari pause atau close) di
+      `turn_graph.py`, dikunci di `tests/test_actor_lanes.py`. Tiga file tes
+      ikut modul baru: `test_actor_early_commit.py`,
+      `test_actor_judge_barge_in.py`, `test_actor_lanes.py`. Parity test
+      yang mengunci literal source kini mengarah ke `actor`. Gate penuh:
+      10731 passed, 55 skipped. Replay oue-4 identik.
+    - B1b-3c-2, lane chat dan lane perhatian jadi task sendiri, jadi chat
+      benar-benar paralel dengan giliran suara (sekarang keduanya masih
+      drain task yang sama). Butuh actor yang sudah ada.
+    - B1b-3c-3, penghapusan sisa: `TurnRuntime` sebagai dependency bag,
+      `turn_events.py`, dan nama lama yang tidak lagi dipakai.
+    - Plan awal B1b-3c sebelum dipecah: participation sebagai fungsi,
+      penghapusan `TurnLifecycle`, `TurnIngress`, `turn_queue.py`,
+      `turn_events.py`, `BargeLatch`, `SpeechFloor`, dan `TurnRuntime`, plus
+      dua keputusan owner: final yang bukan untuk twin tidak membatalkan
+      jawaban yang masih disiapkan, dan chat berjalan di lane sendiri.
+      Gate: property test lengkap (Hypothesis) untuk urutan acak VAD,
+      interim, final, chat, perhatian, verdict, event playback, dan pause;
+      tidak pernah ada dua giliran aktif, tidak ada `speak_prepared` setelah
+      yield, tidak ada ucapan saat pause; replay oue-4 tidak memburuk.
 - B1c, early commit di actor dan pembersihan sisa (`EarlyTurns`,
   arbitrasi, state floor kernel, tes checkpoint). Gate: alias
   `early_turn_verified` di baseline dan fixture tetap benar; replay oue-4.

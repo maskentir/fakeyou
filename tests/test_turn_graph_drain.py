@@ -3,6 +3,7 @@ from collections.abc import AsyncIterator, Callable, Sequence
 from typing import Any, override
 
 from fakeyou.config.settings import DEFAULTS
+from fakeyou.conversation.actor import ActorWiring, FloorActor, IngressOptions, ReplyOptions
 from fakeyou.conversation.model_responder import ReplierWholeResponder
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_graph import (
@@ -10,8 +11,6 @@ from fakeyou.conversation.turn_graph import (
     ToolStartHook,
     build_turn_graph,
 )
-from fakeyou.conversation.turn_ingress import TurnIngress
-from fakeyou.conversation.turn_lifecycle import ReplyOptions, TurnLifecycle
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.observability.faults import FaultReporter
 from tests._prepared_support import PreparedSpeaker
@@ -134,8 +133,17 @@ def final(event_id: str, text: str) -> TranscriptEvent:
     )
 
 
-def whole_lifecycle(replier: GatedReplier, journal: Journal) -> TurnLifecycle:
-    lifecycle = TurnLifecycle(build_turn_graph(), journal=journal, responder=SILENT)
+def whole_lifecycle(
+    replier: GatedReplier, journal: Journal, *, addressing_names: tuple[str, ...] = ()
+) -> FloorActor:
+    lifecycle = FloorActor(
+        build_turn_graph(),
+        ActorWiring(
+            journal=journal,
+            responder=SILENT,
+            ingress=IngressOptions(addressing_names=addressing_names),
+        ),
+    )
     lifecycle.configure_reply(
         ReplyOptions(
             whole_turn=lambda events, hook: ReplierWholeResponder(replier, events, hook),
@@ -149,7 +157,7 @@ async def test_admission_returns_before_the_reply_runs_in_the_background() -> No
     replier, journal, session = GatedReplier(), Journal(), Session()
     lifecycle = whole_lifecycle(replier, journal)
     lifecycle.bind(session)
-    ingress = TurnIngress(lifecycle, addressing_names=())
+    ingress = lifecycle
     replier.gate.set()
 
     await ingress.receive_final(final("f1", "hello"))
@@ -163,7 +171,7 @@ async def test_new_final_cancels_the_reply_still_waiting_for_the_model() -> None
     replier, journal, session = GatedReplier(), Journal(), Session()
     lifecycle = whole_lifecycle(replier, journal)
     lifecycle.bind(session)
-    ingress = TurnIngress(lifecycle, addressing_names=())
+    ingress = lifecycle
 
     first = asyncio.create_task(ingress.handle_final(final("f1", "first")))
     await asyncio.wait_for(replier.started.wait(), 2)
@@ -185,7 +193,7 @@ async def test_interim_cancels_the_reply_still_waiting_for_the_model() -> None:
     replier, journal, session = GatedReplier(), Journal(), Session()
     lifecycle = whole_lifecycle(replier, journal)
     lifecycle.bind(session)
-    ingress = TurnIngress(lifecycle, addressing_names=())
+    ingress = lifecycle
 
     await ingress.receive_final(final("f1", "first"))
     await asyncio.wait_for(replier.started.wait(), 2)
@@ -209,10 +217,10 @@ async def test_close_advances_the_admitted_count_like_a_new_generation() -> None
 
 async def test_shadow_final_is_decided_but_never_answered() -> None:
     replier, journal, session = GatedReplier(), Journal(), Session()
-    lifecycle = whole_lifecycle(replier, journal)
+    lifecycle = whole_lifecycle(replier, journal, addressing_names=("twin",))
     lifecycle.configure_shadow(enabled=True)
     lifecycle.bind(session)
-    ingress = TurnIngress(lifecycle, addressing_names=("twin",))
+    ingress = lifecycle
 
     await ingress.handle_final(final("f1", "twin, status please"))
 
@@ -223,11 +231,14 @@ async def test_shadow_final_is_decided_but_never_answered() -> None:
 
 async def test_streamed_sentences_reach_the_session_with_index_and_transcript() -> None:
     source, journal, session = SentenceSource(["One.", "Two."]), Journal(), Session()
-    lifecycle = TurnLifecycle(build_turn_graph(), journal=journal, responder=SILENT)
+    lifecycle = FloorActor(
+        build_turn_graph(),
+        ActorWiring(journal=journal, responder=SILENT, ingress=IngressOptions()),
+    )
     lifecycle.configure_reply(ReplyOptions(stream_turn=source.responder))
     lifecycle.bind(session)
 
-    await TurnIngress(lifecycle, addressing_names=()).handle_final(final("f1", "hello"))
+    await lifecycle.handle_final(final("f1", "hello"))
 
     assert session.spoken == ["One.", "Two."]
     assert session.indices == [0, 1]

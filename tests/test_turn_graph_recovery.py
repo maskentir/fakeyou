@@ -9,6 +9,7 @@ from langchain_core.messages import AIMessageChunk
 
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation import turn_graph, turn_recovery
+from fakeyou.conversation.actor import ActorWiring, FloorActor
 from fakeyou.conversation.floor import SpeechFloor
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_graph import (
@@ -16,8 +17,6 @@ from fakeyou.conversation.turn_graph import (
     build_speech_graph,
     build_turn_graph,
 )
-from fakeyou.conversation.turn_ingress import TurnIngress
-from fakeyou.conversation.turn_lifecycle import TurnLifecycle
 from fakeyou.conversation.turn_recovery import (
     RecoveryOptions,
     TurnScope,
@@ -161,10 +160,8 @@ class Harness:
         responder = ModelResponder(
             chunks=chunks, phase=ToolPhaseState(), max_sentences=3, language="en"
         )
-        self.lifecycle = TurnLifecycle(
-            build_turn_graph(),
-            journal=self.journal,
-            responder=responder,
+        self.lifecycle = FloorActor(
+            build_turn_graph(), ActorWiring(journal=self.journal, responder=responder)
         )
         self.lifecycle.configure_recovery(
             RecoveryOptions(faults=faults, language="en", response_timeout_seconds=timeout)
@@ -172,9 +169,7 @@ class Harness:
         self.lifecycle.bind(self.session)
 
     async def say(self, event_id: str, text: str) -> None:
-        await TurnIngress(self.lifecycle, addressing_names=("twin",)).handle_final(
-            transcript(event_id, text)
-        )
+        await self.lifecycle.handle_final(transcript(event_id, text))
 
 
 class StreamedReplies:
@@ -245,6 +240,28 @@ async def test_third_consecutive_failure_mutes_the_line_without_failing() -> Non
     assert [fields["consecutive"] for fields in harness.journal.of("turn_failed")] == [1, 2, 3]
     assert harness.session.spoken == [TURN_FAILED_EN, TURN_FAILED_EN]
     assert harness.lifecycle.is_failed is False
+
+
+async def test_the_same_words_twice_are_two_turns_not_a_duplicate() -> None:
+    harness = Harness(failing_chunks)
+
+    for event_id in ("f1", "f2"):
+        await harness.say(event_id, "twin, are you there?")
+
+    assert [fields["consecutive"] for fields in harness.journal.of("turn_failed")] == [1, 2]
+    assert not harness.journal.of("transcript_suppressed")
+
+
+async def test_a_longer_repeat_of_the_same_words_is_one_turn() -> None:
+    harness = Harness(failing_chunks)
+
+    await harness.say("f1", "twin, are you there")
+    await harness.say("f2", "twin, are you there my friend")
+
+    assert [fields["reason"] for fields in harness.journal.of("transcript_suppressed")] == [
+        "overlap_duplicate"
+    ]
+    assert [fields["consecutive"] for fields in harness.journal.of("turn_failed")] == [1]
 
 
 async def test_a_successful_turn_resets_the_consecutive_count() -> None:

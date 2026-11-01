@@ -6,7 +6,8 @@ from typing import Any, override
 import pytest
 
 from fakeyou.config.settings import DEFAULTS
-from fakeyou.conversation import turn_graph, turn_lifecycle
+from fakeyou.conversation import actor, turn_graph
+from fakeyou.conversation.actor import ActorWiring, FloorActor, ReplyOptions
 from fakeyou.conversation.meeting_messages import NoHistory
 from fakeyou.conversation.participation_graph import JudgeThresholds, TurnJudging
 from fakeyou.conversation.reply_planner import SpokenChunk
@@ -15,9 +16,7 @@ from fakeyou.conversation.turn_graph import (
     SentenceLimits,
     build_turn_graph,
 )
-from fakeyou.conversation.turn_ingress import TurnIngress
 from fakeyou.conversation.turn_judge import JudgeCache, WindowSource
-from fakeyou.conversation.turn_lifecycle import ReplyOptions, TurnLifecycle
 from fakeyou.conversation.turn_recovery import RecoveryOptions
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.observability.faults import FaultReporter
@@ -27,7 +26,7 @@ from tests._conversation_fakes import ScriptedJudge
 from tests._prepared_support import PreparedSpeaker
 
 GRAPH_SOURCE = Path(turn_graph.__file__).read_text(encoding="utf-8")
-LIFECYCLE_SOURCE = Path(turn_lifecycle.__file__).read_text(encoding="utf-8")
+LIFECYCLE_SOURCE = Path(actor.__file__).read_text(encoding="utf-8")
 
 
 class Session(PreparedSpeaker):
@@ -85,7 +84,7 @@ class ToolStartingWhole:
     def __init__(
         self,
         hook: Callable[[], None],
-        lifecycle: TurnLifecycle,
+        lifecycle: FloorActor,
         outcomes: list[BaseException | None],
     ) -> None:
         self._hook = hook
@@ -124,19 +123,21 @@ def lifecycle_for(
     *,
     faults: RecordingFaults | None = None,
     judge: ScriptedJudge | None = None,
-) -> TurnLifecycle:
-    lifecycle = TurnLifecycle(
+) -> FloorActor:
+    lifecycle = FloorActor(
         build_turn_graph(),
-        journal=journal,
-        responder=Responder(),
-        judging=(
-            TurnJudging(
-                cache=JudgeCache(judge),
-                windows=WindowSource(NoHistory(), window_lines=8),
-                thresholds=JudgeThresholds(reply=0.6, clarify=0.5),
-            )
-            if judge is not None
-            else None
+        ActorWiring(
+            journal=journal,
+            responder=Responder(),
+            judging=(
+                TurnJudging(
+                    cache=JudgeCache(judge),
+                    windows=WindowSource(NoHistory(), window_lines=8),
+                    thresholds=JudgeThresholds(reply=0.6, clarify=0.5),
+                )
+                if judge is not None
+                else None
+            ),
         ),
     )
     if faults is not None:
@@ -144,7 +145,7 @@ def lifecycle_for(
     return lifecycle
 
 
-async def hold_speech(lifecycle: TurnLifecycle, release: asyncio.Event) -> asyncio.Task[bool]:
+async def hold_speech(lifecycle: FloorActor, release: asyncio.Event) -> asyncio.Task[bool]:
     task = asyncio.create_task(lifecycle.floor.hold(wait_until(release)))
     await asyncio.sleep(0)
     assert lifecycle.floor.busy
@@ -198,9 +199,7 @@ async def test_raise_if_failed_after_a_tool_start_raises_the_failure_and_moves_a
     )
     lifecycle.bind(Session())
 
-    await TurnIngress(lifecycle, addressing_names=("twin",)).handle_final(
-        transcript("f1", "twin, hi")
-    )
+    await lifecycle.handle_final(transcript("f1", "twin, hi"))
 
     assert outcomes[0] is None
     assert isinstance(outcomes[1], ConversationError)
@@ -255,9 +254,7 @@ async def test_final_barge_in_follows_the_speaker_probe_not_the_floor() -> None:
     release = asyncio.Event()
     await hold_speech(lifecycle, release)
 
-    await TurnIngress(lifecycle, addressing_names=("twin",)).handle_final(
-        transcript("f1", "twin, hi")
-    )
+    await lifecycle.handle_final(transcript("f1", "twin, hi"))
 
     assert journal.of("barge_in_detected") == []
     assert session.stops == 0
@@ -272,9 +269,7 @@ async def test_final_barge_in_fires_when_the_speaker_is_speaking() -> None:
     await hold_speech(lifecycle, release)
     session.is_speaking = True
 
-    await TurnIngress(lifecycle, addressing_names=("twin",)).handle_final(
-        transcript("f1", "twin, hi")
-    )
+    await lifecycle.handle_final(transcript("f1", "twin, hi"))
 
     assert journal.of("barge_in_detected") == [{"source": "agent", "trigger": "final", "words": 2}]
     assert session.stops == 1
@@ -285,7 +280,7 @@ async def test_an_interim_is_judged_while_the_twin_is_speaking() -> None:
     lifecycle = lifecycle_for(Journal(), judge=judge)
     session = Session()
     lifecycle.bind(session)
-    ingress = TurnIngress(lifecycle, addressing_names=("twin",))
+    ingress = lifecycle
 
     session.is_speaking = True
     await ingress.handle_interim("twin, what do you think")

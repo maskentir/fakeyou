@@ -46,6 +46,17 @@ class AdmittedFinals:
         return self._count
 
 
+class BargeLatch:
+    def __init__(self) -> None:
+        self.interrupted = False
+        self.last_interim: str | None = None
+        self.stream_stops = 0
+
+    def rearm(self) -> None:
+        self.interrupted = False
+        self.last_interim = None
+
+
 @dataclass(frozen=True, slots=True)
 class DeferredTurn:
     event: TranscriptEvent

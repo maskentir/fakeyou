@@ -7,6 +7,7 @@ from typing import Any, override
 
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation import turn_graph, turn_recovery
+from fakeyou.conversation.actor import ActorWiring, FloorActor, IngressOptions, is_stop_command
 from fakeyou.conversation.floor import SpeechFloor
 from fakeyou.conversation.meeting_messages import NoHistory
 from fakeyou.conversation.participation_graph import JudgeThresholds, TurnJudging
@@ -19,9 +20,7 @@ from fakeyou.conversation.turn_graph import (
     build_speech_graph,
     build_turn_graph,
 )
-from fakeyou.conversation.turn_ingress import TurnIngress
 from fakeyou.conversation.turn_judge import JudgeCache, TurnJudgement, WindowSource
-from fakeyou.conversation.turn_lifecycle import TurnLifecycle
 from fakeyou.foundation.participation import ParticipationContext
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.speech.contract import PreparedSpeech
@@ -254,24 +253,27 @@ def barge_ingress(
     *,
     speaking: bool = True,
     verdict: TurnJudgement | None = None,
-) -> tuple[TurnIngress, TurnLifecycle, BargeAudio]:
-    lifecycle = TurnLifecycle(
+) -> tuple[FloorActor, FloorActor, BargeAudio]:
+    lifecycle = FloorActor(
         build_turn_graph(),
-        journal=journal,
-        responder=OneSentenceResponder(),
-        judging=(
-            TurnJudging(
-                cache=JudgeCache(ScriptedJudge(lambda _window: verdict)),
-                windows=WindowSource(NoHistory(), window_lines=8),
-                thresholds=JudgeThresholds(reply=0.6, clarify=0.5),
-            )
-            if verdict is not None
-            else None
+        ActorWiring(
+            journal=journal,
+            responder=OneSentenceResponder(),
+            judging=(
+                TurnJudging(
+                    cache=JudgeCache(ScriptedJudge(lambda _window: verdict)),
+                    windows=WindowSource(NoHistory(), window_lines=8),
+                    thresholds=JudgeThresholds(reply=0.6, clarify=0.5),
+                )
+                if verdict is not None
+                else None
+            ),
+            ingress=IngressOptions(addressing_names=addressing_names),
         ),
     )
     audio = BargeAudio(speaking=speaking)
     lifecycle.bind(audio)
-    return TurnIngress(lifecycle, addressing_names=addressing_names), lifecycle, audio
+    return lifecycle, lifecycle, audio
 
 
 def final_event(event_id: str, text: str) -> TranscriptEvent:
@@ -298,7 +300,7 @@ async def settle(speech: asyncio.Task[bool]) -> bool:
     return await asyncio.wait_for(speech, timeout=2)
 
 
-async def start_speaking(lifecycle: TurnLifecycle) -> asyncio.Task[bool]:
+async def start_speaking(lifecycle: FloorActor) -> asyncio.Task[bool]:
     speech = asyncio.create_task(lifecycle.floor.hold(hold_until_cancelled()))
     await asyncio.sleep(0)
     return speech
@@ -468,7 +470,6 @@ async def test_a_repeated_stop_with_the_twins_name_yields_the_floor() -> None:
 
 
 def test_talk_about_stopping_is_not_a_stop_command() -> None:
-    from fakeyou.conversation.turn_ingress import is_stop_command
     from fakeyou.foundation.resources import read_package_text
 
     assert is_stop_command("we should stop the rollout tomorrow", ()) is False

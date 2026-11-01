@@ -248,6 +248,51 @@ async def test_without_a_chat_channel_the_reply_is_dropped_not_spoken() -> None:
     await turns.close()
 
 
+async def test_a_chat_turn_journals_started_and_finished() -> None:
+    journal = RecordingJournal()
+    turns, audio = lanes(
+        FixedResponder("The deck is shared."),
+        interaction=interaction(planning=chat_permitted),
+        journal=journal,
+    )
+
+    accepted = turns.receive_chat(meeting_input("c1", f"{TWIN} ping", "meeting_chat"))
+    await settle(turns)
+
+    assert accepted
+    assert audio.spoken == []
+    assert journal.events("agent_started")[0]["request_id"] == "c1:0"
+    assert [row["request_id"] for row in journal.events("agent_finished")] == ["c1:0"]
+    await turns.close()
+
+
+async def test_a_paused_chat_turn_is_cancelled_in_the_journal() -> None:
+    chat = FakeChat()
+    journal = RecordingJournal()
+    gate = asyncio.Event()
+    responder = HeldChatResponder("Here is the deck link.", gate)
+    turns, audio = lanes(
+        responder,
+        interaction=interaction(commands=chat, planning=chat_permitted),
+        journal=journal,
+    )
+
+    accepted = turns.receive_chat(
+        meeting_input("c1", f"{TWIN}, can you share the deck?", "meeting_chat")
+    )
+    await responder.started.wait()
+    await turns.pause()
+    gate.set()
+    await settle(turns)
+
+    assert accepted is True
+    assert audio.spoken == []
+    assert chat.sent == []
+    assert [row["reason"] for row in journal.events("agent_cancelled")] == ["paused"]
+    assert not journal.events("agent_finished")
+    await turns.close()
+
+
 async def test_a_voice_interjection_waits_for_a_quiet_floor() -> None:
     turns, audio = lanes(
         FixedResponder("The beta date looks wrong."), timing=TurnTiming(quiet_gap_seconds=0.15)

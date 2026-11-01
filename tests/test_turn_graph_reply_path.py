@@ -6,11 +6,10 @@ from typing import Any, override
 
 from langchain_core.messages import AIMessageChunk
 
+from fakeyou.conversation import actor, turn_graph
 from fakeyou.conversation import conversation as conversation_module
-from fakeyou.conversation import turn_graph, turn_ingress
+from fakeyou.conversation.actor import ActorWiring, FloorActor
 from fakeyou.conversation.turn_graph import build_turn_graph
-from fakeyou.conversation.turn_ingress import TurnIngress
-from fakeyou.conversation.turn_lifecycle import TurnLifecycle
 from fakeyou.foundation.transcript import TranscriptEvent
 from tests._model_responder import ModelResponder, ReplyTrace
 from tests._prepared_support import PreparedSpeaker
@@ -19,7 +18,7 @@ MODEL_NODE = {"langgraph_node": "model"}
 TOOLS_NODE = {"langgraph_node": "tools"}
 GRAPH_SOURCE = "".join(
     Path(inspect.getfile(module)).read_text(encoding="utf-8")
-    for module in (turn_graph, turn_ingress, conversation_module)
+    for module in (turn_graph, actor, conversation_module)
 )
 
 
@@ -112,10 +111,9 @@ class Harness:
                 else None,
             ),
         )
-        self.lifecycle = TurnLifecycle(
+        self.lifecycle = FloorActor(
             build_turn_graph(),
-            journal=self.journal,
-            responder=self.responder,
+            ActorWiring(journal=self.journal, responder=self.responder),
         )
         self.lifecycle.observe(self._record_move)
         self.lifecycle.bind(self.session)
@@ -123,8 +121,9 @@ class Harness:
     def _record_move(self, _previous: str, phase: str, _detail: str) -> None:
         self.moves.append(phase)
 
-    def ingress(self, names: tuple[str, ...]) -> TurnIngress:
-        return TurnIngress(self.lifecycle, addressing_names=names)
+    def ingress(self, names: tuple[str, ...]) -> FloorActor:
+        self.lifecycle.set_addressing_names(names)
+        return self.lifecycle
 
 
 async def test_name_addressed_final_admits_and_replies() -> None:

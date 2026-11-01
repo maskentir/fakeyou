@@ -8,6 +8,7 @@ from langchain_core.messages import AIMessageChunk
 
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation import turn_graph, turn_recovery
+from fakeyou.conversation.actor import ActorWiring, FloorActor, ReplyOptions
 from fakeyou.conversation.floor import SpeechFloor
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_graph import (
@@ -16,8 +17,6 @@ from fakeyou.conversation.turn_graph import (
     TurnRuntime,
     build_turn_graph,
 )
-from fakeyou.conversation.turn_ingress import TurnIngress
-from fakeyou.conversation.turn_lifecycle import ReplyOptions, TurnLifecycle
 from fakeyou.conversation.turn_recovery import RecoveryOptions
 from fakeyou.foundation.resources import read_package_text
 from fakeyou.foundation.transcript import TranscriptEvent
@@ -120,11 +119,13 @@ class Harness:
     ) -> None:
         self.journal = FakeJournal()
         self.session = FakeSession()
-        self.lifecycle = TurnLifecycle(
+        self.lifecycle = FloorActor(
             build_turn_graph(),
-            journal=self.journal,
-            responder=ModelResponder(
-                chunks=unused_chunks, phase=ToolPhaseState(), max_sentences=3, language="en"
+            ActorWiring(
+                journal=self.journal,
+                responder=ModelResponder(
+                    chunks=unused_chunks, phase=ToolPhaseState(), max_sentences=3, language="en"
+                ),
             ),
         )
         self.lifecycle.configure_recovery(
@@ -138,9 +139,7 @@ class Harness:
         self.lifecycle.bind(self.session)
 
     async def say(self, event_id: str, text: str) -> None:
-        await TurnIngress(self.lifecycle, addressing_names=("twin",)).handle_final(
-            transcript(event_id, text)
-        )
+        await self.lifecycle.handle_final(transcript(event_id, text))
 
 
 class AdvancingSink(PreparedSink):

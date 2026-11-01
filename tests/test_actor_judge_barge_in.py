@@ -2,13 +2,12 @@ import asyncio
 from typing import Any, override
 
 from fakeyou.config.settings import DEFAULTS
+from fakeyou.conversation.actor import ActorWiring, FloorActor, IngressOptions
 from fakeyou.conversation.meeting_messages import NoHistory
 from fakeyou.conversation.participation_graph import JudgeThresholds, TurnJudging
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_graph import build_turn_graph
-from fakeyou.conversation.turn_ingress import TurnIngress
 from fakeyou.conversation.turn_judge import JudgeCache, WindowSource
-from fakeyou.conversation.turn_lifecycle import TurnLifecycle
 from tests._conversation_fakes import ScriptedJudge, judged
 from tests._prepared_support import PreparedSpeaker
 
@@ -67,25 +66,26 @@ def build(
     judge: ScriptedJudge,
     *,
     barge_in_judge_enabled: bool = True,
-) -> tuple[TurnIngress, TurnLifecycle, FakeSession, FakeJournal]:
+) -> tuple[FloorActor, FloorActor, FakeSession, FakeJournal]:
     journal = FakeJournal()
-    lifecycle = TurnLifecycle(
+    lifecycle = FloorActor(
         build_turn_graph(),
-        journal=journal,
-        responder=FakeResponder(),
-        judging=judging(judge),
+        ActorWiring(
+            journal=journal,
+            responder=FakeResponder(),
+            judging=judging(judge),
+            ingress=IngressOptions(
+                addressing_names=("twin",),
+                barge_in_judge_enabled=barge_in_judge_enabled,
+            ),
+        ),
     )
     session = FakeSession()
     lifecycle.bind(session)
-    ingress = TurnIngress(
-        lifecycle,
-        addressing_names=("twin",),
-        barge_in_judge_enabled=barge_in_judge_enabled,
-    )
-    return ingress, lifecycle, session, journal
+    return lifecycle, lifecycle, session, journal
 
 
-async def hold_the_floor(lifecycle: TurnLifecycle) -> asyncio.Task[bool]:
+async def hold_the_floor(lifecycle: FloorActor) -> asyncio.Task[bool]:
     async def wait_forever() -> None:
         await asyncio.Event().wait()
 
@@ -94,7 +94,7 @@ async def hold_the_floor(lifecycle: TurnLifecycle) -> asyncio.Task[bool]:
     return task
 
 
-async def settle(lifecycle: TurnLifecycle, ingress: TurnIngress) -> None:
+async def settle(lifecycle: FloorActor, ingress: FloorActor) -> None:
     judging = lifecycle.judging
     assert judging is not None
     await judging.cache.wait_idle()
