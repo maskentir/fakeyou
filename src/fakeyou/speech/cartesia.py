@@ -1,63 +1,45 @@
-import asyncio
 import base64
-import json
 import uuid
 from collections import deque
-from collections.abc import AsyncGenerator, Awaitable, Callable
-from contextlib import suppress
 from functools import partial
-from typing import Any, Protocol
-
-import websockets
-from websockets.exceptions import InvalidStatus, WebSocketException
+from typing import Any
 
 from fakeyou.config.settings import DEFAULTS, CartesiaTTS
 from fakeyou.foundation.invariants import PLAYBACK_SAMPLE_RATE
-from fakeyou.foundation.pcm import PCM16_SAMPLE_BYTES
 from fakeyou.observability.journal import Journal
-from fakeyou.observability.provider_faults import FaultEvidence, ProviderFault, classify_http
+from fakeyou.observability.provider_faults import ProviderFault, classify_http
 from fakeyou.speech.contract import SpeechSegment, SpeechTurn, WordTiming
 from fakeyou.speech.streaming import SpeechTag, StreamedSegment, journaled_stream
+from fakeyou.speech.websocket import (
+    BYTES_PER_SECOND,
+    SentenceAudio,
+    SocketDialect,
+    SocketOpener,
+    SpeechConnection,
+    SpeechSocket,
+    connect_socket,
+    secure_scheme,
+    silent,
+)
 
 CARTESIA_API_VERSION = "2026-03-01"
-HANDSHAKE_TIMEOUT_SECONDS = 10.0
-BYTES_PER_SECOND = PLAYBACK_SAMPLE_RATE * PCM16_SAMPLE_BYTES
 
 
-class CartesiaSocket(Protocol):
-    async def send(self, message: str) -> None: ...
-
-    async def recv(self) -> str | bytes: ...
-
-    async def close(self) -> None: ...
-
-
-SocketOpener = Callable[[], Awaitable[CartesiaSocket]]
-
-
-async def connect_cartesia(url: str, api_key: str) -> CartesiaSocket:
-    try:
-        return await websockets.connect(
-            url,
-            additional_headers={"X-API-Key": api_key},
-            open_timeout=HANDSHAKE_TIMEOUT_SECONDS,
-        )
-    except InvalidStatus as error:
-        raise classify_http("tts", error.response.status_code, "websocket handshake") from error
-    except (WebSocketException, OSError, TimeoutError) as error:
-        raise _lost("websocket connect failed") from error
-
-
-def _lost(detail: str) -> ProviderFault:
-    return ProviderFault(
-        "tts", "unavailable", evidence=FaultEvidence(detail=detail), retryable=True
-    )
+async def connect_cartesia(url: str, api_key: str) -> SpeechSocket:
+    return await connect_socket(url, {"X-API-Key": api_key})
 
 
 def socket_url(base_url: str) -> str:
-    scheme, _, rest = base_url.partition("://")
-    secure = {"https": "wss", "http": "ws"}.get(scheme, scheme)
-    return f"{secure}://{rest}/tts/websocket?cartesia_version={CARTESIA_API_VERSION}"
+    return f"{secure_scheme(base_url)}/tts/websocket?cartesia_version={CARTESIA_API_VERSION}"
+
+
+def _socket_fault(message: dict[str, Any]) -> ProviderFault | None:
+    return _error_fault(message) if message.get("type") == "error" else None
+
+
+CARTESIA_DIALECT = SocketDialect(
+    context_of=lambda message: message.get("context_id"), socket_fault=_socket_fault
+)
 
 
 class CartesiaSpeechSynthesizer:
@@ -75,8 +57,9 @@ class CartesiaSpeechSynthesizer:
         self._voice = resolved.voice
         self._language = language
         self._journal = journal
-        self._connection = _Connection(
-            opener or partial(connect_cartesia, socket_url(resolved.base_url), api_key)
+        self._connection = SpeechConnection(
+            opener or partial(connect_cartesia, socket_url(resolved.base_url), api_key),
+            CARTESIA_DIALECT,
         )
 
     @property
@@ -118,168 +101,21 @@ class CartesiaSpeechSynthesizer:
         }
 
 
-MALFORMED = (TypeError, ValueError, AttributeError, KeyError)
-
-
-class _Connection:
-    def __init__(self, opener: SocketOpener) -> None:
-        self._opener = opener
-        self._socket: CartesiaSocket | None = None
-        self._reader: asyncio.Task[None] | None = None
-        self._outbox: asyncio.Queue[tuple[_Context, dict[str, Any]]] = asyncio.Queue()
-        self._writer: asyncio.Task[None] | None = None
-        self._contexts: dict[str, _Context] = {}
-        self._warm = False
-        self._closed = False
-
-    def warm(self) -> None:
-        self._warm = True
-        with suppress(RuntimeError):
-            asyncio.get_running_loop()
-            self._start_writer()
-
-    def send(self, context: "_Context", message: dict[str, Any]) -> None:
-        if self._closed:
-            context.lose(_lost("the speech connection is closed"))
-            return
-        if not context.closed:
-            self._contexts[context.context_id] = context
-        self._start_writer()
-        self._outbox.put_nowait((context, message))
-
-    def forget(self, context: "_Context") -> None:
-        self._contexts.pop(context.context_id, None)
-
-    async def close(self) -> None:
-        self._closed = True
-        socket, self._socket = self._socket, None
-        for task in (self._writer, self._reader):
-            if task is not None:
-                task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
-        self._lose(_lost("the speech connection is closed"), on=None)
-        if socket is not None:
-            with suppress(WebSocketException, OSError):
-                await socket.close()
-
-    def _start_writer(self) -> None:
-        if self._writer is None or self._writer.done():
-            self._writer = asyncio.create_task(self._write_loop())
-
-    async def _write_loop(self) -> None:
-        if self._warm:
-            with suppress(ProviderFault):
-                await self._ensure()
-        while True:
-            context, message = await self._outbox.get()
-            if message.get("cancel"):
-                await self._send_cancel(message)
-            elif not context.closed:
-                await self._deliver(context, message)
-
-    async def _deliver(self, context: "_Context", message: dict[str, Any]) -> None:
-        try:
-            socket = await self._ensure()
-            context.socket = socket
-            await socket.send(json.dumps(message))
-        except ProviderFault as fault:
-            context.lose(fault)
-        except (WebSocketException, OSError) as error:
-            await self._drop_socket()
-            context.lose(_lost(f"websocket send failed: {type(error).__name__}"))
-
-    async def _send_cancel(self, message: dict[str, Any]) -> None:
-        socket = self._socket
-        if socket is not None:
-            with suppress(WebSocketException, OSError):
-                await socket.send(json.dumps(message))
-
-    async def _ensure(self) -> CartesiaSocket:
-        if self._socket is None:
-            socket = await self._opener()
-            self._socket = socket
-            self._reader = asyncio.create_task(self._read_loop(socket))
-        return self._socket
-
-    async def _read_loop(self, socket: CartesiaSocket) -> None:
-        reason = "websocket closed"
-        try:
-            while True:
-                self._route(socket, await socket.recv())
-        except (WebSocketException, OSError) as error:
-            reason = f"websocket receive failed: {type(error).__name__}"
-        finally:
-            if self._socket is socket:
-                self._socket = None
-            self._lose(_lost(reason), on=socket)
-
-    def _route(self, socket: CartesiaSocket, raw: str | bytes) -> None:
-        try:
-            message = json.loads(raw)
-        except ValueError:
-            return
-        if not isinstance(message, dict):
-            return
-        context = self._contexts.get(str(message.get("context_id")))
-        if context is None:
-            if message.get("type") == "error":
-                self._lose(_error_fault(message), on=socket)
-            return
-        try:
-            context.receive(message)
-        except MALFORMED as error:
-            context.lose(_lost(f"malformed {message.get('type')} message: {type(error).__name__}"))
-
-    def _lose(self, fault: ProviderFault, *, on: CartesiaSocket | None) -> None:
-        for context in list(self._contexts.values()):
-            if on is None or context.socket is on:
-                context.lose(fault)
-
-    async def _drop_socket(self) -> None:
-        socket, self._socket = self._socket, None
-        if socket is not None:
-            with suppress(WebSocketException, OSError):
-                await socket.close()
-
-
 def _error_fault(message: dict[str, Any]) -> ProviderFault:
     status = message.get("status_code")
     return classify_http("tts", int(status) if isinstance(status, int) else 500, _detail(message))
 
 
-class _Sentence:
+class _Sentence(SentenceAudio):
     def __init__(self) -> None:
-        self.chunks: asyncio.Queue[bytes | ProviderFault | None] = asyncio.Queue()
-        self.words: list[WordTiming] = []
-        self.audio_bytes = 0
-        self.detached = False
+        super().__init__()
         self.flush_id: Any = None
-
-    def feed(self, pcm: bytes) -> None:
-        self.audio_bytes += len(pcm)
-        if not self.detached:
-            self.chunks.put_nowait(pcm)
-
-    def end(self, fault: ProviderFault | None = None) -> None:
-        self.chunks.put_nowait(fault)
-
-    async def pcm(self) -> AsyncGenerator[bytes]:
-        try:
-            while True:
-                item = await self.chunks.get()
-                if item is None:
-                    return
-                if isinstance(item, ProviderFault):
-                    raise item
-                yield item
-        finally:
-            self.detached = True
 
 
 class _Context:
-    def __init__(self, connection: _Connection, request: dict[str, Any]) -> None:
+    def __init__(self, connection: SpeechConnection, request: dict[str, Any]) -> None:
         self.context_id = uuid.uuid4().hex
-        self.socket: CartesiaSocket | None = None
+        self.socket: SpeechSocket | None = None
         self._connection = connection
         self._request = request
         self._pending: deque[_Sentence] = deque()
@@ -299,7 +135,7 @@ class _Context:
     def cancel(self) -> None:
         if self.closed:
             return
-        self._connection.send(self, {"context_id": self.context_id, "cancel": True})
+        self._connection.control(self, {"context_id": self.context_id, "cancel": True})
         self._close(None)
 
     def receive(self, message: dict[str, Any]) -> None:
@@ -386,16 +222,10 @@ def _detail(message: dict[str, Any]) -> str:
     return "cartesia error"
 
 
-async def _silent(text: str) -> AsyncGenerator[bytes]:
-    del text
-    return
-    yield b""
-
-
 class _CartesiaTurn:
     def __init__(
         self,
-        connection: _Connection,
+        connection: SpeechConnection,
         request: dict[str, Any],
         *,
         transcript_id: str | None,
@@ -410,7 +240,7 @@ class _CartesiaTurn:
     def speak(self, text: str, *, sentence_index: int | None = None) -> SpeechSegment:
         tag = SpeechTag("cartesia", sentence_index, self._transcript_id)
         if not text.strip():
-            return StreamedSegment(journaled_stream(self._journal, text, _silent, tag))
+            return StreamedSegment(journaled_stream(self._journal, text, silent, tag))
         context = self._context
         if context is None or context.closed:
             context = self._context = _Context(self._connection, self._request)
