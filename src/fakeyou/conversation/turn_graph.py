@@ -53,6 +53,7 @@ from fakeyou.conversation.turn_recovery import (
 from fakeyou.foundation.participation import ParticipationContext
 from fakeyou.foundation.protocols import SupportsAclose
 from fakeyou.foundation.transcript import TranscriptEvent
+from fakeyou.foundation.triggers import ReplyChannel
 from fakeyou.observability.cleanup import close_safely
 from fakeyou.observability.faults import FaultReporter, capture_error
 from fakeyou.observability.provider_faults import classify_exception
@@ -996,10 +997,13 @@ def _cue_blocker(runtime: TurnRuntime, sink: TurnSink, generations: tuple[int, i
 
 
 async def _held(
-    runtime: TurnRuntime, work: Coroutine[Any, Any, None], scope: TurnScope | None
+    runtime: TurnRuntime,
+    work: Coroutine[Any, Any, None],
+    scope: TurnScope | None,
+    channel: ReplyChannel = "voice",
 ) -> bool:
     floor = runtime.floor
-    if floor is None or scope is None:
+    if floor is None or scope is None or channel == "chat":
         await work
         return True
     return await floor.hold(
@@ -1069,7 +1073,7 @@ async def _drain_pending(runtime: TurnRuntime, speech: SpeechGraph, queue: Pendi
         if runtime.barge is not None:
             runtime.barge.interrupted = False
         work = _run_turn(runtime, speech, batch, scope, generation)
-        outcome = await capture_error(partial(_held, runtime, work, scope))
+        outcome = await capture_error(partial(_held, runtime, work, scope, "voice"))
         await _settle_outcome(runtime, outcome, generation, transcript_id)
 
 
@@ -1165,7 +1169,7 @@ async def run_deferred_turn(runtime: TurnRuntime, speech: SpeechGraph, turn: Def
         work = _run_chat_turn(runtime, event, generation)
     else:
         work = _run_turn(runtime, speech, (event,), scope, generation)
-    completed, error = await capture_error(partial(_held, runtime, work, scope))
+    completed, error = await capture_error(partial(_held, runtime, work, scope, turn.channel))
     if isinstance(error, FloorHeld):
         raise error
     if isinstance(error, TurnDropped) or (error is None and not completed):

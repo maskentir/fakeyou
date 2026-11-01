@@ -1293,7 +1293,6 @@ Bentuk PR:
       lama membuat keduanya gagal. Replay oue-4 identik karena sesi itu tidak
       punya kasus final-untuk-orang-lain saat twin mikir, jadi aturan ini tidak
       terbukti dari replay melainkan dari tes.
-    - Lane chat: belum dikerjakan.
   - B1b-3c, penghapusan `TurnLifecycle`, `TurnIngress`, `turn_queue.py`,
     `turn_events.py`, `BargeLatch`, dan `TurnRuntime`. Mailbox actor
     (satu task konsumen yang memiliki semua state giliran) belum dibangun;
