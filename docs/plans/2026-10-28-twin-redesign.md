@@ -1293,22 +1293,6 @@ Bentuk PR:
       lama membuat keduanya gagal. Replay oue-4 identik karena sesi itu tidak
       punya kasus final-untuk-orang-lain saat twin mikir, jadi aturan ini tidak
       terbukti dari replay melainkan dari tes.
-    - Lane chat, implementasi (2026-11-01): giliran chat tidak lagi memegang
-      lease bicara. Sebelumnya `run_deferred_turn` memakai `_held`, jadi chat
-      memegang floor seperti giliran suara; final suara baru memanggil
-      `take_floor_for_final` yang membatalkan task yang memegang floor,
-      sehingga balasan chat dibatalkan, dicoba sekali lagi, lalu dibuang.
-      Sekarang `_held` menerima channel dan tidak memegang floor untuk
-      channel chat. Plan chat selalu `output="chat"` (lihat
-      `planner._with_output`), jadi jalur chat tidak pernah bicara lewat
-      suara dan tidak bentrok dengan giliran suara. Yang tetap berlaku:
-      close dan pause menghentikan; giliran chat masih antre di drain task
-      yang sama, jadi chat belum paralel sungguhan dengan giliran suara.
-      Bukti: tes `test_a_final_does_not_cancel_a_chat_reply_that_is_still_being_written`
-      di `tests/test_turn_lifecycle_lanes.py`; mutasi mengembalikan chat ke
-      holder floor membuat tes gagal dengan `agent_cancelled`. Replay oue-4
-      identik. Sisa: chat benar-benar paralel (task sendiri) adalah langkah
-      actor (B1b-3c).
   - B1b-3c, penghapusan `TurnLifecycle`, `TurnIngress`, `turn_queue.py`,
     `turn_events.py`, `BargeLatch`, dan `TurnRuntime`. Mailbox actor
     (satu task konsumen yang memiliki semua state giliran) belum dibangun;
