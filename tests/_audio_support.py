@@ -17,7 +17,7 @@ from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.observability.faults import FaultReporter
 from fakeyou.speech.contract import SpeechSynthesizer
 from tests._persistence_fakes import RecordingJournal
-from tests._prepared_support import PreparedSpeaker
+from tests._prepared_support import PreparedSpeaker, SentenceSynth
 
 SPEECH_WINDOW = b"\x00\x00" * 512
 SPEAKING = 0.99
@@ -131,7 +131,7 @@ class FakePlayback(PreparedSpeaker):
         self.closed = True
 
 
-class FakeSynth:
+class FakeSynth(SentenceSynth):
     def __init__(self, audio: bytes = b"\x00" * 480, error: Exception | None = None) -> None:
         self.audio = audio
         self.error = error
@@ -140,6 +140,7 @@ class FakeSynth:
         self.transcripts: list[str | None] = []
         self.closed = False
 
+    @override
     async def stream(
         self,
         text: str,

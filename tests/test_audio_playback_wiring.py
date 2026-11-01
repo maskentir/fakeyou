@@ -79,10 +79,9 @@ async def test_default_playback_engine_closes_speech_client(
 def test_default_playback_engine_streams_tts_to_the_agent_sink(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import inspect
-
     from fakeyou.audio.pulse_writer import PulseWriter
     from fakeyou.foundation.invariants import AGENT_SINK_NAME, PLAYBACK_SAMPLE_RATE
+    from fakeyou.speech.streaming import StreamedSegment
 
     writers: list[dict[str, Any]] = []
 
@@ -96,7 +95,7 @@ def test_default_playback_engine_streams_tts_to_the_agent_sink(
     )
 
     assert writers == [{"sink": AGENT_SINK_NAME, "rate": PLAYBACK_SAMPLE_RATE}]
-    assert inspect.isasyncgen(engine.synthesizer.stream("hello"))
+    assert isinstance(engine.synthesizer.open_turn().speak("hello"), StreamedSegment)
 
 
 def test_default_playback_engine_uses_the_configured_tts_provider() -> None:

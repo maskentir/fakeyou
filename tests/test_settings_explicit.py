@@ -547,7 +547,10 @@ async def test_speech_language_and_explicit_voice_model_reach_provider_payloads(
         language="en",
     )
     try:
-        assert b"".join([chunk async for chunk in synthesizer.stream("Hello.")]) == b"\x00\x01"
+        assert (
+            b"".join([chunk async for chunk in synthesizer.open_turn().speak("Hello.")])
+            == b"\x00\x01"
+        )
     finally:
         await synthesizer.aclose()
     assert requests[0]["model"] == "explicit-model"
@@ -566,7 +569,7 @@ async def test_speech_language_and_explicit_voice_model_reach_provider_payloads(
         language="en",
     )
     try:
-        [chunk async for chunk in minimax.stream("Hello.")]
+        [chunk async for chunk in minimax.open_turn().speak("Hello.")]
     finally:
         await minimax.aclose()
     assert minimax_requests[0]["language_boost"] == "English"

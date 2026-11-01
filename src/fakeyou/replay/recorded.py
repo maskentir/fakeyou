@@ -24,7 +24,8 @@ from fakeyou.replay.fixture import (
     SynthesisTiming,
 )
 from fakeyou.replay.pacer import BYTES_PER_SECOND
-from fakeyou.speech.streaming import SpeechTag, journaled_stream
+from fakeyou.speech.contract import SpeechTurn
+from fakeyou.speech.streaming import SentenceTurn, SpeechTag, journaled_stream
 
 CHUNK_BYTES = 4800
 FILLER = "x"
@@ -90,6 +91,11 @@ class RecordedSynthesizer:
                 if timing.bytes_out
             ]
         )
+
+    def open_turn(
+        self, *, transcript_id: str | None = None, language: str | None = None
+    ) -> SpeechTurn:
+        return SentenceTurn(self.stream, transcript_id=transcript_id, language=language)
 
     def stream(
         self,

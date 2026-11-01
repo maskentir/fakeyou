@@ -1,6 +1,7 @@
 from collections.abc import AsyncIterator
 
-from fakeyou.speech.contract import PreparedSpeech
+from fakeyou.speech.contract import PreparedSpeech, SpeechTurn
+from fakeyou.speech.streaming import SentenceTurn
 
 
 class FakePreparedSpeech:
@@ -77,3 +78,20 @@ class PreparedSpeaker:
 class PreparedSink:
     async def prepare(self, sentence: str, language: str) -> PreparedSpeech | None:
         return FakePreparedSpeech(sentence, language, None, None)
+
+
+class SentenceSynth:
+    def stream(
+        self,
+        text: str,
+        *,
+        sentence_index: int | None = None,
+        transcript_id: str | None = None,
+        language: str | None = None,
+    ) -> AsyncIterator[bytes]:
+        raise NotImplementedError
+
+    def open_turn(
+        self, *, transcript_id: str | None = None, language: str | None = None
+    ) -> SpeechTurn:
+        return SentenceTurn(self.stream, transcript_id=transcript_id, language=language)

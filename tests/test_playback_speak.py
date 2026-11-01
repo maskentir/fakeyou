@@ -16,6 +16,7 @@ from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.observability.faults import FaultReporter
 from tests._audio_support import FakeSynth, FakeWriter, build_engine
 from tests._persistence_fakes import RecordingJournal
+from tests._prepared_support import SentenceSynth
 
 
 class _DrainingWriter(FakeWriter):
@@ -31,7 +32,7 @@ class _DrainingWriter(FakeWriter):
         await self.drain_release.wait()
 
 
-class _SlowSynth:
+class _SlowSynth(SentenceSynth):
     def __init__(self, audio: bytes = b"\x00" * 480) -> None:
         self.audio = audio
         self.texts: list[str] = []
@@ -39,6 +40,7 @@ class _SlowSynth:
         self.started = asyncio.Event()
         self.release = asyncio.Event()
 
+    @override
     async def stream(
         self,
         text: str,
@@ -482,7 +484,8 @@ async def test_close_synth_failure_is_recorded(journal: RecordingJournal) -> Non
 
 
 async def test_a_slow_consumer_does_not_count_against_synthesis() -> None:
-    class ChunkedSynth:
+    class ChunkedSynth(SentenceSynth):
+        @override
         async def stream(
             self,
             text: str,

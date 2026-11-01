@@ -1,16 +1,38 @@
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
+from dataclasses import dataclass
 from typing import Protocol
 
 
+@dataclass(frozen=True, slots=True)
+class WordTiming:
+    text: str
+    start: float
+    end: float
+
+
+class SpeechSegment(Protocol):
+    @property
+    def words(self) -> Sequence[WordTiming]: ...
+
+    def __aiter__(self) -> AsyncIterator[bytes]: ...
+
+    async def __anext__(self) -> bytes: ...
+
+    async def aclose(self) -> None: ...
+
+
+class SpeechTurn(Protocol):
+    def speak(self, text: str, *, sentence_index: int | None = None) -> SpeechSegment: ...
+
+    async def finish(self) -> None: ...
+
+    async def cancel(self) -> None: ...
+
+
 class SpeechSynthesizer(Protocol):
-    def stream(
-        self,
-        text: str,
-        *,
-        sentence_index: int | None = None,
-        transcript_id: str | None = None,
-        language: str | None = None,
-    ) -> AsyncIterator[bytes]: ...
+    def open_turn(
+        self, *, transcript_id: str | None = None, language: str | None = None
+    ) -> SpeechTurn: ...
 
     async def aclose(self) -> None: ...
 

@@ -7,9 +7,11 @@ from fakeyou.config.settings import DEFAULTS, CartesiaTTS
 from fakeyou.foundation.invariants import PLAYBACK_SAMPLE_RATE
 from fakeyou.observability.journal import Journal
 from fakeyou.observability.provider_faults import classify_http
+from fakeyou.speech.contract import SpeechTurn
 from fakeyou.speech.streaming import (
     TTS_HTTP_TIMEOUT,
     TTS_REQUEST_TIMEOUT_SECONDS,
+    SentenceTurn,
     SpeechTag,
     journaled_stream,
 )
@@ -36,6 +38,11 @@ class CartesiaSpeechSynthesizer:
         self._journal = journal
         self._owns_client = client is None
         self._client = client or httpx2.AsyncClient(timeout=TTS_HTTP_TIMEOUT)
+
+    def open_turn(
+        self, *, transcript_id: str | None = None, language: str | None = None
+    ) -> SpeechTurn:
+        return SentenceTurn(self.stream, transcript_id=transcript_id, language=language)
 
     def stream(
         self,

@@ -124,7 +124,12 @@ async def test_configured_tts_streams_pcm_audio() -> None:
         try:
             async with asyncio.timeout(60):
                 streamed = b"".join(
-                    [chunk async for chunk in synthesizer.stream("Hello from the test meeting.")]
+                    [
+                        chunk
+                        async for chunk in synthesizer.open_turn().speak(
+                            "Hello from the test meeting."
+                        )
+                    ]
                 )
         except Exception as error:
             raise _provider_failure(error, f"{settings.tts.provider} TTS") from error
