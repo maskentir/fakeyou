@@ -560,7 +560,7 @@ async def test_stop_mid_tool_drains_the_turn_without_speaking(mode: str) -> None
     await asyncio.wait_for(started.wait(), 2)
     runtime = turns.lifecycle.runtime
     assert runtime is not None
-    await turns.lifecycle.graph.ainvoke(
+    await turns.lifecycle.turn.run(
         TurnInput(
             event=TurnEvent(kind="stop", event_id="s1", at=2.0, payload=""),
             context=ParticipationContext(addressed=False),

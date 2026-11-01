@@ -166,7 +166,7 @@ async def test_stop_during_speech_ends_the_turn_without_a_new_reply() -> None:
     speaker = FakeSpeaker()
     turn_journal = FakeJournal()
 
-    out = await build_turn_graph().ainvoke(
+    out = await build_turn_graph().run(
         stop_input(speaking_generation=4),
         context=TurnRuntime(
             speaker=speaker,

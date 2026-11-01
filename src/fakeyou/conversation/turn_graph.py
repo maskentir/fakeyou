@@ -4,13 +4,12 @@ from collections.abc import (
     Awaitable,
     Callable,
     Coroutine,
-    Hashable,
     Mapping,
 )
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from functools import partial
-from typing import Any, Literal, NotRequired, Protocol, TypedDict
+from typing import Any, Literal, NotRequired, Protocol, TypedDict, cast
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
@@ -1263,8 +1262,8 @@ async def gather_branches(state: TurnGraphState) -> dict[str, Any]:
     return {}
 
 
-async def record_turn_failure(state: TurnGraphState, runtime: Runtime[TurnRuntime]) -> None:
-    runtime.context.journal.record("turn_failed", source="agent", code=state["failure"])
+async def record_turn_failure(state: TurnGraphState, context: TurnRuntime) -> None:
+    context.journal.record("turn_failed", source="agent", code=state["failure"])
 
 
 @dataclass(frozen=True, slots=True)
@@ -1272,61 +1271,75 @@ class _TurnNodes:
     participation_graph: ParticipationGraph
     speech_graph: SpeechGraph
 
-    async def refresh(self, state: TurnGraphState, runtime: Runtime[TurnRuntime]) -> None:
-        _prefetch_judgement(state, runtime.context)
+    async def refresh(self, state: TurnGraphState, context: TurnRuntime) -> None:
+        _prefetch_judgement(state, context)
 
     async def participate(
-        self, state: TurnGraphState, runtime: Runtime[TurnRuntime]
+        self, state: TurnGraphState, context: TurnRuntime
     ) -> dict[str, ParticipationDecision | DecisionSource | str | None]:
-        return await _participate(state, runtime.context, self.participation_graph)
+        return await _participate(state, context, self.participation_graph)
 
     async def speak(
-        self, state: TurnGraphState, runtime: Runtime[TurnRuntime]
+        self, state: TurnGraphState, context: TurnRuntime
     ) -> dict[str, int | str | None | tuple[str, ...]]:
         if state["event"].kind == "stop":
             return {
                 "speaking_generation": await interrupt_speech(
-                    runtime.context.floor, state["speaking_generation"]
+                    context.floor, state["speaking_generation"]
                 )
             }
-        return await _admit_final(state, runtime.context, self.speech_graph)
+        return await _admit_final(state, context, self.speech_graph)
+
+
+class TurnRunner:
+    def __init__(self, nodes: _TurnNodes) -> None:
+        self._nodes = nodes
+
+    async def run(self, model_input: TurnInput, context: TurnRuntime) -> TurnGraphState:
+        optional: dict[str, object] = {
+            key: value for key, value in model_input.items() if key in TurnInput.__optional_keys__
+        }
+        state = cast(
+            TurnGraphState,
+            {
+                **optional,
+                "event": model_input["event"],
+                "context": model_input["context"],
+                "speaking_generation": model_input["speaking_generation"],
+                "transcript_text": "",
+                "participation": None,
+                "failure": None,
+            },
+        )
+        state = cast(TurnGraphState, {**state, **await ingest_turn(state)})
+        ingested = route_after_ingest(state)
+        if ingested == "refresh":
+            await self._nodes.refresh(state, context)
+            return state
+        if ingested == "participation":
+            state = cast(TurnGraphState, {**state, **await self._nodes.participate(state, context)})
+            decided = route_after_participation(state)
+            if decided == "failed":
+                await record_turn_failure(state, context)
+                return state
+            if decided == "end":
+                return state
+        state = cast(TurnGraphState, {**state, **await self._nodes.speak(state, context)})
+        return state
 
 
 def build_turn_graph(
     *,
     participation: ParticipationGraph | None = None,
-) -> CompiledStateGraph[TurnGraphState, TurnRuntime, TurnInput, TurnGraphState]:
-    nodes = _TurnNodes(
-        participation_graph=(
-            build_participation_subgraph() if participation is None else participation
-        ),
-        speech_graph=build_speech_graph(),
+) -> TurnRunner:
+    return TurnRunner(
+        _TurnNodes(
+            participation_graph=(
+                build_participation_subgraph() if participation is None else participation
+            ),
+            speech_graph=build_speech_graph(),
+        )
     )
-    builder = StateGraph(TurnGraphState, input_schema=TurnInput, context_schema=TurnRuntime)
-    builder.add_node("ingest", ingest_turn)
-    builder.add_node("refresh", nodes.refresh)
-    builder.add_node("participation", nodes.participate)
-    builder.add_node("failed", record_turn_failure)
-    builder.add_node("speak", nodes.speak)
-    builder.add_edge(START, "ingest")
-    builder.add_edge("refresh", END)
-    builder.add_edge("failed", END)
-    builder.add_edge("speak", END)
-    _route_participation_directly(builder)
-    return builder.compile()
-
-
-type TurnGraphBuilder = StateGraph[TurnGraphState, TurnRuntime, TurnInput, TurnGraphState]
-_DECISION_ROUTES: dict[Hashable, str] = {"speak": "speak", "failed": "failed", "end": END}
-
-
-def _route_participation_directly(builder: TurnGraphBuilder) -> None:
-    builder.add_conditional_edges(
-        "ingest",
-        route_after_ingest,
-        {"speak": "speak", "participation": "participation", "refresh": "refresh"},
-    )
-    builder.add_conditional_edges("participation", route_after_participation, _DECISION_ROUTES)
 
 
 class _RecordingSink:

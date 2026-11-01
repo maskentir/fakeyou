@@ -55,7 +55,7 @@ def _lifecycle() -> tuple[TurnLifecycle, FakeJournal]:
     return TurnLifecycle(graph, journal=journal, responder=FakeResponder()), journal
 
 
-async def test_bind_attaches_the_graph_and_records_the_runtime() -> None:
+async def test_bind_attaches_the_turn_runner_and_records_the_runtime() -> None:
     lifecycle, journal = _lifecycle()
     session = FakeSession()
 

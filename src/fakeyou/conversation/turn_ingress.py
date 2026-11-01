@@ -3,7 +3,7 @@ import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from functools import partial
-from typing import Any, cast
+from typing import Any
 
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.participation_decision import ParticipationDecision
@@ -335,29 +335,26 @@ class TurnIngress:
     async def _invoke_final(self, event: TranscriptEvent, runtime: TurnRuntime) -> TurnGraphState:
         self._in_flight = True
         try:
-            return cast(
-                TurnGraphState,
-                await self._lifecycle.graph.ainvoke(
-                    TurnInput(
-                        event=TurnEvent(
-                            kind="final",
-                            event_id=event.id,
-                            at=transcript_stamp(event).timestamp(),
-                            payload=event.text,
-                        ),
-                        context=ParticipationContext(
-                            addressed=self._addressed(event.text),
-                            others_speaking=self._others_speaking(),
-                            vocative=self._vocative(event.text),
-                        ),
-                        speaking_generation=self._lifecycle.floor.generation,
-                        transcript_event=event,
-                        history=list(self._lifecycle.events),
-                        addressing_names=self._addressing_names,
-                        admission="rules" if self._rules_admission else "admit",
+            return await self._lifecycle.turn.run(
+                TurnInput(
+                    event=TurnEvent(
+                        kind="final",
+                        event_id=event.id,
+                        at=transcript_stamp(event).timestamp(),
+                        payload=event.text,
                     ),
-                    context=runtime,
+                    context=ParticipationContext(
+                        addressed=self._addressed(event.text),
+                        others_speaking=self._others_speaking(),
+                        vocative=self._vocative(event.text),
+                    ),
+                    speaking_generation=self._lifecycle.floor.generation,
+                    transcript_event=event,
+                    history=list(self._lifecycle.events),
+                    addressing_names=self._addressing_names,
+                    admission="rules" if self._rules_admission else "admit",
                 ),
+                runtime,
             )
         finally:
             self._in_flight = False
@@ -386,7 +383,7 @@ class TurnIngress:
             else None
         )
         events = list(self._lifecycle.events)
-        await self._lifecycle.graph.ainvoke(
+        await self._lifecycle.turn.run(
             TurnInput(
                 event=TurnEvent(
                     kind="interim",
@@ -401,6 +398,6 @@ class TurnIngress:
                 pending=self._in_flight or self._lifecycle.queue.pending,
                 judge_window=window,
             ),
-            context=runtime,
+            runtime,
         )
         return window

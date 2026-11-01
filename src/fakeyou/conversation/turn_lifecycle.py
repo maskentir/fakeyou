@@ -4,8 +4,6 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Literal
 
-from langgraph.graph.state import CompiledStateGraph
-
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.control import ReplyControl
 from fakeyou.conversation.floor import SpeechFloor
@@ -28,9 +26,8 @@ from fakeyou.conversation.turn_graph import (
     SentenceLimits,
     StateSpeech,
     StreamTurnFactory,
-    TurnGraphState,
-    TurnInput,
     TurnPlanning,
+    TurnRunner,
     TurnRuntime,
     WholeResponder,
     WholeTurnFactory,
@@ -165,14 +162,14 @@ class _SessionSpeaker:
 class TurnLifecycle:
     def __init__(
         self,
-        graph: CompiledStateGraph[TurnGraphState, TurnRuntime, TurnInput, TurnGraphState],
+        turn: TurnRunner,
         *,
         journal: JournalSink,
         responder: Responder | None = None,
         judging: TurnJudging | None = None,
         clock: Callable[[], float] = monotonic,
     ) -> None:
-        self._graph = graph
+        self._turn = turn
         self._speech = build_speech_graph()
         self._barge_in = True
         self._shadow = False
@@ -207,8 +204,8 @@ class TurnLifecycle:
         self._runtime: TurnRuntime | None = self._build_runtime()
 
     @property
-    def graph(self) -> CompiledStateGraph[TurnGraphState, TurnRuntime, TurnInput, TurnGraphState]:
-        return self._graph
+    def turn(self) -> TurnRunner:
+        return self._turn
 
     @property
     def journal(self) -> JournalSink:

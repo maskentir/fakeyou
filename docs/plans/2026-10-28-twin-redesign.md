@@ -1237,6 +1237,35 @@ Bentuk PR:
     sama, urutan sama (action, jawaban state, chat, balasan), lookahead dan
     pembersihan sama. Gate: `test_turn_graph*.py` dipindah ke runner dengan
     perilaku yang sama; replay oue-4 tidak memburuk.
+    Temuan (2026-11-01, belum ada perubahan kode): speech graph bukan cuma
+    routing. Saat `respond`/`speak_reply` dipanggil sebagai fungsi biasa
+    (tanpa `ainvoke` LangGraph), `ModelFallbackMiddleware` pada composer
+    rapat tidak menangkap error model utama di jalur streaming; tes
+    `test_streamed_reply_uses_fallback_model` gagal dengan `ProviderFault`
+    dan jawaban maaf. Pembungkus `RunnableLambda` tidak cukup. Di produksi
+    `_run_turn` juga jalan di drain task biasa, jadi `speech.ainvoke` adalah
+    konteks yang membuat fallback berfungsi (`assembly.py:332`). Model-level
+    `with_fallbacks` jalan di konteks biasa (dicek), tetapi `create_agent`
+    perlu `BaseChatModel`, dan itu belum diverifikasi. Keputusan yang
+    dibutuhkan sebelum B1b-2 bisa jalan: (a) fallback pindah ke level model
+    dan composer dipastikan mau menerimanya, atau (b) speech step tetap
+    dijalankan sebagai run LangGraph sampai composer dipecah (track C).
+    Keputusan owner (2026-11-01): pilihan (b). Speech graph dan batas run
+    LangGraph-nya dipertahankan sampai composer dipecah di track C. B1b-2
+    jadi: turn graph (ingest, refresh, participation, speak, failed)
+    diganti fungsi biasa; speech graph tetap, dipanggil dari `_admit_final`
+    dan `_run_turn` lewat `ainvoke` seperti sekarang.
+    Implementasi (2026-11-01): `TurnRunner` (`conversation/turn_graph.py`)
+    menggantikan StateGraph turn. `run(input, context)` menjalankan urutan
+    edge yang sama dengan cabang yang sama: ingest, lalu refresh (interim),
+    atau participation dan speak, atau failed. Node menerima `TurnRuntime`
+    langsung, bukan `Runtime` LangGraph. `TurnLifecycle.turn` dan
+    `TurnIngress` memanggil `run`. Participation subgraph dan speech graph
+    tetap LangGraph (B1b-3 dan track C). Tes yang membaca update per node
+    (`stream_mode="updates"`) ditulis ulang menjadi tes hasil state, karena
+    invariant `speaking_generation` sekarang struktural. Mutation check: buang
+    penyalinan key opsional (38 gagal), dan lewati `refresh` untuk interim
+    (16 gagal). Replay oue-4 identik. Gate penuh 10710 passed.
   - B1b-3, participation sebagai fungsi, penghapusan `TurnLifecycle`,
     `TurnIngress`, `turn_queue.py`, `turn_events.py`, `BargeLatch`,
     `SpeechFloor`, dan `TurnRuntime`, plus dua keputusan owner: final yang
