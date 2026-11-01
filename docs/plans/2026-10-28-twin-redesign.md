@@ -1281,6 +1281,19 @@ Bentuk PR:
     untuk twin tidak lagi membatalkan jawaban yang masih disiapkan (hanya saat
     twin terdengar); chat berjalan di lane sendiri. Ini menyentuh
     `TurnIngress._yield_floor` dan `_chat_turn`.
+    - Aturan final-bukan-untuk-twin, implementasi (2026-11-01): `_yield_floor`
+      hanya membatalkan kalau `session.is_speaking` (twin terdengar). Sebelumnya
+      dua syarat: `is_speaking` atau giliran masih jalan, sehingga final
+      untuk orang lain membatalkan jawaban yang masih disiapkan dan
+      pertanyaannya tidak pernah terjawab. Keputusan owner (2026-11-01): begitu
+      twin bicara lalu diam, final untuk orang lain juga tidak membatalkan, jadi
+      twin menyelesaikan gilirannya. Yang tetap dipotong: twin sedang bicara.
+      Bukti: dua tes baru di `tests/test_turn_graph_barge_in.py` (balasan yang
+      belum mulai, balasan yang sudah jatuh diam); mutasi mengembalikan syarat
+      lama membuat keduanya gagal. Replay oue-4 identik karena sesi itu tidak
+      punya kasus final-untuk-orang-lain saat twin mikir, jadi aturan ini tidak
+      terbukti dari replay melainkan dari tes.
+    - Lane chat: belum dikerjakan.
   - B1b-3c, penghapusan `TurnLifecycle`, `TurnIngress`, `turn_queue.py`,
     `turn_events.py`, `BargeLatch`, dan `TurnRuntime`. Mailbox actor
     (satu task konsumen yang memiliki semua state giliran) belum dibangun;

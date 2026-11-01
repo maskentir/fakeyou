@@ -222,10 +222,10 @@ class OneSentenceResponder:
 
 
 class BargeAudio(PreparedSpeaker):
-    def __init__(self) -> None:
+    def __init__(self, *, speaking: bool = True) -> None:
         self.spoken: list[str] = []
         self.stops = 0
-        self.is_speaking = True
+        self.is_speaking = speaking
 
     @override
     async def speak(self, text: str, **_: Any) -> None:
@@ -245,14 +245,14 @@ class BargeAudio(PreparedSpeaker):
 
 
 def barge_ingress(
-    journal: FakeJournal, addressing_names: tuple[str, ...]
+    journal: FakeJournal, addressing_names: tuple[str, ...], *, speaking: bool = True
 ) -> tuple[TurnIngress, TurnLifecycle, BargeAudio]:
     lifecycle = TurnLifecycle(
         build_turn_graph(),
         journal=journal,
         responder=OneSentenceResponder(),
     )
-    audio = BargeAudio()
+    audio = BargeAudio(speaking=speaking)
     lifecycle.bind(audio)
     return TurnIngress(lifecycle, addressing_names=addressing_names), lifecycle, audio
 
@@ -322,6 +322,37 @@ async def test_unaddressed_final_during_speech_yields_the_floor_and_cancels() ->
     ]
     assert audio.stops == 1
     assert await settle(speech) is False
+
+
+async def test_a_final_for_someone_else_keeps_a_reply_that_has_not_started() -> None:
+    journal = FakeJournal()
+    ingress, lifecycle, audio = barge_ingress(journal, addressing_names=("twin",), speaking=False)
+    speech = await start_speaking(lifecycle)
+
+    decision = await ingress.handle_final(final_event("f1", "Alice, lunch at noon today?"))
+
+    assert decision is not None
+    assert decision.decision == "silent"
+    assert barge_names(journal) == []
+    assert audio.stops == 0
+    assert speech.done() is False
+
+
+async def test_a_final_for_someone_else_keeps_a_reply_that_fell_quiet() -> None:
+    journal = FakeJournal()
+    ingress, lifecycle, audio = barge_ingress(journal, addressing_names=("twin",), speaking=False)
+    speech = await start_speaking(lifecycle)
+    audio.spoken.append("Yes, I am here.")
+    audio.is_speaking = True
+    audio.is_speaking = False
+
+    decision = await ingress.handle_final(final_event("f1", "Alice, lunch at noon today?"))
+
+    assert decision is not None
+    assert decision.decision == "silent"
+    assert barge_names(journal) == []
+    assert audio.stops == 0
+    assert speech.done() is False
 
 
 async def test_interim_during_speech_interrupts_and_journals_the_loop_names() -> None:
