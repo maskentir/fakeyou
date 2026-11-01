@@ -3,6 +3,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 ParticipationAction = Literal["reply", "silent", "clarify"]
+Addressee = Literal["twin", "someone_else", "everyone", "unclear"]
 
 _PARTICIPATION_ACTIONS: dict[str, ParticipationAction] = {
     "speak": "reply",
@@ -17,6 +18,7 @@ class ParticipationDecision(BaseModel):
     decision: Literal["speak", "silent", "clarify"]
     confidence: float = Field(ge=0.0, le=1.0)
     reason_code: str = Field(min_length=1)
+    addressee: Addressee = "unclear"
     backchannel: bool = False
     requests_chat: bool = False
     meet_action: str = "none"

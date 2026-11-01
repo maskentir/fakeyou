@@ -364,12 +364,13 @@ class TurnIngress:
         session = lifecycle.session
         if decision.backchannel or not lifecycle.barge_in or session is None:
             return
-        if not session.is_speaking:
+        if not session.is_speaking and decision.addressee != "twin":
             return
         record_barge_in(
             lifecycle.journal, "final", len(text.split()), interrupted=lifecycle.floor.active
         )
-        await session.stop_playback()
+        if session.is_speaking:
+            await session.stop_playback()
         await cancel_speech(lifecycle.floor, lifecycle.journal, reason="final")
 
     async def _prefetch(self, text: str) -> JudgeWindow | None:

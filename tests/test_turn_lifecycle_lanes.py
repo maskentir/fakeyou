@@ -167,6 +167,8 @@ async def test_a_final_does_not_cancel_a_chat_reply_that_is_still_being_written(
 
     assert accepted
     assert chat.sent == [("Here is the deck link.", "device-budi")]
+    answered = [[event.id for event in call] for call in responder.calls]
+    assert answered.count(["c1"]) == 1
     assert not journal.events("deferred_turn_dropped")
     assert not journal.events("agent_cancelled")
     await turns.close()

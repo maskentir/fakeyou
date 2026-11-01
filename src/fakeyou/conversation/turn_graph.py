@@ -304,6 +304,12 @@ def _turn_current(runtime: TurnRuntime, generation: int, floor_generation: int) 
     return runtime.floor is None or runtime.floor.admits(floor_generation)
 
 
+def _chat_current(runtime: TurnRuntime) -> bool:
+    if _closed(runtime):
+        return False
+    return not _paused(runtime)
+
+
 def _admission_current(runtime: TurnRuntime, generation: int) -> bool:
     if _closed(runtime):
         return False
@@ -331,10 +337,14 @@ def turn_drop_outcome(runtime: TurnRuntime, generation: int) -> tuple[str, str]:
 
 
 def tool_start_hook(
-    runtime: TurnRuntime, generation: int, floor_generation: int, detail: str
+    runtime: TurnRuntime, generation: int, floor_generation: int | None, detail: str
 ) -> ToolStartHook:
     def on_tool_start() -> None:
-        if _turn_current(runtime, generation, floor_generation):
+        if floor_generation is None:
+            if _chat_current(runtime):
+                _move_phase(runtime, "acting", detail)
+                _raise_if_failed(runtime)
+        elif _turn_current(runtime, generation, floor_generation):
             _move_phase(runtime, "acting", detail)
             _raise_if_failed(runtime)
 
@@ -1116,14 +1126,13 @@ async def _deliver_chat(
             "chat_reply_dropped", source="agent", transcript_id=event.id, reason="no_chat_channel"
         )
         return
-    floor_generation = _floor_generation(runtime)
-    hook = tool_start_hook(runtime, generation, floor_generation, event.id)
+    hook = tool_start_hook(runtime, generation, None, event.id)
     reply_event = await with_evidence(runtime, event.text, for_reply(event, planned.plan, outcome))
     reply = await _respond_within(
         factory((reply_event,), hook), event.text, runtime.response_timeout_seconds
     )
-    if not _turn_current(runtime, generation, floor_generation):
-        raise TurnDropped(turn_drop_outcome(runtime, generation)[0])
+    if not _chat_current(runtime):
+        raise TurnDropped("closed" if _closed(runtime) else "paused")
     text = scrub_internal_refs(reply.text)
     sent: CommandOutcome | None = None
     if text:

@@ -69,6 +69,7 @@ def _silenced(judgement: TurnJudgement, reason_code: str) -> ParticipationDecisi
         decision="silent",
         confidence=judgement.confidence,
         reason_code=reason_code,
+        addressee=judgement.addressee,
         backchannel=judgement.backchannel,
     )
 
@@ -97,6 +98,7 @@ def decision_of(
         decision=decision,
         confidence=judgement.confidence,
         reason_code=f"judge_{judgement.action}",
+        addressee=judgement.addressee,
         backchannel=judgement.backchannel,
         requests_chat=judgement.requests_chat,
         meet_action=judgement.meet_action,
@@ -111,7 +113,9 @@ def decision_of(
 def fallback_decision(context: ParticipationContext) -> ParticipationDecision:
     if context.vocative or (context.vocative is None and context.addressed):
         return ParticipationDecision(decision="speak", confidence=1.0, reason_code="fallback_named")
-    return ParticipationDecision(decision="silent", confidence=1.0, reason_code="fallback_unnamed")
+    return ParticipationDecision(
+        decision="silent", confidence=1.0, reason_code="fallback_unnamed", addressee="someone_else"
+    )
 
 
 def _record(
@@ -150,7 +154,9 @@ def _record(
 
 
 def _hold_floor(state: ParticipationState, runtime: ParticipationRuntime) -> ParticipationVerdict:
-    verdict = ParticipationDecision(decision="silent", confidence=1.0, reason_code="floor_occupied")
+    verdict = ParticipationDecision(
+        decision="silent", confidence=1.0, reason_code="floor_occupied", addressee="everyone"
+    )
     return _record(runtime.journal, state, verdict, "floor")
 
 
