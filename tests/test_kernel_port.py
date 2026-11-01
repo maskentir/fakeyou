@@ -7,6 +7,7 @@ from fakeyou.identity.identity import SpeakerRow
 from fakeyou.orchestration.kernel_port import HealthReportingJudge, KernelPort
 from fakeyou.perception.meet_protocol import MeetUser
 from fakeyou.perception.roster import MeetRoster
+from fakeyou.session.contracts import ChatObserved
 from fakeyou.session.world import TWIN, Ref
 from tests._persistence_fakes import RecordingJournal
 
@@ -145,8 +146,12 @@ def test_a_stale_protocol_reaches_presence() -> None:
 
 def test_own_and_backlog_chat_are_kept_as_dialogue() -> None:
     kernel = port()
-    kernel.chat(message_id="m1", device_id="dev-twin", text="sent", own=True, backlog=False)
-    kernel.chat(message_id="m0", device_id="dev-ayu", text="old", own=False, backlog=True)
+    kernel.chat(
+        ChatObserved(message_id="m1", device_id="dev-twin", text="sent", own=True, backlog=False)
+    )
+    kernel.chat(
+        ChatObserved(message_id="m0", device_id="dev-ayu", text="old", own=False, backlog=True)
+    )
     kernel.drain()
 
     lines = kernel.state.dialogue.lines
@@ -211,7 +216,9 @@ def test_degraded_identity_attributes_nobody() -> None:
     kernel = port()
     joined(kernel)
     kernel.chat(
-        message_id="m1", device_id="dev-ayu", text="Rani, hand up", own=False, backlog=False
+        ChatObserved(
+            message_id="m1", device_id="dev-ayu", text="Rani, hand up", own=False, backlog=False
+        )
     )
     kernel.source_health("speaker_registry", "down")
     kernel.drain()

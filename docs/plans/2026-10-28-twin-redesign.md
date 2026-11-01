@@ -1058,6 +1058,161 @@ judge, dan bagian terbaik LiveKit berada di cloud atau berlisensi khusus.
 LangGraph keluar dari loop ini karena hanya bisa berhenti di batas step;
 composer tetap `create_agent` dengan `stream_mode="messages"`.
 
+#### Desain B1 (2026-11-01)
+
+Peta perilaku jalur giliran di `main` (0a4c33b) menghasilkan fakta yang
+mengubah titik awal:
+
+- LangGraph di jalur real-time hanya routing: turn graph, participation
+  subgraph, dan speech graph tidak punya checkpointer, `interrupt`, atau
+  thread. Logika sebenarnya ada di fungsi biasa di `turn_graph.py`
+  (`_admit_final`, `_run_turn`, `act_first`, `answer_state`, `_deliver_chat`,
+  `_speak_reply`, `_deliver`, `TurnSink`, recovery). Tes checkpoint menguji
+  sesuatu yang tidak pernah dipakai produksi.
+- Ada enam penghitung generasi sekaligus: generasi floor, jumlah final yang
+  di-admit (membentuk `request_id` `transcript_id:n`, dibaca `report.py`),
+  `BargeLatch.stream_stops`, `_generation` dan `_stop_epoch` playback, dan
+  versi early commit. "Satu playback aktif" hanya benar karena konstruksi.
+- Lapisan giliran tidak pernah menerima event playback; ia menunggu
+  `speak_prepared` kembali dan mem-poll `is_speaking`. Setelah
+  `PlaybackEngine.stop()`, `speak_prepared` kembali normal, itulah sebabnya
+  `stream_stops` ada.
+- Kernel tidak memutuskan apa pun. `dialogue.twin_playing`, `floor_holder`,
+  `interims`, dan `agenda.paused` tidak dibaca siapa pun: salinan kedua state
+  floor. Tidak ada observasi VAD. `KernelPort.drain()` tidak dipanggil.
+- Arbitrasi `TranscriptDrain` tidak berefek di mode mixed (selalu satu
+  elemen); di mode per-stream ia membuang final kedua yang keluar di jendela
+  merge yang sama tanpa pernah dinilai.
+- Bug yang ditemukan: giliran early commit selalu `UNATTRIBUTED` (id
+  sintetisnya tidak pernah masuk kernel) dan final yang diverifikasi tidak
+  sampai ke moment detector; loop STT menunggu judge (≤ 4 s) dan moment judge
+  sebelum membaca interim berikutnya, jadi barge-in ikut antre; withdraw early
+  commit membatalkan apa pun yang memegang floor, bukan giliran early itu;
+  twin yang di-pause masih bisa mengucapkan jawaban state dan permintaan maaf
+  recovery; verdict judge barge-in dibuang sebagai basi setiap kali generasi
+  floor bergerak, termasuk saat balasan sekadar selesai; `_in_flight` boolean
+  padahal early commit dan final bisa dinilai bersamaan; `QuietFloor` diukur
+  dari awal kalimat twin, bukan akhir playback.
+
+Bentuk actor:
+
+- Satu `FloorActor` per sesi (`conversation/floor.py`) dengan satu mailbox
+  dan satu task konsumen. Semua state giliran ditulis hanya di loop itu:
+  giliran aktif, batch final yang menunggu, lane chat dan perhatian, quiet
+  floor, state barge-in, pause, twin sedang terdengar, kandidat early commit,
+  dan id yang sudah dilihat (dibatasi). Tidak ada lock; pembacaan sinkron
+  dari task lain aman karena satu event loop.
+- Identitas giliran adalah `TurnId` (`transcript_id`, `n`), dengan `n`
+  jumlah admission seperti sekarang, jadi `request_id` tetap
+  `transcript_id:n`. Setiap hasil dari task anak (verdict judge, giliran
+  selesai, kalimat mulai, playback) membawa `TurnId`; pesan untuk giliran
+  yang bukan giliran aktif dibuang. Satu identitas ini menggantikan generasi
+  floor, `AdmittedFinals`, `stream_stops`, dan versi early commit. Generasi
+  internal playback tetap milik `PlaybackEngine`.
+- Lease bicara: hanya actor yang memanggil `stop` dan `play_cue`; sink
+  kalimat bertanya `floor.may_speak(turn_id)` tepat sebelum
+  `speak_prepared`. Yield mencabut lease, menghentikan playback, lalu
+  membatalkan task giliran, jadi tidak ada kalimat yang keluar setelah yield
+  walaupun `speak_prepared` kembali normal.
+- Status terdengar datang dari event playback (`playback_started`,
+  `finished`, `dropped`), bukan polling `is_speaking`; quiet floor diukur dari
+  akhir playback.
+- Eksekusi giliran pindah dari `turn_graph.py` ke `TurnRunner`
+  (`conversation/turn_runner.py`): fungsi yang sama tanpa StateGraph, urutan
+  sama (action, jawaban state, chat, balasan), lookahead dan pembersihan
+  kalimat yang disiapkan sama. Participation menjadi fungsi
+  (`participate(...)`) di atas `decision_of`, `fallback_decision`, dan
+  `JudgeCache` yang ada.
+- Pintu masuk lewat kernel: adapter hanya memanggil `KernelPort` (observasi
+  baru `VoiceActivityObserved`, `AttentionRaised`); listener kernel
+  meneruskan event giliran ke mailbox actor setelah direduksi, jadi
+  `kernel.actor(...)` dan state lain sudah memuat observasi itu ketika actor
+  membacanya. Loop STT hanya menawarkan observasi dan tidak pernah menunggu
+  judge. Runtime tidak lagi memanggil `receive_chat`, `receive_attention`,
+  `take_ready`, atau `is_busy`; pause dan resume menjadi observasi (lobby,
+  reconnect) yang dibaca actor. Harness replay memakai jalur yang sama.
+- Early commit menjadi state actor: hold setelah VAD stop, versi dibuang
+  oleh interim atau tepi VAD apa pun, withdraw menargetkan `TurnId` giliran
+  early itu, final yang diverifikasi tetap diteruskan ke moment detector,
+  dan event early ditawarkan ke kernel dengan atribusi voice activity
+  supaya action tidak lagi `UNATTRIBUTED`. Commit lokal berbasis prosodi tetap
+  B2.
+- Mode per-stream: setiap final dinilai; final yang keluar bersamaan masuk
+  batch yang sama seperti final yang di-admit sebelum drain berjalan.
+- Pause berlaku untuk semua ucapan, termasuk jawaban state dan permintaan
+  maaf recovery, dan membatalkan task giliran yang sedang berjalan.
+- Keputusan owner (2026-11-01): final yang tidak ditujukan ke twin tidak
+  lagi membatalkan jawaban yang masih disiapkan; hanya saat twin terdengar
+  final seperti itu membuatnya berhenti (barge-in dari suara tetap B3).
+  Sekarang jawaban dibatalkan dan pertanyaan awal tidak pernah dijawab.
+- Keputusan owner (2026-11-01): balasan chat berjalan di lane sendiri,
+  paralel dengan giliran suara, karena tidak butuh lease bicara; hanya close
+  dan pause yang menghentikannya. Sekarang final suara membatalkannya, retry
+  sekali, lalu dibuang.
+
+Journal yang dibaca `baseline.py`, `compare.py`, `report.py`, dan fixture
+replay tetap sama nama dan field-nya: `transcript_finalized`,
+`policy_decided` (semua field), `agent_*` dengan `request_id`
+`transcript_id:n`, `barge_in_detected` dengan `interrupted_transcript_id`,
+`barge_in_rejected`, `early_turn_started/cancelled/verified`,
+`answer_sentence_emitted`, `reply_plan_observed`, `speech_rejected`,
+`playback_*`, `synthesis_*`, `plan_selected`, `deferred_turn_*`,
+`thinking_cue_*`, `sentence_dropped`, `turn_failed`. `turn_event_dropped`
+hilang bersama arbitrasi (tidak ada konsumen).
+
+Dihapus setelah B1: `TurnLifecycle`, `TurnIngress`, `turn_queue.py`
+(`PendingFinals`, `DeferredTurns`, `QuietFloor`, `AdmittedFinals`),
+`SpeechFloor`, `BargeLatch`, `TurnRuntime`, ketiga StateGraph,
+`EarlyTurns`, arbitrasi `TranscriptDrain` dan `turn_events.py`, state floor
+kernel yang tidak dibaca (diganti fakta dari actor bila dibutuhkan C6).
+
+Bentuk PR:
+
+- B1a, pintu masuk lewat kernel. Observasi VAD, listener kernel ke satu
+  `TurnFeed`, transcript, interim, VAD, dan chat hanya dikirim sebagai
+  observasi; `TurnFeed` sementara memanggil API `TurnIngress` yang ada.
+  Perilaku giliran sama; loop STT tidak lagi menunggu judge. Gate: suite,
+  replay oue-4 tidak memburuk, kontrak import bahwa drain transcript tidak
+  mengimpor `conversation`.
+- B1a, implementasi (2026-11-01): `KernelPort` menyimpan payload giliran
+  (`HeardVoice`, `HeardInterim`, `HeardFinal`, `HeardChat`) per `event_id`
+  dan meneruskannya ke konsumen giliran dari listener kernel setelah
+  reduksi, jadi `kernel.actor(...)` sudah memuat baris itu saat giliran
+  membacanya (dites). Observasi baru `VoiceActivityObserved` (sumber
+  `audio`). `TurnFeed` punya tiga lane berurutan: suara (VAD, interim, dan
+  `EarlyTurns.settle` supaya urutan early commit dengan interim tetap),
+  final, dan moment. Interim tidak lagi menunggu judge final; moment
+  detector tidak lagi menahan final berikutnya; final yang ditelan early
+  commit sekarang tetap sampai ke moment detector; di mode per-stream setiap
+  final dinilai (arbitrasi `TranscriptDrain` dan `turn_events.arbitrate`
+  dihapus). Error konsumen tercatat lewat `guard_consumer` per item (timeout
+  10 s seperti sebelumnya) dan lane tetap jalan. `KernelPort.settled()`
+  menunggu mailbox dan semua lane kosong; harness replay dan tes memakainya.
+  Runtime mengirim chat sebagai `ChatObserved` plus payload, tidak lagi
+  memanggil `receive_chat`. Replay oue-4: semua metrik sama persis dengan
+  sebelum B1a. Perhatian (moment dan layar), pause/resume, dan `is_busy`
+  masih dari runtime; pindah ke actor di B1b karena gating-nya milik
+  actor. Hasil review: early commit kini masuk lewat lane final, jadi tidak
+  bisa menyalip final yang masih dinilai (dulu tidak mungkin karena loop STT
+  menunggu, setelah lane terpisah jadi mungkin); chat dan moment ikut urutan
+  kernel (lewat lane suara, moment setelah `receive_final`); lane tidak mati
+  oleh `CancelledError` dari pekerjaannya sendiri dan tidak hidup lagi
+  setelah `close`; lane ditutup sebelum `EarlyTurns`; konsumen giliran yang
+  error tidak menghentikan task kernel, dan task kernel yang mati tercatat
+  sebagai fault; payload yang terbuang karena batas 512 tercatat
+  (`turn_payload_dropped`); setelah call berakhir sinyal giliran tidak
+  diteruskan. Interim yang dibuang mailbox saat jenuh tetap hilang (sifat
+  ephemeral kernel).
+- B1b, actor. `FloorActor` dan `TurnRunner` menggantikan lifecycle, ingress,
+  queue, floor, latch, dan ketiga graph; `TurnFeed` menulis ke mailbox
+  actor; perbaikan bug di atas. Gate: tes property (Hypothesis, urutan acak
+  VAD, interim, final, chat, perhatian, verdict, event playback, pause)
+  bahwa tidak pernah ada dua giliran aktif, tidak ada `speak_prepared` setelah
+  yield, tidak ada ucapan saat pause; replay oue-4 tidak memburuk.
+- B1c, early commit di actor dan pembersihan sisa (`EarlyTurns`,
+  arbitrasi, state floor kernel, tes checkpoint). Gate: alias
+  `early_turn_verified` di baseline dan fixture tetap benar; replay oue-4.
+
 ### B3: Barge-in dari suara
 
 - Audio capture hanya berisi suara remote, jadi VAD onset selama twin

@@ -5,6 +5,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, NonNegativeInt
 SCHEMA_VERSION: Literal[1] = 1
 
 Source = Literal[
+    "audio",
     "stt",
     "meet_protocol",
     "meet_dom",
@@ -75,6 +76,11 @@ class TranscriptObserved(Contract):
     language: str | None = None
 
 
+class VoiceActivityObserved(Contract):
+    kind: Literal["voice_activity"] = "voice_activity"
+    active: bool
+
+
 class ChatObserved(Contract):
     kind: Literal["chat"] = "chat"
     message_id: NonEmpty
@@ -122,6 +128,7 @@ Observation = Annotated[
     | AudioStreamObserved
     | VoiceTrackObserved
     | TranscriptObserved
+    | VoiceActivityObserved
     | ChatObserved
     | ScreenObserved
     | CallStateObserved

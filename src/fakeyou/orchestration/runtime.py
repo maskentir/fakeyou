@@ -110,6 +110,7 @@ from fakeyou.perception.sensors import (
     load_perception_script,
 )
 from fakeyou.perception.timeline import ChatReceived, ScreenRead, ScreenShown, TimelineEvent
+from fakeyou.session.contracts import ChatObserved
 
 
 @asynccontextmanager
@@ -181,6 +182,19 @@ class MonitorScan:
 
 
 _LIVE_PHASES: tuple[PublicPhase, ...] = ("admitted", "active")
+
+
+def _chat_event(line: ChatLine) -> TranscriptEvent:
+    return TranscriptEvent(
+        id=line.ref,
+        timestamp=line.sent_at.isoformat(),
+        source="meeting_chat",
+        text=line.text,
+        finalized=True,
+        participant_id=line.sender.participant_id,
+        speaker_evidence_id=None,
+        display_claim=line.sender.name or None,
+    )
 
 
 @dataclass
@@ -703,35 +717,25 @@ class MeetingWorker:
             self.kernel.screen(segment)
 
     def _on_chat_line(self, line: ChatLine) -> None:
+        heard = None if line.own or line.backlog else _chat_event(line)
+        if heard is not None and self.conversation is not None:
+            self.record(
+                "chat_line_observed",
+                source="perception",
+                ref=line.ref,
+                chars=len(line.text),
+            )
         if self.kernel is not None:
             self.kernel.chat(
-                message_id=line.ref,
-                device_id=line.sender.participant_id,
-                text=line.text,
-                own=line.own,
-                backlog=line.backlog,
+                ChatObserved(
+                    message_id=line.ref,
+                    device_id=line.sender.participant_id,
+                    text=line.text,
+                    own=line.own,
+                    backlog=line.backlog,
+                ),
+                heard=heard,
             )
-        conversation = self.conversation
-        if conversation is None or line.own or line.backlog:
-            return
-        self.record(
-            "chat_line_observed",
-            source="perception",
-            ref=line.ref,
-            chars=len(line.text),
-        )
-        conversation.receive_chat(
-            TranscriptEvent(
-                id=line.ref,
-                timestamp=line.sent_at.isoformat(),
-                source="meeting_chat",
-                text=line.text,
-                finalized=True,
-                participant_id=line.sender.participant_id,
-                speaker_evidence_id=None,
-                display_claim=line.sender.name or None,
-            )
-        )
 
     def watch_roster_keywords(self) -> None:
         perception = self.perception

@@ -24,7 +24,7 @@ async def test_stream_callback_surfaces_refusal_reason_and_roster_size(tmp_path:
     path = meeting_record_path(tmp_path, SessionId("meeting-9"))
     record = MeetingRecord(path, now=lambda: now)
     callback = build_transcript_callback(
-        sinks=TranscriptSinks(journal, record, None),
+        sinks=TranscriptSinks(journal, record),
         binder=SlotBinder(),
         voice_activity=None,
         options=DrainOptions(per_stream_enabled=True),
@@ -62,7 +62,7 @@ async def test_stream_callback_surfaces_bound_reason_and_roster_size(tmp_path: P
     binder.update_roster(["host"])
     binder.observe_stream(0, [111])
     callback = build_transcript_callback(
-        sinks=TranscriptSinks(journal, record, None),
+        sinks=TranscriptSinks(journal, record),
         binder=binder,
         voice_activity=None,
         options=DrainOptions(per_stream_enabled=True),
@@ -101,7 +101,7 @@ async def test_stream_callback_journals_csrc_and_tenure_events(tmp_path: Path) -
     binder.update_roster(["host", "guest"])
     binder.observe_stream(0, [111])
     callback = build_transcript_callback(
-        sinks=TranscriptSinks(journal, record, None),
+        sinks=TranscriptSinks(journal, record),
         binder=binder,
         voice_activity=None,
         options=DrainOptions(per_stream_enabled=True),
@@ -147,7 +147,7 @@ async def test_stream_callback_journals_late_arrival_inversion(tmp_path: Path) -
     binder = SlotBinder()
     binder.update_roster(["host", "guest"])
     callback = build_transcript_callback(
-        sinks=TranscriptSinks(journal, record, None),
+        sinks=TranscriptSinks(journal, record),
         binder=binder,
         voice_activity=None,
         options=DrainOptions(per_stream_enabled=True),
@@ -197,7 +197,7 @@ async def test_stream_callback_skips_inversion_for_ordered_arrivals(tmp_path: Pa
     binder = SlotBinder()
     binder.update_roster(["host", "guest"])
     callback = build_transcript_callback(
-        sinks=TranscriptSinks(journal, record, None),
+        sinks=TranscriptSinks(journal, record),
         binder=binder,
         voice_activity=None,
         options=DrainOptions(per_stream_enabled=True),

@@ -256,6 +256,7 @@ async def join_persona_conversation(
                 timestamp=f"2026-09-30T00:00:0{index}+00:00",
             )
             await kwargs["open_audio"].keywords["callbacks"].on_transcript(update)
+        await kwargs["kernel"].settled()
         await asyncio.wait_for(
             loop.lifecycle.wait_idle() if settle is None else settle(),
             timeout=SETTLE_TIMEOUT_SECONDS,

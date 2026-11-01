@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 from fakeyou.meet.meet import DEFAULT_MEET_SIGNALS
-from fakeyou.orchestration.kernel_port import KernelPort
+from fakeyou.orchestration.kernel_port import HeardChat, KernelPort, TurnSignal
 from fakeyou.orchestration.runtime import MeetingWorker
 from fakeyou.perception.percepts import ChatLine, IncomingChat, ParticipantRef, ScreenSegment
 from fakeyou.perception.timeline import MeetingTimeline
@@ -68,17 +68,38 @@ def _chat(timeline: MeetingTimeline, text: str, *, own: bool = False) -> ChatLin
     return line
 
 
-async def test_a_chat_line_reaches_the_conversation(journal: RecordingJournal) -> None:
+class HeardChats:
+    def __init__(self) -> None:
+        self.texts: list[str] = []
+
+    def accept(self, signal: TurnSignal) -> None:
+        if isinstance(signal, HeardChat):
+            self.texts.append(signal.event.text)
+
+    async def idle(self) -> None:
+        return None
+
+
+def _heard_chats(worker: MeetingWorker) -> HeardChats:
+    kernel = KernelPort.for_meeting("meeting-9")
+    heard = HeardChats()
+    kernel.on_turn(heard)
+    worker.kernel = kernel
+    return heard
+
+
+async def test_a_chat_line_reaches_the_turns_through_the_kernel(journal: RecordingJournal) -> None:
     clock = FakeClock()
     timeline = MeetingTimeline(journal=journal)
     worker = _worker(clock, journal, timeline)
+    heard = _heard_chats(worker)
     worker.watch_meeting_events()
 
     _chat(timeline, "Rani, can you share the deck?")
-    await asyncio.sleep(0)
+    await cast(KernelPort, worker.kernel).settled()
 
-    conversation = cast(FakeConversation, worker.conversation)
-    assert conversation.chat == ["Rani, can you share the deck?"]
+    assert heard.texts == ["Rani, can you share the deck?"]
+    assert cast(FakeConversation, worker.conversation).chat == []
     assert journal.events("chat_line_observed")
 
 
@@ -86,12 +107,16 @@ async def test_the_twin_own_chat_is_not_answered(journal: RecordingJournal) -> N
     clock = FakeClock()
     timeline = MeetingTimeline(journal=journal)
     worker = _worker(clock, journal, timeline)
+    heard = _heard_chats(worker)
     worker.watch_meeting_events()
 
     _chat(timeline, "Rani, here is the deck", own=True)
-    await asyncio.sleep(0)
+    await cast(KernelPort, worker.kernel).settled()
 
-    assert cast(FakeConversation, worker.conversation).chat == []
+    assert heard.texts == []
+    assert [line.text for line in cast(KernelPort, worker.kernel).state.dialogue.lines] == [
+        "Rani, here is the deck"
+    ]
 
 
 async def test_the_twin_is_offered_the_room_and_the_rate_limit_holds(

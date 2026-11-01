@@ -31,10 +31,6 @@ from fakeyou.conversation.middleware import (
 )
 from fakeyou.conversation.turn_events import (
     TurnEvent,
-    TurnEventKind,
-    TurnState,
-    apply_arbitration,
-    arbitrate,
 )
 from fakeyou.conversation.turn_graph import ActiveSpeech, TurnInput, record_barge_in
 from fakeyou.foundation.participation import ParticipationContext
@@ -476,63 +472,6 @@ async def test_a_backchannel_while_speaking_does_not_yield_the_floor() -> None:
     assert responder.calls == []
     assert audio.stops == 0
     await loop.lifecycle.close()
-
-
-def _ev(kind: TurnEventKind, event_id: str, at: float) -> TurnEvent:
-    return TurnEvent(kind=kind, event_id=event_id, at=at, payload="")
-
-
-class ArbitrationJournal:
-    def __init__(self) -> None:
-        self.names: list[str] = []
-        self.fields: list[dict[str, Any]] = []
-
-    def record(self, event: str, **fields: Any) -> None:
-        self.names.append(event)
-        self.fields.append(fields)
-
-
-def empty_turn_state() -> TurnState:
-    return TurnState(last_event_id=None, kind=None)
-
-
-def test_stop_beats_final_beats_interim_and_vad() -> None:
-    result = arbitrate(
-        [
-            _ev("vad", "v1", 1.0),
-            _ev("interim", "i1", 2.0),
-            _ev("final", "f1", 3.0),
-            _ev("stop", "s1", 0.5),
-        ]
-    )
-    assert result.winner is not None
-    assert result.winner.event_id == "s1"
-    assert {e.event_id for e in result.journaled} == {"v1", "i1", "f1"}
-
-
-def test_losing_events_are_journaled_without_touching_state() -> None:
-    journal = ArbitrationJournal()
-    before = empty_turn_state()
-    result = arbitrate([_ev("final", "f1", 2.0), _ev("interim", "i1", 1.0)])
-    after = apply_arbitration(before, result, journal)
-    assert after["last_event_id"] == "f1"
-    assert journal.names == ["turn_event_dropped"]
-    assert journal.fields[0]["event_id"] == "i1"
-    assert journal.fields[0]["winner_event_id"] == "f1"
-
-
-def test_latest_event_wins_within_one_priority() -> None:
-    result = arbitrate([_ev("final", "f1", 1.0), _ev("final", "f2", 2.0)])
-    assert result.winner is not None
-    assert result.winner.event_id == "f2"
-    assert arbitrate([]).winner is None
-
-
-def test_applied_winner_records_its_kind() -> None:
-    journal = ArbitrationJournal()
-    after = apply_arbitration(empty_turn_state(), arbitrate([_ev("stop", "s1", 1.0)]), journal)
-    assert after["last_event_id"] == "s1"
-    assert after["kind"] == "stop"
 
 
 @pytest.mark.parametrize("language", ["id", "en"])

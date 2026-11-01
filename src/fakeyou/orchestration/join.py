@@ -73,6 +73,7 @@ from fakeyou.orchestration.transcript import (
     TranscriptSinks,
     build_transcript_callback,
 )
+from fakeyou.orchestration.turn_feed import EarlyCommit, TurnFeed
 from fakeyou.perception.percepts import IncomingChat, ParticipantRef
 from fakeyou.perception.roster import MeetRoster
 from fakeyou.persistence.audio_persist import SlotAudioWriter
@@ -395,24 +396,30 @@ def _build_audio_factory(
     log_playback = partial(_log_playback_event, run)
     stream_binder = SlotBinder(capacity=STREAM_FLEET_SLOTS, registry=registry)
     judge = prepared.request.settings.turn_judge
+    per_stream = prepared.request.settings.conversation.per_stream_enabled
     transcript = build_transcript_callback(
         sinks=TranscriptSinks(
-            journal=run.journal,
-            record=run.record,
-            conversation=run.conversation.ingress if run.conversation is not None else None,
-            faults=run.faults,
-            on_final=_moment_observer(run),
-            kernel=run.kernel,
+            journal=run.journal, record=run.record, faults=run.faults, kernel=run.kernel
         ),
         binder=stream_binder,
         voice_activity=run.voice_activity,
         scoring=LiveScoring(run.voiceprint_live, registry),
-        options=DrainOptions(
-            per_stream_enabled=prepared.request.settings.conversation.per_stream_enabled,
-            early_hold_seconds=(judge.commit_hold_seconds if judge.early_commit_enabled else None),
-        ),
+        options=DrainOptions(per_stream_enabled=per_stream),
     )
-    resources.push_async_callback(transcript.close)
+    if run.conversation is not None and run.kernel is not None:
+        feed = TurnFeed(
+            run.conversation.ingress,
+            journal=run.journal,
+            faults=run.faults,
+            early=(
+                EarlyCommit(judge.commit_hold_seconds, transcript.early_event)
+                if judge.early_commit_enabled and not per_stream
+                else None
+            ),
+            on_final=_moment_observer(run),
+        )
+        feed.attach(run.kernel)
+        resources.push_async_callback(feed.close)
 
     audio_recorder: SlotAudioWriter | None = None
     if (
@@ -445,7 +452,7 @@ def _build_audio_factory(
             speech_language=prepared.request.settings.speech.language,
         ),
     )
-    if prepared.request.settings.conversation.per_stream_enabled:
+    if per_stream:
         run.audio_factory = partial(
             open_stream_fleet,
             topology=FleetTopology(stream_binder, STREAM_FLEET_SLOTS, audio_recorder),

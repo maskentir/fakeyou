@@ -1,13 +1,18 @@
 import asyncio
 import uuid
+from collections import OrderedDict
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, suppress
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
+from typing import Protocol
 
 from fakeyou.audio.playback import PlaybackEvent
 from fakeyou.conversation.turn_judge import JudgeWindow, TurnJudge, TurnJudgement
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.identity.identity import SpeakerRow
+from fakeyou.observability.faults import ConsumerSink, guard_observer, record_consumer_fault
 from fakeyou.observability.journal import Journal
 from fakeyou.perception.percepts import ScreenSegment
 from fakeyou.perception.roster import MeetRoster
@@ -30,6 +35,7 @@ from fakeyou.session.contracts import (
     SourceHealthObserved,
     SourceStatus,
     TranscriptObserved,
+    VoiceActivityObserved,
     VoiceTrackObserved,
 )
 from fakeyou.session.health import Mode, modes, side_effects_allowed
@@ -44,6 +50,38 @@ _PLAYBACK_PHASES: dict[str, PlaybackPhase] = {
     "playback_dropped": "dropped",
     "playback_failed": "failed",
 }
+
+
+TURN_PAYLOAD_LIMIT = 512
+
+
+@dataclass(frozen=True, slots=True)
+class HeardVoice:
+    active: bool
+
+
+@dataclass(frozen=True, slots=True)
+class HeardInterim:
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class HeardFinal:
+    event: TranscriptEvent
+
+
+@dataclass(frozen=True, slots=True)
+class HeardChat:
+    event: TranscriptEvent
+
+
+TurnSignal = HeardVoice | HeardInterim | HeardFinal | HeardChat
+
+
+class TurnConsumer(Protocol):
+    def accept(self, signal: TurnSignal) -> None: ...
+
+    async def idle(self) -> None: ...
 
 
 def roster_observations(roster: MeetRoster) -> tuple[Observation, ...]:
@@ -96,7 +134,10 @@ class KernelPort:
         self._journal = journal
         self._modes: frozenset[Mode] = frozenset()
         self._health: dict[Source, SourceStatus] = {}
+        self._turn_payloads: OrderedDict[str, TurnSignal] = OrderedDict()
+        self._turn_consumers: list[TurnConsumer] = []
         kernel.subscribe(self._note_modes)
+        kernel.subscribe(self._forward_turn)
         self._mailbox = mailbox or Mailbox()
         self._clock = clock
         self._browser_epoch = 0
@@ -135,6 +176,45 @@ class KernelPort:
                 kernel_seq=state.seq,
             )
 
+    def on_turn(self, consumer: TurnConsumer) -> None:
+        self._turn_consumers.append(consumer)
+
+    async def settled(self) -> None:
+        self.drain()
+        for consumer in self._turn_consumers:
+            await consumer.idle()
+
+    def _forward_turn(self, state: SessionState, event: SessionEvent) -> None:
+        signal = self._turn_payloads.pop(event.event_id, None)
+        if signal is None or state.terminal:
+            return
+        sink = ConsumerSink(journal=self._journal)
+        for consumer in self._turn_consumers:
+            guard_observer(
+                partial(consumer.accept, signal), sink=sink, source="agent", detail="turn_consumer"
+            )
+
+    def _offer_turn(
+        self,
+        source: Source,
+        observation: Observation,
+        signal: TurnSignal,
+        *,
+        event_id: str | None = None,
+        correlation_id: str | None = None,
+    ) -> None:
+        key = event_id or uuid.uuid4().hex
+        if self._turn_consumers:
+            self._turn_payloads[key] = signal
+            self._turn_payloads.move_to_end(key)
+            while len(self._turn_payloads) > TURN_PAYLOAD_LIMIT:
+                _key, evicted = self._turn_payloads.popitem(last=False)
+                if self._journal is not None:
+                    self._journal.record(
+                        "turn_payload_dropped", source="agent", kind=type(evicted).__name__
+                    )
+        self.observe(source, observation, event_id=key, correlation_id=correlation_id)
+
     @property
     def attempt_id(self) -> str:
         return self._kernel.attempt_id
@@ -165,12 +245,25 @@ class KernelPort:
     @asynccontextmanager
     async def running(self) -> AsyncIterator[None]:
         task = asyncio.create_task(self._kernel.run(self._mailbox), name="session-kernel")
+        task.add_done_callback(self._note_stopped)
         try:
             yield
         finally:
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
+
+    def _note_stopped(self, task: asyncio.Task[None]) -> None:
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None and self._journal is not None:
+            record_consumer_fault(
+                ConsumerSink(journal=self._journal),
+                source="runtime",
+                detail="session_kernel",
+                error=error,
+            )
 
     def drain(self) -> None:
         while (event := self._mailbox.take_nowait()) is not None:
@@ -204,28 +297,32 @@ class KernelPort:
     def transcript(self, event: TranscriptEvent, row: SpeakerRow | None) -> None:
         if row is not None:
             self.observe("speaker_registry", voice_track_observation(row))
-        self.observe(
-            "stt",
-            transcript_observation(event, row.uuid if row is not None else None),
-            event_id=f"{event.id}:{'final' if event.finalized else 'interim'}:{event.text}",
-            correlation_id=event.id,
+        observation = transcript_observation(event, row.uuid if row is not None else None)
+        event_id = f"{event.id}:{'final' if event.finalized else 'interim'}:{event.text}"
+        if not event.finalized:
+            self.observe("stt", observation, event_id=event_id, correlation_id=event.id)
+            return
+        self._offer_turn(
+            "stt", observation, HeardFinal(event), event_id=event_id, correlation_id=event.id
         )
 
     def interim(self, text: str) -> None:
         self._interims += 1
-        self.observe(
+        self._offer_turn(
             "stt",
             TranscriptObserved(transcript_id=f"interim-{self._interims}", text=text, final=False),
+            HeardInterim(text),
         )
 
-    def chat(self, *, message_id: str, device_id: str, text: str, own: bool, backlog: bool) -> None:
-        self.observe(
-            "meet_protocol",
-            ChatObserved(
-                message_id=message_id, device_id=device_id, text=text, own=own, backlog=backlog
-            ),
-            event_id=f"chat:{message_id}",
-        )
+    def voice(self, *, active: bool) -> None:
+        self._offer_turn("audio", VoiceActivityObserved(active=active), HeardVoice(active))
+
+    def chat(self, observation: ChatObserved, *, heard: TranscriptEvent | None = None) -> None:
+        event_id = f"chat:{observation.message_id}"
+        if heard is None:
+            self.observe("meet_protocol", observation, event_id=event_id)
+        else:
+            self._offer_turn("meet_protocol", observation, HeardChat(heard), event_id=event_id)
 
     def screen(self, segment: ScreenSegment) -> None:
         reading = segment.reading
