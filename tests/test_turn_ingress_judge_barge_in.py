@@ -1,5 +1,5 @@
 import asyncio
-from typing import Any
+from typing import Any, override
 
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.meeting_messages import NoHistory
@@ -10,14 +10,16 @@ from fakeyou.conversation.turn_ingress import TurnIngress
 from fakeyou.conversation.turn_judge import JudgeCache, WindowSource
 from fakeyou.conversation.turn_lifecycle import TurnLifecycle
 from tests._conversation_fakes import ScriptedJudge, judged
+from tests._prepared_support import PreparedSpeaker
 
 
-class FakeSession:
+class FakeSession(PreparedSpeaker):
     def __init__(self) -> None:
         self.spoken: list[str] = []
         self.stops = 0
         self.is_speaking = True
 
+    @override
     async def speak(self, text: str, **_: Any) -> None:
         self.spoken.append(text)
 

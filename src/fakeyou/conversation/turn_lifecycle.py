@@ -53,6 +53,7 @@ from fakeyou.foundation.triggers import ReplyChannel
 from fakeyou.observability.faults import ConsumerSink, guard_observer
 from fakeyou.observability.journal import Journal
 from fakeyou.observability.provider_faults import classify_exception
+from fakeyou.speech.contract import PreparedSpeech
 
 TransitionObserver = Callable[[ConversationPhase, ConversationPhase, str], None]
 WAKEUP_FLOOR_SECONDS = 0.25
@@ -129,6 +130,24 @@ class _SessionSpeaker:
 
     async def stop_playback(self) -> None:
         await self._session().stop_playback()
+
+    async def prepare(
+        self,
+        utterance: str,
+        *,
+        sentence_index: int | None = None,
+        transcript_id: str | None = None,
+        language: str | None = None,
+    ) -> PreparedSpeech | None:
+        return await self._session().prepare(
+            utterance,
+            sentence_index=sentence_index,
+            transcript_id=transcript_id,
+            language=language,
+        )
+
+    async def speak_prepared(self, prepared: PreparedSpeech) -> None:
+        await self._session().speak_prepared(prepared)
 
     async def play_cue(self, text: str) -> bool:
         session = self._lifecycle.session

@@ -780,11 +780,30 @@ Bentuknya dua PR:
   tetap memeriksa pause, barge-in, dan turn current per kalimat; kalimat
   yang sudah disiapkan tapi di-drop ditutup sintesisnya. Ini membuat first
   chunk TTS keluar dari jalur kritis tanpa mengubah semantik drop.
+- B5a-2, bentuk implementasinya. `PreparedSpeech` (kontrak di
+  `speech/contract.py`) adalah sintesis yang sudah jalan dengan chunk-nya
+  ditampung; `PlaybackEngine.prepare` memulainya, `speak_prepared` memutar
+  buffer itu, dan `aclose` membatalkan request TTS-nya. `TurnSink.prepare`
+  men-scrub teks lalu meminta sintesis, `TurnSink.say` memeriksa pause,
+  barge-in, dan turn current per kalimat lalu memutar sintesis yang sudah
+  siap. Task producer menarik stream LLM ke antrean berkedalaman 2, jadi
+  sintesis kalimat berikutnya jalan sambil kalimat sekarang diputar dan
+  stream LLM tidak berhenti selama playback. Kalimat yang disiapkan lalu
+  di-drop ditutup sintesisnya; sintesis yang disiapkan tapi tidak pernah
+  diputar ditutup saat engine ditutup. Metrik latensi replay tetap
+  dibandingkan dengan rekaman seperti gate V0.7; `sentence_gap_ms` tidak
+  dipakai sebagai gate offline karena rekaman membekukan waktu LLM (lihat
+  catatan gate di bawah).
 
-Gate offline lewat replay: `sentence_gap_ms` (dari `playback_finished` ke
-PCM pertama kalimat berikutnya) di oue-4 turun dari 0,78-0,80 s ke ≤ 150
-ms, gate latensi V0.7 tetap lolos. Gate live: satu sesi baru dengan
-`transcript_id` di event playback untuk mengukur jeda dan stop dengan alat.
+Gate offline lewat replay tidak bisa mengukur B5a-2: rekaman membekukan
+waktu LLM dan TTS, jadi jeda yang diukur di replay adalah jeda LLM yang
+terkunci, bukan jeda penguinipan. Yang bisa diukur offline hanyalah regresi
+latensi lain (gate V0.7 tetap lolos). Bukti jeda diukur di container
+(`fakeyou-meeting-worker:local`, nada 440 Hz ke `agent_output`, monitor
+direkam dengan `parec` ke file): dengan latensi first chunk 500 ms, jeda
+antar kalimat di sink 0 mskalau ada lookahead dan 470 ms tanpa lookahead.
+Gate live: satu sesi baru dengan `transcript_id` di event playback untuk
+mengukur jeda dan stop dengan alat.
 
 ### B5b: Kontrak sesi streaming netral dan adapter provider
 

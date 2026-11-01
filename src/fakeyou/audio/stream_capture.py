@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mappin
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, replace
 from typing import Any, Protocol, override, runtime_checkable
+from weakref import WeakKeyDictionary
 
 from playwright.async_api import Error as PlaywrightError
 
@@ -40,6 +41,7 @@ from fakeyou.observability.faults import (
 )
 from fakeyou.observability.journal import Journal
 from fakeyou.persistence.audio_persist import SlotAudioWriter
+from fakeyou.speech.contract import PreparedSpeech
 
 CAPTURE_DRAIN_JS = (
     "() => { const capture = window.__fakeyouStreamCapture;"
@@ -585,6 +587,9 @@ class StreamFleetSession:
             raise ValueError("stream fleet needs at least one session")
         self._sessions = list(sessions)
         self._registry = registry
+        self._prepared_sessions: WeakKeyDictionary[PreparedSpeech, MeetingAudioSession] = (
+            WeakKeyDictionary()
+        )
 
     @property
     def capture_registry(self) -> StreamRegistry:
@@ -624,6 +629,31 @@ class StreamFleetSession:
             [session.stop_playback for session in self._sessions],
             "stop_playback",
         )
+
+    async def prepare(
+        self,
+        text: str,
+        *,
+        sentence_index: int | None = None,
+        transcript_id: str | None = None,
+        language: str | None = None,
+    ) -> PreparedSpeech | None:
+        session = self._voice()
+        prepared = await session.prepare(
+            text,
+            sentence_index=sentence_index,
+            transcript_id=transcript_id,
+            language=language,
+        )
+        if prepared is not None:
+            self._prepared_sessions[prepared] = session
+        return prepared
+
+    async def speak_prepared(self, prepared: PreparedSpeech) -> None:
+        session = self._prepared_sessions.pop(prepared, None)
+        if session is None:
+            session = self._voice()
+        await session.speak_prepared(prepared)
 
     def raise_if_failed(self) -> None:
         failures: list[MeetingAudioError] = []

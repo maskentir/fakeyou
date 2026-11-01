@@ -1,4 +1,5 @@
 import asyncio
+from typing import override
 
 from fakeyou.audio.audio import MeetingAudioSession, SessionCapture
 from fakeyou.audio.own_speech import FinalGate, OwnSpeech
@@ -8,9 +9,10 @@ from fakeyou.observability.provider_faults import ProviderFault
 from tests._audio_fakes import FakeReconnectableSTT
 from tests._audio_support import build_run, wait_gate
 from tests._persistence_fakes import RecordingJournal
+from tests._prepared_support import PreparedSpeaker
 
 
-class CueEngine:
+class CueEngine(PreparedSpeaker):
     def __init__(self, *, failure: Exception | None = None) -> None:
         self.failure = failure
         self.prepared: list[str] = []
@@ -25,6 +27,7 @@ class CueEngine:
     def louder(self) -> None:
         pass
 
+    @override
     async def speak(
         self,
         text: str,

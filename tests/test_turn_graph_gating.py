@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, override
 
 import pytest
 
@@ -29,6 +29,7 @@ from fakeyou.foundation.participation import ParticipationContext
 from fakeyou.foundation.transcript import TranscriptEvent
 from tests._audio_fakes import SilentSpeaker
 from tests._conversation_fakes import judged
+from tests._prepared_support import PreparedSpeaker
 
 TWIN_REPLY = "Yes, I am here."
 POLICY_FIELDS = {
@@ -52,11 +53,12 @@ POLICY_FIELDS = {
 }
 
 
-class FakeSession:
+class FakeSession(PreparedSpeaker):
     def __init__(self) -> None:
         self.spoken: list[str] = []
         self.is_speaking = False
 
+    @override
     async def speak(self, text: str, **_: Any) -> None:
         self.spoken.append(text)
 

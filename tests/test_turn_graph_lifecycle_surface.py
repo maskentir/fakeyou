@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, override
 
 import pytest
 
@@ -10,14 +10,16 @@ from fakeyou.conversation.session import ConversationError
 from fakeyou.conversation.turn_graph import build_turn_graph
 from fakeyou.conversation.turn_lifecycle import TurnLifecycle
 from tests._audio_fakes import wait_until
+from tests._prepared_support import PreparedSpeaker
 
 
-class FakeSession:
+class FakeSession(PreparedSpeaker):
     def __init__(self) -> None:
         self.spoken: list[str] = []
         self.playback_stops = 0
         self.is_speaking = False
 
+    @override
     async def speak(self, text: str, **_: Any) -> None:
         self.spoken.append(text)
 

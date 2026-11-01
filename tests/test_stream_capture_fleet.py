@@ -1,5 +1,5 @@
 import asyncio
-from typing import Any, cast
+from typing import Any, cast, override
 
 import pytest
 
@@ -13,6 +13,7 @@ from fakeyou.foundation.transcript import TranscriptUpdate
 from tests._capture_support import echo_stt
 from tests._fakes_common import FakeClock
 from tests._meet_browser_fakes import meet_page
+from tests._prepared_support import PreparedSpeaker
 
 
 async def test_stream_fleet_tags_transcripts_per_slot() -> None:
@@ -23,7 +24,7 @@ async def test_stream_fleet_tags_transcripts_per_slot() -> None:
         open_stream_fleet,
     )
 
-    class _Playback:
+    class _Playback(PreparedSpeaker):
         @property
         def is_speaking(self) -> bool:
             return False
@@ -31,6 +32,7 @@ async def test_stream_fleet_tags_transcripts_per_slot() -> None:
         def louder(self) -> None:
             pass
 
+        @override
         async def speak(self, text: str, **extra: object) -> None:
             pass
 
@@ -72,7 +74,7 @@ async def test_stream_fleet_tags_transcripts_per_slot() -> None:
     assert sorted(seen) == [("slot-0", "speech-0"), ("slot-1", "speech-1")]
 
 
-class _Playback:
+class _Playback(PreparedSpeaker):
     @property
     def is_speaking(self) -> bool:
         return False
@@ -80,6 +82,7 @@ class _Playback:
     def louder(self) -> None:
         pass
 
+    @override
     async def speak(self, text: str, **extra: object) -> None:
         pass
 

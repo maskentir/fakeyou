@@ -63,6 +63,7 @@ from fakeyou.session.facts import StateQuestion
 from fakeyou.session.intent import EvidenceNeed, Reading, intent_of
 from fakeyou.session.planner import TurnPlan, plan_turn, with_language
 from fakeyou.session.policy import UNATTRIBUTED, Channel, Grant, authorize
+from fakeyou.speech.contract import PreparedSpeech
 
 
 class Speaker(Protocol):
@@ -77,6 +78,17 @@ class Speaker(Protocol):
         transcript_id: str | None = None,
         language: str | None = None,
     ) -> None: ...
+
+    async def prepare(
+        self,
+        utterance: str,
+        *,
+        sentence_index: int | None = None,
+        transcript_id: str | None = None,
+        language: str | None = None,
+    ) -> PreparedSpeech | None: ...
+
+    async def speak_prepared(self, prepared: PreparedSpeech) -> None: ...
 
     async def stop_playback(self) -> None: ...
 
@@ -535,8 +547,13 @@ async def _participate(
     }
 
 
+LOOKAHEAD_DEPTH = 2
+
+
 class SentenceSink(Protocol):
-    async def say(self, sentence: str, language: str) -> None: ...
+    async def prepare(self, sentence: str, language: str) -> PreparedSpeech | None: ...
+
+    async def say(self, prepared: PreparedSpeech) -> None: ...
 
 
 @dataclass(slots=True)
@@ -613,34 +630,46 @@ class TurnSink:
         self._spoken = 0
         self._offered = 0
         self._started = False
+        self._queued = False
+        self._indices: dict[PreparedSpeech, int] = {}
 
     @property
     def started(self) -> bool:
         return self._started
 
-    async def say(self, sentence: str, language: str) -> None:
-        runtime = self._runtime
+    async def prepare(self, sentence: str, language: str) -> PreparedSpeech | None:
         sentence_index = self._offered
         self._offered += 1
-        sentence = scrub_internal_refs(sentence)
-        if not sentence:
-            return
+        scrubbed = scrub_internal_refs(sentence)
+        if not scrubbed:
+            return None
+        prepared = await self._runtime.speaker.prepare(
+            scrubbed,
+            sentence_index=sentence_index,
+            transcript_id=self._transcript_id,
+            language=language,
+        )
+        if prepared is None:
+            return None
+        self._indices[prepared] = sentence_index
+        if not self._queued and self._drop_outcome() is None:
+            _move_phase(self._runtime, "queued", self._transcript_id)
+            self._queued = True
+        return prepared
+
+    async def say(self, prepared: PreparedSpeech) -> None:
+        runtime = self._runtime
+        sentence = prepared.text
+        index = self._indices.get(prepared, prepared.sentence_index)
         self._started = True
-        if self._streamed:
-            self._check_live(sentence_index)
-        if self._spoken == 0:
-            _move_phase(runtime, "queued", self._transcript_id)
+        if self._streamed and index is not None:
+            self._check_live(index)
         _raise_if_failed(runtime)
         if runtime.barge is not None:
             runtime.barge.rearm()
         if runtime.note_spoken is not None:
             runtime.note_spoken(sentence)
-        await runtime.speaker.speak(
-            sentence,
-            sentence_index=sentence_index,
-            transcript_id=self._transcript_id,
-            language=language,
-        )
+        await runtime.speaker.speak_prepared(prepared)
         self._spoken += 1
 
     def _check_live(self, index: int) -> None:
@@ -1380,9 +1409,12 @@ class _RecordingSink:
         self._inner = inner
         self._delivered = delivered
 
-    async def say(self, sentence: str, language: str) -> None:
-        await self._inner.say(sentence, language)
-        self._delivered.append(sentence)
+    async def prepare(self, sentence: str, language: str) -> PreparedSpeech | None:
+        return await self._inner.prepare(sentence, language)
+
+    async def say(self, prepared: PreparedSpeech) -> None:
+        await self._inner.say(prepared)
+        self._delivered.append(prepared.text)
 
 
 class _SupersedableSink:
@@ -1400,9 +1432,12 @@ class _SupersedableSink:
         self._context = context
         self._delivered = delivered
 
-    async def say(self, sentence: str, language: str) -> None:
+    async def prepare(self, sentence: str, language: str) -> PreparedSpeech | None:
+        return await self._inner.prepare(sentence, language)
+
+    async def say(self, prepared: PreparedSpeech) -> None:
         if self._floor.admits(self._generation):
-            await self._inner.say(sentence, language)
+            await self._inner.say(prepared)
             return
         detail, reason = _drop_outcome(self._floor)
         record_drop(
@@ -1412,6 +1447,7 @@ class _SupersedableSink:
             detail=detail,
             reason=reason,
         )
+        await prepared.aclose()
 
 
 async def _close_stream(stream: object, faults: FaultReporter | None) -> None:
@@ -1425,8 +1461,59 @@ async def _replay(sentences: tuple[SpokenChunk, ...]) -> AsyncIterator[SpokenChu
 
 
 async def _deliver(replies: AsyncIterator[SpokenChunk], sink: SentenceSink) -> None:
-    async for chunk in replies:
-        await sink.say(chunk.text, chunk.language)
+    queue: asyncio.Queue[PreparedSpeech | None] = asyncio.Queue()
+    slots = asyncio.Semaphore(LOOKAHEAD_DEPTH)
+    producer = asyncio.create_task(_produce(replies, sink, queue, slots))
+    taken: list[PreparedSpeech] = []
+    try:
+        while True:
+            sentence = await queue.get()
+            if sentence is None:
+                break
+            slots.release()
+            taken.append(sentence)
+            await sink.say(sentence)
+        await producer
+    finally:
+        await _close_producer(producer)
+        for sentence in taken:
+            await sentence.aclose()
+        await _close_queued(queue)
+
+
+async def _produce(
+    replies: AsyncIterator[SpokenChunk],
+    sink: SentenceSink,
+    queue: asyncio.Queue[PreparedSpeech | None],
+    slots: asyncio.Semaphore,
+) -> None:
+    held: PreparedSpeech | None = None
+    try:
+        async for chunk in replies:
+            await slots.acquire()
+            sentence = await sink.prepare(chunk.text, chunk.language)
+            if sentence is None:
+                slots.release()
+                continue
+            held = sentence
+            queue.put_nowait(sentence)
+            held = None
+    finally:
+        if held is not None:
+            await held.aclose()
+        queue.put_nowait(None)
+
+
+async def _close_producer(producer: asyncio.Task[None]) -> None:
+    producer.cancel()
+    await asyncio.gather(producer, return_exceptions=True)
+
+
+async def _close_queued(queue: asyncio.Queue[PreparedSpeech | None]) -> None:
+    while not queue.empty():
+        sentence = queue.get_nowait()
+        if sentence is not None:
+            await sentence.aclose()
 
 
 def _reply_stream(runtime: SpeechRuntime, transcript: str) -> AsyncIterator[SpokenChunk]:

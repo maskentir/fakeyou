@@ -24,17 +24,19 @@ from fakeyou.observability.faults import FaultReporter
 from fakeyou.observability.provider_faults import ProviderFault
 from tests._audio_fakes import wait_until
 from tests._conversation_fakes import ScriptedJudge
+from tests._prepared_support import PreparedSpeaker
 
 GRAPH_SOURCE = Path(turn_graph.__file__).read_text(encoding="utf-8")
 LIFECYCLE_SOURCE = Path(turn_lifecycle.__file__).read_text(encoding="utf-8")
 
 
-class Session:
+class Session(PreparedSpeaker):
     def __init__(self) -> None:
         self.spoken: list[str] = []
         self.stops = 0
         self.is_speaking = False
 
+    @override
     async def speak(self, text: str, **_: Any) -> None:
         self.spoken.append(text)
 

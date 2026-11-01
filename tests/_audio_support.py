@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator
-from typing import Any, TypedDict, Unpack, cast
+from typing import Any, TypedDict, Unpack, cast, override
 
 import numpy as np
 
@@ -17,6 +17,7 @@ from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.observability.faults import FaultReporter
 from fakeyou.speech.contract import SpeechSynthesizer
 from tests._persistence_fakes import RecordingJournal
+from tests._prepared_support import PreparedSpeaker
 
 SPEECH_WINDOW = b"\x00\x00" * 512
 SPEAKING = 0.99
@@ -92,7 +93,7 @@ class FakeCapture:
         self.queue.put(pcm)
 
 
-class FakePlayback:
+class FakePlayback(PreparedSpeaker):
     def __init__(self) -> None:
         self.spoken: list[str] = []
         self.indices: list[int | None] = []
@@ -109,6 +110,7 @@ class FakePlayback:
     def louder(self) -> None:
         self.louder_calls += 1
 
+    @override
     async def speak(
         self,
         text: str,

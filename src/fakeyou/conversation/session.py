@@ -13,6 +13,7 @@ from fakeyou.foundation.invariants import PositiveSeconds, TwinName
 from fakeyou.foundation.taxonomy import PublicPhase, TerminalReason
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.foundation.triggers import ReplyChannel
+from fakeyou.speech.contract import PreparedSpeech
 
 
 class MeetingAudio(Protocol):
@@ -24,6 +25,17 @@ class MeetingAudio(Protocol):
         transcript_id: str | None = None,
         language: str | None = None,
     ) -> None: ...
+
+    async def prepare(
+        self,
+        text: str,
+        *,
+        sentence_index: int | None = None,
+        transcript_id: str | None = None,
+        language: str | None = None,
+    ) -> PreparedSpeech | None: ...
+
+    async def speak_prepared(self, prepared: PreparedSpeech) -> None: ...
 
     async def stop_playback(self) -> None: ...
 

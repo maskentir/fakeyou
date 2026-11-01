@@ -38,9 +38,10 @@ from tests._audio_fakes import (
 from tests._audio_support import FakeCapture, FakePlayback, build_run
 from tests._capture_support import settle_reconnect
 from tests._persistence_fakes import RecordingJournal
+from tests._prepared_support import PreparedSpeaker
 
 
-class _Playback:
+class _Playback(PreparedSpeaker):
     @property
     def is_speaking(self) -> bool:
         return False
@@ -48,6 +49,7 @@ class _Playback:
     def louder(self) -> None:
         pass
 
+    @override
     async def speak(
         self,
         text: str,

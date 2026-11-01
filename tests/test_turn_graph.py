@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, override
 
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.meeting_messages import NoHistory
@@ -17,6 +17,7 @@ from fakeyou.conversation.turn_judge import JudgeCache, TurnJudge, WindowSource
 from fakeyou.foundation.participation import ParticipationContext
 from fakeyou.foundation.transcript import TranscriptEvent
 from tests._conversation_fakes import ScriptedJudge, judged
+from tests._prepared_support import PreparedSpeaker
 
 TWIN_REPLY = "Yes, I am here."
 QUESTION = "twin, are you there?"
@@ -31,11 +32,12 @@ class FakeResponder:
         yield SpokenChunk(text=TWIN_REPLY, language=DEFAULTS.speech.language)
 
 
-class FakeSpeaker:
+class FakeSpeaker(PreparedSpeaker):
     def __init__(self) -> None:
         self.utterances: list[str] = []
         self.is_speaking = False
 
+    @override
     async def speak(self, utterance: str, **_: Any) -> None:
         self.utterances.append(utterance)
 

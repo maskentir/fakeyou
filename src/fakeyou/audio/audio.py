@@ -60,6 +60,7 @@ from fakeyou.observability.provider_faults import (
     ProviderFault,
     classify_exception,
 )
+from fakeyou.speech.contract import PreparedSpeech
 from fakeyou.speech.registry import build_speech_synthesizer
 from fakeyou.transcription.contract import (
     SpeechSinks,
@@ -525,6 +526,39 @@ class MeetingAudioSession:
 
     async def stop_playback(self) -> None:
         await self._engine.stop()
+
+    async def prepare(
+        self,
+        text: str,
+        *,
+        sentence_index: int | None = None,
+        transcript_id: str | None = None,
+        language: str | None = None,
+    ) -> PreparedSpeech | None:
+        self.raise_if_failed()
+        if self._stopping:
+            raise MeetingAudioError("meeting audio session is stopped")
+        extra: dict[str, Any] = {}
+        if sentence_index is not None:
+            extra["sentence_index"] = sentence_index
+        if transcript_id is not None:
+            extra["transcript_id"] = transcript_id
+        if language is not None:
+            extra["language"] = language
+        return await self._engine.prepare(text, **extra)
+
+    async def speak_prepared(self, prepared: PreparedSpeech) -> None:
+        self.raise_if_failed()
+        if self._stopping:
+            raise MeetingAudioError("meeting audio session is stopped")
+        with self._gate.own_speech.speaking(prepared.text):
+            try:
+                await self._engine.speak_prepared(prepared)
+            except (PlaybackError, OSError) as error:
+                if self._faults is not None:
+                    self._faults.record(classify_exception("tts", error, operation="speak"))
+                raise
+        self.raise_if_failed()
 
     def louder(self) -> None:
         self._engine.louder()

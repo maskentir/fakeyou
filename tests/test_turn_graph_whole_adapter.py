@@ -2,7 +2,7 @@ import asyncio
 import contextlib
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, cast, override
 
 from langchain_core.messages import AIMessageChunk
 
@@ -25,17 +25,19 @@ from fakeyou.session.intent import Reading
 from fakeyou.session.planner import TurnPlan
 from fakeyou.session.policy import Channel
 from tests._model_responder import ModelResponder
+from tests._prepared_support import PreparedSpeaker
 
 MODEL_NODE = {"langgraph_node": "model"}
 GRAPH_SOURCE = Path(turn_graph.__file__).read_text(encoding="utf-8")
 TURNS_SOURCE = Path(meeting_turns.__file__).read_text(encoding="utf-8")
 
 
-class FakeSession:
+class FakeSession(PreparedSpeaker):
     def __init__(self) -> None:
         self.spoken: list[str] = []
         self.is_speaking = False
 
+    @override
     async def speak(self, text: str, **_: Any) -> None:
         self.spoken.append(text)
 
@@ -317,6 +319,9 @@ async def test_sentences_keep_the_planner_index_when_one_is_scrubbed_away() -> N
     cast(Any, harness.session).speak = speak
 
     for sentence in ("First.", "person#2", "Third."):
-        await sink.say(sentence, "en")
+        prepared = await sink.prepare(sentence, "en")
+        if prepared is None:
+            continue
+        await sink.say(prepared)
 
     assert spoken == [("First.", 0), ("Third.", 2)]

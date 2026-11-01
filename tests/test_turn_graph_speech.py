@@ -1,5 +1,6 @@
+import asyncio
 from collections.abc import AsyncIterator, Sequence
-from typing import Any, TypedDict
+from typing import Any, TypedDict, override
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
@@ -7,11 +8,15 @@ from langgraph.graph import END, START, StateGraph
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_graph import (
+    SpeechFloor,
     SpeechInput,
     SpeechRuntime,
+    TurnDropped,
     build_speech_graph,
 )
 from fakeyou.db.checkpoint import checkpoint_serializer
+from fakeyou.speech.contract import PreparedSpeech
+from tests._prepared_support import FakePreparedSpeech, PreparedSink
 
 
 class FakeResponder:
@@ -30,13 +35,12 @@ class FakeResponder:
             raise RuntimeError("generator broke mid-reply")
 
 
-class FakeSink:
+class FakeSink(PreparedSink):
     def __init__(self) -> None:
         self.sentences: list[str] = []
 
-    async def say(self, sentence: str, language: str) -> None:
-        del language
-        self.sentences.append(sentence)
+    async def say(self, prepared: PreparedSpeech) -> None:
+        self.sentences.append(prepared.text)
 
 
 class FakeJournal:
@@ -68,6 +72,115 @@ async def test_streaming_respond_speaks_sentences_in_generator_order() -> None:
 
     assert sink.sentences == ["First sentence.", "Second sentence.", "Third sentence."]
     assert out["failure"] is None
+
+
+async def test_the_next_sentence_is_synthesised_while_the_current_one_plays() -> None:
+    events: list[str] = []
+
+    class BlockingSink(PreparedSink):
+        def __init__(self) -> None:
+            self.playing = asyncio.Event()
+            self.release = asyncio.Event()
+
+        @override
+        async def prepare(self, sentence: str, language: str) -> PreparedSpeech | None:
+            events.append(f"prepare:{sentence}")
+            return FakePreparedSpeech(sentence, language, None, None)
+
+        async def say(self, prepared: PreparedSpeech) -> None:
+            events.append(f"say:{prepared.text}")
+            self.playing.set()
+            await self.release.wait()
+            events.append(f"said:{prepared.text}")
+
+    sink = BlockingSink()
+    graph = build_speech_graph()
+
+    delivery = asyncio.create_task(
+        graph.ainvoke(
+            speech_input(),
+            context=SpeechRuntime(
+                responder=FakeResponder(["First.", "Second.", "Third."]),
+                sink=sink,
+                journal=FakeJournal(),
+            ),
+        )
+    )
+    await asyncio.wait_for(sink.playing.wait(), timeout=2)
+
+    during = list(events)
+    assert during.index("prepare:Second.") < during.index("say:First.")
+
+    sink.release.set()
+    await asyncio.wait_for(delivery, timeout=2)
+    assert events.index("prepare:Third.") < events.index("said:First.")
+    assert events[-1] == "said:Third."
+
+
+async def test_a_barge_in_while_the_lookahead_queue_is_full_does_not_hang() -> None:
+    floor = SpeechFloor(0)
+
+    class SlowSink(PreparedSink):
+        @override
+        async def prepare(self, sentence: str, language: str) -> PreparedSpeech | None:
+            return FakePreparedSpeech(sentence, language, None, None)
+
+        async def say(self, prepared: PreparedSpeech) -> None:
+            del prepared
+            await asyncio.sleep(5)
+
+    class LongResponder:
+        async def stream_reply(self, transcript: str) -> AsyncIterator[SpokenChunk]:
+            del transcript
+            for index in range(20):
+                yield SpokenChunk(text=f"Sentence {index}.", language=DEFAULTS.speech.language)
+
+    graph = build_speech_graph()
+    delivery = asyncio.create_task(
+        graph.ainvoke(
+            speech_input(),
+            context=SpeechRuntime(
+                responder=LongResponder(),
+                sink=SlowSink(),
+                journal=FakeJournal(),
+                floor=floor,
+            ),
+        )
+    )
+    await asyncio.sleep(0.2)
+
+    await asyncio.wait_for(floor.interrupt("barge"), timeout=3)
+    await asyncio.wait_for(delivery, timeout=3)
+
+
+async def test_a_dropped_turn_closes_the_syntheses_it_prepared() -> None:
+    prepared: list[FakePreparedSpeech] = []
+
+    class RecordingSink(PreparedSink):
+        @override
+        async def prepare(self, sentence: str, language: str) -> PreparedSpeech | None:
+            speech = FakePreparedSpeech(sentence, language, None, None)
+            prepared.append(speech)
+            return speech
+
+        async def say(self, prepared_speech: PreparedSpeech) -> None:
+            del prepared_speech
+            raise TurnDropped("interrupted")
+
+    graph = build_speech_graph()
+
+    out = await graph.ainvoke(
+        speech_input(),
+        context=SpeechRuntime(
+            responder=FakeResponder(["First.", "Second.", "Third."]),
+            sink=RecordingSink(),
+            journal=FakeJournal(),
+        ),
+    )
+
+    assert out["failure"] == "reply_failed"
+    assert prepared
+    assert all(speech.closed for speech in prepared)
 
 
 async def test_speaking_generation_is_written_only_by_the_speak_node() -> None:
