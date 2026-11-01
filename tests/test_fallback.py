@@ -270,7 +270,7 @@ class BrokenCloseSegment:
         self._inner = inner
 
     @property
-    def words(self) -> Sequence[WordTiming]:
+    def words(self) -> Sequence[WordTiming] | None:
         return self._inner.words
 
     def __aiter__(self) -> AsyncIterator[bytes]:

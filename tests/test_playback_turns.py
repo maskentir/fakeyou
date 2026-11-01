@@ -14,8 +14,8 @@ class RecordingSegment:
         self._chunks = iter((pcm,))
 
     @property
-    def words(self) -> Sequence[WordTiming]:
-        return ()
+    def words(self) -> Sequence[WordTiming] | None:
+        return None
 
     def __aiter__(self) -> AsyncIterator[bytes]:
         return self

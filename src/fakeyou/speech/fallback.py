@@ -162,7 +162,7 @@ class _FallbackSegment:
         self._emitted = False
 
     @property
-    def words(self) -> Sequence[WordTiming]:
+    def words(self) -> Sequence[WordTiming] | None:
         return self._current.words
 
     def __aiter__(self) -> AsyncIterator[bytes]:

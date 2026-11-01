@@ -191,7 +191,7 @@ def _spoken_lines(history: MeetingHistory, *, skip: str | None) -> list[JudgeLin
     return [
         _line(entry)
         for entry in history.entries()
-        if isinstance(entry, TwinSpeechEntry)
+        if (isinstance(entry, TwinSpeechEntry) and entry.text.strip())
         or (
             isinstance(entry, TranscriptEntry)
             and entry.source == "meeting_audio"

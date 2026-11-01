@@ -26,6 +26,7 @@ from fakeyou.orchestration.assembly import (
     open_conversation,
 )
 from fakeyou.orchestration.kernel_port import KernelPort
+from fakeyou.orchestration.spoken_log import SpokenLog
 from fakeyou.orchestration.transcript import (
     DrainOptions,
     TranscriptDrain,
@@ -73,12 +74,6 @@ class RecordedBehavior:
 class ReplayResult:
     rows: tuple[dict[str, Any], ...]
     comparison: Comparison
-
-
-@dataclass(slots=True)
-class _Speaking:
-    text: str | None = None
-    rows: list[dict[str, Any]] = field(default_factory=list)
 
 
 class EngineAudio:
@@ -304,37 +299,11 @@ async def _replay(
 def _playback_journal(
     journal: Journal, record: MeetingRecord, kernel: KernelPort
 ) -> Callable[[PlaybackEvent], None]:
-    speaking = _Speaking()
+    spoken = SpokenLog(journal, record)
 
     def observe(event: PlaybackEvent) -> None:
         kernel.playback(event)
-        if event.cue:
-            journal.record(
-                event.kind.replace("playback_", "thinking_cue_"),
-                source="playback",
-                detail=event.detail,
-                cue_text=event.text,
-            )
-            return
-        utterance = event.utterance
-        journal.record(
-            event.kind,
-            source="playback",
-            ends_with_question=event.text.rstrip().endswith("?"),
-            detail=event.detail,
-            transcript_id=utterance.transcript_id,
-            sentence_index=utterance.sentence_index,
-        )
-        if event.kind == "playback_started":
-            speaking.text = event.text
-        elif event.kind == "playback_finished":
-            speaking.text = None
-            record.add_twin_speech(event.text, causation_id=utterance.transcript_id)
-        elif event.kind == "playback_dropped" and event.text == speaking.text:
-            speaking.text = None
-            record.add_twin_speech(
-                event.text, interrupted=True, causation_id=utterance.transcript_id
-            )
+        spoken.observe(event)
 
     return observe
 

@@ -3,7 +3,7 @@ import shlex
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, ExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
@@ -66,6 +66,7 @@ from fakeyou.orchestration.providers import (
     preflight_hosts,
 )
 from fakeyou.orchestration.runtime import SessionWiring
+from fakeyou.orchestration.spoken_log import SpokenLog
 from fakeyou.orchestration.transcript import (
     DrainOptions,
     LiveScoring,
@@ -109,8 +110,11 @@ class _JoinRun:
     record_error: str | None = None
     exit_code: ExitCode = ExitCode.FAILURE
     final_exit: ExitCode = ExitCode.FAILURE
-    speaking: str | None = None
     kernel: KernelPort | None = None
+    spoken: SpokenLog = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.spoken = SpokenLog(self.journal, self.record)
 
 
 def _write_pending_status(
@@ -371,33 +375,7 @@ def _log_playback_event(run: _JoinRun, event: PlaybackEvent) -> None:
         run.kernel.playback(event)
     if run.voice_activity is not None:
         run.voice_activity.observe_self_speech(active=event.kind == "playback_started")
-    if event.cue:
-        run.journal.record(
-            event.kind.replace("playback_", "thinking_cue_"),
-            source="playback",
-            detail=event.detail,
-            cue_text=event.text,
-        )
-        return
-    utterance = event.utterance
-    run.journal.record(
-        event.kind,
-        source="playback",
-        ends_with_question=event.text.rstrip().endswith("?"),
-        detail=event.detail,
-        transcript_id=utterance.transcript_id,
-        sentence_index=utterance.sentence_index,
-    )
-    if event.kind == "playback_started":
-        run.speaking = event.text
-    elif event.kind == "playback_finished":
-        run.speaking = None
-        run.record.add_twin_speech(event.text, causation_id=event.utterance.transcript_id)
-    elif event.kind == "playback_dropped" and event.text == run.speaking:
-        run.speaking = None
-        run.record.add_twin_speech(
-            event.text, interrupted=True, causation_id=event.utterance.transcript_id
-        )
+    run.spoken.observe(event)
 
 
 def _moment_observer(run: _JoinRun) -> Callable[[TranscriptEvent], Awaitable[None]] | None:

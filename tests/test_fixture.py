@@ -170,6 +170,22 @@ def test_a_sentence_takes_the_text_that_was_actually_spoken() -> None:
     assert answered.spoken == ("Yes, I can.",)
 
 
+def test_a_sentence_cut_short_replays_the_text_it_planned_to_say() -> None:
+    rows, entries = session()
+    entries[1] = TwinSpeechEntry(
+        at=START + timedelta(seconds=4),
+        seq=2,
+        causation_id="t1",
+        text="Yes,",
+        interrupted=True,
+        planned="Yes, I can.",
+    )
+
+    fixture = build_fixture(rows, entries)
+
+    assert [sentence.text for sentence in fixture.replies["t1"].sentences] == ["Yes, I can."]
+
+
 def test_a_sentence_that_never_reached_the_synthesizer_is_not_replayed() -> None:
     fixture = build_fixture(*session())
 

@@ -946,6 +946,33 @@ Bentuk PR:
   socket ditutup saat close walau pembacanya sedang dibatalkan. Tidak ada
   timeout di adapter: batasnya timeout per chunk 45 s di engine, seperti
   sebelumnya.
+- B5b-2b, kata yang terdengar (2026-11-01): engine menghitung byte yang
+  sudah ditulis untuk kalimat yang sedang diputar dan mencocokkannya dengan
+  `words` segmen (lewat `PreparedSpeech.words` untuk kalimat yang disiapkan
+  lebih dulu). Karena stop memakai fade lalu drain, bukan flush, semua byte
+  yang sudah ditulis memang terdengar, jadi buffer writer tidak dikurangi.
+  Kata dihitung terdengar bila `end`-nya sudah lewat; teksnya adalah teks
+  kata dari provider (Cartesia membawa tanda baca, dan "3:30" yang diucapkan
+  "three thirty" tercatat seperti diucapkan), bukan potongan `text.split()`
+  yang jumlah katanya bisa berbeda. `SpeechSegment.words` bernilai `None`
+  bila provider tidak memberi timing (provider HTTP) dan list kosong bila
+  timing belum datang. `playback_dropped` membawa `heard`: teks yang
+  terdengar, `""` untuk kalimat antrean yang belum diputar atau dipotong
+  sebelum timing pertama datang, `None` hanya bila provider tanpa timing. Journal mencatat
+  `heard_words`; record menyimpan teks yang terdengar sebagai `text` dan
+  kalimat utuhnya sebagai `planned`, jadi riwayat percakapan, judge, dan
+  memori melihat apa yang memang diucapkan, sedangkan fixture replay tetap
+  memakai kalimat utuh. Kalimat yang dipotong sebelum kata pertama tercatat
+  dengan `text` kosong dan tidak masuk judge maupun memori. Logika journal
+  dan record playback yang sebelumnya kembar di `join.py` dan harness replay
+  kini satu `SpokenLog`. Probe ke Cartesia asli dengan writer real-time,
+  stop 1,0 s setelah `playback_started` (0,86-0,88 s audio tertulis): tercatat
+  "Halo" atau "Halo semuanya," tergantung jeda awal 0,0-0,31 s tiap generate;
+  stop 2,2 s: "Halo semuanya, saya sudah cek laporan minggu". Replay oue-4
+  tidak berubah (p50 2049,401 ms). Sisa dari review, sengaja ditunda:
+  provider yang gagal di tengah kalimat lalu berpindah ke cadangan masih
+  tercatat sebagai kalimat selesai (perilaku lama); record dengan `planned`
+  tidak bisa dibaca build lama karena entry memakai `extra="forbid"`.
 - B5b-3, ElevenLabs websocket (multi-context). Belum ada key ElevenLabs di
   `.env`, jadi adapter ini diuji dengan fixture protokol dan menunggu key
   untuk verifikasi live.
