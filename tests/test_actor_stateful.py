@@ -155,12 +155,12 @@ class ActorModel(RuleBasedStateMachine):
             assert not self.actor.accepts_ingress
 
     @invariant()
-    def the_journal_never_reports_a_second_active_turn(self) -> None:
+    def the_journal_never_reports_three_active_turns(self) -> None:
         started = self.journal.names.count("agent_started")
         finished = self.journal.names.count("agent_finished") + self.journal.names.count(
             "agent_cancelled"
         )
-        assert started - finished <= 1
+        assert started - finished <= 2
 
     @override
     def teardown(self) -> None:

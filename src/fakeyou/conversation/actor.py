@@ -179,6 +179,10 @@ def judge_yields_the_floor(judgement: TurnJudgement, thresholds: JudgeThresholds
     return judgement.confidence >= thresholds.barge_in
 
 
+def _running(task: asyncio.Task[None] | None) -> bool:
+    return task is not None and not task.done()
+
+
 class FloorActor:
     def __init__(self, turn: TurnRunner, wiring: ActorWiring) -> None:
         journal = wiring.journal
@@ -214,7 +218,9 @@ class FloorActor:
         self._barge = BargeLatch()
         self._events: list[TranscriptEvent] = []
         self._session: MeetingAudio | None = None
-        self._drain: asyncio.Task[None] | None = None
+        self._voice_drain: asyncio.Task[None] | None = None
+        self._chat_drain: asyncio.Task[None] | None = None
+        self._attention_drain: asyncio.Task[None] | None = None
         self._pending_requested = False
         self._closed = False
         self._paused = False
@@ -306,8 +312,7 @@ class FloorActor:
 
     @property
     def is_busy(self) -> bool:
-        drain = self._drain
-        return (drain is not None and not drain.done()) or self._floor.busy
+        return any(_running(task) for task in self._lane_tasks()) or self._floor.busy
 
     @property
     def accepts_ingress(self) -> bool:
@@ -495,18 +500,25 @@ class FloorActor:
         runtime = self._runtime
         if runtime is None or self._failure is not None or self._session is None:
             return
-        if not self._queue.pending and not self._deferred.pending:
-            return
-        drain = self._drain
-        if drain is None or drain.done():
-            self._drain = asyncio.create_task(self._drain_lanes(runtime))
+        if self._queue.pending and not _running(self._voice_drain):
+            self._voice_drain = asyncio.create_task(self._drain_pending_finals(runtime))
+        if self._deferred.pending_for("chat") and not _running(self._chat_drain):
+            self._chat_drain = asyncio.create_task(self._drain_deferred(runtime, "chat"))
+        if self._deferred.pending_for("voice") and not _running(self._attention_drain):
+            self._attention_drain = asyncio.create_task(self._drain_deferred(runtime, "voice"))
 
-    async def _drain_lanes(self, runtime: TurnRuntime) -> None:
+    async def _drain_pending_finals(self, runtime: TurnRuntime) -> None:
         while not self._closed and self._failure is None:
-            if self._queue.pending:
-                await drain_turns(runtime, self._speech, self._queue)
-                continue
-            turn = self._next_deferred()
+            if not self._queue.pending:
+                break
+            await drain_turns(runtime, self._speech, self._queue)
+        if not self._closed and self._failure is None:
+            self.start_pending()
+        self._arm_wakeup()
+
+    async def _drain_deferred(self, runtime: TurnRuntime, channel: ReplyChannel) -> None:
+        while not self._closed and self._failure is None:
+            turn = self._next_deferred(channel)
             if turn is None:
                 break
             delivered = await run_deferred_turn(runtime, self._speech, turn)
@@ -520,7 +532,10 @@ class FloorActor:
                 )
         self._arm_wakeup()
 
-    def _next_deferred(self) -> DeferredTurn | None:
+    def _lane_tasks(self) -> list[asyncio.Task[None] | None]:
+        return [self._voice_drain, self._chat_drain, self._attention_drain]
+
+    def _next_deferred(self, channel: ReplyChannel) -> DeferredTurn | None:
         for expired in self._deferred.expire(self._clock()):
             self._journal.record(
                 "deferred_turn_expired",
@@ -528,13 +543,19 @@ class FloorActor:
                 transcript_id=expired.event.id,
                 channel=expired.channel,
             )
-        return self._deferred.next_ready(self._deferred_ready)
+        ready = self._chat_ready if channel == "chat" else self._attention_ready
+        return self._deferred.next_ready_for(channel, ready)
 
-    def _deferred_ready(self, turn: DeferredTurn) -> bool:
+    def _chat_ready(self, turn: DeferredTurn) -> bool:
+        del turn
+        return not self._paused and not self._shadow
+
+    def _attention_ready(self, turn: DeferredTurn) -> bool:
+        del turn
         if self._paused or self._shadow:
             return False
-        if not turn.needs_quiet_floor:
-            return True
+        if self._queue.pending or _running(self._voice_drain):
+            return False
         session = self._session
         if session is not None and session.is_speaking:
             return False
@@ -569,18 +590,18 @@ class FloorActor:
             raise self._failure
 
     async def wait_idle(self) -> None:
-        drain = self._drain
-        if drain is not None:
-            await asyncio.shield(drain)
+        for task in self._lane_tasks():
+            if task is not None:
+                await asyncio.shield(task)
         active = self._floor.active
         if active is not None:
             await asyncio.shield(active.task)
         self.raise_if_failed()
 
     async def drained(self) -> None:
-        drain = self._drain
-        if drain is not None:
-            await asyncio.gather(drain, return_exceptions=True)
+        lanes = [task for task in self._lane_tasks() if task is not None]
+        if lanes:
+            await asyncio.gather(*lanes, return_exceptions=True)
 
     async def settled(self) -> None:
         tasks = list(self._judge_tasks)
@@ -610,10 +631,14 @@ class FloorActor:
         self._session = None
         self._runtime = None
         await self._release_floor()
-        drain = self._drain
-        if drain is not None and not drain.done():
-            drain.cancel()
-            await asyncio.gather(drain, return_exceptions=True)
+        lanes: list[asyncio.Task[None]] = []
+        for task in (self._voice_drain, self._chat_drain, self._attention_drain):
+            if task is not None and not task.done():
+                lanes.append(task)
+        for task in lanes:
+            task.cancel()
+        if lanes:
+            await asyncio.gather(*lanes, return_exceptions=True)
         self._phase = "closed"
 
     async def _release_floor(self) -> None:

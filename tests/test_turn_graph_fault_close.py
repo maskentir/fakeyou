@@ -162,8 +162,8 @@ def test_tool_start_raises_after_the_acting_move() -> None:
     )
 
 
-def test_wait_idle_shields_the_drain_then_raises_the_failure() -> None:
-    assert "await asyncio.shield(drain)" in LIFECYCLE_SOURCE
+def test_wait_idle_shields_the_lanes_then_raises_the_failure() -> None:
+    assert "await asyncio.shield(task)" in LIFECYCLE_SOURCE
     assert "await asyncio.shield(active.task)\n        self.raise_if_failed()" in LIFECYCLE_SOURCE
 
 
