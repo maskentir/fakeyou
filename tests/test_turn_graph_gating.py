@@ -194,7 +194,7 @@ async def test_interim_is_not_judged_while_a_final_is_in_flight() -> None:
     judge = GatedJudge()
     cache = judging(judge)
 
-    await build_turn_graph().ainvoke(
+    await build_turn_graph().run(
         interim_input("twin, what do you think", pending=True),
         context=TurnRuntime(
             speaker=SilentSpeaker(), journal=FakeJournal(), responder=FakeResponder(), judging=cache
@@ -210,7 +210,7 @@ async def test_the_judge_is_asked_about_the_window_the_ingress_built() -> None:
     cache = judging(judge)
     window = JudgeWindow((), JudgeLine(SPEAKING_NOW, "twin, hello"), twin_speaking=True)
 
-    await build_turn_graph().ainvoke(
+    await build_turn_graph().run(
         TurnInput(
             event=TurnEvent(kind="interim", event_id="i1", at=1.0, payload="twin, hello"),
             context=ParticipationContext(addressed=False),

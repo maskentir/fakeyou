@@ -130,8 +130,8 @@ async def test_the_final_reuses_the_judgement_started_on_its_interim() -> None:
     graph = build_turn_graph()
     context = runtime(speaker, judge=judge)
 
-    await graph.ainvoke(interim_input("twin are you there"), context=context)
-    await graph.ainvoke(turn_input(), context=context)
+    await graph.run(interim_input("twin are you there"), context=context)
+    await graph.run(turn_input(), context=context)
 
     assert [window.latest.text for window in judge.windows] == ["twin are you there"]
     assert speaker.utterances == [TWIN_REPLY]
@@ -167,7 +167,7 @@ async def test_a_judge_that_stays_silent_never_reaches_the_responder() -> None:
     speaker = FakeSpeaker()
     responder = FakeResponder()
 
-    await build_turn_graph().ainvoke(
+    await build_turn_graph().run(
         turn_input(),
         context=runtime(
             speaker, judge=ScriptedJudge(lambda _window: judged("stay_silent")), responder=responder
@@ -182,7 +182,7 @@ async def test_a_judge_that_replies_speaks_exactly_once() -> None:
     speaker = FakeSpeaker()
     journal = FakeJournal()
 
-    await build_turn_graph().ainvoke(
+    await build_turn_graph().run(
         turn_input(),
         context=runtime(
             speaker, judge=ScriptedJudge(lambda _window: judged("reply")), journal=journal
@@ -202,7 +202,7 @@ async def test_a_failed_judge_falls_back_to_the_name_without_failing_the_turn() 
     journal = FakeJournal()
     speaker = FakeSpeaker()
 
-    out = await build_turn_graph().ainvoke(
+    out = await build_turn_graph().run(
         turn_input(addressed=True),
         context=runtime(speaker, judge=ScriptedJudge(fail=TimeoutError()), journal=journal),
     )
@@ -217,7 +217,7 @@ async def test_a_failed_judge_falls_back_to_the_name_without_failing_the_turn() 
 async def test_without_a_judge_an_unnamed_line_stays_silent() -> None:
     speaker = FakeSpeaker()
 
-    await build_turn_graph().ainvoke(turn_input(), context=runtime(speaker))
+    await build_turn_graph().run(turn_input(), context=runtime(speaker))
 
     assert speaker.utterances == []
 
@@ -226,7 +226,7 @@ async def test_an_occupied_floor_is_held_without_asking_the_judge() -> None:
     judge = ScriptedJudge(lambda _window: judged("reply"))
     speaker = FakeSpeaker()
 
-    await build_turn_graph().ainvoke(
+    await build_turn_graph().run(
         turn_input(addressed=True, others_speaking=True), context=runtime(speaker, judge=judge)
     )
 
@@ -238,7 +238,7 @@ async def test_stop_event_skips_the_judge_and_never_invokes_the_speaker() -> Non
     judge = ScriptedJudge(lambda _window: judged("reply"))
     speaker = FakeSpeaker()
 
-    out = await build_turn_graph().ainvoke(stop_input(), context=runtime(speaker, judge=judge))
+    out = await build_turn_graph().run(stop_input(), context=runtime(speaker, judge=judge))
 
     assert judge.windows == []
     assert speaker.utterances == []
@@ -247,12 +247,11 @@ async def test_stop_event_skips_the_judge_and_never_invokes_the_speaker() -> Non
 
 async def test_speaking_generation_is_written_only_by_the_speak_node() -> None:
     graph = build_turn_graph()
-    writers: list[str] = []
 
-    for model_input in (stop_input(), turn_input(addressed=True)):
-        async for chunk in graph.astream(model_input, context=runtime(), stream_mode="updates"):
-            writers.extend(
-                node for node, update in chunk.items() if "speaking_generation" in update
-            )
+    stopped = await graph.run(stop_input(), runtime())
+    assert stopped["speaking_generation"] == stop_input()["speaking_generation"] + 1
 
-    assert writers == ["speak", "speak"]
+    silent = await graph.run(
+        turn_input(addressed=False), runtime(judge=ScriptedJudge(lambda _window: judged("silent")))
+    )
+    assert silent["speaking_generation"] == turn_input()["speaking_generation"]
