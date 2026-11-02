@@ -4,7 +4,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from functools import partial
 
-from fakeyou.conversation.actor import FloorActor
+from fakeyou.conversation.actor import EarlyOptions, FloorActor
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.observability.faults import (
     ConsumerSink,
@@ -13,7 +13,6 @@ from fakeyou.observability.faults import (
     record_consumer_fault,
 )
 from fakeyou.observability.journal import Journal
-from fakeyou.orchestration.early_turns import EarlyTurns
 from fakeyou.orchestration.kernel_port import (
     HeardChat,
     HeardFinal,
@@ -68,21 +67,6 @@ class _Lane:
                 self._work.task_done()
 
 
-class _EarlyAnswering:
-    def __init__(self, ingress: FloorActor, feed: "TurnFeed") -> None:
-        self._ingress = ingress
-        self._feed = feed
-
-    async def ready_to_answer(self, text: str) -> bool:
-        return await self._ingress.ready_to_answer(text)
-
-    async def receive_final(self, event: TranscriptEvent) -> None:
-        await self._feed.answer(event)
-
-    async def withdraw(self, *, reason: str) -> None:
-        await self._ingress.withdraw(reason=reason)
-
-
 @dataclass(frozen=True, slots=True)
 class EarlyCommit:
     hold_seconds: float
@@ -105,16 +89,15 @@ class TurnFeed:
         self._voice = _Lane("voice", sink)
         self._finals = _Lane("finals", sink)
         self._moments = _Lane("moments", sink)
-        self._early = (
-            EarlyTurns(
-                _EarlyAnswering(ingress, self),
-                hold_seconds=early.hold_seconds,
-                build_event=early.build_event,
-                journal=journal,
+        self._early = early is not None
+        if early is not None:
+            ingress.configure_early(
+                EarlyOptions(
+                    hold_seconds=early.hold_seconds,
+                    build_event=early.build_event,
+                ),
+                answer=self.answer,
             )
-            if early is not None
-            else None
-        )
 
     def attach(self, kernel: KernelPort) -> None:
         kernel.on_turn(self)
@@ -142,20 +125,18 @@ class TurnFeed:
     async def close(self) -> None:
         for lane in (self._voice, self._finals, self._moments):
             await lane.close()
-        if self._early is not None:
-            await self._early.close()
 
     async def _voice_edge(self, *, active: bool) -> None:
-        if self._early is not None:
-            self._early.on_speech(active=active)
+        if self._early:
+            self._ingress.note_speech(active=active)
 
     async def _interim(self, text: str) -> None:
         await self._ingress.handle_interim(text)
-        if self._early is not None:
-            await self._early.on_interim(text)
+        if self._early:
+            await self._ingress.note_interim(text)
 
     async def _settle(self, event: TranscriptEvent) -> None:
-        swallowed = self._early is not None and await self._early.settle(event)
+        swallowed = self._early and await self._ingress.settle_early(event)
         if swallowed:
             self._observe_moment(event)
         else:
