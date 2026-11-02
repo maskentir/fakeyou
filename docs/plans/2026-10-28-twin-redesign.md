@@ -1403,6 +1403,18 @@ Bentuk PR:
       Replay oue-4 tidak berubah.
     - B1b-3c-3, penghapusan sisa: `TurnRuntime` sebagai dependency bag,
       `turn_events.py`, dan nama lama yang tidak lagi dipakai.
+    - B1b-3c-3, implementasi (2026-11-02): `TurnRuntime` dihapus; turn
+      runner menerima protokol `TurnContext` dan `FloorActor` sendiri
+      konteksnya, jadi tidak ada lagi tas dependensi di antara keduanya.
+      Alias `MeetingTurns.lifecycle` dan `MeetingTurns.ingress` dibuang,
+      semua pemanggil memakai `actor`. `turn_events.py` dihapus:
+      `TurnEvent` pindah ke `turn_queue.py`, `JournalSink` ke
+      `observability/journal.py`. Test turn graph memakai satu helper
+      `TurnTestContext` dengan tipe protokol yang persis. Sisa pemanggil
+      alias lama yang lolos dari mypy karena handle-nya `Any` (tiga file
+      replay di `evals/` dan tiga test join) ketahuan dari suite dan ikut
+      dimigrasikan. Gate penuh: 10729 passed, 55 skipped (tanpa
+      `TEST_DATABASE_URL`); replay eval termasuk di suite itu.
     - Plan awal B1b-3c sebelum dipecah: participation sebagai fungsi,
       penghapusan `TurnLifecycle`, `TurnIngress`, `turn_queue.py`,
       `turn_events.py`, `BargeLatch`, `SpeechFloor`, dan `TurnRuntime`, plus
