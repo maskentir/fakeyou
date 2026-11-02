@@ -199,6 +199,20 @@ async def test_a_finished_question_is_answered_before_the_final(tmp_path: Path) 
     await setup.close()
 
 
+async def test_an_early_turn_reaches_the_kernel_dialogue_before_the_final(
+    tmp_path: Path,
+) -> None:
+    setup = RealSetup(tmp_path)
+
+    await setup.speak_then_pause(QUESTION)
+
+    assert [line.text for line in setup.kernel.state.dialogue.lines] == [QUESTION]
+    await setup.final(QUESTION)
+    await setup.settle_all()
+    assert setup.audio.spoken == [QUESTION]
+    await setup.close()
+
+
 async def test_a_final_swallowed_by_an_early_turn_still_reaches_the_moments(
     tmp_path: Path,
 ) -> None:

@@ -294,10 +294,24 @@ class KernelPort:
         for observation in roster_observations(roster):
             self.observe("meet_protocol", observation)
 
-    def transcript(self, event: TranscriptEvent, row: SpeakerRow | None) -> None:
+    def _transcript_observation(
+        self, event: TranscriptEvent, row: SpeakerRow | None
+    ) -> TranscriptObserved:
         if row is not None:
             self.observe("speaker_registry", voice_track_observation(row))
-        observation = transcript_observation(event, row.uuid if row is not None else None)
+        return transcript_observation(event, row.uuid if row is not None else None)
+
+    def early(self, event: TranscriptEvent, row: SpeakerRow | None) -> None:
+        observation = self._transcript_observation(event, row)
+        self.observe(
+            "stt",
+            observation,
+            event_id=f"{event.id}:early:{event.text}",
+            correlation_id=event.id,
+        )
+
+    def transcript(self, event: TranscriptEvent, row: SpeakerRow | None) -> None:
+        observation = self._transcript_observation(event, row)
         event_id = f"{event.id}:{'final' if event.finalized else 'interim'}:{event.text}"
         if not event.finalized:
             self.observe("stt", observation, event_id=event_id, correlation_id=event.id)

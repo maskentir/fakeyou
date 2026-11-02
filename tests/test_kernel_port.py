@@ -1,3 +1,5 @@
+from typing import Any, cast
+
 import pytest
 
 from fakeyou.audio.playback import PlaybackEvent
@@ -79,6 +81,28 @@ def test_an_unbound_voice_keeps_the_room_open() -> None:
 
     assert kernel.presence().sole_human_responder is False
     assert kernel.presence().unresolved == 1
+
+
+def test_an_early_transcript_is_attributed_without_starting_a_turn() -> None:
+    kernel = port()
+    joined(kernel)
+    signals: list[object] = []
+
+    class Collecting:
+        def accept(self, signal: object) -> None:
+            signals.append(signal)
+
+        async def idle(self) -> None:
+            return None
+
+    kernel.on_turn(cast(Any, Collecting()))
+    kernel.early(final("early-1", "can you hear me?"), row("uuid-a", "dev-ayu"))
+    kernel.drain()
+
+    actor = kernel.actor("early-1")
+    assert (actor.kind, actor.device_id) == ("participant", "dev-ayu")
+    assert kernel.state.dialogue.lines[-1].speaker == Ref("track", "uuid-a")
+    assert signals == []
 
 
 def test_the_same_final_is_only_reduced_once() -> None:
