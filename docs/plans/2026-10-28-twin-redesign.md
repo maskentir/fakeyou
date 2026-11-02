@@ -1447,6 +1447,18 @@ Bentuk PR:
     `receive_final` (temuan review: sebelumnya giliran antre tetap
     bicara setelah `early_turn_cancelled`). Nama
     dan field `early_turn_started/cancelled/verified` tidak berubah.
+  - B1c-2, implementasi (2026-11-02): event early sekarang ditawarkan ke
+    kernel saat dibuat. `KernelPort.early(event, row)` mereduksi observasi
+    transkrip yang sama seperti final biasa (termasuk observasi voice
+    track dari baris registry) tetapi tanpa sinyal giliran, jadi tidak ada
+    final kedua yang ditawarkan ke feed. `TranscriptDrain.early_event`
+    memakai atribusi voice activity yang sama seperti `_mixed_stream`
+    (`journal_fields` → baris registry) lalu memanggilnya; sebelumnya
+    atribusi itu dibuang dan id sintetis early tidak pernah masuk
+    `dialogue.lines`, jadi `kernel.actor(...)` selalu `UNATTRIBUTED` untuk
+    giliran early. Konsekuensinya baris early dan baris final aslinya
+    sama-sama ada di dialogue kernel (teks sama, `source_id` berbeda);
+    history composer tetap dari record, bukan dari kernel.
     Test unit `EarlyTurns` dipindah ke level actor
     (`test_actor_early_commit.py`, termasuk bukti mutasi: withdraw tanpa
     syarat membuat test giliran berikutnya gagal) dan empat test
