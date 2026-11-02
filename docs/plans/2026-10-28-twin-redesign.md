@@ -1441,7 +1441,11 @@ Bentuk PR:
     terhadap final yang sedang dinilai tidak berubah. Withdraw sekarang
     menargetkan giliran early itu sendiri: `cancel_speech` hanya jalan
     kalau `transcript_id` pemegang floor sama dengan event early, bukan
-    membatalkan apa pun yang memegang floor (bug lama di peta B1). Nama
+    membatalkan apa pun yang memegang floor (bug lama di peta B1), dan
+    giliran early yang masih antre atau sedang di-admit dibuang lewat
+    `PendingFinals.discard` plus penanda withdrawn yang dicek
+    `receive_final` (temuan review: sebelumnya giliran antre tetap
+    bicara setelah `early_turn_cancelled`). Nama
     dan field `early_turn_started/cancelled/verified` tidak berubah.
     Test unit `EarlyTurns` dipindah ke level actor
     (`test_actor_early_commit.py`, termasuk bukti mutasi: withdraw tanpa
@@ -1449,7 +1453,7 @@ Bentuk PR:
     integrasi early di `test_turn_feed.py` kini memakai actor asli,
     bukan fake; di situ kelihatan semantik aslinya: final kedua untuk
     twin membatalkan giliran pertama yang masih disiapkan
-    (`new_final`), admission tetap berurutan. Gate penuh: 10716 passed,
+    (`new_final`), admission tetap berurutan. Gate penuh: 10717 passed,
     55 skipped; selisih dari 10729 adalah test `EarlyTurns` yang dipindah
     dan kasus parametris per file untuk dua file yang dihapus.
 
