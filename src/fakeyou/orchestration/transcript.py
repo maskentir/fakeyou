@@ -13,7 +13,7 @@ from fakeyou.foundation.transcript import (
     transcript_event,
     transcript_stamp,
 )
-from fakeyou.identity.identity import SpeakerRegistry
+from fakeyou.identity.identity import SpeakerRegistry, SpeakerRow
 from fakeyou.identity.verify import VerificationInputs, claim_of
 from fakeyou.identity.voiceprint_match import (
     VoiceScoreAttribution,
@@ -190,18 +190,24 @@ class TranscriptDrain:
     def _registry(self) -> SpeakerRegistry | None:
         return self._scoring.registry if self._scoring is not None else None
 
+    def _row(self, extra: Mapping[str, Any] | None) -> SpeakerRow | None:
+        speaker_uuid = (extra or {}).get("speaker_uuid")
+        registry = self._registry()
+        if registry is None or not isinstance(speaker_uuid, str) or not speaker_uuid:
+            return None
+        return registry.row(speaker_uuid)
+
     def _observe(self, event: TranscriptEvent, extra: Mapping[str, Any] | None) -> None:
         kernel = self._sinks.kernel
         if kernel is None:
             return
-        speaker_uuid = (extra or {}).get("speaker_uuid")
-        registry = self._registry()
-        row = (
-            registry.row(speaker_uuid)
-            if registry is not None and isinstance(speaker_uuid, str) and speaker_uuid
-            else None
-        )
-        kernel.transcript(event, row)
+        kernel.transcript(event, self._row(extra))
+
+    def _observe_early(self, event: TranscriptEvent, extra: Mapping[str, Any] | None) -> None:
+        kernel = self._sinks.kernel
+        if kernel is None:
+            return
+        kernel.early(event, self._row(extra))
 
     async def _score_turn(
         self, speaker_uuid: Any, stream_id: str, device: str | None, *, finalized: bool
@@ -316,7 +322,10 @@ class TranscriptDrain:
 
     def early_event(self, text: str) -> TranscriptEvent:
         update = TranscriptUpdate(text=text, final=True, timestamp=datetime.now(UTC).isoformat())
-        return self._attributed(update)[0]
+        event, attribution = self._attributed(update)
+        extra = attribution.journal_fields() if attribution is not None else None
+        self._observe_early(event, extra)
+        return event
 
     async def _mixed_stream(self, update: TranscriptUpdate) -> None:
         event, attribution = self._attributed(update)
