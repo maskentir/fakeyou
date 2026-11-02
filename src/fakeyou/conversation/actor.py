@@ -270,6 +270,7 @@ class FloorActor:
         self._early_timer: asyncio.Task[None] | None = None
         self._early_starting: asyncio.Task[None] | None = None
         self._early_commit: _EarlyCommit | None = None
+        self._early_withdrawn: set[str] = set()
         self._speaker = _ActorSpeaker(self)
 
     @property
@@ -726,9 +727,15 @@ class FloorActor:
         await self._floor.interrupt("close")
 
     async def receive_final(self, event: TranscriptEvent) -> ParticipationDecision | None:
+        if event.id in self._early_withdrawn:
+            self._early_withdrawn.discard(event.id)
+            return None
         if self._open_final(event) is None:
             return None
         output = await self._invoke_final(event)
+        if event.id in self._early_withdrawn:
+            self._early_withdrawn.discard(event.id)
+            self._queue.discard(event.id)
         self.start_requested()
         decision: ParticipationDecision | None = output["participation"]
         if decision is not None and decision.decision in _ADMITTED:
@@ -859,6 +866,8 @@ class FloorActor:
             transcript_id=commit.event.id,
             reason=reason,
         )
+        self._early_withdrawn.add(commit.event.id)
+        self._queue.discard(commit.event.id)
         active = self._floor.active
         if active is not None and active.transcript_id == commit.event.id:
             await cancel_speech(self._floor, self._journal, reason=reason)

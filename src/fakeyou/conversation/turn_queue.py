@@ -35,6 +35,13 @@ class PendingFinals:
     def holds(self, event: TranscriptEvent) -> bool:
         return any(pending.id == event.id for pending in self._events)
 
+    def discard(self, event_id: str) -> bool:
+        kept = [pending for pending in self._events if pending.id != event_id]
+        if len(kept) == len(self._events):
+            return False
+        self._events = deque(kept)
+        return True
+
     def take(self) -> tuple[TranscriptEvent, ...]:
         events = tuple(self._events)
         self._events.clear()

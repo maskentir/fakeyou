@@ -69,7 +69,10 @@ MORE = "Rani, when is the beta and who runs the QA for it"
 
 
 def early_loop(
-    journal: RecordingJournal, responder: FakeResponder
+    journal: RecordingJournal,
+    responder: FakeResponder,
+    *,
+    audio: FakeReplyAudio | None = None,
 ) -> tuple[MeetingTurns, FakeReplyAudio]:
     loop = build_meeting_turns(
         responder,
@@ -78,7 +81,7 @@ def early_loop(
         ),
         diagnostics=Diagnostics(journal=journal),
     )
-    audio = FakeReplyAudio()
+    audio = audio or FakeReplyAudio()
     loop.actor.bind(audio)
     counter = iter(range(100))
     loop.actor.configure_early(
@@ -173,6 +176,55 @@ async def test_a_resumed_line_does_not_withdraw_a_later_turn(journal: RecordingJ
     assert journal.events("early_turn_cancelled")
     assert journal.events("agent_cancelled") == []
     assert audio.spoken == [QUESTION, "Second answer."]
+    await loop.actor.close()
+
+
+class FirstBlockingAudio(FakeReplyAudio):
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    @override
+    async def speak(
+        self,
+        text: str,
+        *,
+        sentence_index: int | None = None,
+        transcript_id: str | None = None,
+        language: str | None = None,
+    ) -> None:
+        if text == "Rani, first?":
+            self.speaking = True
+            self.entered.set()
+            await self.release.wait()
+            self.speaking = False
+        await super().speak(
+            text, sentence_index=sentence_index, transcript_id=transcript_id, language=language
+        )
+
+
+async def test_a_resumed_line_withdraws_a_queued_early_turn(journal: RecordingJournal) -> None:
+    audio = FirstBlockingAudio()
+    loop, _bound = early_loop(journal, FakeResponder(), audio=audio)
+    await loop.actor.receive_final(event("t1", "Rani, first?"))
+    assert await asyncio.wait_for(audio.entered.wait(), 2)
+
+    await loop.actor.note_interim(QUESTION)
+    loop.actor.note_speech(active=False)
+    for _ in range(200):
+        if loop.actor.queue.pending:
+            break
+        await asyncio.sleep(0)
+    assert loop.actor.queue.pending
+    assert journal.events("early_turn_started")
+
+    await loop.actor.note_interim(MORE)
+    audio.release.set()
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
+
+    assert journal.events("early_turn_cancelled")[0]["reason"] == "speech_resumed"
+    assert audio.spoken == []
     await loop.actor.close()
 
 
