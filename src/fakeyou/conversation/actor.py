@@ -1,7 +1,8 @@
 import asyncio
 import json
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from functools import partial
 from typing import Any, Literal, Self
 
@@ -71,6 +72,8 @@ _STOP_FILLER = frozenset(_STOP_DATA["filler"])
 _STOP_PHRASES = frozenset(_STOP_DATA["phrases"])
 _STOP_MAX_TOKENS = 6
 _OVERLAP_WINDOW_SECONDS = 20.0
+_RESUMED_MATCH = 0.7
+_EXTRA_WORDS_FOR_MORE = 3
 WAKEUP_FLOOR_SECONDS = 0.25
 PublicPhase = Literal["active", "failed", "leaving"]
 ReplyMode = Literal["whole_turn", "streamed"]
@@ -96,6 +99,17 @@ def public_phase(phase: ConversationPhase) -> PublicPhase:
 def _tokens(text: str) -> list[str]:
     cleaned = "".join(ch if ch.isalnum() or ch.isspace() else " " for ch in text.casefold())
     return cleaned.split()
+
+
+def _early_words(text: str) -> list[str]:
+    return "".join(ch for ch in text.casefold() if ch.isalnum() or ch.isspace()).split()
+
+
+def says_more(text: str, committed: str) -> bool:
+    before, after = _early_words(committed), _early_words(text)
+    if len(after) <= len(before):
+        return False
+    return SequenceMatcher(None, before, after[: len(before)]).ratio() >= _RESUMED_MATCH
 
 
 def is_stop_command(text: str, names: Sequence[str]) -> bool:
@@ -157,6 +171,19 @@ class ActorWiring:
     responder: Responder | None = None
     judging: TurnJudging | None = None
     clock: Callable[[], float] = monotonic
+
+
+@dataclass(frozen=True, slots=True)
+class EarlyOptions:
+    hold_seconds: float
+    build_event: Callable[[str], TranscriptEvent]
+
+
+@dataclass(slots=True)
+class _EarlyCommit:
+    event: TranscriptEvent
+    text: str
+    resumed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,6 +263,14 @@ class FloorActor:
         self._judge_tasks: set[asyncio.Task[None]] = set()
         self._last_attention: str | None = None
         self._last_final: tuple[str, str, float] | None = None
+        self._early_options: EarlyOptions | None = None
+        self._early_answer: Callable[[TranscriptEvent], Awaitable[None]] | None = None
+        self._early_text = ""
+        self._early_version = 0
+        self._early_timer: asyncio.Task[None] | None = None
+        self._early_starting: asyncio.Task[None] | None = None
+        self._early_commit: _EarlyCommit | None = None
+        self._early_withdrawn: set[str] = set()
         self._speaker = _ActorSpeaker(self)
 
     @property
@@ -415,6 +450,15 @@ class FloorActor:
 
     def configure_deferred(self, options: DeferredOptions) -> None:
         self._deferred_options = options
+
+    def configure_early(
+        self,
+        options: EarlyOptions,
+        *,
+        answer: Callable[[TranscriptEvent], Awaitable[None]] | None = None,
+    ) -> None:
+        self._early_options = options
+        self._early_answer = answer
 
     def configure_control(self, control: ReplyControl | None) -> None:
         self._control = control
@@ -614,6 +658,9 @@ class FloorActor:
             raise self._failure
 
     async def wait_idle(self) -> None:
+        for task in (self._early_timer, self._early_starting):
+            if task is not None and not task.done():
+                await asyncio.shield(task)
         for task in self._lane_tasks():
             if task is not None:
                 await asyncio.shield(task)
@@ -647,6 +694,14 @@ class FloorActor:
         self._admitted.advance()
         self._queue.clear()
         self._deferred.clear()
+        early_tasks = [
+            task for task in (self._early_timer, self._early_starting) if task is not None
+        ]
+        self._early_timer = self._early_starting = None
+        for early_task in early_tasks:
+            early_task.cancel()
+        if early_tasks:
+            await asyncio.gather(*early_tasks, return_exceptions=True)
         if self._wakeup is not None:
             self._wakeup.cancel()
             self._wakeup = None
@@ -672,9 +727,15 @@ class FloorActor:
         await self._floor.interrupt("close")
 
     async def receive_final(self, event: TranscriptEvent) -> ParticipationDecision | None:
+        if event.id in self._early_withdrawn:
+            self._early_withdrawn.discard(event.id)
+            return None
         if self._open_final(event) is None:
             return None
         output = await self._invoke_final(event)
+        if event.id in self._early_withdrawn:
+            self._early_withdrawn.discard(event.id)
+            self._queue.discard(event.id)
         self.start_requested()
         decision: ParticipationDecision | None = output["participation"]
         if decision is not None and decision.decision in _ADMITTED:
@@ -719,8 +780,97 @@ class FloorActor:
         verdict = decision_of(judgement, judging.thresholds, named=self._addressed(text))
         return verdict.decision in _ADMITTED
 
-    async def withdraw(self, *, reason: str) -> None:
-        await cancel_speech(self._floor, self._journal, reason=reason)
+    def note_speech(self, *, active: bool) -> None:
+        if self._early_options is None:
+            return
+        self._restart_early()
+        if active or not self._early_text.strip() or self._early_commit is not None:
+            return
+        self._early_timer = asyncio.create_task(
+            self._after_early_hold(self._early_version, self._early_text)
+        )
+
+    async def note_interim(self, text: str) -> None:
+        if self._early_options is None:
+            return
+        self._early_text = text
+        self._restart_early()
+        commit = self._early_commit
+        if commit is not None and not commit.resumed and says_more(text, commit.text):
+            await self._cancel_early(commit, reason="speech_resumed")
+
+    async def settle_early(self, final: TranscriptEvent) -> bool:
+        if self._early_options is None:
+            return False
+        commit, self._early_commit = self._early_commit, None
+        self._early_text = ""
+        self._restart_early()
+        if commit is None:
+            return False
+        if (
+            not commit.resumed
+            and says_more(final.text, commit.text)
+            and (len(_early_words(final.text)) - len(_early_words(commit.text)))
+            >= _EXTRA_WORDS_FOR_MORE
+        ):
+            await self._cancel_early(commit, reason="final_says_more")
+        if commit.resumed:
+            return False
+        self._journal.record(
+            "early_turn_verified",
+            source="agent",
+            transcript_id=final.id,
+            early_transcript_id=commit.event.id,
+            early_words=len(_early_words(commit.text)),
+            final_words=len(_early_words(final.text)),
+        )
+        return True
+
+    def _restart_early(self) -> None:
+        self._early_version += 1
+        timer, self._early_timer = self._early_timer, None
+        if timer is not None and not timer.done():
+            timer.cancel()
+
+    async def _after_early_hold(self, version: int, text: str) -> None:
+        options = self._early_options
+        if options is None:
+            return
+        await asyncio.sleep(options.hold_seconds)
+        if version != self._early_version:
+            return
+        if not await self.ready_to_answer(text):
+            return
+        if version != self._early_version or self._early_commit is not None:
+            return
+        event = options.build_event(text)
+        self._early_commit = _EarlyCommit(event, text)
+        self._early_starting, self._early_timer = self._early_timer, None
+        self._journal.record(
+            "early_turn_started",
+            source="agent",
+            transcript_id=event.id,
+            words=len(_early_words(text)),
+            hold_ms=round(options.hold_seconds * 1000),
+        )
+        if self._early_answer is not None:
+            await self._early_answer(event)
+        else:
+            await self.receive_final(event)
+
+    async def _cancel_early(self, commit: _EarlyCommit, *, reason: str) -> None:
+        commit.resumed = True
+        self._journal.record(
+            "early_turn_cancelled",
+            source="agent",
+            transcript_id=commit.event.id,
+            reason=reason,
+        )
+        self._early_withdrawn.add(commit.event.id)
+        self._queue.discard(commit.event.id)
+        active = self._floor.active
+        if active is not None and active.transcript_id == commit.event.id:
+            await cancel_speech(self._floor, self._journal, reason=reason)
 
     async def handle_interim(self, text: str) -> None:
         if text.strip():

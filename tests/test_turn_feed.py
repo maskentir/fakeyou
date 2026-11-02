@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast, override
@@ -7,7 +8,10 @@ import pytest
 
 from fakeyou.audio.voice_activity import SlotBinder
 from fakeyou.config.identifiers import SessionId
+from fakeyou.conversation.meeting_turns import TurnInteraction, build_meeting_turns
+from fakeyou.conversation.turn_judge import JudgeWindow, TurnJudgement
 from fakeyou.foundation.transcript import TranscriptEvent, TranscriptUpdate
+from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.orchestration import kernel_port
 from fakeyou.orchestration.kernel_port import KernelPort, TurnSignal
 from fakeyou.orchestration.transcript import (
@@ -20,16 +24,17 @@ from fakeyou.orchestration.turn_feed import EarlyCommit, TurnFeed
 from fakeyou.persistence.record import MeetingRecord, TranscriptEntry, meeting_record_path
 from fakeyou.session.contracts import ChatObserved
 from fakeyou.session.kernel import SessionKernel
+from tests._audio_fakes import FakeReplyAudio
+from tests._conversation_fakes import FakeResponder, ScriptedJudge, judged
 from tests._persistence_fakes import RecordingJournal
 
 QUESTION = "Rani, when is the beta?"
 
 
 class Conversation:
-    def __init__(self, *, ready: bool = True) -> None:
+    def __init__(self) -> None:
         self.order: list[str] = []
         self.started: list[str] = []
-        self.ready = ready
         self.finals: list[TranscriptEvent] = []
         self.interims: list[str] = []
         self.chats: list[TranscriptEvent] = []
@@ -41,10 +46,6 @@ class Conversation:
     async def handle_interim(self, text: str) -> None:
         self.interims.append(text)
         self.interim_heard.set()
-
-    async def ready_to_answer(self, text: str) -> bool:
-        del text
-        return self.ready
 
     async def receive_final(self, event: TranscriptEvent) -> None:
         self.started.append(event.text)
@@ -58,9 +59,6 @@ class Conversation:
         self.order.append(f"chat:{event.text}")
         return True
 
-    async def withdraw(self, *, reason: str) -> None:
-        del reason
-
 
 class Setup:
     def __init__(
@@ -68,9 +66,10 @@ class Setup:
         tmp_path: Path,
         conversation: Conversation,
         *,
-        hold: float | None = 0.0,
+        hold: float | None = None,
         per_stream: bool = False,
     ) -> None:
+        del hold
         self.conversation = conversation
         self.journal = RecordingJournal("meeting-9")
         self.record = MeetingRecord(meeting_record_path(tmp_path, SessionId("meeting-9")))
@@ -86,7 +85,6 @@ class Setup:
         self.feed = TurnFeed(
             cast(Any, conversation),
             journal=self.journal,
-            early=EarlyCommit(hold, self.drain.early_event) if hold is not None else None,
             on_final=self.observe_moment,
         )
         self.feed.attach(self.kernel)
@@ -116,18 +114,84 @@ class Setup:
         self.record.close()
 
 
+class RealSetup:
+    def __init__(
+        self,
+        tmp_path: Path,
+        *,
+        responder: FakeResponder | None = None,
+        verdict: Callable[[JudgeWindow], TurnJudgement] | None = None,
+    ) -> None:
+        self.journal = RecordingJournal("meeting-9")
+        self.record = MeetingRecord(meeting_record_path(tmp_path, SessionId("meeting-9")))
+        self.kernel = KernelPort.for_meeting("meeting-9")
+        self.kernel.call_state("in_call")
+        self.moments: list[str] = []
+        self.audio = FakeReplyAudio()
+        self.turns = build_meeting_turns(
+            responder or FakeResponder(),
+            interaction=TurnInteraction(
+                twin_names=["Rani"],
+                judge=ScriptedJudge(verdict or (lambda _window: judged("reply"))),
+            ),
+            diagnostics=Diagnostics(journal=self.journal),
+        )
+        self.turns.actor.configure_barge_in(enabled=False)
+        self.turns.actor.bind(self.audio)
+        self.drain: TranscriptDrain = build_transcript_callback(
+            sinks=TranscriptSinks(self.journal, self.record, kernel=self.kernel),
+            binder=SlotBinder(),
+            voice_activity=None,
+            options=DrainOptions(),
+        )
+        self.feed = TurnFeed(
+            self.turns.actor,
+            journal=self.journal,
+            early=EarlyCommit(0.0, self.drain.early_event),
+            on_final=self.observe_moment,
+        )
+        self.feed.attach(self.kernel)
+
+    async def observe_moment(self, event: TranscriptEvent) -> None:
+        self.moments.append(event.text)
+
+    async def settle_all(self) -> None:
+        await self.kernel.settled()
+        await asyncio.wait_for(self.turns.actor.wait_idle(), 5)
+        await self.kernel.settled()
+
+    async def speak_then_pause(self, text: str) -> None:
+        await self.drain.on_interim(TranscriptUpdate(text=text, final=False))
+        await self.drain.on_vad(active=False)
+        await self.settle_all()
+
+    async def final(self, text: str) -> None:
+        await self.drain(
+            TranscriptUpdate(
+                text=text,
+                final=True,
+                timestamp="2026-10-25T01:00:00+00:00",
+            )
+        )
+
+    async def close(self) -> None:
+        await self.feed.close()
+        await self.turns.actor.close()
+        self.record.close()
+
+
 def recorded(record: MeetingRecord) -> list[str]:
     return [entry.text for entry in record.entries() if isinstance(entry, TranscriptEntry)]
 
 
 async def test_a_finished_question_is_answered_before_the_final(tmp_path: Path) -> None:
-    setup = Setup(tmp_path, Conversation())
+    setup = RealSetup(tmp_path)
 
     await setup.speak_then_pause(QUESTION)
     await setup.final(QUESTION)
-    await setup.kernel.settled()
+    await setup.settle_all()
 
-    assert [event.text for event in setup.conversation.finals] == [QUESTION]
+    assert setup.audio.spoken == [QUESTION]
     assert recorded(setup.record) == [QUESTION]
     assert [row["event"] for row in setup.journal.events("early_turn_verified")] == [
         "early_turn_verified"
@@ -138,28 +202,31 @@ async def test_a_finished_question_is_answered_before_the_final(tmp_path: Path) 
 async def test_a_final_swallowed_by_an_early_turn_still_reaches_the_moments(
     tmp_path: Path,
 ) -> None:
-    setup = Setup(tmp_path, Conversation())
+    setup = RealSetup(tmp_path)
 
     await setup.speak_then_pause(QUESTION)
     await setup.final(QUESTION)
-    await setup.kernel.settled()
+    await setup.settle_all()
 
     assert setup.moments == [QUESTION]
     await setup.close()
 
 
 async def test_without_a_ready_judgement_the_final_starts_the_turn(tmp_path: Path) -> None:
-    setup = Setup(tmp_path, Conversation(ready=False))
+    setup = RealSetup(
+        tmp_path,
+        verdict=lambda window: judged("reply", finished=window.latest.text.endswith("beta?")),
+    )
 
     await setup.speak_then_pause("Rani, so about the")
     await setup.final("Rani, so about the beta?")
-    await setup.kernel.settled()
+    await setup.settle_all()
 
-    assert [event.text for event in setup.conversation.finals] == ["Rani, so about the beta?"]
+    assert setup.audio.spoken == ["Rani, so about the beta?"]
     await setup.close()
 
 
-async def test_early_turns_stay_off_without_a_hold(tmp_path: Path) -> None:
+async def test_early_commit_stays_off_without_a_hold(tmp_path: Path) -> None:
     setup = Setup(tmp_path, Conversation(), hold=None)
 
     await setup.speak_then_pause(QUESTION)
@@ -288,26 +355,30 @@ def offer_chat(kernel: KernelPort, text: str) -> None:
     )
 
 
-async def test_an_early_turn_waits_for_the_final_still_being_judged(tmp_path: Path) -> None:
-    conversation = Conversation()
-    conversation.release.clear()
-    setup = Setup(tmp_path, conversation)
+async def test_an_early_turn_is_admitted_after_the_final_being_prepared(
+    tmp_path: Path,
+) -> None:
+    gate = asyncio.Event()
+    responder = FakeResponder(gate)
+    setup = RealSetup(tmp_path, responder=responder)
 
     await setup.final("Rani, first?")
     setup.kernel.drain()
-    await asyncio.wait_for(conversation.judging.wait(), timeout=2)
+    await asyncio.wait_for(responder.started.wait(), timeout=2)
     await setup.drain.on_interim(TranscriptUpdate(text="Rani, second?", final=False))
     await setup.drain.on_vad(active=False)
     setup.kernel.drain()
-    await asyncio.wait_for(conversation.interim_heard.wait(), timeout=2)
     for _ in range(20):
         await asyncio.sleep(0)
 
     assert setup.journal.events("early_turn_started")
-    assert (conversation.started, conversation.finals) == (["Rani, first?"], [])
-    conversation.release.set()
-    await asyncio.wait_for(setup.kernel.settled(), timeout=2)
-    assert [event.text for event in conversation.finals] == ["Rani, first?", "Rani, second?"]
+    assert setup.audio.spoken == []
+    gate.set()
+    await asyncio.wait_for(setup.settle_all(), timeout=5)
+    started = [row["request_id"] for row in setup.journal.events("agent_started")]
+    assert [request.rsplit(":", 1)[1] for request in started] == ["1", "2"]
+    assert [row["reason"] for row in setup.journal.events("agent_cancelled")] == ["new_final"]
+    assert setup.audio.spoken == ["Rani, second?"]
     await setup.close()
 
 
