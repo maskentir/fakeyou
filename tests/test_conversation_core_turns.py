@@ -18,12 +18,12 @@ async def test_new_final_cancels_waiting_model_and_answers_newest_once(
 ) -> None:
     responder, audio = FakeResponder(asyncio.Event()), FakeReplyAudio()
     loop = build_meeting_turns(responder, diagnostics=Diagnostics(journal=journal))
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(event("t1", "first"))
+    loop.actor.bind(audio)
+    await loop.actor.receive_final(event("t1", "first"))
     assert await asyncio.wait_for(responder.started.wait(), 2)
-    await loop.ingress.receive_final(event("t2", "second"))
+    await loop.actor.receive_final(event("t2", "second"))
     assert responder.cancelled.is_set()
-    await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
     assert responder.max_active == 1
     assert [[item.text for item in call] for call in responder.calls] == [
         ["first"],
@@ -47,34 +47,34 @@ async def test_new_final_cancels_waiting_model_and_answers_newest_once(
     ) == ("t1", 1, "new_final")
     assert cancelled[0]["duration_ms"] >= 0
     assert journal.events("agent_failed") == []
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_buffers_before_bind_and_ignores_duplicates_interims_and_empty_text() -> None:
     responder, audio = FakeResponder(), FakeReplyAudio()
     loop = build_meeting_turns(responder)
-    await loop.ingress.receive_final(event("provisional", finalized=False))
-    await loop.ingress.receive_final(event("empty", "  "))
-    await loop.ingress.receive_final(event("one", "kept"))
-    await loop.ingress.receive_final(event("one", "kept"))
+    await loop.actor.receive_final(event("provisional", finalized=False))
+    await loop.actor.receive_final(event("empty", "  "))
+    await loop.actor.receive_final(event("one", "kept"))
+    await loop.actor.receive_final(event("one", "kept"))
     assert responder.calls == []
-    loop.lifecycle.bind(audio)
-    await loop.lifecycle.wait_idle()
+    loop.actor.bind(audio)
+    await loop.actor.wait_idle()
     assert audio.spoken == ["kept"]
-    assert len(loop.ingress.events) == 1
-    await loop.lifecycle.close()
-    await loop.ingress.receive_final(event("after-close"))
+    assert len(loop.actor.events) == 1
+    await loop.actor.close()
+    await loop.actor.receive_final(event("after-close"))
     assert len(responder.calls) == 1
 
 
 async def test_close_cancels_model_and_prevents_later_speech() -> None:
     responder, audio = FakeResponder(asyncio.Event()), FakeReplyAudio()
     loop = build_meeting_turns(responder)
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(event("one"))
+    loop.actor.bind(audio)
+    await loop.actor.receive_final(event("one"))
     await responder.started.wait()
-    await loop.lifecycle.close()
-    await loop.lifecycle.close()
+    await loop.actor.close()
+    await loop.actor.close()
     assert responder.cancelled.is_set()
     assert audio.spoken == []
 
@@ -120,11 +120,11 @@ async def test_floor_hold_propagates_turn_errors() -> None:
 async def test_loop_speaks_capped_reply_head() -> None:
     responder, audio = FakeResponder(), FakeReplyAudio()
     loop = build_meeting_turns(responder)
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(event("one", "One. Two. Three. Four."))
-    await loop.lifecycle.wait_idle()
+    loop.actor.bind(audio)
+    await loop.actor.receive_final(event("one", "One. Two. Three. Four."))
+    await loop.actor.wait_idle()
     assert audio.spoken == ["One. Two."]
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_observer_failure_preserves_model_and_speech() -> None:
@@ -134,12 +134,12 @@ async def test_observer_failure_preserves_model_and_speech() -> None:
 
     responder, audio = FakeResponder(), FakeReplyAudio()
     loop = build_meeting_turns(responder, interaction=TurnInteraction(on_transition=broken))
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(event("one"))
-    await loop.lifecycle.wait_idle()
+    loop.actor.bind(audio)
+    await loop.actor.receive_final(event("one"))
+    await loop.actor.wait_idle()
     assert len(responder.calls) == 1
     assert len(audio.spoken) == 1
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 def test_cap_spoken_reply_keeps_short_replies() -> None:
@@ -210,12 +210,12 @@ async def test_interim_cancels_pre_pcm_child_without_answering(journal: Recordin
         interaction=TurnInteraction(barge_in=True),
         diagnostics=Diagnostics(journal=journal),
     )
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(event("t1", "first"))
+    loop.actor.bind(audio)
+    await loop.actor.receive_final(event("t1", "first"))
     assert await asyncio.wait_for(responder.started.wait(), 2)
-    await loop.ingress.handle_interim("one moment")
+    await loop.actor.handle_interim("one moment")
     assert not responder.cancelled.is_set()
-    await loop.ingress.handle_interim("please hold on a moment")
+    await loop.actor.handle_interim("please hold on a moment")
     assert responder.cancelled.is_set()
     assert len(responder.calls) == 1
     assert audio.spoken == []
@@ -223,11 +223,11 @@ async def test_interim_cancels_pre_pcm_child_without_answering(journal: Recordin
     assert requested["reason"] == "interim"
     assert (requested["request_id"], requested["transcript_id"]) == ("t1:1", "t1")
     assert journal.events("barge_in_detected") != []
-    await loop.ingress.receive_final(event("t2", "second"))
-    await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
+    await loop.actor.receive_final(event("t2", "second"))
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
     assert audio.spoken == ["second"]
     assert journal.events("agent_failed") == []
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_duplicate_final_and_interim_do_not_reschedule(journal: RecordingJournal) -> None:
@@ -237,40 +237,40 @@ async def test_duplicate_final_and_interim_do_not_reschedule(journal: RecordingJ
         interaction=TurnInteraction(barge_in=True),
         diagnostics=Diagnostics(journal=journal),
     )
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(event("t1", "first"))
+    loop.actor.bind(audio)
+    await loop.actor.receive_final(event("t1", "first"))
     assert await asyncio.wait_for(responder.started.wait(), 2)
-    await loop.ingress.receive_final(event("t1", "first"))
+    await loop.actor.receive_final(event("t1", "first"))
     assert not responder.cancelled.is_set()
     assert len(responder.calls) == 1
-    await loop.ingress.handle_interim("please hold on a moment")
+    await loop.actor.handle_interim("please hold on a moment")
     assert responder.cancelled.is_set()
-    await loop.ingress.handle_interim("please hold on a moment")
+    await loop.actor.handle_interim("please hold on a moment")
     [requested] = journal.events("agent_cancel_requested")
     assert requested["reason"] == "interim"
     assert len(responder.calls) == 1
-    await loop.ingress.receive_final(event("t2", "second"))
-    await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
+    await loop.actor.receive_final(event("t2", "second"))
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
     assert audio.spoken == ["second"]
     assert [[item.text for item in call] for call in responder.calls] == [
         ["first"],
         ["second"],
     ]
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_close_cancels_active_turn_and_never_reschedules(journal: RecordingJournal) -> None:
     responder, audio = FakeResponder(asyncio.Event()), FakeReplyAudio()
     loop = build_meeting_turns(responder, diagnostics=Diagnostics(journal=journal))
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(event("t1", "first"))
+    loop.actor.bind(audio)
+    await loop.actor.receive_final(event("t1", "first"))
     assert await asyncio.wait_for(responder.started.wait(), 2)
-    await loop.lifecycle.close()
+    await loop.actor.close()
     assert responder.cancelled.is_set()
     assert audio.spoken == []
-    assert loop.lifecycle.phase == "closed"
-    await loop.lifecycle.close()
-    await loop.ingress.receive_final(event("t2", "second"))
+    assert loop.actor.phase == "closed"
+    await loop.actor.close()
+    await loop.actor.receive_final(event("t2", "second"))
     assert len(responder.calls) == 1
     [requested] = journal.events("agent_cancel_requested")
     assert (
@@ -289,19 +289,19 @@ async def test_new_final_during_tts_drops_stale_audio(journal: RecordingJournal)
     gate = asyncio.Event()
     responder, audio = FakeResponder(), GatedAudio(gate)
     loop = build_meeting_turns(responder, diagnostics=Diagnostics(journal=journal))
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(event("t1", "first"))
+    loop.actor.bind(audio)
+    await loop.actor.receive_final(event("t1", "first"))
     assert await asyncio.wait_for(audio.entered.wait(), 2)
-    await loop.ingress.receive_final(event("t2", "second"))
+    await loop.actor.receive_final(event("t2", "second"))
     gate.set()
-    await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
     assert audio.attempts == 2
     assert audio.spoken == ["second"]
-    assert loop.lifecycle.phase == "listening"
+    assert loop.actor.phase == "listening"
     [requested] = journal.events("agent_cancel_requested")
     assert requested["reason"] == "new_final"
     assert journal.events("agent_failed") == []
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_close_during_tts_speak_drops_audio_and_stays_closed(
@@ -310,14 +310,14 @@ async def test_close_during_tts_speak_drops_audio_and_stays_closed(
     gate = asyncio.Event()
     responder, audio = FakeResponder(), GatedAudio(gate)
     loop = build_meeting_turns(responder, diagnostics=Diagnostics(journal=journal))
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(event("t1", "first"))
+    loop.actor.bind(audio)
+    await loop.actor.receive_final(event("t1", "first"))
     assert await asyncio.wait_for(audio.entered.wait(), 2)
-    await loop.lifecycle.close()
+    await loop.actor.close()
     gate.set()
     assert audio.spoken == []
-    assert loop.lifecycle.phase == "closed"
-    await loop.lifecycle.close()
+    assert loop.actor.phase == "closed"
+    await loop.actor.close()
     [requested] = journal.events("agent_cancel_requested")
     assert requested["reason"] == "close"
     assert journal.events("agent_failed") == []
@@ -328,11 +328,11 @@ async def test_cancelled_request_ids_do_not_attach_to_next_transcript(
 ) -> None:
     responder, audio = FakeResponder(asyncio.Event()), FakeReplyAudio()
     loop = build_meeting_turns(responder, diagnostics=Diagnostics(journal=journal))
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(event("t1", "first"))
+    loop.actor.bind(audio)
+    await loop.actor.receive_final(event("t1", "first"))
     assert await asyncio.wait_for(responder.started.wait(), 2)
-    await loop.ingress.receive_final(event("t2", "second"))
-    await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
+    await loop.actor.receive_final(event("t2", "second"))
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
     started = [row["request_id"] for row in journal.events("agent_started")]
     assert started == ["t1:1", "t2:2"]
     finished = [row["request_id"] for row in journal.events("agent_finished")]
@@ -342,7 +342,7 @@ async def test_cancelled_request_ids_do_not_attach_to_next_transcript(
     body = "\n".join(journal.lines)
     assert "first" not in body
     assert "second" not in body
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_shadow_mode_decides_without_speaking(
@@ -354,14 +354,14 @@ async def test_shadow_mode_decides_without_speaking(
         interaction=TurnInteraction(twin_names=["harun"], shadow=True),
         diagnostics=Diagnostics(journal=journal),
     )
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(event("t1", "Harun, status update please", participant_id="a"))
-    await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
+    loop.actor.bind(audio)
+    await loop.actor.receive_final(event("t1", "Harun, status update please", participant_id="a"))
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
     assert responder.calls == []
     assert audio.spoken == []
     assert [row["reason"] for row in journal.events("policy_decided")] == ["fallback_named"]
     assert [row["reason"] for row in journal.events("transcript_suppressed")] == ["shadow"]
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_interim_judgement_answers_the_final_without_blocking(
@@ -374,14 +374,14 @@ async def test_interim_judgement_answers_the_final_without_blocking(
         interaction=TurnInteraction(twin_names=["harun"], judge=judge),
         diagnostics=Diagnostics(journal=journal),
     )
-    loop.lifecycle.bind(audio)
-    await loop.ingress.handle_interim("what is next")
-    judging = loop.lifecycle.judging
+    loop.actor.bind(audio)
+    await loop.actor.handle_interim("what is next")
+    judging = loop.actor.judging
     assert judging is not None
     await asyncio.wait_for(judging.cache.wait_idle(), 2)
-    await loop.ingress.receive_final(event("t2", "What is next?", participant_id="b"))
-    await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
+    await loop.actor.receive_final(event("t2", "What is next?", participant_id="b"))
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
     assert [row["reason"] for row in journal.events("policy_decided")] == ["judge_reply"]
     assert len(judge.windows) == 1
     assert audio.spoken == ["What is next?"]
-    await loop.lifecycle.close()
+    await loop.actor.close()

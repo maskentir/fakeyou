@@ -278,7 +278,7 @@ async def _replay(
             )
             judge = settings.turn_judge
             feed = TurnFeed(
-                turns.ingress,
+                turns.actor,
                 journal=journal,
                 early=(
                     EarlyCommit(judge.commit_hold_seconds, drain.early_event)
@@ -291,7 +291,7 @@ async def _replay(
                 inputs = schedule(fixture, attention=config.attention_enabled)
                 await _feed(inputs, _Sinks(drain, turns, journal, kernel))
                 await kernel.settled()
-                await turns.lifecycle.wait_idle()
+                await turns.actor.wait_idle()
             finally:
                 await feed.close()
     finally:

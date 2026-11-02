@@ -118,7 +118,7 @@ class Harness:
         self.session = FakeSession(block_first=block_first)
         self.replier = FakeReplier()
         self.stream_batches: list[tuple[str, ...]] = []
-        self.lifecycle = FloorActor(
+        self.actor = FloorActor(
             build_turn_graph(),
             ActorWiring(
                 journal=self.journal,
@@ -135,10 +135,10 @@ class Harness:
             )
         else:
             options = ReplyOptions(stream_turn=self._stream_turn, sentences=sentences)
-        self.lifecycle.configure_reply(options)
+        self.actor.configure_reply(options)
         if bound:
-            self.lifecycle.bind(self.session)
-        self.ingress = self.lifecycle
+            self.actor.bind(self.session)
+        self.actor = self.actor
 
     def _stream_turn(
         self, events: tuple[TranscriptEvent, ...], _hook: ToolStartHook, _request_id: str
@@ -149,7 +149,7 @@ class Harness:
         return self.replier.batches if self.mode == "whole" else self.stream_batches
 
     async def say(self, event_id: str, text: str = TRANSCRIPT) -> None:
-        await self.ingress.handle_final(transcript(event_id, text))
+        await self.actor.handle_final(transcript(event_id, text))
 
 
 @pytest.mark.parametrize("mode", ["whole", "streamed"])
@@ -184,10 +184,10 @@ async def test_barge_in_cancel_carries_the_request_id_of_the_cancelled_turn() ->
 async def test_finals_admitted_before_the_drain_runs_join_one_batch(mode: str) -> None:
     harness = Harness(mode, bound=False)
 
-    await harness.ingress.receive_final(transcript("A", "twin, first"))
-    await harness.ingress.receive_final(transcript("B", "twin, second"))
-    harness.lifecycle.bind(harness.session)
-    await harness.lifecycle.wait_idle()
+    await harness.actor.receive_final(transcript("A", "twin, first"))
+    await harness.actor.receive_final(transcript("B", "twin, second"))
+    harness.actor.bind(harness.session)
+    await harness.actor.wait_idle()
 
     assert harness.batches() == [("A", "B")]
     started = [fields["request_id"] for fields in harness.journal.of("agent_started")]

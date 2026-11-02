@@ -6,7 +6,7 @@ from langchain_core.messages import BaseMessage
 
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.sentence_stream import SentenceStream
-from fakeyou.conversation.turn_events import JournalSink
+from fakeyou.observability.journal import JournalSink
 
 
 def model_text(message: object, metadata: object, *, tool_pending: bool) -> str:

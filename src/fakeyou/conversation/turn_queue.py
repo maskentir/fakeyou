@@ -2,12 +2,23 @@ import math
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from typing import Literal
 
 from fakeyou.foundation.clock import monotonic
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.foundation.triggers import ReplyChannel
 
 DEFERRED_RETRIES = 1
+
+TurnEventKind = Literal["stop", "final", "interim", "vad"]
+
+
+@dataclass(frozen=True, slots=True)
+class TurnEvent:
+    kind: TurnEventKind
+    event_id: str
+    at: float
+    payload: str
 
 
 class PendingFinals:

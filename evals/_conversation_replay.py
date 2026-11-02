@@ -216,8 +216,8 @@ def _event(scenario: Scenario, index: int, step: Step) -> TranscriptEvent:
 
 async def _settle(turns: Any) -> None:
     for _ in range(200):
-        await turns.lifecycle.wait_idle()
-        if not turns.lifecycle.deferred.pending and not turns.lifecycle.is_busy:
+        await turns.actor.wait_idle()
+        if not turns.actor.deferred.pending and not turns.actor.is_busy:
             return
         await asyncio.sleep(0.02)
 
@@ -252,14 +252,14 @@ async def run_scenario(
             ),
             diagnostics=Diagnostics(journal=journal),
         ) as turns:
-            turns.lifecycle.bind(audio)
+            turns.actor.bind(audio)
             index = 0
             while index < len(scenario.steps):
                 step = scenario.steps[index]
                 event = _event(scenario, index, step)
                 started = time.monotonic()
                 if step.kind == "interim":
-                    await turns.ingress.handle_interim(step.say)
+                    await turns.actor.handle_interim(step.say)
                     await _settle(turns)
                     outcomes.append(
                         StepOutcome(
@@ -281,11 +281,11 @@ async def run_scenario(
                 if following is not None and following.kind == "interim":
                     await _speak_and_interrupt(turns, audio, event, following.say)
                 elif step.source == "meeting_audio":
-                    await turns.ingress.receive_final(event)
+                    await turns.actor.receive_final(event)
                 elif step.source == "meeting_attention":
-                    turns.ingress.receive_attention(event, channel="voice")
+                    turns.actor.receive_attention(event, channel="voice")
                 else:
-                    turns.ingress.receive_chat(event)
+                    turns.actor.receive_chat(event)
                 await _settle(turns)
                 spoken = audio.turn
                 outcomes.append(
@@ -327,10 +327,10 @@ async def _speak_and_interrupt(
 ) -> None:
     gate = asyncio.Event()
     audio.gate = gate
-    turn = asyncio.create_task(turns.ingress.receive_final(event))
+    turn = asyncio.create_task(turns.actor.receive_final(event))
     await _wait_for_speech(audio)
-    await turns.ingress.handle_interim(interim)
-    await turns.ingress.settled()
+    await turns.actor.handle_interim(interim)
+    await turns.actor.settled()
     gate.set()
     audio.gate = None
     await asyncio.gather(turn, return_exceptions=True)

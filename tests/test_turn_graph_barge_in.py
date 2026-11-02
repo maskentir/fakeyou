@@ -12,20 +12,20 @@ from fakeyou.conversation.floor import SpeechFloor
 from fakeyou.conversation.meeting_messages import NoHistory
 from fakeyou.conversation.participation_graph import JudgeThresholds, TurnJudging
 from fakeyou.conversation.reply_planner import SpokenChunk
-from fakeyou.conversation.turn_events import TurnEvent
 from fakeyou.conversation.turn_graph import (
     SpeechInput,
     SpeechRuntime,
-    TurnRuntime,
     build_speech_graph,
     build_turn_graph,
 )
 from fakeyou.conversation.turn_judge import JudgeCache, TurnJudgement, WindowSource
+from fakeyou.conversation.turn_queue import TurnEvent
 from fakeyou.foundation.participation import ParticipationContext
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.speech.contract import PreparedSpeech
 from tests._conversation_fakes import ScriptedJudge, judged
 from tests._prepared_support import PreparedSink, PreparedSpeaker
+from tests._turn_context import TurnTestContext
 
 
 class SilentResponder:
@@ -171,7 +171,7 @@ async def test_stop_during_speech_ends_the_turn_without_a_new_reply() -> None:
 
     out = await build_turn_graph().run(
         stop_input(speaking_generation=4),
-        context=TurnRuntime(
+        context=TurnTestContext(
             speaker=speaker,
             journal=turn_journal,
             responder=SilentResponder(),

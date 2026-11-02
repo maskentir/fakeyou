@@ -443,7 +443,7 @@ async def test_open_conversation_wires_sentence_streaming_flag(
 
     seen: dict[str, Any] = {}
 
-    class StubLifecycle:
+    class StubActor:
         async def close(self) -> None:
             pass
 
@@ -451,7 +451,7 @@ async def test_open_conversation_wires_sentence_streaming_flag(
             seen["memory"] = memory
 
     class StubTurns:
-        lifecycle = StubLifecycle()
+        actor = StubActor()
 
     def fake_turns(responder: Any, **kwargs: Any) -> StubTurns:
         seen["responder"] = responder

@@ -4,7 +4,6 @@ from typing import override
 from fakeyou.conversation import turn_graph
 from fakeyou.conversation.turn_graph import (
     PlannedTurn,
-    TurnRuntime,
     for_reply,
     plan_for,
     plan_notes,
@@ -20,6 +19,7 @@ from fakeyou.session.planner import TurnPlan
 from fakeyou.session.policy import Refusal
 from tests._persistence_fakes import RecordingJournal
 from tests._prepared_support import PreparedSpeaker
+from tests._turn_context import TurnTestContext
 
 
 @dataclass
@@ -59,8 +59,8 @@ def event(text: str = "Rani, raise your hand.") -> TranscriptEvent:
     )
 
 
-def runtime(commands: FakeCommands | None = None) -> TurnRuntime:
-    return TurnRuntime(speaker=SilentSpeaker(), journal=RecordingJournal(), commands=commands)
+def runtime(commands: FakeCommands | None = None) -> TurnTestContext:
+    return TurnTestContext(speaker=SilentSpeaker(), journal=RecordingJournal(), commands=commands)
 
 
 def test_without_planning_no_plan_ever_holds_a_side_effect() -> None:
@@ -201,7 +201,9 @@ async def test_a_state_question_is_spoken_from_the_renderer_not_the_model() -> N
     planned = PlannedTurn(
         TurnPlan("p", "speech_only", output="speech", state_question="participant_count")
     )
-    state_runtime = TurnRuntime(speaker=speaker, journal=RecordingJournal(), state_speech=speech)
+    state_runtime = TurnTestContext(
+        speaker=speaker, journal=RecordingJournal(), state_speech=speech
+    )
 
     answered = await turn_graph.answer_state(state_runtime, event("How many are here?"), planned, 0)
 
@@ -211,7 +213,7 @@ async def test_a_state_question_is_spoken_from_the_renderer_not_the_model() -> N
 
 async def test_without_a_locale_pack_the_state_question_falls_back_to_the_reply() -> None:
     planned = PlannedTurn(TurnPlan("p", "speech_only", output="speech", state_question="presenter"))
-    state_runtime = TurnRuntime(
+    state_runtime = TurnTestContext(
         speaker=RecordingSpeaker(),
         journal=RecordingJournal(),
         state_speech=lambda _question, _language: None,
@@ -226,7 +228,7 @@ async def test_the_state_answer_follows_the_language_of_the_turn() -> None:
     planned = PlannedTurn(
         TurnPlan("p", "speech_only", output="speech", state_question="participant_count")
     )
-    state_runtime = TurnRuntime(
+    state_runtime = TurnTestContext(
         speaker=speaker,
         journal=RecordingJournal(),
         state_speech=lambda question, _language: answers.get(question),

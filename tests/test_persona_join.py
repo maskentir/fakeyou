@@ -375,7 +375,7 @@ async def test_join_stop_during_recall_cancels_without_late_reply(
 
     assert graphiti.search_cancelled.is_set()
     assert audio.spoken == []
-    assert outcome["conversation"].lifecycle.phase == "closed"
+    assert outcome["conversation"].actor.phase == "closed"
     assert graphiti.events[-1] == "close"
 
 

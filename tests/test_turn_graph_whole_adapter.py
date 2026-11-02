@@ -119,7 +119,7 @@ class Harness:
         self.journal = FakeJournal()
         self.session = FakeSession()
         self.moves: list[str] = []
-        self.lifecycle = FloorActor(
+        self.actor = FloorActor(
             build_turn_graph(),
             ActorWiring(
                 journal=self.journal,
@@ -128,21 +128,21 @@ class Harness:
                 ),
             ),
         )
-        self.lifecycle.observe(self._record_move)
-        self.lifecycle.configure_reply(
+        self.actor.observe(self._record_move)
+        self.actor.configure_reply(
             ReplyOptions(
                 whole_turn=lambda events, hook: ReplierWholeResponder(replier, events, hook),
                 sentences=SentenceLimits(max_sentences=2, language="en"),
             )
         )
-        self.lifecycle.bind(self.session)
+        self.actor.bind(self.session)
         self.replier = replier
 
     def _record_move(self, _previous: str, phase: str, _detail: str) -> None:
         self.moves.append(phase)
 
     async def say(self, event_id: str, text: str) -> None:
-        await self.lifecycle.handle_final(transcript(event_id, text))
+        await self.actor.handle_final(transcript(event_id, text))
 
 
 async def test_adapter_passes_the_events_tuple_and_tool_hook_and_returns_the_text() -> None:
@@ -172,7 +172,7 @@ async def test_tool_start_during_the_reply_moves_acting_while_the_turn_is_curren
 
 async def test_tool_start_after_a_newer_final_took_the_floor_does_not_move_acting() -> None:
     def newer_final_then_hook(hook: Callable[[], None]) -> None:
-        harness.lifecycle.floor.advance()
+        harness.actor.floor.advance()
         hook()
 
     harness = Harness(FakeReplier(on_call=newer_final_then_hook))
@@ -185,13 +185,12 @@ async def test_tool_start_after_a_newer_final_took_the_floor_does_not_move_actin
 
 async def test_tool_start_after_close_does_not_move_acting() -> None:
     harness = Harness(FakeReplier())
-    runtime = harness.lifecycle.runtime
-    assert runtime is not None
+    runtime = harness.actor
     hook = tool_start_hook(
-        runtime, harness.lifecycle.admitted.count, harness.lifecycle.floor.generation, "f1"
+        runtime, harness.actor.admitted.count, harness.actor.floor.generation, "f1"
     )
 
-    await harness.lifecycle.close()
+    await harness.actor.close()
     hook()
 
     assert "acting" not in harness.moves
@@ -200,13 +199,13 @@ async def test_tool_start_after_close_does_not_move_acting() -> None:
 
 async def test_two_pending_finals_are_answered_by_one_reply_that_covers_both() -> None:
     harness = Harness(FakeReplier())
-    harness.lifecycle.queue.admit(transcript("f1", "twin, first"))
+    harness.actor.queue.admit(transcript("f1", "twin, first"))
 
     await harness.say("f2", "twin, second")
 
     assert harness.replier.calls == [("f1", "f2")]
     assert harness.session.spoken == ["Yes, I am here."]
-    assert harness.lifecycle.queue.pending is False
+    assert harness.actor.queue.pending is False
 
 
 async def test_single_final_is_answered_alone() -> None:
@@ -232,7 +231,7 @@ async def test_evidence_is_gathered_once_for_the_heard_question_before_the_reply
         )
 
     harness = Harness(FakeReplier())
-    harness.lifecycle.configure_deferred(DeferredOptions(planning=planning, evidence=evidence))
+    harness.actor.configure_deferred(DeferredOptions(planning=planning, evidence=evidence))
 
     await harness.say("f1", "twin, what is on the slide")
 
@@ -245,9 +244,7 @@ def test_graph_drains_every_pending_final_into_one_respond_call() -> None:
     assert "work = _run_turn(runtime, speech, batch, scope, generation)" in GRAPH_SOURCE
     assert "return ReplierWholeResponder(replier, events, hook)" in TURNS_SOURCE
     assert "hook = tool_start_hook(runtime, generation, floor_generation, final.id)" in GRAPH_SOURCE
-    assert "if runtime.admitted is not None and runtime.admitted.count != generation:" in (
-        GRAPH_SOURCE
-    )
+    assert "if _closed(runtime) or runtime.admitted.count != generation:" in (GRAPH_SOURCE)
 
 
 class RecordingCommands:
@@ -271,9 +268,7 @@ def leave_planning(event: TranscriptEvent, reading: Reading, channel: Channel) -
 async def test_a_permitted_leave_happens_even_when_the_farewell_is_cut_off() -> None:
     harness = Harness(FakeReplier(reply="Bye everyone."))
     commands = RecordingCommands()
-    harness.lifecycle.configure_deferred(
-        DeferredOptions(planning=leave_planning, commands=commands)
-    )
+    harness.actor.configure_deferred(DeferredOptions(planning=leave_planning, commands=commands))
 
     async def cut_off(text: str, **_: Any) -> None:
         harness.session.spoken.append(text)
@@ -291,13 +286,11 @@ async def test_a_permitted_leave_happens_even_when_the_farewell_is_cut_off() -> 
 async def test_a_leave_waits_when_a_newer_line_takes_the_floor_before_the_farewell() -> None:
     def newer_final_takes_the_floor(hook: Callable[[], None]) -> None:
         del hook
-        harness.lifecycle.floor.advance()
+        harness.actor.floor.advance()
 
     harness = Harness(FakeReplier(reply="Bye everyone.", on_call=newer_final_takes_the_floor))
     commands = RecordingCommands()
-    harness.lifecycle.configure_deferred(
-        DeferredOptions(planning=leave_planning, commands=commands)
-    )
+    harness.actor.configure_deferred(DeferredOptions(planning=leave_planning, commands=commands))
 
     await harness.say("f1", "twin, you can leave now")
 
@@ -307,8 +300,7 @@ async def test_a_leave_waits_when_a_newer_line_takes_the_floor_before_the_farewe
 
 async def test_sentences_keep_the_planner_index_when_one_is_scrubbed_away() -> None:
     harness = Harness(FakeReplier())
-    runtime = harness.lifecycle.runtime
-    assert runtime is not None
+    runtime = harness.actor
     sink = turn_graph.TurnSink(runtime, None, "t9", (0, 0), streamed=False)
     spoken: list[tuple[str, int | None]] = []
 

@@ -63,7 +63,7 @@ async def test_join_audio_builds_conversation_on_the_meeting_record(
 
     loop = captured["conversation"]
     assert isinstance(loop, MeetingTurns)
-    assert loop.lifecycle.phase == "closed"
+    assert loop.actor.phase == "closed"
     assert created["tools"] == []
     assert "checkpointer" not in created
     assert created["persona"] == f"{DEFAULT_PERSONA}\n\n{PERCEPTION_GUIDANCE}"
@@ -115,7 +115,7 @@ async def test_join_audio_transcript_reaches_conversation(
         )
         await kwargs["open_audio"].keywords["callbacks"].on_transcript(frame)
         await kwargs["kernel"].settled()
-        await loop.lifecycle.wait_idle()
+        await loop.actor.wait_idle()
         return SessionResult(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
 
     session_run.effect = run
@@ -124,7 +124,7 @@ async def test_join_audio_transcript_reaches_conversation(
         conversation_enabled=True,
     )
 
-    assert [event.text for event in captured["conversation"].ingress.events] == [
+    assert [event.text for event in captured["conversation"].actor.events] == [
         "Settings Twin, hello."
     ]
     request, config = agent_calls[0]
@@ -236,7 +236,7 @@ async def test_join_wake_phrase_gates_agent_replies(
             frame = TranscriptUpdate(text=text, final=True, timestamp="2026-09-28T00:00:00+00:00")
             await kwargs["open_audio"].keywords["callbacks"].on_transcript(frame)
         await kwargs["kernel"].settled()
-        await loop.lifecycle.wait_idle()
+        await loop.actor.wait_idle()
         return SessionResult(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
 
     session_run.effect = run
@@ -289,7 +289,7 @@ async def test_join_barge_in_stops_speaking_session(
         frame = TranscriptUpdate(text="wait", final=True, timestamp="2026-09-28T00:00:00+00:00")
         await kwargs["open_audio"].keywords["callbacks"].on_transcript(frame)
         await kwargs["kernel"].settled()
-        await loop.lifecycle.wait_idle()
+        await loop.actor.wait_idle()
         return SessionResult(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
 
     session_run.effect = run
@@ -463,7 +463,7 @@ async def test_join_without_wake_phrase_answers_only_when_the_twin_is_named(
             frame = TranscriptUpdate(text=text, final=True, timestamp="2026-09-28T00:00:00+00:00")
             await kwargs["open_audio"].keywords["callbacks"].on_transcript(frame)
         await kwargs["kernel"].settled()
-        await loop.lifecycle.wait_idle()
+        await loop.actor.wait_idle()
         return SessionResult(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
 
     session_run.effect = run

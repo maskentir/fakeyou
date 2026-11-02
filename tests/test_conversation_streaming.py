@@ -171,7 +171,7 @@ def streamed_loop(
         generation=generation,
         diagnostics=Diagnostics(journal=journal),
     )
-    loop.lifecycle.bind(audio)
+    loop.actor.bind(audio)
     return loop
 
 
@@ -185,8 +185,8 @@ async def test_streamed_reply_speaks_each_sentence_in_order(journal: RecordingJo
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
-    await loop.ingress.receive_final(event("t1", "hello"))
-    await loop.lifecycle.wait_idle()
+    await loop.actor.receive_final(event("t1", "hello"))
+    await loop.actor.wait_idle()
     assert audio.spoken == ["First sentence here.", "Second sentence here."]
     assert " ".join(audio.spoken) == cap_spoken_reply("First sentence here. Second sentence here.")
     [started] = journal.events("agent_started")
@@ -198,7 +198,7 @@ async def test_streamed_reply_speaks_each_sentence_in_order(journal: RecordingJo
     assert {row["request_id"] for row in emitted} == {started["request_id"]}
     assert agent.stream_modes == ["messages"]
     assert journal.events("agent_finished") != []
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 @pytest.mark.parametrize("language", ["id", "en"])
@@ -210,13 +210,13 @@ async def test_streamed_reply_matches_cap_across_languages(
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal, language=language)
-    await loop.ingress.receive_final(event("t1", "hello"))
-    await loop.lifecycle.wait_idle()
+    await loop.actor.receive_final(event("t1", "hello"))
+    await loop.actor.wait_idle()
     assert audio.spoken == ["Morning update.", "All systems ready."]
     assert " ".join(audio.spoken) == cap_spoken_reply(
         "Morning update. All systems ready.", language=language
     )
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_the_declared_language_reaches_the_speaker(journal: RecordingJournal) -> None:
@@ -231,11 +231,11 @@ async def test_the_declared_language_reaches_the_speaker(journal: RecordingJourn
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal, language="id")
-    await loop.ingress.receive_final(event("t1", "Is the launch still on 14 October?"))
-    await loop.lifecycle.wait_idle()
+    await loop.actor.receive_final(event("t1", "Is the launch still on 14 October?"))
+    await loop.actor.wait_idle()
     assert audio.spoken == ["The launch is on 14 October."]
     assert audio.languages == ["en"]
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_a_silent_plan_speaks_nothing(journal: RecordingJournal) -> None:
@@ -247,10 +247,10 @@ async def test_a_silent_plan_speaks_nothing(journal: RecordingJournal) -> None:
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
-    await loop.ingress.receive_final(event("t1", "hello"))
-    await loop.lifecycle.wait_idle()
+    await loop.actor.receive_final(event("t1", "hello"))
+    await loop.actor.wait_idle()
     assert audio.spoken == []
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_an_ack_plan_speaks_one_sentence(journal: RecordingJournal) -> None:
@@ -259,10 +259,10 @@ async def test_an_ack_plan_speaks_one_sentence(journal: RecordingJournal) -> Non
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
-    await loop.ingress.receive_final(event("t1", "hello"))
-    await loop.lifecycle.wait_idle()
+    await loop.actor.receive_final(event("t1", "hello"))
+    await loop.actor.wait_idle()
     assert audio.spoken == ["Okay."]
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_an_answer_plan_drops_the_closing_question(journal: RecordingJournal) -> None:
@@ -278,11 +278,11 @@ async def test_an_answer_plan_drops_the_closing_question(journal: RecordingJourn
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal, language="en")
-    await loop.ingress.receive_final(event("t1", "Is the launch still on 14 October?"))
-    await loop.lifecycle.wait_idle()
+    await loop.actor.receive_final(event("t1", "Is the launch still on 14 October?"))
+    await loop.actor.wait_idle()
     assert audio.spoken == ["The launch is on 14 October."]
     assert "intent" not in " ".join(audio.spoken)
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_streamed_reply_skips_tool_text_and_empty_chunks(journal: RecordingJournal) -> None:
@@ -295,13 +295,13 @@ async def test_streamed_reply_skips_tool_text_and_empty_chunks(journal: Recordin
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
-    await loop.ingress.receive_final(event("t1", "hello"))
-    await loop.lifecycle.wait_idle()
+    await loop.actor.receive_final(event("t1", "hello"))
+    await loop.actor.wait_idle()
     assert audio.spoken == ["Real answer here.", "Done now."]
     body = "\n".join(journal.lines)
     assert "tool output secret" not in body
     assert "Real answer here" not in body
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_streaming_responder_with_flag_off_uses_single_speak(
@@ -315,25 +315,25 @@ async def test_streaming_responder_with_flag_off_uses_single_speak(
         generation=TurnGeneration(sentence_streaming=False),
         diagnostics=Diagnostics(journal=journal),
     )
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(event("t1", "hello"))
-    await loop.lifecycle.wait_idle()
+    loop.actor.bind(audio)
+    await loop.actor.receive_final(event("t1", "hello"))
+    await loop.actor.wait_idle()
     assert audio.spoken == ["One. Two."]
     assert journal.events("answer_text_emitted") == []
     assert journal.events("answer_sentence_emitted") == []
     assert len(agent.ainvoke_calls) == 1
     assert agent.streams == []
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_flag_on_with_plain_responder_keeps_old_behavior() -> None:
     responder, audio = FakeResponder(), FakeReplyAudio()
     loop = build_meeting_turns(responder, generation=TurnGeneration(sentence_streaming=True))
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(event("t1", "hello"))
-    await loop.lifecycle.wait_idle()
+    loop.actor.bind(audio)
+    await loop.actor.receive_final(event("t1", "hello"))
+    await loop.actor.wait_idle()
     assert audio.spoken == ["hello"]
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_streamed_reply_discards_partial_text_before_tool_end(
@@ -349,8 +349,8 @@ async def test_streamed_reply_discards_partial_text_before_tool_end(
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
-    await loop.ingress.receive_final(event("t1", "when is demo"))
-    await loop.lifecycle.wait_idle()
+    await loop.actor.receive_final(event("t1", "when is demo"))
+    await loop.actor.wait_idle()
     assert audio.spoken == ["The demo is on Friday.", "Doors open at nine."]
     body = "\n".join(journal.lines)
     assert "Checking memor" not in body
@@ -359,7 +359,7 @@ async def test_streamed_reply_discards_partial_text_before_tool_end(
     assert (started_tool["tool"], started_tool["transcript_id"]) == ("recall_meeting_context", "t1")
     [finished_tool] = journal.events("tool_finished")
     assert finished_tool["transcript_id"] == "t1"
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_streamed_reply_marks_answer_text_after_tool_end(journal: RecordingJournal) -> None:
@@ -373,12 +373,12 @@ async def test_streamed_reply_marks_answer_text_after_tool_end(journal: Recordin
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
-    await loop.ingress.receive_final(event("t1", "when is demo"))
-    await loop.lifecycle.wait_idle()
+    await loop.actor.receive_final(event("t1", "when is demo"))
+    await loop.actor.wait_idle()
     assert audio.spoken == ["The demo is on Friday."]
     order = [json.loads(line)["event"] for line in journal.lines]
     assert order.index("answer_text_emitted") > order.index("tool_finished")
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_streamed_reply_uses_fallback_model(journal: RecordingJournal) -> None:
@@ -406,11 +406,11 @@ async def test_streamed_reply_uses_fallback_model(journal: RecordingJournal) -> 
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
-    await loop.ingress.receive_final(event("t1", "hello"))
-    await loop.lifecycle.wait_idle()
+    await loop.actor.receive_final(event("t1", "hello"))
+    await loop.actor.wait_idle()
     assert audio.spoken == ["Fallback answer here."]
     assert journal.events("agent_finished") != []
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_streamed_reply_caps_third_sentence_and_stops_stream(
@@ -421,37 +421,37 @@ async def test_streamed_reply_caps_third_sentence_and_stops_stream(
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
-    await loop.ingress.receive_final(event("t1", "hello"))
-    await loop.lifecycle.wait_idle()
+    await loop.actor.receive_final(event("t1", "hello"))
+    await loop.actor.wait_idle()
     assert audio.spoken == ["One.", "Two."]
     assert " ".join(audio.spoken) == cap_spoken_reply("One. Two. Three. Four. Five.")
     [capped] = journal.events("reply_capped")
     assert capped["chars_in"] >= capped["chars_out"] > 0
     assert agent.delivered == 1
     assert agent.streams[0].aclosed
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_streamed_reply_without_remainder_records_no_cap(journal: RecordingJournal) -> None:
     agent = ScriptedAgent([("chunk", "One. Two.", "model")])
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
-    await loop.ingress.receive_final(event("t1", "hello"))
-    await loop.lifecycle.wait_idle()
+    await loop.actor.receive_final(event("t1", "hello"))
+    await loop.actor.wait_idle()
     assert audio.spoken == ["One.", "Two."]
     assert journal.events("reply_capped") == []
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_streamed_empty_reply_moves_to_waiting(journal: RecordingJournal) -> None:
     agent = ScriptedAgent([])
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
-    await loop.ingress.receive_final(event("t1", "hello"))
-    await loop.lifecycle.wait_idle()
+    await loop.actor.receive_final(event("t1", "hello"))
+    await loop.actor.wait_idle()
     assert audio.spoken == []
-    assert loop.lifecycle.phase == "waiting"
-    await loop.lifecycle.close()
+    assert loop.actor.phase == "waiting"
+    await loop.actor.close()
 
 
 def test_streaming_responder_rejects_non_positive_cap() -> None:
@@ -474,17 +474,17 @@ async def test_new_transcript_mid_stream_drops_remainder(journal: RecordingJourn
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
-    await loop.ingress.receive_final(event("t1", "first"))
+    await loop.actor.receive_final(event("t1", "first"))
     assert await asyncio.wait_for(ready.wait(), 10)
-    await loop.ingress.receive_final(event("t2", "second"))
+    await loop.actor.receive_final(event("t2", "second"))
     release.set()
-    await loop.lifecycle.wait_idle()
+    await loop.actor.wait_idle()
     assert audio.spoken == ["First done.", "New answer."]
     [dropped] = journal.events("sentence_dropped")
     assert (dropped["request_id"], dropped["transcript_id"]) == ("t1:1", "t1")
     assert (dropped["sentence_index"], dropped["detail"]) == (1, "stale_generation")
     assert agent.streams[0].aclosed
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_interim_stop_between_sentences_speaks_nothing_further(
@@ -501,13 +501,13 @@ async def test_interim_stop_between_sentences_speaks_nothing_further(
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal, barge_in=True)
-    await loop.ingress.receive_final(event("t1", "first"))
+    await loop.actor.receive_final(event("t1", "first"))
     assert await asyncio.wait_for(ready.wait(), 10)
     audio.speaking = True
-    await loop.ingress.handle_interim("wait just a moment")
+    await loop.actor.handle_interim("wait just a moment")
     assert audio.stops == 1
     release.set()
-    await loop.lifecycle.wait_idle()
+    await loop.actor.wait_idle()
     assert audio.spoken == ["First done."]
     [dropped] = journal.events("sentence_dropped")
     assert (dropped["transcript_id"], dropped["sentence_index"], dropped["detail"]) == (
@@ -515,7 +515,7 @@ async def test_interim_stop_between_sentences_speaks_nothing_further(
         1,
         "stopped",
     )
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_close_during_stream_cancels_without_trailing_speech(
@@ -532,9 +532,9 @@ async def test_close_during_stream_cancels_without_trailing_speech(
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
-    await loop.ingress.receive_final(event("t1", "first"))
+    await loop.actor.receive_final(event("t1", "first"))
     assert await asyncio.wait_for(ready.wait(), 10)
-    await loop.lifecycle.close()
+    await loop.actor.close()
     assert audio.spoken == ["First done."]
     assert agent.streams[0].aclosed
     assert journal.events("agent_cancelled") != []
@@ -544,8 +544,8 @@ async def test_streamed_journal_events_carry_metadata_only(journal: RecordingJou
     agent = ScriptedAgent([("chunk", "First sentence here. Second sentence here.", "model")])
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
-    await loop.ingress.receive_final(event("t1", "hello"))
-    await loop.lifecycle.wait_idle()
+    await loop.actor.receive_final(event("t1", "hello"))
+    await loop.actor.wait_idle()
     [first] = journal.events("answer_text_emitted")
     assert set(first) == {"event", "meeting_id", "at", "source", "request_id", "transcript_id"}
     emitted = journal.events("answer_sentence_emitted")
@@ -565,7 +565,7 @@ async def test_streamed_journal_events_carry_metadata_only(journal: RecordingJou
     assert "First sentence here" not in body
     assert "Second sentence here" not in body
     assert "hello" not in body
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_stream_failure_fails_the_turn_without_re_running_the_agent(
@@ -577,13 +577,13 @@ async def test_stream_failure_fails_the_turn_without_re_running_the_agent(
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
-    await loop.ingress.receive_final(event("t1", "hello"))
-    await loop.lifecycle.wait_idle()
+    await loop.actor.receive_final(event("t1", "hello"))
+    await loop.actor.wait_idle()
     assert "Full reply one." not in audio.spoken
     [failed] = [row for row in journal.events("agent_failed") if row.get("detail") == "stream"]
     assert failed["request_id"] == "t1:1"
     assert agent.ainvoke_calls == []
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_stream_failure_after_first_sentence_propagates_without_duplicate(
@@ -594,25 +594,25 @@ async def test_stream_failure_after_first_sentence_propagates_without_duplicate(
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
-    await loop.ingress.receive_final(event("t1", "hello"))
-    await loop.lifecycle.wait_idle()
-    loop.lifecycle.raise_if_failed()
+    await loop.actor.receive_final(event("t1", "hello"))
+    await loop.actor.wait_idle()
+    loop.actor.raise_if_failed()
     assert audio.spoken.count("First done.") == 1
     assert len(audio.spoken) == 2
     assert journal.events("agent_finished") == []
     assert agent.ainvoke_calls == []
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_streamed_speak_tags_each_sentence_with_its_index(journal: RecordingJournal) -> None:
     agent = ScriptedAgent([("chunk", "First sentence here. Second sentence here.", "model")])
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
-    await loop.ingress.receive_final(event("t1", "hello"))
-    await loop.lifecycle.wait_idle()
+    await loop.actor.receive_final(event("t1", "hello"))
+    await loop.actor.wait_idle()
     assert audio.spoken == ["First sentence here.", "Second sentence here."]
     assert audio.indices == [0, 1]
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_stale_drop_terminates_turn_with_agent_cancelled(journal: RecordingJournal) -> None:
@@ -630,11 +630,11 @@ async def test_stale_drop_terminates_turn_with_agent_cancelled(journal: Recordin
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
-    await loop.ingress.receive_final(event("t1", "first"))
+    await loop.actor.receive_final(event("t1", "first"))
     assert await asyncio.wait_for(ready.wait(), 10)
-    await loop.ingress.receive_final(event("t2", "second"))
+    await loop.actor.receive_final(event("t2", "second"))
     release.set()
-    await loop.lifecycle.wait_idle()
+    await loop.actor.wait_idle()
     [dropped] = journal.events("sentence_dropped")
     assert dropped["request_id"] == "t1:1"
     cancelled = [row for row in journal.events("agent_cancelled") if row["request_id"] == "t1:1"]
@@ -642,7 +642,7 @@ async def test_stale_drop_terminates_turn_with_agent_cancelled(journal: Recordin
     assert "duration_ms" in cancelled[0]
     finished = [row for row in journal.events("agent_finished") if row["request_id"] == "t1:1"]
     assert finished == []
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_stopped_drop_terminates_turn_with_agent_cancelled(journal: RecordingJournal) -> None:
@@ -657,17 +657,17 @@ async def test_stopped_drop_terminates_turn_with_agent_cancelled(journal: Record
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal, barge_in=True)
-    await loop.ingress.receive_final(event("t1", "first"))
+    await loop.actor.receive_final(event("t1", "first"))
     assert await asyncio.wait_for(ready.wait(), 10)
     audio.speaking = True
-    await loop.ingress.handle_interim("wait just a moment")
+    await loop.actor.handle_interim("wait just a moment")
     release.set()
-    await loop.lifecycle.wait_idle()
+    await loop.actor.wait_idle()
     [dropped] = journal.events("sentence_dropped")
     assert dropped["detail"] == "stopped"
     cancelled = [row for row in journal.events("agent_cancelled") if row["request_id"] == "t1:1"]
     assert len(cancelled) == 1
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 def test_sentence_streaming_default_follows_settings_flag() -> None:
@@ -690,11 +690,11 @@ async def test_streamed_speak_passes_transcript_id_to_session(journal: Recording
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
-    await loop.ingress.receive_final(event("t1", "hello"))
-    await loop.lifecycle.wait_idle()
+    await loop.actor.receive_final(event("t1", "hello"))
+    await loop.actor.wait_idle()
     assert audio.spoken == ["First sentence here.", "Second sentence here."]
     assert audio.transcripts == ["t1", "t1"]
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_streamed_reply_passes_domain_error_through_after_first_sentence(
@@ -775,14 +775,14 @@ async def test_speaking_time_does_not_count_against_the_response_budget() -> Non
         timing=TurnTiming(response_timeout_seconds=0.1),
         generation=TurnGeneration(sentence_streaming=True),
     )
-    loop.lifecycle.bind(audio)
+    loop.actor.bind(audio)
 
-    await loop.ingress.receive_final(event("t1", "question"))
-    await asyncio.wait_for(loop.lifecycle.wait_idle(), 3)
+    await loop.actor.receive_final(event("t1", "question"))
+    await asyncio.wait_for(loop.actor.wait_idle(), 3)
 
     assert audio.spoken == ["First sentence.", "Second sentence."]
-    loop.lifecycle.raise_if_failed()
-    await loop.lifecycle.close()
+    loop.actor.raise_if_failed()
+    await loop.actor.close()
 
 
 class SlowTokenStream:
@@ -948,8 +948,8 @@ async def test_a_slow_model_is_asked_again_before_the_turn_dies(
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
 
-    await loop.ingress.receive_final(event("t1", "hello"))
-    await loop.lifecycle.wait_idle()
+    await loop.actor.receive_final(event("t1", "hello"))
+    await loop.actor.wait_idle()
 
     assert audio.spoken == ["Here is the answer."]
     [retried] = journal.events("reply_retried")

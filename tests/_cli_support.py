@@ -258,10 +258,10 @@ async def join_persona_conversation(
             await kwargs["open_audio"].keywords["callbacks"].on_transcript(update)
         await kwargs["kernel"].settled()
         await asyncio.wait_for(
-            loop.lifecycle.wait_idle() if settle is None else settle(),
+            loop.actor.wait_idle() if settle is None else settle(),
             timeout=SETTLE_TIMEOUT_SECONDS,
         )
-        outcome["phase"] = loop.lifecycle.phase
+        outcome["phase"] = loop.actor.phase
         return SessionResult(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
 
     monkeypatch.setattr(cli_join, "run_meeting_session", run)

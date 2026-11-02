@@ -8,10 +8,10 @@ from fakeyou.conversation.participation_decision import (
     ParticipationDecision,
     to_participation_action,
 )
-from fakeyou.conversation.turn_events import JournalSink
 from fakeyou.conversation.turn_judge import JudgeCache, JudgeWindow, TurnJudgement, WindowSource
 from fakeyou.foundation.participation import ParticipationContext
 from fakeyou.observability.faults import capture_error
+from fakeyou.observability.journal import JournalSink
 
 JudgeFailureCode = Literal["judge_timeout", "judge_schema_invalid", "judge_unavailable"]
 DecisionSource = Literal["judge", "fallback", "floor"]

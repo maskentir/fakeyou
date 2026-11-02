@@ -182,8 +182,8 @@ def build_detector(
 
 async def _settle(turns: Any) -> None:
     for _ in range(200):
-        await turns.lifecycle.wait_idle()
-        if not turns.lifecycle.deferred.pending and not turns.lifecycle.is_busy:
+        await turns.actor.wait_idle()
+        if not turns.actor.deferred.pending and not turns.actor.is_busy:
             return
         await asyncio.sleep(0.02)
 
@@ -239,7 +239,7 @@ async def run_proactive_scenario(
             return
         prefilter.take(now)
         outcome.offers += 1
-        turns.ingress.receive_attention(_attention_event(scenario, context), channel="voice")
+        turns.actor.receive_attention(_attention_event(scenario, context), channel="voice")
         await _settle(turns)
 
     with (
@@ -258,7 +258,7 @@ async def run_proactive_scenario(
             ),
             diagnostics=Diagnostics(journal=journal),
         ) as turns:
-            turns.lifecycle.bind(audio)
+            turns.actor.bind(audio)
             for index, step in enumerate(scenario.steps):
                 if step.screen is not None:
                     seen = step.screen.title
@@ -285,7 +285,7 @@ async def run_proactive_scenario(
                     speaker_evidence_id=None,
                 )
                 record.add_transcript(event)
-                await turns.ingress.receive_final(event)
+                await turns.actor.receive_final(event)
                 await moment_detector.observe(event, now=step.at)
                 ready = moment_detector.take_ready(now=step.at)
                 if ready is not None:

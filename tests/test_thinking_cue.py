@@ -66,20 +66,20 @@ def cue_turns(
         timing=TurnTiming(thinking_cue_after_seconds=after_seconds),
         diagnostics=Diagnostics(journal=journal),
     )
-    turns.lifecycle.bind(audio)
+    turns.actor.bind(audio)
     return turns, audio
 
 
 async def settle(turns: MeetingTurns) -> None:
     for _ in range(50):
-        await turns.lifecycle.wait_idle()
-        if not turns.lifecycle.deferred.pending and not turns.lifecycle.is_busy:
+        await turns.actor.wait_idle()
+        if not turns.actor.deferred.pending and not turns.actor.is_busy:
             return
         await asyncio.sleep(0.02)
 
 
 async def answer_slowly(turns: MeetingTurns, responder: FakeResponder, gate: asyncio.Event) -> None:
-    final = asyncio.create_task(turns.ingress.handle_final(event("t1", QUESTION)))
+    final = asyncio.create_task(turns.actor.handle_final(event("t1", QUESTION)))
     await responder.started.wait()
     await asyncio.sleep(0.05)
     gate.set()
@@ -113,7 +113,7 @@ async def test_a_quick_reply_needs_no_cue() -> None:
     journal = RecordingJournal()
     turns, audio = cue_turns(FakeResponder(), after_seconds=0.5, journal=journal)
 
-    await turns.ingress.handle_final(event("t1", QUESTION))
+    await turns.actor.handle_final(event("t1", QUESTION))
     await turns.close()
 
     assert audio.timeline == [("reply", QUESTION)]
@@ -214,7 +214,7 @@ async def test_the_attention_lane_plays_no_cue() -> None:
         participant_id="unknown",
         speaker_evidence_id=None,
     )
-    turns.ingress.receive_attention(attention, channel="voice")
+    turns.actor.receive_attention(attention, channel="voice")
     await responder.started.wait()
     gate.set()
     await settle(turns)
@@ -228,7 +228,7 @@ async def test_a_cue_without_an_answer_is_reported() -> None:
     journal = RecordingJournal()
     turns, audio = cue_turns(SilentResponder(), after_seconds=0.0, journal=journal)
 
-    await turns.ingress.handle_final(event("t1", QUESTION))
+    await turns.actor.handle_final(event("t1", QUESTION))
     await turns.close()
 
     assert [row["detail"] for row in journal.events("thinking_cue_orphaned")] == ["no_answer"]

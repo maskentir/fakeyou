@@ -107,14 +107,6 @@ class MeetingTurns:
     responder: MeetingReplier
 
     @property
-    def lifecycle(self) -> FloorActor:
-        return self.actor
-
-    @property
-    def ingress(self) -> FloorActor:
-        return self.actor
-
-    @property
     def is_busy(self) -> bool:
         return self.actor.is_busy
 

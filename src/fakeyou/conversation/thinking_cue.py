@@ -5,8 +5,8 @@ from dataclasses import dataclass, field
 from itertools import cycle
 from typing import Protocol, runtime_checkable
 
-from fakeyou.conversation.turn_events import JournalSink
 from fakeyou.foundation.resources import read_package_text
+from fakeyou.observability.journal import JournalSink
 
 THINKING_CUE_LINES: dict[str, tuple[str, ...]] = {
     language: tuple(lines)
