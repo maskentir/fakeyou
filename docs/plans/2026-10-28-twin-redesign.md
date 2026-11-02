@@ -1427,6 +1427,31 @@ Bentuk PR:
 - B1c, early commit di actor dan pembersihan sisa (`EarlyTurns`,
   arbitrasi, state floor kernel, tes checkpoint). Gate: alias
   `early_turn_verified` di baseline dan fixture tetap benar; replay oue-4.
+  Dipecah jadi tiga PR (2026-11-02): B1c-1 early commit jadi state actor,
+  B1c-2 atribusi event early lewat kernel, B1c-3 penghapusan state floor
+  kernel. Arbitrasi sudah hilang sejak B1a dan `test_checkpoint.py` ternyata
+  soal checkpointer DB composer, bukan jalur real-time, jadi keduanya tidak
+  ikut.
+  - B1c-1, implementasi (2026-11-02): mesin state `EarlyTurns` (teks
+    interim, versi, timer hold, commit aktif) pindah ke `FloorActor`
+    sebagai `EarlyOptions` plus `note_speech`, `note_interim`, dan
+    `settle_early`; `early_turns.py` dan adapter `_EarlyAnswering`
+    dihapus. `TurnFeed` meneruskan sinyal suara ke actor dan tetap
+    mengantrekan jawaban early lewat lane final (`answer`), jadi urutan
+    terhadap final yang sedang dinilai tidak berubah. Withdraw sekarang
+    menargetkan giliran early itu sendiri: `cancel_speech` hanya jalan
+    kalau `transcript_id` pemegang floor sama dengan event early, bukan
+    membatalkan apa pun yang memegang floor (bug lama di peta B1). Nama
+    dan field `early_turn_started/cancelled/verified` tidak berubah.
+    Test unit `EarlyTurns` dipindah ke level actor
+    (`test_actor_early_commit.py`, termasuk bukti mutasi: withdraw tanpa
+    syarat membuat test giliran berikutnya gagal) dan empat test
+    integrasi early di `test_turn_feed.py` kini memakai actor asli,
+    bukan fake; di situ kelihatan semantik aslinya: final kedua untuk
+    twin membatalkan giliran pertama yang masih disiapkan
+    (`new_final`), admission tetap berurutan. Gate penuh: 10716 passed,
+    55 skipped; selisih dari 10729 adalah test `EarlyTurns` yang dipindah
+    dan kasus parametris per file untuk dua file yang dihapus.
 
 ### B3: Barge-in dari suara
 
