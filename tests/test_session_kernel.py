@@ -202,15 +202,14 @@ def test_chat_does_not_invalidate_presence_but_a_roster_change_does() -> None:
     assert rostered.revisions.presence == joined.revisions.presence + 1
 
 
-def test_an_interim_holds_the_floor_until_its_final() -> None:
+def test_an_interims_final_clears_it_and_keeps_the_line() -> None:
     interim = TranscriptObserved(transcript_id="t1", text="so", final=False, track_id="voice-a")
     final = interim.model_copy(update={"text": "so what now", "final": True})
 
     holding = replay([event("e1", interim)])
     released = reduce(holding, event("e2", final))
 
-    assert holding.dialogue.floor_holder == Ref("track", "voice-a")
-    assert released.dialogue.floor_holder is None
+    assert holding.dialogue.interims == {Ref("track", "voice-a"): "so"}
     assert released.dialogue.interims == {}
     assert released.dialogue.lines[-1].text == "so what now"
     assert released.world.heard[Ref("track", "voice-a")] == released.seq
@@ -248,7 +247,6 @@ def test_delivered_and_interrupted_twin_speech_is_kept_for_repeat() -> None:
         (line.text, line.interrupted) for line in state.dialogue.lines if line.speaker == TWIN
     ]
     assert spoken == [("One.", False), ("Two", True)]
-    assert state.dialogue.twin_playing == frozenset()
 
 
 def test_owner_pause_and_resume_move_the_agenda() -> None:

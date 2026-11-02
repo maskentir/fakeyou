@@ -1459,6 +1459,16 @@ Bentuk PR:
     giliran early. Konsekuensinya baris early dan baris final aslinya
     sama-sama ada di dialogue kernel (teks sama, `source_id` berbeda);
     history composer tetap dari record, bukan dari kernel.
+  - B1c-3, implementasi (2026-11-02): `floor_holder` dan `twin_playing`
+    dikeluarkan dari `DialogueState` di `session/world.py` beserta semua
+    tulisan reducernya (interim, final, dan playback). Grep membuktikan
+    tidak ada pembaca di luar reducer itu sendiri dan dua assert test;
+    fakta floor yang hidup ada di actor (`SpeechFloor`), jadi ini
+    memang salinan kedua yang mati sejak peta B1. `Revisions.floor`
+    dipertahankan sebagai domain revisi generik. Playback `started`
+    sekarang tidak mengubah state kernel; baris twin yang selesai atau
+    terpotong tetap disimpan seperti semula. Dengan ini B1c selesai:
+    tidak ada lagi pemilik state giliran di luar `FloorActor`.
     Test unit `EarlyTurns` dipindah ke level actor
     (`test_actor_early_commit.py`, termasuk bukti mutasi: withdraw tanpa
     syarat membuat test giliran berikutnya gagal) dan empat test
