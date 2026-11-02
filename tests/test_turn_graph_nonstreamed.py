@@ -14,14 +14,12 @@ from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_graph import (
     SentenceLimits,
     SpeechRuntime,
-    TurnRuntime,
     build_turn_graph,
 )
 from fakeyou.conversation.turn_recovery import RecoveryOptions
 from fakeyou.foundation.resources import read_package_text
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.speech.contract import PreparedSpeech
-from tests._audio_fakes import SilentSpeaker
 from tests._model_responder import ModelResponder
 from tests._prepared_support import PreparedSink, PreparedSpeaker
 
@@ -119,7 +117,7 @@ class Harness:
     ) -> None:
         self.journal = FakeJournal()
         self.session = FakeSession()
-        self.lifecycle = FloorActor(
+        self.actor = FloorActor(
             build_turn_graph(),
             ActorWiring(
                 journal=self.journal,
@@ -128,18 +126,18 @@ class Harness:
                 ),
             ),
         )
-        self.lifecycle.configure_recovery(
+        self.actor.configure_recovery(
             RecoveryOptions(language="en", response_timeout_seconds=timeout)
         )
-        self.lifecycle.configure_reply(
+        self.actor.configure_reply(
             ReplyOptions(
                 whole=whole, sentences=SentenceLimits(max_sentences=max_sentences, language="en")
             )
         )
-        self.lifecycle.bind(self.session)
+        self.actor.bind(self.session)
 
     async def say(self, event_id: str, text: str) -> None:
-        await self.lifecycle.handle_final(transcript(event_id, text))
+        await self.actor.handle_final(transcript(event_id, text))
 
 
 class AdvancingSink(PreparedSink):
@@ -181,8 +179,8 @@ async def test_whole_reply_is_spoken_once_and_journaled_as_agent_finished() -> N
     assert harness.journal.names.index("agent_started") < harness.journal.names.index(
         "agent_finished"
     )
-    assert harness.lifecycle.phase == "listening"
-    assert harness.lifecycle.recovery.consecutive_failures == 0
+    assert harness.actor.phase == "listening"
+    assert harness.actor.recovery.consecutive_failures == 0
 
 
 async def test_whole_reply_over_the_sentence_cap_is_capped_and_journaled() -> None:
@@ -226,8 +224,8 @@ async def test_whole_respond_over_the_turn_budget_is_cut_journaled_and_counted()
     assert failed["raised_in"].endswith(":_respond_within")
     assert [fields["request_id"] for fields in harness.journal.of("agent_failed")] == ["f1:1"]
     assert harness.journal.of("agent_finished") == []
-    assert harness.lifecycle.recovery.consecutive_failures == 1
-    assert harness.lifecycle.phase == "waiting"
+    assert harness.actor.recovery.consecutive_failures == 1
+    assert harness.actor.phase == "waiting"
 
 
 async def test_third_consecutive_whole_timeout_mutes_without_failing() -> None:
@@ -236,7 +234,7 @@ async def test_third_consecutive_whole_timeout_mutes_without_failing() -> None:
     for event_id in ("f1", "f2", "f3"):
         await harness.say(event_id, "twin, are you there?")
 
-    assert not harness.lifecycle.is_failed
+    assert not harness.actor.is_failed
     assert harness.session.spoken == [TURN_FAILED_EN, TURN_FAILED_EN]
     assert [fields["consecutive"] for fields in harness.journal.of("turn_failed")] == [1, 2, 3]
 
@@ -244,7 +242,7 @@ async def test_third_consecutive_whole_timeout_mutes_without_failing() -> None:
 async def test_whole_reply_while_paused_is_suppressed_with_the_loop_reason() -> None:
     responder = FakeWholeResponder("Yes, I am here.")
     harness = Harness(responder)
-    responder.on_call = harness.lifecycle.pause
+    responder.on_call = harness.actor.pause
 
     await harness.say("f1", "twin, are you there?")
 
@@ -253,15 +251,15 @@ async def test_whole_reply_while_paused_is_suppressed_with_the_loop_reason() -> 
         {"source": "agent", "request_id": "f1:1", "reason": "paused"}
     ]
     assert harness.journal.of("agent_finished") != []
-    assert harness.lifecycle.recovery.consecutive_failures == 0
+    assert harness.actor.recovery.consecutive_failures == 0
 
 
 def test_default_response_budget_is_the_loop_budget() -> None:
     assert DEFAULTS.conversation.response_timeout_seconds == 60.0
     speech = SpeechRuntime(responder=StallingStream(), sink=SilentSink(), journal=FakeJournal())
-    turn = TurnRuntime(speaker=SilentSpeaker(), journal=FakeJournal(), responder=StallingStream())
+    actor = FloorActor(build_turn_graph(), ActorWiring(journal=FakeJournal()))
     assert speech.response_timeout_seconds == DEFAULTS.conversation.response_timeout_seconds
-    assert turn.response_timeout_seconds == DEFAULTS.conversation.response_timeout_seconds
+    assert actor.response_timeout_seconds == DEFAULTS.conversation.response_timeout_seconds
 
 
 def test_turn_budget_literals_are_the_ones_the_graph_uses() -> None:

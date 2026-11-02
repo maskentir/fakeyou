@@ -53,12 +53,12 @@ async def test_a_turn_cancelled_mid_tool_leaves_nothing_for_the_next_turn(
     responder = MeetingResponder(agent, NoHistory(), journal=journal)
     audio = FakeReplyAudio()
     loop = build_meeting_turns(responder, diagnostics=Diagnostics(journal=journal))
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(event("t1", "first question"))
+    loop.actor.bind(audio)
+    await loop.actor.receive_final(event("t1", "first question"))
     assert await asyncio.wait_for(hanging_begun.wait(), 2)
     assert fast_calls == ["demo"]
-    await loop.ingress.receive_final(event("t2", "second question"))
-    await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
+    await loop.actor.receive_final(event("t2", "second question"))
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
     assert audio.spoken == ["second turn answer"]
     assert fast_calls == ["demo"]
     assert hanging_calls == ["demo"]
@@ -71,7 +71,7 @@ async def test_a_turn_cancelled_mid_tool_leaves_nothing_for_the_next_turn(
     assert journal.events("agent_failed") == []
     [cancelled] = [row for row in journal.events("agent_cancelled") if row["request_id"] == "t1:1"]
     assert cancelled["reason"] == "new_final"
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_cancelled_model_request_does_not_use_fallback(journal: RecordingJournal) -> None:
@@ -115,14 +115,14 @@ async def test_cancelled_model_request_does_not_use_fallback(journal: RecordingJ
     responder = MeetingResponder(agent, NoHistory(), journal=journal)
     audio = FakeReplyAudio()
     loop = build_meeting_turns(responder, diagnostics=Diagnostics(journal=journal))
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(event("t1", "first"))
+    loop.actor.bind(audio)
+    await loop.actor.receive_final(event("t1", "first"))
     assert await asyncio.wait_for(entered.wait(), 2)
-    await loop.ingress.receive_final(event("t2", "second"))
-    await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
+    await loop.actor.receive_final(event("t2", "second"))
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
     assert audio.spoken == ["primary answer"]
     assert fallback_calls == []
     assert journal.events("agent_failed") == []
     [cancelled] = [row for row in journal.events("agent_cancelled") if row["request_id"] == "t1:1"]
     assert cancelled["reason"] == "new_final"
-    await loop.lifecycle.close()
+    await loop.actor.close()

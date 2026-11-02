@@ -182,4 +182,4 @@ def test_stream_only_responder_is_accepted_when_sentence_streaming_is_on() -> No
         _StreamOnlyResponder(), generation=TurnGeneration(sentence_streaming=True)
     )
 
-    assert loop.lifecycle.phase == "listening"
+    assert loop.actor.phase == "listening"

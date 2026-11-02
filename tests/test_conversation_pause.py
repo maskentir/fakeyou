@@ -11,44 +11,44 @@ from tests._persistence_fakes import RecordingJournal
 async def test_paused_loop_drops_transcripts_and_stays_silent(journal: RecordingJournal) -> None:
     responder, audio = FakeResponder(), FakeReplyAudio()
     loop = build_meeting_turns(responder, diagnostics=Diagnostics(journal=journal))
-    loop.lifecycle.bind(audio)
+    loop.actor.bind(audio)
 
-    await loop.lifecycle.pause()
-    await loop.ingress.receive_final(event("t1", "are you there?"))
-    await loop.lifecycle.wait_idle()
+    await loop.actor.pause()
+    await loop.actor.receive_final(event("t1", "are you there?"))
+    await loop.actor.wait_idle()
 
     assert responder.calls == []
     assert audio.spoken == []
     assert [row["reason"] for row in journal.events("transcript_suppressed")] == ["paused"]
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_resumed_loop_answers_again() -> None:
     responder, audio = FakeResponder(), FakeReplyAudio()
     loop = build_meeting_turns(responder)
-    loop.lifecycle.bind(audio)
+    loop.actor.bind(audio)
 
-    await loop.lifecycle.pause()
-    loop.lifecycle.resume()
-    await loop.ingress.receive_final(event("t1", "are you there now?"))
-    await loop.lifecycle.wait_idle()
+    await loop.actor.pause()
+    loop.actor.resume()
+    await loop.actor.receive_final(event("t1", "are you there now?"))
+    await loop.actor.wait_idle()
 
     assert audio.spoken == ["are you there now?"]
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_pause_during_a_turn_drops_the_reply(journal: RecordingJournal) -> None:
     gate = asyncio.Event()
     responder, audio = FakeResponder(gate), FakeReplyAudio()
     loop = build_meeting_turns(responder, diagnostics=Diagnostics(journal=journal))
-    loop.lifecycle.bind(audio)
+    loop.actor.bind(audio)
 
-    await loop.ingress.receive_final(event("t1", "long question"))
+    await loop.actor.receive_final(event("t1", "long question"))
     await responder.started.wait()
-    await loop.lifecycle.pause()
+    await loop.actor.pause()
     gate.set()
-    await loop.lifecycle.wait_idle()
+    await loop.actor.wait_idle()
 
     assert audio.spoken == []
     assert [row["reason"] for row in journal.events("turn_suppressed")] == ["paused"]
-    await loop.lifecycle.close()
+    await loop.actor.close()

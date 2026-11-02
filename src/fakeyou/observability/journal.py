@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from fakeyou.config.identifiers import SessionId
 from fakeyou.foundation.clock import monotonic
@@ -41,6 +41,10 @@ def journal_path(directory: Path, meeting_id: SessionId) -> Path:
 def journal_files(directory: Path, meeting_id: SessionId) -> tuple[Path, ...]:
     path = journal_path(directory, meeting_id)
     return (path, *(Path(f"{path}.{index}") for index in range(1, JOURNAL_BACKUP_COUNT + 1)))
+
+
+class JournalSink(Protocol):
+    def record(self, event: str, *, source: Subsystem, **fields: Any) -> object: ...
 
 
 @dataclass(frozen=True, slots=True)

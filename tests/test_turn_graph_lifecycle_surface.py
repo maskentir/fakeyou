@@ -55,17 +55,16 @@ def _lifecycle() -> tuple[FloorActor, FakeJournal]:
     return FloorActor(graph, ActorWiring(journal=journal, responder=FakeResponder())), journal
 
 
-async def test_bind_attaches_the_turn_runner_and_records_the_runtime() -> None:
+async def test_bind_attaches_the_turn_runner_and_records_the_journal() -> None:
     lifecycle, journal = _lifecycle()
     session = FakeSession()
 
     lifecycle.bind(session)
 
     assert lifecycle.session is session
-    assert lifecycle.runtime is not None
-    assert lifecycle.runtime.journal is journal
-    assert lifecycle.runtime.floor is lifecycle.floor
-    await lifecycle.runtime.speaker.speak("hello")
+    assert lifecycle.journal is journal
+    assert lifecycle.floor.admits(lifecycle.floor.generation)
+    await lifecycle.speaker.speak("hello")
     assert session.spoken == ["hello"]
 
 
@@ -129,7 +128,6 @@ async def test_close_ends_the_session_and_releases_the_speech_floor() -> None:
     assert await held is False
     assert lifecycle.is_closed is True
     assert lifecycle.session is None
-    assert lifecycle.runtime is None
     assert lifecycle.accepts_ingress is False
     assert lifecycle.floor.generation > generation
     assert lifecycle.floor.admits(generation) is False

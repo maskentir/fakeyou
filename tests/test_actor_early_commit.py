@@ -26,10 +26,10 @@ async def test_a_finished_reply_judgement_is_ready_to_answer(journal: RecordingJ
         ),
         diagnostics=Diagnostics(journal=journal),
     )
-    loop.lifecycle.bind(FakeReplyAudio())
+    loop.actor.bind(FakeReplyAudio())
 
-    assert await loop.ingress.ready_to_answer("Rani, when is the beta?") is True
-    await loop.lifecycle.close()
+    assert await loop.actor.ready_to_answer("Rani, when is the beta?") is True
+    await loop.actor.close()
 
 
 async def test_an_unfinished_or_silent_judgement_is_not_ready(journal: RecordingJournal) -> None:
@@ -41,10 +41,10 @@ async def test_an_unfinished_or_silent_judgement_is_not_ready(journal: Recording
             ),
             diagnostics=Diagnostics(journal=journal),
         )
-        loop.lifecycle.bind(FakeReplyAudio())
+        loop.actor.bind(FakeReplyAudio())
 
-        assert await loop.ingress.ready_to_answer("Rani, so about the") is False
-        await loop.lifecycle.close()
+        assert await loop.actor.ready_to_answer("Rani, so about the") is False
+        await loop.actor.close()
 
 
 async def test_without_a_judge_nothing_is_ready(journal: RecordingJournal) -> None:
@@ -53,10 +53,10 @@ async def test_without_a_judge_nothing_is_ready(journal: RecordingJournal) -> No
         interaction=TurnInteraction(twin_names=["Rani"]),
         diagnostics=Diagnostics(journal=journal),
     )
-    loop.lifecycle.bind(FakeReplyAudio())
+    loop.actor.bind(FakeReplyAudio())
 
-    assert await loop.ingress.ready_to_answer("Rani, when is the beta?") is False
-    await loop.lifecycle.close()
+    assert await loop.actor.ready_to_answer("Rani, when is the beta?") is False
+    await loop.actor.close()
 
 
 async def test_withdraw_cancels_the_turn_in_flight(journal: RecordingJournal) -> None:
@@ -67,14 +67,14 @@ async def test_withdraw_cancels_the_turn_in_flight(journal: RecordingJournal) ->
         diagnostics=Diagnostics(journal=journal),
     )
     audio = FakeReplyAudio()
-    loop.lifecycle.bind(audio)
+    loop.actor.bind(audio)
 
-    await loop.ingress.receive_final(event("t1", "Rani, when is the beta?"))
+    await loop.actor.receive_final(event("t1", "Rani, when is the beta?"))
     assert await asyncio.wait_for(responder.started.wait(), 2)
 
-    await loop.ingress.withdraw(reason="speech_resumed")
-    await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
+    await loop.actor.withdraw(reason="speech_resumed")
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
 
     assert audio.spoken == []
     assert [row["reason"] for row in journal.events("agent_cancelled")] == ["speech_resumed"]
-    await loop.lifecycle.close()
+    await loop.actor.close()

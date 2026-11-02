@@ -36,9 +36,14 @@ from fakeyou.conversation.thinking_cue import (
     ThinkingCue,
     cue_when_slow,
 )
-from fakeyou.conversation.turn_events import JournalSink, TurnEvent
 from fakeyou.conversation.turn_judge import JudgeWindow
-from fakeyou.conversation.turn_queue import AdmittedFinals, BargeLatch, DeferredTurn, PendingFinals
+from fakeyou.conversation.turn_queue import (
+    AdmittedFinals,
+    BargeLatch,
+    DeferredTurn,
+    PendingFinals,
+    TurnEvent,
+)
 from fakeyou.conversation.turn_recovery import (
     TurnRecovery,
     TurnScope,
@@ -56,6 +61,7 @@ from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.foundation.triggers import ReplyChannel
 from fakeyou.observability.cleanup import close_safely
 from fakeyou.observability.faults import FaultReporter, capture_error
+from fakeyou.observability.journal import JournalSink
 from fakeyou.observability.provider_faults import classify_exception
 from fakeyou.perception.scrub import scrub_internal_refs
 from fakeyou.session.commands import CommandOutcome, CommandSpec
@@ -145,10 +151,6 @@ async def cancel_speech(floor: SpeechFloor, journal: JournalSink, *, reason: str
     journal.record("agent_cancelled", source="agent", **_cancel_fields(floor, active, reason))
 
 
-class PhaseSink(Protocol):
-    def move(self, phase: ConversationPhase, detail: str) -> None: ...
-
-
 class Responder(Protocol):
     def stream_reply(self, transcript: str) -> AsyncIterator[SpokenChunk]: ...
 
@@ -192,117 +194,162 @@ class SentenceLimits:
     language: str
 
 
-class TurnScheduler(Protocol):
+class TurnContext(Protocol):
+    @property
+    def journal(self) -> JournalSink: ...
+
+    @property
+    def plans(self) -> dict[str, PlannedTurn]: ...
+
+    @property
+    def speaker(self) -> Speaker: ...
+
+    @property
+    def floor(self) -> SpeechFloor: ...
+
+    @property
+    def queue(self) -> PendingFinals: ...
+
+    @property
+    def admitted(self) -> AdmittedFinals: ...
+
+    @property
+    def barge(self) -> BargeLatch: ...
+
+    @property
+    def recovery(self) -> TurnRecovery: ...
+
+    @property
+    def judging(self) -> TurnJudging | None: ...
+
+    @property
+    def responder(self) -> Responder | None: ...
+
+    @property
+    def sentences(self) -> SentenceLimits | None: ...
+
+    @property
+    def whole(self) -> WholeResponder | None: ...
+
+    @property
+    def whole_turn(self) -> WholeTurnFactory | None: ...
+
+    @property
+    def stream_turn(self) -> StreamTurnFactory | None: ...
+
+    @property
+    def chat_turn(self) -> WholeTurnFactory | None: ...
+
+    @property
+    def planning(self) -> TurnPlanning | None: ...
+
+    @property
+    def commands(self) -> CommandPort | None: ...
+
+    @property
+    def state_speech(self) -> StateSpeech | None: ...
+
+    @property
+    def evidence(self) -> EvidencePort | None: ...
+
+    @property
+    def cue(self) -> ThinkingCue | None: ...
+
+    @property
+    def faults(self) -> FaultReporter | None: ...
+
+    @property
+    def others_speaking(self) -> Callable[[], bool] | None: ...
+
+    @property
+    def note_spoken(self) -> Callable[[str], None]: ...
+
+    @property
+    def barge_in(self) -> bool: ...
+
+    @property
+    def shadow(self) -> bool: ...
+
+    @property
+    def response_timeout_seconds(self) -> float: ...
+
+    @property
+    def is_closed(self) -> bool: ...
+
+    @property
+    def is_paused(self) -> bool: ...
+
+    @property
+    def is_bound(self) -> bool: ...
+
     @property
     def is_busy(self) -> bool: ...
+
+    def move(self, phase: ConversationPhase, detail: str) -> None: ...
+
+    def fail(self, cause: Exception) -> None: ...
+
+    def raise_if_failed(self) -> None: ...
 
     def request_pending(self) -> None: ...
 
 
-@dataclass(frozen=True, slots=True)
-class TurnRuntime:
-    speaker: Speaker
-    journal: JournalSink
-    responder: Responder | None = None
-    floor: SpeechFloor | None = None
-    judging: TurnJudging | None = None
-    phase: PhaseSink | None = None
-    queue: PendingFinals | None = None
-    recovery: TurnRecovery | None = None
-    on_fail: Callable[[Exception], None] | None = None
-    response_timeout_seconds: float = DEFAULTS.conversation.response_timeout_seconds
-    sentences: SentenceLimits | None = None
-    whole: WholeResponder | None = None
-    whole_turn: WholeTurnFactory | None = None
-    stream_turn: StreamTurnFactory | None = None
-    admitted: AdmittedFinals | None = None
-    closed: Callable[[], bool] | None = None
-    paused: Callable[[], bool] | None = None
-    barge_in: bool = True
-    raise_if_failed: Callable[[], None] | None = None
-    scheduler: TurnScheduler | None = None
-    bound: Callable[[], bool] | None = None
-    barge: BargeLatch | None = None
-    note_spoken: Callable[[str], None] | None = None
-    shadow: bool = False
-    faults: FaultReporter | None = None
-    chat_turn: WholeTurnFactory | None = None
-    planning: TurnPlanning | None = None
-    commands: CommandPort | None = None
-    state_speech: StateSpeech | None = None
-    evidence: EvidencePort | None = None
-    plans: dict[str, PlannedTurn] = field(default_factory=dict)
-    cue: ThinkingCue | None = None
-    others_speaking: Callable[[], bool] | None = None
+def _closed(runtime: TurnContext) -> bool:
+    return runtime.is_closed
 
 
-def _closed(runtime: TurnRuntime) -> bool:
-    return runtime.closed is not None and runtime.closed()
+def _paused(runtime: TurnContext) -> bool:
+    return runtime.is_paused
 
 
-def _paused(runtime: TurnRuntime) -> bool:
-    return runtime.paused is not None and runtime.paused()
+def _bound(runtime: TurnContext) -> bool:
+    return runtime.is_bound
 
 
-def _bound(runtime: TurnRuntime) -> bool:
-    return runtime.bound is None or runtime.bound()
+def _raise_if_failed(runtime: TurnContext) -> None:
+    runtime.raise_if_failed()
 
 
-def _raise_if_failed(runtime: TurnRuntime) -> None:
-    if runtime.raise_if_failed is not None:
-        runtime.raise_if_failed()
+def _busy(runtime: TurnContext) -> bool:
+    return runtime.is_busy
 
 
-def _busy(runtime: TurnRuntime) -> bool:
-    if runtime.scheduler is not None:
-        return runtime.scheduler.is_busy
-    return runtime.floor is not None and runtime.floor.busy
+def _admitted_count(runtime: TurnContext) -> int:
+    return runtime.admitted.count
 
 
-def _admitted_count(runtime: TurnRuntime) -> int:
-    if runtime.admitted is not None:
-        return runtime.admitted.count
-    return 0 if runtime.floor is None else runtime.floor.generation
+def _advance_admitted(runtime: TurnContext) -> int:
+    return runtime.admitted.advance()
 
 
-def _advance_admitted(runtime: TurnRuntime) -> int:
-    if runtime.admitted is not None:
-        return runtime.admitted.advance()
-    return _admitted_count(runtime)
+def _floor_generation(runtime: TurnContext) -> int:
+    return runtime.floor.generation
 
 
-def _floor_generation(runtime: TurnRuntime) -> int:
-    return 0 if runtime.floor is None else runtime.floor.generation
+def _fail(runtime: TurnContext, cause: Exception) -> None:
+    runtime.fail(cause)
 
 
-def _fail(runtime: TurnRuntime, cause: Exception) -> None:
-    if runtime.on_fail is not None:
-        runtime.on_fail(cause)
+def _move_phase(runtime: TurnContext, phase: ConversationPhase, detail: str) -> None:
+    runtime.move(phase, detail)
 
 
-def _move_phase(runtime: TurnRuntime, phase: ConversationPhase, detail: str) -> None:
-    if runtime.phase is not None:
-        runtime.phase.move(phase, detail)
-
-
-def _turn_current(runtime: TurnRuntime, generation: int, floor_generation: int) -> bool:
+def _turn_current(runtime: TurnContext, generation: int, floor_generation: int) -> bool:
     if _closed(runtime):
         return False
-    if runtime.admitted is not None and runtime.admitted.count != generation:
-        return False
-    return runtime.floor is None or runtime.floor.admits(floor_generation)
+    return runtime.admitted.count == generation and runtime.floor.admits(floor_generation)
 
 
-def _chat_current(runtime: TurnRuntime) -> bool:
+def _chat_current(runtime: TurnContext) -> bool:
     if _closed(runtime):
         return False
     return not _paused(runtime)
 
 
-def _admission_current(runtime: TurnRuntime, generation: int) -> bool:
+def _admission_current(runtime: TurnContext, generation: int) -> bool:
     if _closed(runtime):
         return False
-    return runtime.admitted is None or runtime.admitted.count == generation
+    return runtime.admitted.count == generation
 
 
 def _drop_outcome(floor: SpeechFloor) -> tuple[str, str]:
@@ -313,20 +360,16 @@ def _drop_outcome(floor: SpeechFloor) -> tuple[str, str]:
     return "stale_generation", "new_final"
 
 
-def turn_drop_outcome(runtime: TurnRuntime, generation: int) -> tuple[str, str]:
+def turn_drop_outcome(runtime: TurnContext, generation: int) -> tuple[str, str]:
     if _closed(runtime):
         return "closed", "close"
-    if runtime.admitted is not None:
-        if runtime.admitted.count != generation:
-            return "stale_generation", "new_final"
-        return "stopped", "interim"
-    if runtime.floor is not None:
-        return _drop_outcome(runtime.floor)
-    return "stale_generation", "new_final"
+    if runtime.admitted.count != generation:
+        return "stale_generation", "new_final"
+    return "stopped", "interim"
 
 
 def tool_start_hook(
-    runtime: TurnRuntime, generation: int, floor_generation: int | None, detail: str
+    runtime: TurnContext, generation: int, floor_generation: int | None, detail: str
 ) -> ToolStartHook:
     def on_tool_start() -> None:
         if floor_generation is None:
@@ -340,11 +383,10 @@ def tool_start_hook(
     return on_tool_start
 
 
-async def take_floor_for_final(runtime: TurnRuntime, transcript_text: str) -> None:
+async def take_floor_for_final(runtime: TurnContext, transcript_text: str) -> None:
     floor = runtime.floor
-    interrupted = floor.active if floor is not None else None
-    if floor is not None:
-        await cancel_speech(floor, runtime.journal, reason="new_final")
+    interrupted = floor.active
+    await cancel_speech(floor, runtime.journal, reason="new_final")
     if not _bound(runtime):
         return
     speaker = runtime.speaker
@@ -413,7 +455,7 @@ def route_after_participation(state: TurnGraphState) -> TurnRoute:
     return "end"
 
 
-def _prefetch_judgement(state: TurnGraphState, runtime: TurnRuntime) -> None:
+def _prefetch_judgement(state: TurnGraphState, runtime: TurnContext) -> None:
     judging = runtime.judging
     text = state["transcript_text"]
     if judging is None or state.get("pending", False) or not text.strip():
@@ -429,7 +471,7 @@ _NO_THRESHOLDS = JudgeThresholds(reply=1.0, clarify=1.0)
 
 async def _participate(
     state: TurnGraphState,
-    runtime: TurnRuntime,
+    runtime: TurnContext,
 ) -> dict[str, ParticipationDecision | DecisionSource | str | None]:
     if state.get("admission") == "admit":
         return {"failure": None}
@@ -530,7 +572,7 @@ class TurnDropped(Exception):
 class TurnSink:
     def __init__(
         self,
-        runtime: TurnRuntime,
+        runtime: TurnContext,
         scope: TurnScope | None,
         transcript_id: str,
         generations: tuple[int, int],
@@ -542,7 +584,7 @@ class TurnSink:
         self._transcript_id = transcript_id
         self._generation, self._floor_generation = generations
         self._streamed = streamed
-        self._stop_mark = 0 if runtime.barge is None else runtime.barge.stream_stops
+        self._stop_mark = runtime.barge.stream_stops
         self._spoken = 0
         self._offered = 0
         self._started = False
@@ -581,10 +623,8 @@ class TurnSink:
         if self._streamed and index is not None:
             self._check_live(index)
         _raise_if_failed(runtime)
-        if runtime.barge is not None:
-            runtime.barge.rearm()
-        if runtime.note_spoken is not None:
-            runtime.note_spoken(sentence)
+        runtime.barge.rearm()
+        runtime.note_spoken(sentence)
         await runtime.speaker.speak_prepared(prepared)
         self._spoken += 1
 
@@ -602,7 +642,7 @@ class TurnSink:
         runtime = self._runtime
         if _paused(runtime):
             return "paused", "paused"
-        stopped = runtime.barge is not None and runtime.barge.stream_stops != self._stop_mark
+        stopped = runtime.barge.stream_stops != self._stop_mark
         if stopped or not _turn_current(runtime, self._generation, self._floor_generation):
             return turn_drop_outcome(runtime, self._generation)
         if not _bound(runtime):
@@ -610,10 +650,8 @@ class TurnSink:
         return None
 
 
-def _turn_scope(runtime: TurnRuntime, transcript_id: str, generation: int) -> TurnScope | None:
+def _turn_scope(runtime: TurnContext, transcript_id: str, generation: int) -> TurnScope:
     floor = runtime.floor
-    if floor is None:
-        return None
     return TurnScope(
         request_id=turn_request_id(transcript_id, generation),
         transcript_id=transcript_id,
@@ -625,7 +663,7 @@ def _turn_scope(runtime: TurnRuntime, transcript_id: str, generation: int) -> Tu
 
 
 def _turn_whole(
-    runtime: TurnRuntime, batch: tuple[TranscriptEvent, ...], hook: ToolStartHook
+    runtime: TurnContext, batch: tuple[TranscriptEvent, ...], hook: ToolStartHook
 ) -> WholeResponder | None:
     factory = runtime.whole_turn
     if factory is None:
@@ -634,7 +672,7 @@ def _turn_whole(
 
 
 def _turn_responder(
-    runtime: TurnRuntime, batch: tuple[TranscriptEvent, ...], hook: ToolStartHook, request_id: str
+    runtime: TurnContext, batch: tuple[TranscriptEvent, ...], hook: ToolStartHook, request_id: str
 ) -> Responder | None:
     factory = runtime.stream_turn
     if factory is None:
@@ -643,7 +681,7 @@ def _turn_responder(
 
 
 def _speech_context(
-    runtime: TurnRuntime,
+    runtime: TurnContext,
     sink: SentenceSink,
     scope: TurnScope | None,
     generations: tuple[int, int],
@@ -658,17 +696,17 @@ def _speech_context(
         transcript_id=transcript_id,
         scope=scope,
         response_timeout_seconds=runtime.response_timeout_seconds,
-        paused=runtime.paused,
+        paused=lambda: runtime.is_paused,
         held=True,
         current=partial(_turn_current, runtime, generation, floor_generation),
         raise_if_failed=runtime.raise_if_failed,
-        bound=runtime.bound,
+        bound=lambda: runtime.is_bound,
         faults=runtime.faults,
         drop_detail=partial(_drop_detail, runtime, generation),
     )
 
 
-def _drop_detail(runtime: TurnRuntime, generation: int) -> str:
+def _drop_detail(runtime: TurnContext, generation: int) -> str:
     return turn_drop_outcome(runtime, generation)[0]
 
 
@@ -679,7 +717,7 @@ def _raise_reply_failure(output: Mapping[str, object]) -> None:
 
 
 def _finish_turn(
-    runtime: TurnRuntime,
+    runtime: TurnContext,
     output: Mapping[str, object],
     transcript_id: str,
     generations: tuple[int, int],
@@ -689,7 +727,7 @@ def _finish_turn(
     if streamed:
         _raise_if_failed(runtime)
     generation, _floor_generation = generations
-    if _closed(runtime) or (runtime.admitted is not None and runtime.admitted.count != generation):
+    if _closed(runtime) or runtime.admitted.count != generation:
         return
     if output.get("completed"):
         _move_phase(runtime, "listening" if output.get("delivered") else "waiting", transcript_id)
@@ -717,7 +755,7 @@ def reading_of(verdict: ParticipationDecision) -> Reading:
 
 
 def plan_for(
-    runtime: TurnRuntime, event: TranscriptEvent, reading: Reading, channel: Channel
+    runtime: TurnContext, event: TranscriptEvent, reading: Reading, channel: Channel
 ) -> PlannedTurn:
     if runtime.planning is not None:
         planned = runtime.planning(event, reading, channel)
@@ -778,14 +816,14 @@ def for_reply(
 
 
 async def with_evidence(
-    runtime: TurnRuntime, question: str, event: TranscriptEvent
+    runtime: TurnContext, question: str, event: TranscriptEvent
 ) -> TranscriptEvent:
     if runtime.evidence is None or not event.evidence_needs:
         return event
     return replace(event, evidence=await runtime.evidence(question, event.evidence_needs))
 
 
-async def _run_action(runtime: TurnRuntime, planned: PlannedTurn) -> CommandOutcome | None:
+async def _run_action(runtime: TurnContext, planned: PlannedTurn) -> CommandOutcome | None:
     action, commands = planned.plan.action, runtime.commands
     if action is None or commands is None:
         return None
@@ -797,7 +835,7 @@ async def _run_action(runtime: TurnRuntime, planned: PlannedTurn) -> CommandOutc
     )
 
 
-async def _leave(runtime: TurnRuntime, planned: PlannedTurn) -> CommandOutcome | None:
+async def _leave(runtime: TurnContext, planned: PlannedTurn) -> CommandOutcome | None:
     if not planned.plan.leave or runtime.commands is None:
         return None
     return await runtime.commands.run(
@@ -805,7 +843,7 @@ async def _leave(runtime: TurnRuntime, planned: PlannedTurn) -> CommandOutcome |
     )
 
 
-def _record_plan(runtime: TurnRuntime, event_id: str, planned: PlannedTurn) -> None:
+def _record_plan(runtime: TurnContext, event_id: str, planned: PlannedTurn) -> None:
     plan = planned.plan
     runtime.journal.record(
         "plan_selected",
@@ -823,7 +861,7 @@ def _record_plan(runtime: TurnRuntime, event_id: str, planned: PlannedTurn) -> N
 
 
 async def act_first(
-    runtime: TurnRuntime, final: TranscriptEvent, planned: PlannedTurn
+    runtime: TurnContext, final: TranscriptEvent, planned: PlannedTurn
 ) -> tuple[bool, CommandOutcome | None]:
     plan = planned.plan
     if plan.action is not None and runtime.commands is not None:
@@ -838,7 +876,7 @@ async def act_first(
 
 
 async def answer_state(
-    runtime: TurnRuntime, final: TranscriptEvent, planned: PlannedTurn, generation: int
+    runtime: TurnContext, final: TranscriptEvent, planned: PlannedTurn, generation: int
 ) -> bool:
     question = planned.plan.state_question
     if question is None or runtime.state_speech is None:
@@ -869,17 +907,16 @@ async def answer_state(
     _move_phase(runtime, "queued", final.id)
     language = runtime.sentences.language if runtime.sentences is not None else None
     await runtime.speaker.speak(text, transcript_id=final.id, language=language)
-    if runtime.note_spoken is not None:
-        runtime.note_spoken(text)
+    runtime.note_spoken(text)
     _move_phase(runtime, "listening", final.id)
     return True
 
 
 async def _run_turn(
-    runtime: TurnRuntime,
+    runtime: TurnContext,
     speech: SpeechGraph,
     batch: tuple[TranscriptEvent, ...],
-    scope: TurnScope | None,
+    scope: TurnScope,
     generation: int,
 ) -> None:
     final = batch[-1]
@@ -912,11 +949,11 @@ class Farewell:
 
 
 async def _speak_reply(
-    runtime: TurnRuntime,
+    runtime: TurnContext,
     speech: SpeechGraph,
     batch: tuple[TranscriptEvent, ...],
     reply_event: TranscriptEvent,
-    turn: tuple[TurnScope | None, int, Farewell],
+    turn: tuple[TurnScope, int, Farewell],
 ) -> None:
     final = batch[-1]
     scope, generation, farewell = turn
@@ -967,7 +1004,7 @@ async def _speak_reply(
     _finish_turn(runtime, output, final.id, generations, streamed=streamed)
 
 
-def _start_cue(runtime: TurnRuntime, turn: CueTurn) -> asyncio.Task[None] | None:
+def _start_cue(runtime: TurnContext, turn: CueTurn) -> asyncio.Task[None] | None:
     cue, speaker = runtime.cue, runtime.speaker
     if cue is None or runtime.shadow or not isinstance(speaker, CueSpeaker):
         return None
@@ -981,7 +1018,7 @@ async def _settle_cue(task: asyncio.Task[None] | None) -> None:
     await asyncio.gather(task, return_exceptions=True)
 
 
-def _cue_blocker(runtime: TurnRuntime, sink: TurnSink, generations: tuple[int, int]) -> str | None:
+def _cue_blocker(runtime: TurnContext, sink: TurnSink, generations: tuple[int, int]) -> str | None:
     generation, floor_generation = generations
     if sink.started:
         return "answered"
@@ -996,15 +1033,15 @@ def _cue_blocker(runtime: TurnRuntime, sink: TurnSink, generations: tuple[int, i
 
 
 async def _held(
-    runtime: TurnRuntime,
+    runtime: TurnContext,
     work: Coroutine[Any, Any, None],
-    scope: TurnScope | None,
+    scope: TurnScope,
     channel: ReplyChannel = "voice",
 ) -> bool:
-    floor = runtime.floor
-    if floor is None or scope is None or channel == "chat":
+    if channel == "chat":
         await work
         return True
+    floor = runtime.floor
     return await floor.hold(
         work,
         transcript_id=scope.transcript_id,
@@ -1013,18 +1050,16 @@ async def _held(
     )
 
 
-def _turn_dropped(runtime: TurnRuntime) -> None:
+def _turn_dropped(runtime: TurnContext) -> None:
     if _closed(runtime):
         raise asyncio.CancelledError
     _raise_if_failed(runtime)
 
 
 async def recover_turn(
-    runtime: TurnRuntime, error: Exception, generation: int, transcript_id: str
+    runtime: TurnContext, error: Exception, generation: int, transcript_id: str
 ) -> None:
     recovery = runtime.recovery
-    if recovery is None:
-        return
     if recovery.record_failure(error, transcript_id):
         _fail(runtime, error)
         return
@@ -1042,7 +1077,7 @@ async def recover_turn(
 
 
 async def _settle_outcome(
-    runtime: TurnRuntime,
+    runtime: TurnContext,
     outcome: tuple[bool | None, Exception | None],
     generation: int,
     transcript_id: str,
@@ -1053,13 +1088,12 @@ async def _settle_outcome(
     if error is not None:
         await recover_turn(runtime, error, generation, transcript_id)
     elif completed:
-        if runtime.recovery is not None:
-            runtime.recovery.record_success()
+        runtime.recovery.record_success()
     else:
         _turn_dropped(runtime)
 
 
-async def _drain_pending(runtime: TurnRuntime, speech: SpeechGraph, queue: PendingFinals) -> None:
+async def _drain_pending(runtime: TurnContext, speech: SpeechGraph, queue: PendingFinals) -> None:
     while queue.pending and not _closed(runtime):
         batch = queue.take()
         generation = _admitted_count(runtime)
@@ -1067,22 +1101,20 @@ async def _drain_pending(runtime: TurnRuntime, speech: SpeechGraph, queue: Pendi
         _move_phase(runtime, "weighing", transcript_id)
         _raise_if_failed(runtime)
         scope = _turn_scope(runtime, transcript_id, generation)
-        if scope is not None:
-            record_agent_started(runtime.journal, scope)
-        if runtime.barge is not None:
-            runtime.barge.interrupted = False
+        record_agent_started(runtime.journal, scope)
+        runtime.barge.interrupted = False
         work = _run_turn(runtime, speech, batch, scope, generation)
         outcome = await capture_error(partial(_held, runtime, work, scope, "voice"))
         await _settle_outcome(runtime, outcome, generation, transcript_id)
 
 
-async def drain_turns(runtime: TurnRuntime, speech: SpeechGraph, queue: PendingFinals) -> None:
+async def drain_turns(runtime: TurnContext, speech: SpeechGraph, queue: PendingFinals) -> None:
     _, error = await capture_error(partial(_drain_pending, runtime, speech, queue))
     if error is not None:
         _fail(runtime, error)
 
 
-async def _chat_reading(runtime: TurnRuntime, event: TranscriptEvent) -> Reading:
+async def _chat_reading(runtime: TurnContext, event: TranscriptEvent) -> Reading:
     judging = runtime.judging
     if judging is None:
         return Reading("speak", "chat_named")
@@ -1103,7 +1135,7 @@ async def _chat_reading(runtime: TurnRuntime, event: TranscriptEvent) -> Reading
 
 
 async def _deliver_chat(
-    runtime: TurnRuntime,
+    runtime: TurnContext,
     event: TranscriptEvent,
     planned: PlannedTurn,
     generation: int,
@@ -1144,7 +1176,7 @@ async def _deliver_chat(
     _move_phase(runtime, "listening" if text else "waiting", event.id)
 
 
-async def _run_chat_turn(runtime: TurnRuntime, event: TranscriptEvent, generation: int) -> None:
+async def _run_chat_turn(runtime: TurnContext, event: TranscriptEvent, generation: int) -> None:
     planned = plan_for(runtime, event, await _chat_reading(runtime, event), "chat")
     _record_plan(runtime, event.id, planned)
     done, outcome = await act_first(runtime, event, planned)
@@ -1156,13 +1188,12 @@ async def _run_chat_turn(runtime: TurnRuntime, event: TranscriptEvent, generatio
     await _deliver_chat(runtime, event, planned, generation, outcome)
 
 
-async def run_deferred_turn(runtime: TurnRuntime, speech: SpeechGraph, turn: DeferredTurn) -> bool:
+async def run_deferred_turn(runtime: TurnContext, speech: SpeechGraph, turn: DeferredTurn) -> bool:
     event = turn.event
     generation = _admitted_count(runtime)
     _move_phase(runtime, "weighing", event.id)
     scope = _turn_scope(runtime, event.id, generation)
-    if scope is not None:
-        record_agent_started(runtime.journal, scope)
+    record_agent_started(runtime.journal, scope)
     if turn.channel == "chat":
         work = _run_chat_turn(runtime, event, generation)
     else:
@@ -1170,7 +1201,7 @@ async def run_deferred_turn(runtime: TurnRuntime, speech: SpeechGraph, turn: Def
     completed, error = await capture_error(partial(_held, runtime, work, scope, turn.channel))
     if isinstance(error, FloorHeld):
         raise error
-    if turn.channel == "chat" and scope is not None:
+    if turn.channel == "chat":
         _journal_chat_turn_end(runtime, scope, error)
     if isinstance(error, TurnDropped) or (error is None and not completed):
         return False
@@ -1188,7 +1219,7 @@ async def run_deferred_turn(runtime: TurnRuntime, speech: SpeechGraph, turn: Def
     return True
 
 
-def _journal_chat_turn_end(runtime: TurnRuntime, scope: TurnScope, error: Exception | None) -> None:
+def _journal_chat_turn_end(runtime: TurnContext, scope: TurnScope, error: Exception | None) -> None:
     if isinstance(error, TurnDropped):
         runtime.journal.record(
             "agent_cancelled",
@@ -1222,21 +1253,8 @@ def _final_of(state: TurnGraphState) -> TranscriptEvent:
     )
 
 
-async def _start_pending(runtime: TurnRuntime, speech: SpeechGraph, queue: PendingFinals) -> None:
-    scheduler = runtime.scheduler
-    if scheduler is not None:
-        scheduler.request_pending()
-        return
-    await drain_turns(runtime, speech, queue)
-
-
-def _speaking_generation(runtime: TurnRuntime, state: TurnGraphState) -> int:
-    floor = runtime.floor
-    return state["speaking_generation"] if floor is None else floor.generation
-
-
 async def _admit_final(
-    state: TurnGraphState, runtime: TurnRuntime, speech: SpeechGraph
+    state: TurnGraphState, runtime: TurnContext
 ) -> dict[str, int | str | None | tuple[str, ...]]:
     final = _final_of(state)
     if runtime.shadow:
@@ -1253,14 +1271,13 @@ async def _admit_final(
         runtime.plans[final.id] = planned
         for stale in list(runtime.plans)[:-MAX_PENDING_PLANS]:
             del runtime.plans[stale]
-    queue = runtime.queue if runtime.queue is not None else PendingFinals()
-    queue.admit(final)
+    runtime.queue.admit(final)
     _advance_admitted(runtime)
     if _busy(runtime):
         _move_phase(runtime, "interrupted", final.id)
     await take_floor_for_final(runtime, final.text)
-    await _start_pending(runtime, speech, queue)
-    return {"speaking_generation": _speaking_generation(runtime, state)}
+    runtime.request_pending()
+    return {"speaking_generation": runtime.floor.generation}
 
 
 async def ingest_turn(state: TurnGraphState) -> dict[str, str | ParticipationDecision]:
@@ -1280,24 +1297,22 @@ async def gather_branches(state: TurnGraphState) -> dict[str, Any]:
     return {}
 
 
-async def record_turn_failure(state: TurnGraphState, context: TurnRuntime) -> None:
+async def record_turn_failure(state: TurnGraphState, context: TurnContext) -> None:
     context.journal.record("turn_failed", source="agent", code=state["failure"])
 
 
 @dataclass(frozen=True, slots=True)
 class _TurnNodes:
-    speech_graph: SpeechGraph
-
-    async def refresh(self, state: TurnGraphState, context: TurnRuntime) -> None:
+    async def refresh(self, state: TurnGraphState, context: TurnContext) -> None:
         _prefetch_judgement(state, context)
 
     async def decide(
-        self, state: TurnGraphState, context: TurnRuntime
+        self, state: TurnGraphState, context: TurnContext
     ) -> dict[str, ParticipationDecision | DecisionSource | str | None]:
         return await _participate(state, context)
 
     async def speak(
-        self, state: TurnGraphState, context: TurnRuntime
+        self, state: TurnGraphState, context: TurnContext
     ) -> dict[str, int | str | None | tuple[str, ...]]:
         if state["event"].kind == "stop":
             return {
@@ -1305,14 +1320,14 @@ class _TurnNodes:
                     context.floor, state["speaking_generation"]
                 )
             }
-        return await _admit_final(state, context, self.speech_graph)
+        return await _admit_final(state, context)
 
 
 class TurnRunner:
     def __init__(self, nodes: _TurnNodes) -> None:
         self._nodes = nodes
 
-    async def run(self, model_input: TurnInput, context: TurnRuntime) -> TurnGraphState:
+    async def run(self, model_input: TurnInput, context: TurnContext) -> TurnGraphState:
         optional: dict[str, object] = {
             key: value for key, value in model_input.items() if key in TurnInput.__optional_keys__
         }
@@ -1346,7 +1361,7 @@ class TurnRunner:
 
 
 def build_turn_graph() -> TurnRunner:
-    return TurnRunner(_TurnNodes(speech_graph=build_speech_graph()))
+    return TurnRunner(_TurnNodes())
 
 
 class _RecordingSink:

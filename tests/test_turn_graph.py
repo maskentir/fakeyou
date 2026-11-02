@@ -6,18 +6,19 @@ from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.meeting_messages import NoHistory
 from fakeyou.conversation.participation_graph import JudgeThresholds, TurnJudging
 from fakeyou.conversation.reply_planner import SpokenChunk
-from fakeyou.conversation.turn_events import TurnEvent
 from fakeyou.conversation.turn_graph import (
     TurnInput,
-    TurnRuntime,
     _chat_reading,
+    build_speech_graph,
     build_turn_graph,
 )
 from fakeyou.conversation.turn_judge import JudgeCache, TurnJudge, WindowSource
+from fakeyou.conversation.turn_queue import TurnEvent
 from fakeyou.foundation.participation import ParticipationContext
 from fakeyou.foundation.transcript import TranscriptEvent
 from tests._conversation_fakes import ScriptedJudge, judged
 from tests._prepared_support import PreparedSpeaker
+from tests._turn_context import TurnTestContext
 
 TWIN_REPLY = "Yes, I am here."
 QUESTION = "twin, are you there?"
@@ -115,12 +116,13 @@ def runtime(
     judge: TurnJudge | None = None,
     journal: FakeJournal | None = None,
     responder: FakeResponder | None = None,
-) -> TurnRuntime:
-    return TurnRuntime(
+) -> TurnTestContext:
+    return TurnTestContext(
         speaker=speaker or FakeSpeaker(),
         journal=journal or FakeJournal(),
         responder=responder or FakeResponder(),
         judging=judging(judge) if judge is not None else None,
+        speech=build_speech_graph(),
     )
 
 
@@ -132,6 +134,7 @@ async def test_the_final_reuses_the_judgement_started_on_its_interim() -> None:
 
     await graph.run(interim_input("twin are you there"), context=context)
     await graph.run(turn_input(), context=context)
+    await context.start_pending()
 
     assert [window.latest.text for window in judge.windows] == ["twin are you there"]
     assert speaker.utterances == [TWIN_REPLY]
@@ -181,13 +184,12 @@ async def test_a_judge_that_stays_silent_never_reaches_the_responder() -> None:
 async def test_a_judge_that_replies_speaks_exactly_once() -> None:
     speaker = FakeSpeaker()
     journal = FakeJournal()
-
-    await build_turn_graph().run(
-        turn_input(),
-        context=runtime(
-            speaker, judge=ScriptedJudge(lambda _window: judged("reply")), journal=journal
-        ),
+    context = runtime(
+        speaker, judge=ScriptedJudge(lambda _window: judged("reply")), journal=journal
     )
+
+    await build_turn_graph().run(turn_input(), context=context)
+    await context.start_pending()
 
     assert speaker.utterances == [TWIN_REPLY]
     decided = journal.fields[journal.names.index("policy_decided")]
@@ -201,17 +203,17 @@ async def test_a_judge_that_replies_speaks_exactly_once() -> None:
 async def test_a_failed_judge_falls_back_to_the_name_without_failing_the_turn() -> None:
     journal = FakeJournal()
     speaker = FakeSpeaker()
+    context = runtime(speaker, judge=ScriptedJudge(fail=TimeoutError()), journal=journal)
 
-    out = await build_turn_graph().run(
-        turn_input(addressed=True),
-        context=runtime(speaker, judge=ScriptedJudge(fail=TimeoutError()), journal=journal),
-    )
+    out = await build_turn_graph().run(turn_input(addressed=True), context=context)
+    await context.start_pending()
 
     assert out["failure"] is None
     assert speaker.utterances == [TWIN_REPLY]
-    assert journal.names[:2] == ["policy_judge_failed", "policy_decided"]
-    assert journal.fields[0]["code"] == "judge_timeout"
-    assert journal.fields[1]["reason"] == "fallback_named"
+    failed = journal.fields[journal.names.index("policy_judge_failed")]
+    decided = journal.fields[journal.names.index("policy_decided")]
+    assert failed["code"] == "judge_timeout"
+    assert decided["reason"] == "fallback_named"
 
 
 async def test_without_a_judge_an_unnamed_line_stays_silent() -> None:

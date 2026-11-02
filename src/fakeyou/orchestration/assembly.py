@@ -555,5 +555,5 @@ async def open_conversation(
         turns = builder.build_turns(
             responder, participant_policy_enabled=config.participant_policy_enabled
         )
-        resources.push_async_callback(turns.lifecycle.close)
+        resources.push_async_callback(turns.actor.close)
         yield turns

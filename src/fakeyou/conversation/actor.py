@@ -3,7 +3,7 @@ import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from functools import partial
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.control import ReplyControl
@@ -17,7 +17,6 @@ from fakeyou.conversation.session import (
     SupportsLouder,
 )
 from fakeyou.conversation.thinking_cue import ThinkingCue
-from fakeyou.conversation.turn_events import JournalSink, TurnEvent
 from fakeyou.conversation.turn_graph import (
     CommandPort,
     ConversationPhase,
@@ -25,13 +24,13 @@ from fakeyou.conversation.turn_graph import (
     PlannedTurn,
     Responder,
     SentenceLimits,
+    Speaker,
     StateSpeech,
     StreamTurnFactory,
     TurnGraphState,
     TurnInput,
     TurnPlanning,
     TurnRunner,
-    TurnRuntime,
     WholeResponder,
     WholeTurnFactory,
     build_speech_graph,
@@ -48,6 +47,7 @@ from fakeyou.conversation.turn_queue import (
     DeferredTurns,
     PendingFinals,
     QuietFloor,
+    TurnEvent,
 )
 from fakeyou.conversation.turn_recovery import RecoveryOptions, TurnRecovery
 from fakeyou.foundation.clock import monotonic
@@ -59,8 +59,8 @@ from fakeyou.foundation.participation import (
 from fakeyou.foundation.resources import read_package_text
 from fakeyou.foundation.transcript import TranscriptEvent, transcript_stamp
 from fakeyou.foundation.triggers import ReplyChannel
-from fakeyou.observability.faults import ConsumerSink, capture_error, guard_observer
-from fakeyou.observability.journal import Journal
+from fakeyou.observability.faults import ConsumerSink, FaultReporter, capture_error, guard_observer
+from fakeyou.observability.journal import Journal, JournalSink
 from fakeyou.observability.provider_faults import classify_exception
 from fakeyou.speech.contract import PreparedSpeech
 
@@ -236,7 +236,7 @@ class FloorActor:
         self._judge_tasks: set[asyncio.Task[None]] = set()
         self._last_attention: str | None = None
         self._last_final: tuple[str, str, float] | None = None
-        self._runtime: TurnRuntime | None = self._build_runtime()
+        self._speaker = _ActorSpeaker(self)
 
     @property
     def turn(self) -> TurnRunner:
@@ -295,8 +295,80 @@ class FloorActor:
         return self._session
 
     @property
-    def runtime(self) -> TurnRuntime | None:
-        return self._runtime
+    def speaker(self) -> Speaker:
+        return self._speaker
+
+    @property
+    def plans(self) -> dict[str, PlannedTurn]:
+        return self._plans
+
+    @property
+    def responder(self) -> Responder | None:
+        return self._responder
+
+    @property
+    def sentences(self) -> SentenceLimits | None:
+        return self._reply.sentences
+
+    @property
+    def whole(self) -> WholeResponder | None:
+        return self._reply.whole
+
+    @property
+    def whole_turn(self) -> WholeTurnFactory | None:
+        return self._reply.whole_turn
+
+    @property
+    def stream_turn(self) -> StreamTurnFactory | None:
+        return self._reply.stream_turn
+
+    @property
+    def chat_turn(self) -> WholeTurnFactory | None:
+        return self._deferred_options.chat_turn
+
+    @property
+    def planning(self) -> TurnPlanning | None:
+        return self._deferred_options.planning
+
+    @property
+    def commands(self) -> CommandPort | None:
+        return self._deferred_options.commands
+
+    @property
+    def state_speech(self) -> StateSpeech | None:
+        return self._deferred_options.state_speech
+
+    @property
+    def evidence(self) -> EvidencePort | None:
+        return self._deferred_options.evidence
+
+    @property
+    def cue(self) -> ThinkingCue | None:
+        return self._cue
+
+    @property
+    def faults(self) -> FaultReporter | None:
+        return self._options.faults
+
+    @property
+    def others_speaking(self) -> Callable[[], bool] | None:
+        return self._deferred_options.others_speaking
+
+    @property
+    def note_spoken(self) -> Callable[[str], None]:
+        return self._note_spoken
+
+    @property
+    def shadow(self) -> bool:
+        return self._shadow
+
+    @property
+    def response_timeout_seconds(self) -> float:
+        return self._options.response_timeout_seconds
+
+    @property
+    def is_bound(self) -> bool:
+        return self._session is not None
 
     @property
     def is_closed(self) -> bool:
@@ -331,23 +403,18 @@ class FloorActor:
     def configure_recovery(self, options: RecoveryOptions) -> None:
         self._options = options
         self._recovery = self._build_recovery()
-        self._refresh_runtime()
 
     def configure_reply(self, options: ReplyOptions) -> None:
         self._reply = options
-        self._refresh_runtime()
 
     def configure_barge_in(self, *, enabled: bool) -> None:
         self._barge_in = enabled
-        self._refresh_runtime()
 
     def configure_shadow(self, *, enabled: bool) -> None:
         self._shadow = enabled
-        self._refresh_runtime()
 
     def configure_deferred(self, options: DeferredOptions) -> None:
         self._deferred_options = options
-        self._refresh_runtime()
 
     def configure_control(self, control: ReplyControl | None) -> None:
         self._control = control
@@ -356,7 +423,6 @@ class FloorActor:
     def configure_cue(self, cue: ThinkingCue | None) -> None:
         self._cue = cue
         self._prepare_cues()
-        self._refresh_runtime()
 
     def set_addressing_names(self, names: Sequence[str]) -> None:
         self._addressing_names = addressing_phrases(names)
@@ -405,47 +471,6 @@ class FloorActor:
             language=self._options.language,
             is_closed=lambda: self._closed,
             clock=self._clock,
-        )
-
-    def _refresh_runtime(self) -> None:
-        if not self._closed:
-            self._runtime = self._build_runtime()
-
-    def _build_runtime(self) -> TurnRuntime:
-        return TurnRuntime(
-            speaker=_ActorSpeaker(self),
-            journal=self._journal,
-            responder=self._responder,
-            floor=self._floor,
-            judging=self._judging,
-            phase=self,
-            queue=self._queue,
-            recovery=self._recovery,
-            on_fail=self.fail,
-            response_timeout_seconds=self._options.response_timeout_seconds,
-            sentences=self._reply.sentences,
-            whole=self._reply.whole,
-            whole_turn=self._reply.whole_turn,
-            stream_turn=self._reply.stream_turn,
-            admitted=self._admitted,
-            closed=lambda: self._closed,
-            paused=lambda: self._paused,
-            barge_in=self._barge_in,
-            raise_if_failed=self.raise_if_failed,
-            scheduler=self,
-            bound=lambda: self._session is not None,
-            barge=self._barge,
-            note_spoken=self._note_spoken,
-            shadow=self._shadow,
-            faults=self._options.faults,
-            chat_turn=self._deferred_options.chat_turn,
-            planning=self._deferred_options.planning,
-            commands=self._deferred_options.commands,
-            state_speech=self._deferred_options.state_speech,
-            evidence=self._deferred_options.evidence,
-            plans=self._plans,
-            cue=self._cue,
-            others_speaking=self._deferred_options.others_speaking,
         )
 
     def _note_spoken(self, sentence: str) -> None:
@@ -497,31 +522,30 @@ class FloorActor:
         return True
 
     def start_pending(self) -> None:
-        runtime = self._runtime
-        if runtime is None or self._failure is not None or self._session is None:
+        if self._failure is not None or self._session is None:
             return
         if self._queue.pending and not _running(self._voice_drain):
-            self._voice_drain = asyncio.create_task(self._drain_pending_finals(runtime))
+            self._voice_drain = asyncio.create_task(self._drain_pending_finals())
         if self._deferred.pending_for("chat") and not _running(self._chat_drain):
-            self._chat_drain = asyncio.create_task(self._drain_deferred(runtime, "chat"))
+            self._chat_drain = asyncio.create_task(self._drain_deferred("chat"))
         if self._deferred.pending_for("voice") and not _running(self._attention_drain):
-            self._attention_drain = asyncio.create_task(self._drain_deferred(runtime, "voice"))
+            self._attention_drain = asyncio.create_task(self._drain_deferred("voice"))
 
-    async def _drain_pending_finals(self, runtime: TurnRuntime) -> None:
+    async def _drain_pending_finals(self) -> None:
         while not self._closed and self._failure is None:
             if not self._queue.pending:
                 break
-            await drain_turns(runtime, self._speech, self._queue)
+            await drain_turns(self, self._speech, self._queue)
         if not self._closed and self._failure is None:
             self.start_pending()
         self._arm_wakeup()
 
-    async def _drain_deferred(self, runtime: TurnRuntime, channel: ReplyChannel) -> None:
+    async def _drain_deferred(self, channel: ReplyChannel) -> None:
         while not self._closed and self._failure is None:
             turn = self._next_deferred(channel)
             if turn is None:
                 break
-            delivered = await run_deferred_turn(runtime, self._speech, turn)
+            delivered = await run_deferred_turn(self, self._speech, turn)
             if not delivered and not self._closed and not self._deferred.retry(turn):
                 self._journal.record(
                     "deferred_turn_dropped",
@@ -629,7 +653,6 @@ class FloorActor:
         if self._judging is not None:
             self._judging.cache.cancel()
         self._session = None
-        self._runtime = None
         await self._release_floor()
         lanes: list[asyncio.Task[None]] = []
         for task in (self._voice_drain, self._chat_drain, self._attention_drain):
@@ -649,10 +672,9 @@ class FloorActor:
         await self._floor.interrupt("close")
 
     async def receive_final(self, event: TranscriptEvent) -> ParticipationDecision | None:
-        runtime = self._open_final(event)
-        if runtime is None:
+        if self._open_final(event) is None:
             return None
-        output = await self._invoke_final(event, runtime)
+        output = await self._invoke_final(event)
         self.start_requested()
         decision: ParticipationDecision | None = output["participation"]
         if decision is not None and decision.decision in _ADMITTED:
@@ -704,7 +726,7 @@ class FloorActor:
         if text.strip():
             self.note_activity()
         window: JudgeWindow | None = None
-        if self._runtime is not None and not self._closed and self._failure is None:
+        if not self._closed and self._failure is None:
             window = await self._prefetch(text)
         session = self._session
         if self._closed or self._failure is not None or not self._barge_in or session is None:
@@ -827,7 +849,7 @@ class FloorActor:
         signal = self._others_speaking_signal
         return self._participant_policy and signal is not None and signal()
 
-    def _open_final(self, event: TranscriptEvent) -> TurnRuntime | None:
+    def _open_final(self, event: TranscriptEvent) -> Self | None:
         if self._closed or self._failure is not None:
             return None
         if not event.finalized or not event.text.strip():
@@ -838,8 +860,7 @@ class FloorActor:
                 "transcript_suppressed", source="agent", transcript_id=event.id, reason="paused"
             )
             return None
-        runtime = self._runtime
-        if runtime is None or event.id in self._seen:
+        if event.id in self._seen:
             return None
         if self._is_overlap_duplicate(event):
             self._journal.record(
@@ -851,9 +872,9 @@ class FloorActor:
             return None
         self._seen.add(event.id)
         self.note_final(event)
-        return runtime
+        return self
 
-    async def _invoke_final(self, event: TranscriptEvent, runtime: TurnRuntime) -> TurnGraphState:
+    async def _invoke_final(self, event: TranscriptEvent) -> TurnGraphState:
         self._in_flight = True
         try:
             return await self._turn.run(
@@ -875,7 +896,7 @@ class FloorActor:
                     addressing_names=self._addressing_names,
                     admission="rules" if self._rules_admission else "admit",
                 ),
-                runtime,
+                self,
             )
         finally:
             self._in_flight = False
@@ -892,12 +913,9 @@ class FloorActor:
         await cancel_speech(self._floor, self._journal, reason="final")
 
     async def _prefetch(self, text: str) -> JudgeWindow | None:
-        runtime = self._runtime
-        if runtime is None:
-            return None
         judging = self._judging
         window = (
-            judging.windows.for_interim(text, twin_speaking=runtime.speaker.is_speaking)
+            judging.windows.for_interim(text, twin_speaking=self.speaker.is_speaking)
             if judging is not None
             else None
         )
@@ -917,7 +935,7 @@ class FloorActor:
                 pending=self._in_flight or self._queue.pending,
                 judge_window=window,
             ),
-            runtime,
+            self,
         )
         return window
 

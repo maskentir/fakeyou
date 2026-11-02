@@ -15,11 +15,9 @@ from fakeyou.conversation.actor import (
 from fakeyou.conversation.meeting_messages import NoHistory
 from fakeyou.conversation.participation_graph import JudgeThresholds, TurnJudging
 from fakeyou.conversation.reply_planner import SpokenChunk
-from fakeyou.conversation.turn_events import TurnEvent
 from fakeyou.conversation.turn_graph import (
     ConversationPhase,
     TurnInput,
-    TurnRuntime,
     build_turn_graph,
 )
 from fakeyou.conversation.turn_judge import (
@@ -30,11 +28,13 @@ from fakeyou.conversation.turn_judge import (
     TurnJudgement,
     WindowSource,
 )
+from fakeyou.conversation.turn_queue import TurnEvent
 from fakeyou.foundation.participation import ParticipationContext
 from fakeyou.foundation.transcript import TranscriptEvent
 from tests._audio_fakes import SilentSpeaker
 from tests._conversation_fakes import judged
 from tests._prepared_support import PreparedSpeaker
+from tests._turn_context import TurnTestContext
 
 TWIN_REPLY = "Yes, I am here."
 POLICY_FIELDS = {
@@ -204,7 +204,7 @@ async def test_interim_is_not_judged_while_a_final_is_in_flight() -> None:
 
     await build_turn_graph().run(
         interim_input("twin, what do you think", pending=True),
-        context=TurnRuntime(
+        context=TurnTestContext(
             speaker=SilentSpeaker(), journal=FakeJournal(), responder=FakeResponder(), judging=cache
         ),
     )
@@ -226,7 +226,7 @@ async def test_the_judge_is_asked_about_the_window_the_ingress_built() -> None:
             addressing_names=("twin",),
             judge_window=window,
         ),
-        context=TurnRuntime(
+        context=TurnTestContext(
             speaker=SilentSpeaker(), journal=FakeJournal(), responder=FakeResponder(), judging=cache
         ),
     )

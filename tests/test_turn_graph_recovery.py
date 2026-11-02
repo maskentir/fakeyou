@@ -160,16 +160,16 @@ class Harness:
         responder = ModelResponder(
             chunks=chunks, phase=ToolPhaseState(), max_sentences=3, language="en"
         )
-        self.lifecycle = FloorActor(
+        self.actor = FloorActor(
             build_turn_graph(), ActorWiring(journal=self.journal, responder=responder)
         )
-        self.lifecycle.configure_recovery(
+        self.actor.configure_recovery(
             RecoveryOptions(faults=faults, language="en", response_timeout_seconds=timeout)
         )
-        self.lifecycle.bind(self.session)
+        self.actor.bind(self.session)
 
     async def say(self, event_id: str, text: str) -> None:
-        await self.lifecycle.handle_final(transcript(event_id, text))
+        await self.actor.handle_final(transcript(event_id, text))
 
 
 class StreamedReplies:
@@ -207,7 +207,7 @@ async def test_sentence_over_the_budget_times_out_and_the_turn_recovers() -> Non
     assert failed["raised_at"]
     assert [fields["request_id"] for fields in harness.journal.of("agent_failed")] == ["f1:1"]
     assert harness.journal.of("agent_finished") == []
-    assert harness.lifecycle.phase == "waiting"
+    assert harness.actor.phase == "waiting"
 
 
 async def test_responder_error_counts_one_failure_and_records_a_fault() -> None:
@@ -224,11 +224,11 @@ async def test_responder_error_counts_one_failure_and_records_a_fault() -> None:
         "consecutive": 1,
     }
     assert failed["raised_at"]
-    assert harness.lifecycle.recovery.consecutive_failures == 1
+    assert harness.actor.recovery.consecutive_failures == 1
     assert [fault.source for fault in faults.summaries()] == ["agent"]
     assert harness.session.spoken == [TURN_FAILED_EN]
     assert harness.session.turns == ["f1"]
-    assert harness.lifecycle.phase == "waiting"
+    assert harness.actor.phase == "waiting"
 
 
 async def test_third_consecutive_failure_mutes_the_line_without_failing() -> None:
@@ -239,7 +239,7 @@ async def test_third_consecutive_failure_mutes_the_line_without_failing() -> Non
 
     assert [fields["consecutive"] for fields in harness.journal.of("turn_failed")] == [1, 2, 3]
     assert harness.session.spoken == [TURN_FAILED_EN, TURN_FAILED_EN]
-    assert harness.lifecycle.is_failed is False
+    assert harness.actor.is_failed is False
 
 
 async def test_the_same_words_twice_are_two_turns_not_a_duplicate() -> None:
@@ -268,9 +268,9 @@ async def test_a_successful_turn_resets_the_consecutive_count() -> None:
     harness = Harness(flaky_chunks(failures=1))
 
     await harness.say("f1", "twin, are you there?")
-    assert harness.lifecycle.recovery.consecutive_failures == 1
+    assert harness.actor.recovery.consecutive_failures == 1
     await harness.say("f2", "twin, still there?")
-    assert harness.lifecycle.recovery.consecutive_failures == 0
+    assert harness.actor.recovery.consecutive_failures == 0
     assert harness.session.spoken == [TURN_FAILED_EN, "Yes, I am here."]
 
 

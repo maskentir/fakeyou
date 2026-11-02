@@ -408,7 +408,7 @@ def _build_audio_factory(
     )
     if run.conversation is not None and run.kernel is not None:
         feed = TurnFeed(
-            run.conversation.ingress,
+            run.conversation.actor,
             journal=run.journal,
             faults=run.faults,
             early=(

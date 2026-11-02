@@ -60,9 +60,9 @@ def replay_record(path: Path, twin_names: tuple[str, ...]) -> list[dict[str, Any
             diagnostics=Diagnostics(journal=journal),
         )
         for turn in load_record_turns(path):
-            await turns.ingress.receive_final(turn)
-        await turns.lifecycle.wait_idle()
-        await turns.lifecycle.close()
+            await turns.actor.receive_final(turn)
+        await turns.actor.wait_idle()
+        await turns.actor.close()
         return [
             {
                 "transcript_id": row["transcript_id"],

@@ -128,7 +128,7 @@ def lanes(
         timing=timing or TurnTiming(quiet_gap_seconds=0.0),
         diagnostics=Diagnostics(journal=journal or RecordingJournal()),
     )
-    turns.lifecycle.bind(audio)
+    turns.actor.bind(audio)
     return turns, audio
 
 
@@ -138,8 +138,8 @@ def interaction(**options: Any) -> TurnInteraction:
 
 async def settle(turns: MeetingTurns) -> None:
     for _ in range(50):
-        await turns.lifecycle.wait_idle()
-        if not turns.lifecycle.deferred.pending and not turns.lifecycle.is_busy:
+        await turns.actor.wait_idle()
+        if not turns.actor.deferred.pending and not turns.actor.is_busy:
             return
         await asyncio.sleep(0.02)
 
@@ -151,7 +151,7 @@ async def test_a_chat_that_names_the_twin_is_answered_in_chat() -> None:
         interaction=interaction(commands=chat, planning=chat_permitted),
     )
 
-    accepted = turns.ingress.receive_chat(
+    accepted = turns.actor.receive_chat(
         meeting_input("c1", f"{TWIN}, can you share the deck?", "meeting_chat")
     )
     await settle(turns)
@@ -173,11 +173,11 @@ async def test_a_final_does_not_cancel_a_chat_reply_that_is_still_being_written(
         journal=journal,
     )
 
-    accepted = turns.ingress.receive_chat(
+    accepted = turns.actor.receive_chat(
         meeting_input("c1", f"{TWIN}, can you share the deck?", "meeting_chat")
     )
     await responder.started.wait()
-    await turns.ingress.receive_final(event("t1", f"{TWIN}, quick question"))
+    await turns.actor.receive_final(event("t1", f"{TWIN}, quick question"))
     gate.set()
     await settle(turns)
 
@@ -225,9 +225,7 @@ async def test_a_chat_that_does_not_name_the_twin_is_left_alone() -> None:
     responder = FakeResponder()
     turns, _ = lanes(responder, interaction=interaction(commands=chat, planning=chat_permitted))
 
-    accepted = turns.ingress.receive_chat(
-        meeting_input("c1", "anyone has the deck?", "meeting_chat")
-    )
+    accepted = turns.actor.receive_chat(meeting_input("c1", "anyone has the deck?", "meeting_chat"))
     await settle(turns)
 
     assert not accepted
@@ -243,7 +241,7 @@ async def test_chat_replies_never_carry_internal_references() -> None:
         interaction=interaction(commands=chat, planning=chat_permitted),
     )
 
-    turns.ingress.receive_chat(meeting_input("c1", f"{TWIN} when does it start?", "meeting_chat"))
+    turns.actor.receive_chat(meeting_input("c1", f"{TWIN} when does it start?", "meeting_chat"))
     await settle(turns)
 
     assert chat.sent == [("The roadmap starts in Q1.", "device-budi")]
@@ -256,7 +254,7 @@ async def test_without_a_chat_channel_the_reply_is_dropped_not_spoken() -> None:
         FixedResponder("Sure."), journal=journal, interaction=interaction(planning=chat_permitted)
     )
 
-    turns.ingress.receive_chat(meeting_input("c1", f"{TWIN} ping", "meeting_chat"))
+    turns.actor.receive_chat(meeting_input("c1", f"{TWIN} ping", "meeting_chat"))
     await settle(turns)
 
     assert audio.spoken == []
@@ -274,7 +272,7 @@ async def test_a_chat_reply_runs_while_a_final_is_still_being_prepared() -> None
     )
 
     voice = asyncio.create_task(
-        turns.ingress.receive_final(event("t1", f"{TWIN}, can you share the deck?"))
+        turns.actor.receive_final(event("t1", f"{TWIN}, can you share the deck?"))
     )
     await responder.started.wait()
     accepted = turns.receive_chat(meeting_input("c1", f"{TWIN} ping", "meeting_chat"))
@@ -342,8 +340,8 @@ async def test_a_voice_interjection_waits_for_a_quiet_floor() -> None:
         FixedResponder("The beta date looks wrong."), timing=TurnTiming(quiet_gap_seconds=0.15)
     )
 
-    turns.lifecycle.note_activity()
-    turns.ingress.receive_attention(
+    turns.actor.note_activity()
+    turns.actor.receive_attention(
         meeting_input("a1", "attention screen#2", "meeting_attention"), channel="voice"
     )
     await asyncio.sleep(0.05)
@@ -364,11 +362,11 @@ async def test_a_voice_interjection_never_talks_over_someone() -> None:
         timing=TurnTiming(quiet_gap_seconds=0.0, deferred_ttl_seconds=0.1),
     )
 
-    turns.ingress.receive_attention(
+    turns.actor.receive_attention(
         meeting_input("a1", "attention", "meeting_attention"), channel="voice"
     )
     await asyncio.sleep(0.4)
-    turns.lifecycle.start_pending()
+    turns.actor.start_pending()
     await settle(turns)
 
     assert audio.spoken == []
@@ -381,11 +379,11 @@ async def test_speech_preempts_a_deferred_turn_which_is_retried_once() -> None:
     responder = FakeResponder(gate)
     turns, audio = lanes(responder)
 
-    turns.ingress.receive_attention(
+    turns.actor.receive_attention(
         meeting_input("a1", "noticed", "meeting_attention"), channel="voice"
     )
     await responder.started.wait()
-    await turns.ingress.receive_final(event("t1", f"{TWIN}, quick question"))
+    await turns.actor.receive_final(event("t1", f"{TWIN}, quick question"))
     gate.set()
     await settle(turns)
 
@@ -398,7 +396,7 @@ async def test_shadow_mode_suppresses_deferred_turns() -> None:
     journal = RecordingJournal()
     turns, audio = lanes(FakeResponder(), journal=journal, interaction=interaction(shadow=True))
 
-    accepted = turns.ingress.receive_attention(
+    accepted = turns.actor.receive_attention(
         meeting_input("a1", "noticed", "meeting_attention"), channel="voice"
     )
     await settle(turns)
@@ -412,7 +410,7 @@ async def test_shadow_mode_suppresses_deferred_turns() -> None:
 async def test_spoken_sentences_are_scrubbed_of_internal_references() -> None:
     turns, audio = lanes(FixedResponder("Per screen#1, beta is on 17 March."))
 
-    await turns.ingress.receive_final(event("t1", f"{TWIN}, when is beta?"))
+    await turns.actor.receive_final(event("t1", f"{TWIN}, when is beta?"))
     await settle(turns)
 
     assert audio.spoken == ["Per, beta is on 17 March."]
@@ -421,13 +419,13 @@ async def test_spoken_sentences_are_scrubbed_of_internal_references() -> None:
 
 async def test_closing_drops_waiting_deferred_turns() -> None:
     turns, audio = lanes(FakeResponder(), interaction=interaction(others_speaking=lambda: True))
-    turns.ingress.receive_attention(
+    turns.actor.receive_attention(
         meeting_input("a1", "noticed", "meeting_attention"), channel="voice"
     )
 
     await turns.close()
 
-    assert not turns.lifecycle.deferred.pending
+    assert not turns.actor.deferred.pending
     assert audio.spoken == []
 
 

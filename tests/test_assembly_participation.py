@@ -39,7 +39,7 @@ def test_every_meeting_has_a_turn_judge(
     monkeypatch.setattr(assembly, "build_turn_judge", REAL_BUILD_TURN_JUDGE)
     turns = _builder(settings).build_turns(_responder())
 
-    judging = turns.lifecycle.judging
+    judging = turns.actor.judging
     assert judging is not None
     assert judging.thresholds.reply == settings.turn_judge.reply_threshold
 

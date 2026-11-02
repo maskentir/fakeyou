@@ -72,7 +72,7 @@ async def test_the_conversation_judges_with_the_injected_judge(
         behavior=TurnBehavior(on_transition=lambda *_args: None),
         models=ModelWiring(judge=lambda _names: judge),
     ) as turns:
-        judging = turns.lifecycle.judging
+        judging = turns.actor.judging
         assert judging is not None
         await judging.cache.judgement(JudgeWindow((), JudgeLine("ayu", "Rani?")))
 

@@ -35,13 +35,13 @@ async def test_model_timeout_is_observable_without_exposing_provider_error(
         timing=TurnTiming(response_timeout_seconds=0.02),
         diagnostics=Diagnostics(journal=journal),
     )
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(event("one"))
-    await loop.lifecycle.wait_idle()
-    loop.lifecycle.raise_if_failed()
+    loop.actor.bind(audio)
+    await loop.actor.receive_final(event("one"))
+    await loop.actor.wait_idle()
+    loop.actor.raise_if_failed()
     assert [row["error"] for row in journal.events("turn_failed")] == ["TimeoutError"]
     assert len(audio.spoken) == 1
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 class _BuggyResponder(FakeResponder):
@@ -56,14 +56,14 @@ async def test_responder_bug_keeps_listening_after_the_failure_limit() -> None:
     journal = RecordingJournal("meeting-bug")
     reporter = FaultReporter(journal=journal)
     loop = build_meeting_turns(_BuggyResponder(), diagnostics=Diagnostics(faults=reporter))
-    loop.lifecycle.bind(FakeReplyAudio())
+    loop.actor.bind(FakeReplyAudio())
     for index in range(MAX_CONSECUTIVE_TURN_FAILURES):
-        await loop.ingress.receive_final(event(f"t{index}", "hello"))
-        await loop.lifecycle.wait_idle()
-    loop.lifecycle.raise_if_failed()
-    assert loop.lifecycle.phase != "failed"
+        await loop.actor.receive_final(event(f"t{index}", "hello"))
+        await loop.actor.wait_idle()
+    loop.actor.raise_if_failed()
+    assert loop.actor.phase != "failed"
     assert reporter.total() >= 1
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_agent_error_raises_typed_provider_fault() -> None:
@@ -93,13 +93,13 @@ async def test_responder_error_keeps_loop_alive_after_the_failure_limit() -> Non
             raise RuntimeError("model exploded")
 
     loop = build_meeting_turns(Broken())
-    loop.lifecycle.bind(FakeReplyAudio())
+    loop.actor.bind(FakeReplyAudio())
     for index in range(MAX_CONSECUTIVE_TURN_FAILURES):
-        await loop.ingress.receive_final(event(f"one-{index}"))
-        await loop.lifecycle.wait_idle()
-    loop.lifecycle.raise_if_failed()
-    assert loop.lifecycle.phase != "failed"
-    await loop.lifecycle.close()
+        await loop.actor.receive_final(event(f"one-{index}"))
+        await loop.actor.wait_idle()
+    loop.actor.raise_if_failed()
+    assert loop.actor.phase != "failed"
+    await loop.actor.close()
 
 
 async def test_loop_journals_turn_without_modifying_injected_responder(
@@ -123,16 +123,16 @@ async def test_loop_journals_turn_without_modifying_injected_responder(
     responder = JournaledResponder()
     loop = build_meeting_turns(responder, diagnostics=Diagnostics(journal=journal))
 
-    loop.lifecycle.bind(FakeReplyAudio())
-    await loop.ingress.receive_final(event("one"))
-    await loop.lifecycle.wait_idle()
+    loop.actor.bind(FakeReplyAudio())
+    await loop.actor.receive_final(event("one"))
+    await loop.actor.wait_idle()
     assert responder.journal is None
     assert [json.loads(line)["event"] for line in lines] == [
         "plan_selected",
         "agent_started",
         "agent_finished",
     ]
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 def memory_event(event_id: str) -> TranscriptEvent:
@@ -322,11 +322,11 @@ async def test_transition_observer_error_is_recorded_as_fault() -> None:
         interaction=TurnInteraction(on_transition=boom),
         diagnostics=Diagnostics(faults=reporter),
     )
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(event("t1", "hello"))
-    await loop.lifecycle.wait_idle()
+    loop.actor.bind(audio)
+    await loop.actor.receive_final(event("t1", "hello"))
+    await loop.actor.wait_idle()
 
     (summary,) = reporter.summaries()
     assert summary.operation == "transition_observer"
     assert audio.spoken == ["hello"]
-    await loop.lifecycle.close()
+    await loop.actor.close()

@@ -36,48 +36,48 @@ class ScriptedResponder(FakeResponder):
 async def test_one_failed_turn_says_a_line_and_keeps_listening() -> None:
     audio = FakeReplyAudio()
     loop = build_meeting_turns(ScriptedResponder(["fail", "ok"]))
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(event("t1", "first question"))
-    await loop.lifecycle.wait_idle()
-    await loop.ingress.receive_final(event("t2", "second question"))
-    await loop.lifecycle.wait_idle()
+    loop.actor.bind(audio)
+    await loop.actor.receive_final(event("t1", "first question"))
+    await loop.actor.wait_idle()
+    await loop.actor.receive_final(event("t2", "second question"))
+    await loop.actor.wait_idle()
 
-    loop.lifecycle.raise_if_failed()
-    assert loop.lifecycle.phase != "failed"
+    loop.actor.raise_if_failed()
+    assert loop.actor.phase != "failed"
     assert audio.spoken == [TURN_FAILED_LINE, "second question"]
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_consecutive_failures_mute_the_apology_without_failing_the_loop() -> None:
     audio = FakeReplyAudio()
     loop = build_meeting_turns(ScriptedResponder(["fail"] * (MAX_CONSECUTIVE_TURN_FAILURES + 2)))
-    loop.lifecycle.bind(audio)
+    loop.actor.bind(audio)
     for index in range(MAX_CONSECUTIVE_TURN_FAILURES + 2):
-        await loop.ingress.receive_final(event(f"t{index}", f"question {index}"))
-        await loop.lifecycle.wait_idle()
+        await loop.actor.receive_final(event(f"t{index}", f"question {index}"))
+        await loop.actor.wait_idle()
 
-    loop.lifecycle.raise_if_failed()
-    assert loop.lifecycle.phase != "failed"
+    loop.actor.raise_if_failed()
+    assert loop.actor.phase != "failed"
     assert audio.spoken == [TURN_FAILED_LINE] * (MAX_CONSECUTIVE_TURN_FAILURES - 1)
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_after_the_failure_limit_the_loop_recovers_on_the_next_success() -> None:
     audio = FakeReplyAudio()
     outcomes = ["fail"] * MAX_CONSECUTIVE_TURN_FAILURES + ["ok"]
     loop = build_meeting_turns(ScriptedResponder(outcomes))
-    loop.lifecycle.bind(audio)
+    loop.actor.bind(audio)
     for index in range(len(outcomes)):
-        await loop.ingress.receive_final(event(f"t{index}", f"question {index}"))
-        await loop.lifecycle.wait_idle()
+        await loop.actor.receive_final(event(f"t{index}", f"question {index}"))
+        await loop.actor.wait_idle()
 
-    loop.lifecycle.raise_if_failed()
-    assert loop.lifecycle.phase != "failed"
+    loop.actor.raise_if_failed()
+    assert loop.actor.phase != "failed"
     assert audio.spoken == [
         *([TURN_FAILED_LINE] * (MAX_CONSECUTIVE_TURN_FAILURES - 1)),
         f"question {MAX_CONSECUTIVE_TURN_FAILURES}",
     ]
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_a_successful_turn_resets_the_failure_streak() -> None:
@@ -85,33 +85,33 @@ async def test_a_successful_turn_resets_the_failure_streak() -> None:
     outcomes = ["fail"] * (limit - 1) + ["ok"] + ["fail"] * (limit - 1)
     audio = FakeReplyAudio()
     loop = build_meeting_turns(ScriptedResponder(outcomes))
-    loop.lifecycle.bind(audio)
+    loop.actor.bind(audio)
     for index in range(len(outcomes)):
-        await loop.ingress.receive_final(event(f"t{index}", f"question {index}"))
-        await loop.lifecycle.wait_idle()
+        await loop.actor.receive_final(event(f"t{index}", f"question {index}"))
+        await loop.actor.wait_idle()
 
-    loop.lifecycle.raise_if_failed()
-    assert loop.lifecycle.phase != "failed"
+    loop.actor.raise_if_failed()
+    assert loop.actor.phase != "failed"
     assert audio.spoken.count(TURN_FAILED_LINE) == 2 * (limit - 1)
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_failed_turn_is_journaled_with_its_streak(journal: RecordingJournal) -> None:
     loop = build_meeting_turns(
         ScriptedResponder(["fail", "fail"]), diagnostics=Diagnostics(journal=journal)
     )
-    loop.lifecycle.bind(FakeReplyAudio())
-    await loop.ingress.receive_final(event("t1", "one"))
-    await loop.lifecycle.wait_idle()
-    await loop.ingress.receive_final(event("t2", "two"))
-    await loop.lifecycle.wait_idle()
+    loop.actor.bind(FakeReplyAudio())
+    await loop.actor.receive_final(event("t1", "one"))
+    await loop.actor.wait_idle()
+    await loop.actor.receive_final(event("t2", "two"))
+    await loop.actor.wait_idle()
 
     failures = [
         (row["transcript_id"], row["error"], row["consecutive"])
         for row in journal.events("turn_failed")
     ]
     assert failures == [("t1", "RuntimeError", 1), ("t2", "RuntimeError", 2)]
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 def test_the_failure_line_follows_the_language_the_participant_used() -> None:

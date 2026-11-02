@@ -8,10 +8,10 @@ from pathlib import Path
 
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.reply_planner import SpokenChunk
-from fakeyou.conversation.turn_events import JournalSink
 from fakeyou.foundation.clock import monotonic
 from fakeyou.foundation.resources import read_package_text
 from fakeyou.observability.faults import FaultReporter
+from fakeyou.observability.journal import JournalSink
 from fakeyou.observability.provider_faults import classify_exception
 
 MAX_CONSECUTIVE_TURN_FAILURES = 3

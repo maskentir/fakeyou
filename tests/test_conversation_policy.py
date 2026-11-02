@@ -30,10 +30,10 @@ from fakeyou.conversation.middleware import (
     trim_messages_to_budget,
     unanswered_tool_calls,
 )
-from fakeyou.conversation.turn_events import (
+from fakeyou.conversation.turn_graph import TurnInput, record_barge_in
+from fakeyou.conversation.turn_queue import (
     TurnEvent,
 )
-from fakeyou.conversation.turn_graph import TurnInput, record_barge_in
 from fakeyou.foundation.participation import ParticipationContext
 from fakeyou.foundation.speakers import UNIDENTIFIED_PARTICIPANT
 from fakeyou.foundation.transcript import TranscriptEvent
@@ -54,39 +54,39 @@ async def test_wake_mode_ignores_unaddressed_transcripts_but_records_them() -> N
         interaction=TurnInteraction(wake_phrases=["hey fakeyou"]),
         timing=TurnTiming(clock=clock),
     )
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(event("one", "our project status"))
-    await loop.lifecycle.wait_idle()
+    loop.actor.bind(audio)
+    await loop.actor.receive_final(event("one", "our project status"))
+    await loop.actor.wait_idle()
     assert responder.calls == []
     assert audio.spoken == []
-    assert [item.text for item in loop.ingress.events] == ["our project status"]
-    await loop.lifecycle.close()
+    assert [item.text for item in loop.actor.events] == ["our project status"]
+    await loop.actor.close()
 
 
 async def test_barge_in_stops_playback_only_while_speaking() -> None:
     responder, audio = FakeResponder(), FakeReplyAudio()
     loop = build_meeting_turns(responder, interaction=TurnInteraction(barge_in=True))
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(event("one", "hello"))
-    await loop.lifecycle.wait_idle()
+    loop.actor.bind(audio)
+    await loop.actor.receive_final(event("one", "hello"))
+    await loop.actor.wait_idle()
     assert audio.stops == 0
     audio.speaking = True
-    await loop.ingress.receive_final(event("two", "hold on"))
-    await loop.lifecycle.wait_idle()
+    await loop.actor.receive_final(event("two", "hold on"))
+    await loop.actor.wait_idle()
     assert audio.stops == 1
     assert audio.spoken[-1] == "hold on"
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_barge_in_disabled_never_stops_playback() -> None:
     responder, audio = FakeResponder(), FakeReplyAudio()
     loop = build_meeting_turns(responder)
-    loop.lifecycle.bind(audio)
+    loop.actor.bind(audio)
     audio.speaking = True
-    await loop.ingress.receive_final(event("one", "hello"))
-    await loop.lifecycle.wait_idle()
+    await loop.actor.receive_final(event("one", "hello"))
+    await loop.actor.wait_idle()
     assert audio.stops == 0
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_interim_speech_interrupts_playback_after_enough_words(
@@ -101,12 +101,12 @@ async def test_interim_speech_interrupts_playback_after_enough_words(
         interaction=TurnInteraction(barge_in=True),
         diagnostics=Diagnostics(journal=journal),
     )
-    loop.lifecycle.bind(audio)
+    loop.actor.bind(audio)
 
-    await loop.ingress.handle_interim("okay")
-    await loop.ingress.handle_interim("okay wait")
+    await loop.actor.handle_interim("okay")
+    await loop.actor.handle_interim("okay wait")
     assert audio.stops == 0
-    await loop.ingress.handle_interim("okay wait please")
+    await loop.actor.handle_interim("okay wait please")
 
     assert audio.stops == 1
     [row] = [json.loads(line) for line in lines if '"barge_in_detected"' in line]
@@ -117,13 +117,13 @@ async def test_interim_speech_is_ignored_without_barge_in_or_playback() -> None:
     audio = FakeReplyAudio()
     audio.speaking = True
     quiet = build_meeting_turns(FakeResponder())
-    quiet.lifecycle.bind(audio)
-    await quiet.ingress.handle_interim("please stop for now")
+    quiet.actor.bind(audio)
+    await quiet.actor.handle_interim("please stop for now")
 
     idle_audio = FakeReplyAudio()
     idle = build_meeting_turns(FakeResponder(), interaction=TurnInteraction(barge_in=True))
-    idle.lifecycle.bind(idle_audio)
-    await idle.ingress.handle_interim("please stop for now")
+    idle.actor.bind(idle_audio)
+    await idle.actor.handle_interim("please stop for now")
 
     assert audio.stops == 0
     assert idle_audio.stops == 0
@@ -137,12 +137,12 @@ async def test_interim_speech_over_the_twin_stops_it_in_wake_mode() -> None:
         interaction=TurnInteraction(wake_phrases=["rani twin"], barge_in=True),
         timing=TurnTiming(clock=FakeClock()),
     )
-    loop.lifecycle.bind(audio)
+    loop.actor.bind(audio)
 
-    await loop.ingress.handle_interim("someone else is talking now")
+    await loop.actor.handle_interim("someone else is talking now")
 
     assert audio.stops == 1
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_final_barge_in_is_journaled_with_its_trigger(
@@ -157,13 +157,13 @@ async def test_final_barge_in_is_journaled_with_its_trigger(
         interaction=TurnInteraction(barge_in=True),
         diagnostics=Diagnostics(journal=journal),
     )
-    loop.lifecycle.bind(audio)
+    loop.actor.bind(audio)
 
-    await loop.ingress.receive_final(event("t1", "enough"))
+    await loop.actor.receive_final(event("t1", "enough"))
 
     [row] = [json.loads(line) for line in lines if '"barge_in_detected"' in line]
     assert row["trigger"] == "final"
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_one_interruption_is_journaled_and_stopped_once(
@@ -178,10 +178,10 @@ async def test_one_interruption_is_journaled_and_stopped_once(
         interaction=TurnInteraction(barge_in=True),
         diagnostics=Diagnostics(journal=journal),
     )
-    loop.lifecycle.bind(audio)
+    loop.actor.bind(audio)
 
-    await loop.ingress.handle_interim("wait a second")
-    await loop.ingress.handle_interim("wait a second please")
+    await loop.actor.handle_interim("wait a second")
+    await loop.actor.handle_interim("wait a second please")
 
     assert audio.stops == 1
     assert len([line for line in lines if '"barge_in_detected"' in line]) == 1
@@ -191,18 +191,18 @@ async def test_interim_barge_in_rearms_for_the_next_reply() -> None:
     audio = FakeReplyAudio()
     audio.speaking = True
     loop = build_meeting_turns(FakeResponder(), interaction=TurnInteraction(barge_in=True))
-    loop.lifecycle.bind(audio)
+    loop.actor.bind(audio)
 
-    await loop.ingress.handle_interim("wait a second")
-    await loop.ingress.receive_final(event("t1", "what is next"))
-    await loop.lifecycle.wait_idle()
+    await loop.actor.handle_interim("wait a second")
+    await loop.actor.receive_final(event("t1", "what is next"))
+    await loop.actor.wait_idle()
     audio.speaking = True
     audio.stops = 0
-    await loop.ingress.handle_interim("hold on one moment")
+    await loop.actor.handle_interim("hold on one moment")
 
     assert audio.spoken == ["what is next"]
     assert audio.stops == 1
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_local_transport_cancel_closes_loopback_without_fallback(
@@ -246,12 +246,12 @@ async def test_local_transport_cancel_closes_loopback_without_fallback(
         diagnostics=Diagnostics(journal=journal),
     )
     audio = FakeReplyAudio()
-    loop.lifecycle.bind(audio)
+    loop.actor.bind(audio)
     try:
-        await loop.ingress.receive_final(event("t1", "hello"))
+        await loop.actor.receive_final(event("t1", "hello"))
         assert await asyncio.wait_for(arrived.wait(), 2)
         assert connections == 1
-        await loop.lifecycle.close()
+        await loop.actor.close()
         assert await asyncio.wait_for(disconnected.wait(), 2)
         assert connections == 1
         assert audio.spoken == []
@@ -288,18 +288,18 @@ async def test_policy_yields_the_floor_while_others_are_speaking(journal: Record
         ),
         diagnostics=Diagnostics(journal=journal),
     )
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(event("t1", "Rani Twin, what is blocking the release?"))
-    await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
+    loop.actor.bind(audio)
+    await loop.actor.receive_final(event("t1", "Rani Twin, what is blocking the release?"))
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
     assert responder.calls == []
     [decision] = journal.events("policy_decided")
     assert (decision["action"], decision["reason"]) == ("silent", "floor_occupied")
 
     busy[0] = False
-    await loop.ingress.receive_final(event("t2", "Rani Twin, what is blocking the release?"))
-    await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
+    await loop.actor.receive_final(event("t2", "Rani Twin, what is blocking the release?"))
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
     assert len(responder.calls) == 1
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_policy_silent_makes_zero_responder_calls(journal: RecordingJournal) -> None:
@@ -309,9 +309,9 @@ async def test_policy_silent_makes_zero_responder_calls(journal: RecordingJourna
         interaction=TurnInteraction(wake_phrases=["Rani Twin"], participant_policy_enabled=True),
         diagnostics=Diagnostics(journal=journal),
     )
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(event("t1", "Budi, when is the demo?"))
-    await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
+    loop.actor.bind(audio)
+    await loop.actor.receive_final(event("t1", "Budi, when is the demo?"))
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
     assert responder.calls == []
     assert audio.spoken == []
     [decision] = journal.events("policy_decided")
@@ -320,7 +320,7 @@ async def test_policy_silent_makes_zero_responder_calls(journal: RecordingJourna
         "silent",
         "fallback_unnamed",
     )
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_policy_keeps_barge_in_on_speech_onset(journal: RecordingJournal) -> None:
@@ -332,16 +332,16 @@ async def test_policy_keeps_barge_in_on_speech_onset(journal: RecordingJournal) 
         ),
         diagnostics=Diagnostics(journal=journal),
     )
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(event("t0", "Rani Twin, when is the demo?"))
-    await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
+    loop.actor.bind(audio)
+    await loop.actor.receive_final(event("t0", "Rani Twin, when is the demo?"))
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
     audio.speaking = True
-    await loop.ingress.handle_interim("wait just a moment please")
+    await loop.actor.handle_interim("wait just a moment please")
     assert audio.stops == 1
-    await loop.ingress.receive_final(event("t1", "Budi, when is the demo?"))
-    await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
+    await loop.actor.receive_final(event("t1", "Budi, when is the demo?"))
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
     assert [call[0].text for call in responder.calls] == ["Rani Twin, when is the demo?"]
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_policy_answers_vocative_and_ignores_quote_mention(journal: RecordingJournal) -> None:
@@ -351,18 +351,18 @@ async def test_policy_answers_vocative_and_ignores_quote_mention(journal: Record
         interaction=TurnInteraction(wake_phrases=["Rani Twin"], participant_policy_enabled=True),
         diagnostics=Diagnostics(journal=journal),
     )
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(event("t1", "Rani Twin, when is the demo?"))
-    await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
-    await loop.ingress.receive_final(
+    loop.actor.bind(audio)
+    await loop.actor.receive_final(event("t1", "Rani Twin, when is the demo?"))
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
+    await loop.actor.receive_final(
         event("t2", "He said Rani Twin agrees", participant_id="spaces/x/devices/9")
     )
-    await asyncio.wait_for(loop.lifecycle.wait_idle(), 2)
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
     assert [call[0].text for call in responder.calls] == ["Rani Twin, when is the demo?"]
     assert audio.spoken == ["Rani Twin, when is the demo?"]
     actions = [row["action"] for row in journal.events("policy_decided")]
     assert actions == ["reply", "silent"]
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 def test_request_messages_carry_speaker_identity_without_owner_data() -> None:
@@ -398,14 +398,14 @@ async def test_wake_phrase_must_match_a_whole_word() -> None:
         interaction=TurnInteraction(wake_phrases=["Rani"]),
         timing=TurnTiming(clock=clock),
     )
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(event("one", "Ranier, what is the status?"))
-    await loop.lifecycle.wait_idle()
+    loop.actor.bind(audio)
+    await loop.actor.receive_final(event("one", "Ranier, what is the status?"))
+    await loop.actor.wait_idle()
     assert responder.calls == []
-    await loop.ingress.receive_final(event("two", "Rani, what is the status?"))
-    await loop.lifecycle.wait_idle()
+    await loop.actor.receive_final(event("two", "Rani, what is the status?"))
+    await loop.actor.wait_idle()
     assert len(responder.calls) == 1
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_unaddressed_finals_stay_silent_when_only_the_twin_name_is_an_alias() -> None:
@@ -415,20 +415,20 @@ async def test_unaddressed_finals_stay_silent_when_only_the_twin_name_is_an_alia
         interaction=TurnInteraction(twin_names=["Rani"]),
         timing=TurnTiming(clock=clock),
     )
-    loop.lifecycle.bind(audio)
+    loop.actor.bind(audio)
     for ident, text in (
         ("one", "Let's review the budget."),
         ("two", "Who owns the migration?"),
         ("three", "Sounds good to me."),
     ):
-        await loop.ingress.receive_final(event(ident, text))
-        await loop.lifecycle.wait_idle()
+        await loop.actor.receive_final(event(ident, text))
+        await loop.actor.wait_idle()
     assert responder.calls == []
     assert audio.spoken == []
-    await loop.ingress.receive_final(event("four", "Rani, what is blocking the release?"))
-    await loop.lifecycle.wait_idle()
+    await loop.actor.receive_final(event("four", "Rani, what is blocking the release?"))
+    await loop.actor.wait_idle()
     assert len(responder.calls) == 1
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_explicit_wake_phrase_replaces_the_default_twin_name() -> None:
@@ -438,11 +438,11 @@ async def test_explicit_wake_phrase_replaces_the_default_twin_name() -> None:
         interaction=TurnInteraction(wake_phrases=["hey fakeyou"], twin_names=["Rani"]),
         timing=TurnTiming(clock=clock),
     )
-    loop.lifecycle.bind(audio)
-    await loop.ingress.receive_final(event("one", "Rani, what is the status?"))
-    await loop.lifecycle.wait_idle()
+    loop.actor.bind(audio)
+    await loop.actor.receive_final(event("one", "Rani, what is the status?"))
+    await loop.actor.wait_idle()
     assert responder.calls == []
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_unaddressed_speech_yields_the_floor_without_a_reply() -> None:
@@ -452,13 +452,13 @@ async def test_unaddressed_speech_yields_the_floor_without_a_reply() -> None:
         interaction=TurnInteraction(twin_names=["Rani"], barge_in=True),
         timing=TurnTiming(clock=clock),
     )
-    loop.lifecycle.bind(audio)
+    loop.actor.bind(audio)
     audio.speaking = True
-    await loop.ingress.receive_final(event("one", "let's review the budget"))
-    await loop.lifecycle.wait_idle()
+    await loop.actor.receive_final(event("one", "let's review the budget"))
+    await loop.actor.wait_idle()
     assert responder.calls == []
     assert audio.stops == 1
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 async def test_a_backchannel_while_speaking_does_not_yield_the_floor() -> None:
@@ -469,13 +469,13 @@ async def test_a_backchannel_while_speaking_does_not_yield_the_floor() -> None:
         interaction=TurnInteraction(twin_names=["Rani"], barge_in=True, judge=judge),
         timing=TurnTiming(clock=clock),
     )
-    loop.lifecycle.bind(audio)
+    loop.actor.bind(audio)
     audio.speaking = True
-    await loop.ingress.receive_final(event("one", "yeah"))
-    await loop.lifecycle.wait_idle()
+    await loop.actor.receive_final(event("one", "yeah"))
+    await loop.actor.wait_idle()
     assert responder.calls == []
     assert audio.stops == 0
-    await loop.lifecycle.close()
+    await loop.actor.close()
 
 
 @pytest.mark.parametrize("language", ["id", "en"])
@@ -558,22 +558,20 @@ async def test_stop_mid_tool_drains_the_turn_without_speaking(mode: str) -> None
         MeetingResponder(agent, NoHistory(), language="en"),
         generation=TurnGeneration(sentence_streaming=mode == "streamed", language="en"),
     )
-    turns.lifecycle.bind(audio)
-    await turns.ingress.receive_final(event("f1", "check that please"))
+    turns.actor.bind(audio)
+    await turns.actor.receive_final(event("f1", "check that please"))
     await asyncio.wait_for(started.wait(), 2)
-    runtime = turns.lifecycle.runtime
-    assert runtime is not None
-    await turns.lifecycle.turn.run(
+    await turns.actor.turn.run(
         TurnInput(
             event=TurnEvent(kind="stop", event_id="s1", at=2.0, payload=""),
             context=ParticipationContext(addressed=False),
-            speaking_generation=turns.lifecycle.floor.generation,
+            speaking_generation=turns.actor.floor.generation,
         ),
-        context=runtime,
+        context=turns.actor,
     )
-    await asyncio.wait_for(turns.lifecycle.drained(), 2)
+    await asyncio.wait_for(turns.actor.drained(), 2)
     assert audio.spoken == []
-    await turns.lifecycle.close()
+    await turns.actor.close()
 
 
 async def test_a_barge_in_names_the_turn_it_interrupted() -> None:
