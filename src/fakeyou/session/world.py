@@ -106,8 +106,6 @@ class DialogueLine:
 class DialogueState:
     lines: tuple[DialogueLine, ...] = ()
     interims: Mapping[Ref, str] = field(default_factory=dict)
-    floor_holder: Ref | None = None
-    twin_playing: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -252,10 +250,7 @@ def _transcript(
         interims = {key: text for key, text in dialogue.interims.items() if key != ref}
         interims[ref] = observation.text
         kept = dict(list(interims.items())[-limits.interims :])
-        holder_changed = dialogue.floor_holder != ref
-        updated = replace(dialogue, interims=kept, floor_holder=ref)
-        revisions = _bump(state.revisions, "floor") if holder_changed else state.revisions
-        return replace(state, dialogue=updated, revisions=revisions)
+        return replace(state, dialogue=replace(dialogue, interims=kept))
     world = _heard(state.world, seq, observation)
     newly_heard = (
         world.heard.keys() != state.world.heard.keys() or world.tracks != state.world.tracks
@@ -273,7 +268,6 @@ def _transcript(
         interims={
             key: text for key, text in dialogue.interims.items() if key not in (ref, UNKNOWN)
         },
-        floor_holder=None if dialogue.floor_holder in (ref, UNKNOWN) else dialogue.floor_holder,
     )
     domains = ("dialogue", "floor", "presence") if newly_heard else ("dialogue", "floor")
     return replace(
@@ -345,11 +339,7 @@ def _playback(
 ) -> SessionState:
     dialogue = state.dialogue
     if observation.phase == "started":
-        playing = dialogue.twin_playing | {observation.utterance_id}
-        return _changed(
-            state, replace(state, dialogue=replace(dialogue, twin_playing=playing)), "floor"
-        )
-    playing = dialogue.twin_playing - {observation.utterance_id}
+        return state
     lines = dialogue.lines
     if observation.phase in ("finished", "interrupted"):
         lines = _append(
@@ -365,7 +355,7 @@ def _playback(
             ),
             limits.dialogue_lines,
         )
-    updated = replace(dialogue, lines=lines, twin_playing=playing)
+    updated = replace(dialogue, lines=lines)
     return _changed(state, replace(state, dialogue=updated), "floor", "dialogue")
 
 
