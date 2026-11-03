@@ -1605,6 +1605,33 @@ dokumentasi Pipecat) di-vendor seperti Silero dan dijalankan dengan
 `onnxruntime` yang sudah ada, setelah Silero melaporkan stop. Sinyal prosodi
 ini digabung dengan judge interim.
 
+Dipecah (2026-11-03, dari pengukuran): B2-1 instrumen dan metrik, B2-2
+perbaiki penyebab dominan commit yang inert, B2-3 Smart Turn. Gate di
+atas di-scope ulang secara eksplisit: fixture replay tidak menyimpan PCM
+dan interim-nya disintesis dari teks final, jadi replay oue-4 hanya
+mengukur jalur timer+judge; sinyal prosodi B2-3 dinilai offline (golden)
+dan live, bukan dari replay oue-4. False commit didefinisikan sebagai
+`early_turn_cancelled / early_turn_started`.
+
+- B2-1, implementasi dan temuan (2026-11-03): baseline kini menghitung
+  `vad_stop_to_commit_ms` (speech_stopped terakhir → `early_turn_started`)
+  dan `early_false_commits`, dan actor men-journal `early_turn_declined`
+  dengan alasan (`judge_unfinished`, `judge_not_admitted`, `judge_failed`,
+  `raced`, `superseded`, `final_first`) di semua jalur keluar hold yang
+  sebelumnya sunyi. Angka awal: journal asli oue-4 punya 2 commit dari
+  236 final (p50 587 ms, false 0); tiga sesi live terakhir 1 commit dari
+  36 turn (dan yang satu itu dibatalkan). Replay oue-4 dengan instrumen
+  baru: 0 commit dari 352 episode hold — 328 `superseded`, 16
+  `final_first`, 8 `judge_unfinished` (sebagian artefak judge terekam
+  yang tidak bisa menilai interim sintesis). Akar masalah struktural:
+  timer hold hanya lahir di tepi VAD stop, setiap interim sesudahnya
+  membunuhnya lewat bump versi, dan tidak ada timer pengganti karena VAD
+  sudah berhenti — jadi commit mensyaratkan teks interim sudah final
+  persis pada instant VAD stop. B2-2 memperbaiki semantiknya menjadi
+  timer stabilitas: hold berjalan sejak perubahan teks terakhir selama
+  VAD berhenti, sesuai redaksi tahap ini ("interim stabil, setelah
+  300–500 ms hening").
+
 ### B4: Identitas dari stream
 
 - Fleet per-stream yang sudah ada menjadi jalur utama: satu STT per slot
