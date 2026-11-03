@@ -153,6 +153,7 @@ class DeferredOptions:
 class IngressTiming:
     duck_grace_seconds: float = 1.5
     freeze_sustain_seconds: float = 0.6
+    freeze_gap_seconds: float = 0.25
     clock: Callable[[], float] = monotonic
 
 
@@ -261,11 +262,13 @@ class FloorActor:
         self._others_speaking_signal: Callable[[], bool] | None = None
         self._duck_grace_seconds = resolved.duck_grace_seconds
         self._freeze_sustain_seconds = resolved.freeze_sustain_seconds
+        self._freeze_gap_seconds = resolved.freeze_gap_seconds
         self._ducked = False
         self._frozen = False
         self._duck_timer: asyncio.Task[None] | None = None
         self._freeze_timer: asyncio.Task[None] | None = None
         self._voice_active = False
+        self._voice_last_at = 0.0
         self._barge_seq = 0
         self._barge_in_judge_enabled = ingress.barge_in_judge_enabled
         self._seen: set[str] = set()
@@ -817,19 +820,24 @@ class FloorActor:
         self._journal.record("barge_in_ducked", source="agent")
         self._duck_timer = asyncio.create_task(self._duck_grace())
         if isinstance(session, SupportsFreezing):
-            self._freeze_timer = asyncio.create_task(self._freeze_after_sustain())
+            self._freeze_timer = asyncio.create_task(
+                self._freeze_after_sustain(self._freeze_sustain_seconds)
+            )
 
-    async def _freeze_after_sustain(self) -> None:
-        await asyncio.sleep(self._freeze_sustain_seconds)
+    async def _freeze_after_sustain(self, delay: float) -> None:
+        await asyncio.sleep(delay)
         session = self._session
         if (
             not self._ducked
             or self._frozen
-            or not self._voice_active
             or session is None
             or not isinstance(session, SupportsFreezing)
             or not self._twin_holds_floor(session)
         ):
+            return
+        if not self._voice_active:
+            if self._clock() - self._voice_last_at <= self._freeze_gap_seconds:
+                self._freeze_timer = asyncio.create_task(self._freeze_after_sustain(0.02))
             return
         self._frozen = True
         session.freeze()
@@ -867,6 +875,8 @@ class FloorActor:
         self._unduck("grace")
 
     def note_speech(self, *, active: bool) -> None:
+        if active or self._voice_active:
+            self._voice_last_at = self._clock()
         self._voice_active = active
         if active:
             self._duck()

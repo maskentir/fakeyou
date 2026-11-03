@@ -247,6 +247,25 @@ async def test_sustained_voice_freezes_playback_while_ducked() -> None:
     await lifecycle.close()
 
 
+async def test_a_word_gap_inside_a_sustained_interruption_still_freezes() -> None:
+    judge = ScriptedJudge(lambda _window: judged("reply", addressee="twin"))
+    ingress, lifecycle, session, journal = build(judge, freeze_sustain_seconds=0.1)
+    speech = await hold_the_floor(lifecycle)
+
+    ingress.note_speech(active=True)
+    await asyncio.sleep(0.08)
+    ingress.note_speech(active=False)
+    await asyncio.sleep(0.05)
+    ingress.note_speech(active=True)
+    await asyncio.sleep(0.2)
+
+    assert session.freezes == 1
+    assert journal.of("barge_in_frozen") == [{"source": "agent"}]
+    speech.cancel()
+    await asyncio.gather(speech, return_exceptions=True)
+    await lifecycle.close()
+
+
 async def test_a_short_burst_never_freezes() -> None:
     judge = ScriptedJudge(lambda _window: judged("reply", addressee="twin"))
     ingress, lifecycle, session, _journal = build(
