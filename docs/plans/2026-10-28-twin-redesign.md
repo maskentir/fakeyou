@@ -1506,9 +1506,22 @@ duck kurang.
   mengikuti → timer grace actor (1,5 dtk, `IngressTiming`) meng-unduck
   (reason `grace`); yield tetap jalur stop penuh yang lama. Selama duck
   kata-kata twin terus berjalan dengan volume pelan; itulah trade-off
-  yang diterima slice ini dan alasan freeze ditunda. Gate live plan ini
-  belum dibuktikan; bukti offline: test gain duck di level frame,
-  onset→duck, tolak→pulih, grace→pulih, dan baris pendek kini dinilai.
+  yang diterima slice ini dan alasan freeze ditunda. Bukti offline: test
+  gain duck di level frame, onset→duck, tolak→pulih, grace→pulih, dan
+  baris pendek kini dinilai. Bukti live (2026-11-03, sesi `b8-live-2`):
+  interupsi kalimat penuh ("Wait, stop…") men-duck pada tepi VAD itu
+  sendiri (delta journal < 1 ms, jauh di dalam ≤ 300 ms untuk
+  menurunkan volume), lalu berhenti penuh pada interim stop-lexicon —
+  metrik `barge_in_to_silence_ms` 902 ms (n=1). Jadi redaksi gate
+  "twin diam dalam 300 ms" secara harfiah **belum** terpenuhi di desain
+  duck-first: yang di dalam 300 ms adalah penurunan volumenya, diam
+  penuhnya menunggu kata pertama terkonfirmasi. Backchannel terbukti:
+  "mm-hm/yeah/okay" men-duck sesaat, ditolak judge
+  (`barge_in_rejected`), lalu `barge_in_resumed` dan twin selesai
+  bicara. Keputusan freeze kini punya bukti live untuk ditimbang:
+  membekukan playback pada onset akan memenuhi redaksi gate apa
+  adanya, dengan risiko potongan batuk/backchannel yang semula dihindari
+  duck.
   Temuan review yang ikut dibereskan: penolakan judge yang lambat tidak
   boleh mengangkat duck yang lebih baru (nomor urut per penilaian), grace
   tidak habis selama suara lawan masih aktif, `close()` mengangkat duck,
@@ -1683,8 +1696,20 @@ yang subjeknya bukan policy memilih opt-out secara eksplisit.
   keberangkatan dan layar ter-journal, presence bernama, perangkat
   kedua twin dan roster belum tersinkron berperilaku seperti live),
   test fixture (parsing roster), dan replay CLI dengan roster tercatat
-  plus policy menyala menghasilkan `policy_decided`. Gate live (sesi
-  API tanpa flag di Meet sungguhan) belum dibuktikan.
+  plus policy menyala menghasilkan `policy_decided`.
+- Gate live B8 terbukti (2026-11-03, sesi `b8-live-2` di Meet sungguhan):
+  sesi dibuat dari API tanpa flag partisipan apa pun; snapshot sesi
+  merekam `participant_policy_enabled: true` dan
+  `participant_evidence_enabled: false` dari default. Sepuluh
+  `policy_decided` semuanya `decision_source: judge` (pertanyaan
+  bernama dijawab, omongan tak tertuju dan backchannel diam),
+  `judge_model_selected` mencatat fallback `role=reply`
+  (`gemini-3.1-flash-lite`), dan `roster_observed` berisi nama peserta
+  (Harun + Rani Twin). Replay journal sesi yang sama mereproduksi 10
+  keputusan itu, dan fixture replay-nya membawa roster bernama yang
+  terjadwal sebelum final pertama — presence di replay tidak lagi
+  kosong. Catatan samping sesi ini: latensi final→audio pertama p50
+  5,3 dtk adalah urusan tahap lain.
 
 ## Track C: otak
 
