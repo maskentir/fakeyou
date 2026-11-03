@@ -127,8 +127,7 @@ class TurnFeed:
             await lane.close()
 
     async def _voice_edge(self, *, active: bool) -> None:
-        if self._early:
-            self._ingress.note_speech(active=active)
+        self._ingress.note_speech(active=active)
 
     async def _interim(self, text: str) -> None:
         await self._ingress.handle_interim(text)

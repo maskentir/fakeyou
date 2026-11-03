@@ -35,6 +35,7 @@ class Conversation:
     def __init__(self) -> None:
         self.order: list[str] = []
         self.started: list[str] = []
+        self.voice_edges: list[bool] = []
         self.finals: list[TranscriptEvent] = []
         self.interims: list[str] = []
         self.chats: list[TranscriptEvent] = []
@@ -42,6 +43,9 @@ class Conversation:
         self.release.set()
         self.judging = asyncio.Event()
         self.interim_heard = asyncio.Event()
+
+    def note_speech(self, *, active: bool) -> None:
+        self.voice_edges.append(active)
 
     async def handle_interim(self, text: str) -> None:
         self.interims.append(text)
@@ -247,6 +251,7 @@ async def test_early_commit_stays_off_without_a_hold(tmp_path: Path) -> None:
 
     assert setup.conversation.finals == []
     assert setup.conversation.interims == [QUESTION]
+    assert setup.conversation.voice_edges == [False]
     await setup.close()
 
 

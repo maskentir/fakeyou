@@ -235,12 +235,86 @@ async def test_a_rejected_barge_in_lifts_the_duck() -> None:
     await lifecycle.close()
 
 
+class GatedJudge(ScriptedJudge):
+    def __init__(self) -> None:
+        super().__init__()
+        self.gates: dict[str, asyncio.Event] = {}
+
+    def gate(self, text: str) -> asyncio.Event:
+        event = asyncio.Event()
+        self.gates[text] = event
+        return event
+
+    @override
+    async def judge(self, window: Any) -> Any:
+        self.windows.append(window)
+        gate = self.gates.get(window.latest.text)
+        if gate is not None:
+            await gate.wait()
+        if window.latest.text.startswith("twin"):
+            return judged("reply", addressee="twin")
+        return judged("stay_silent", addressee="someone_else")
+
+
+async def test_a_slow_rejection_does_not_lift_a_newer_duck() -> None:
+    judge = GatedJudge()
+    first = judge.gate("ayu, can you hear me")
+    second = judge.gate("twin, can you hear me")
+    ingress, lifecycle, session, _journal = build(judge)
+    speech = await hold_the_floor(lifecycle)
+
+    ingress.note_speech(active=True)
+    await ingress.handle_interim("ayu, can you hear me")
+    await ingress.handle_interim("twin, can you hear me")
+    first.set()
+    await asyncio.sleep(0.05)
+
+    assert session.unducks == 0
+    second.set()
+    await settle(lifecycle, ingress)
+    assert speech.done()
+    await lifecycle.close()
+
+
+async def test_close_lifts_the_duck() -> None:
+    judge = ScriptedJudge(lambda _window: judged("reply", addressee="twin"))
+    ingress, lifecycle, session, _journal = build(judge)
+    speech = await hold_the_floor(lifecycle)
+
+    ingress.note_speech(active=True)
+    await lifecycle.close()
+
+    assert session.ducks == 1
+    assert session.unducks == 1
+    speech.cancel()
+    await asyncio.gather(speech, return_exceptions=True)
+
+
+async def test_ducking_stays_while_the_voice_is_still_active() -> None:
+    judge = ScriptedJudge(lambda _window: judged("reply", addressee="twin"))
+    ingress, lifecycle, session, journal = build(judge, duck_grace_seconds=0.05)
+    speech = await hold_the_floor(lifecycle)
+
+    ingress.note_speech(active=True)
+    await asyncio.sleep(0.12)
+    assert session.unducks == 0
+    ingress.note_speech(active=False)
+    await asyncio.sleep(0.12)
+
+    assert session.unducks == 1
+    assert journal.of("barge_in_resumed") == [{"source": "agent", "reason": "grace"}]
+    speech.cancel()
+    await asyncio.gather(speech, return_exceptions=True)
+    await lifecycle.close()
+
+
 async def test_ducking_lifts_itself_when_no_words_follow() -> None:
     judge = ScriptedJudge(lambda _window: judged("reply", addressee="twin"))
     ingress, lifecycle, session, journal = build(judge, duck_grace_seconds=0.05)
     speech = await hold_the_floor(lifecycle)
 
     ingress.note_speech(active=True)
+    ingress.note_speech(active=False)
     await asyncio.sleep(0.2)
 
     assert session.ducks == 1
