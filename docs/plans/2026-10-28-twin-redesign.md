@@ -1586,6 +1586,59 @@ Latin termasuk Indonesia belum terkonfirmasi dari dokumentasi resmi, jadi
 dicek saat spike) melawan Tesseract 5.5 pada frame oue-4; kunci dedup
 adalah hash teks OCR, `imagehash` hanya sebagai sinyal kasar.
 
+### B8: Presence dan judgment menyala secara default
+
+Temuan (2026-11-02): judgment adalah jalur utama partisipasi sejak plan
+ini ditulis, tetapi deployment referensi menjalankannya seperti fitur
+opt-in. Rantai default-nya, semua terbukti dari kode:
+
+- `participant_policy_enabled` default `False` di tiga lapisan: schema
+  API pembuatan sesi, `RuntimeConfig`, dan `TurnInteraction`. Sesi yang
+  dibuat tanpa flag eksplisit berjalan dengan policy mati.
+- Policy mati mengubah semantik admission: `_addressed` memakai sebutan
+  nama di mana saja (bukan vokatif), `_others_speaking` selalu `False`,
+  dan `start_participant_observer` di runtime langsung kembali, jadi
+  tidak ada evidence partisipan yang ditulis.
+- Model judge tidak punya key sendiri secara default
+  (`turn_judge.model` kosong dan barisnya terkomentari di
+  `.env.example`); judge diam-diam memakai model chat utama. Tidak ada
+  sinyal di journal yang membedakan "judge kecil yang memang disiapkan"
+  dari "fallback model besar karena tidak dikonfigurasi".
+- Presence masuk window judge lewat `kernel.presence` di join, tetapi
+  roster tidak pernah di-journal (catatan V0.7: presence selalu kosong
+  di replay), jadi keputusan berbasis presence tidak bisa dibuktikan
+  ulang dan tidak terlihat kalau kosong di live.
+
+Desain perbaikannya, bukan sekadar membalik satu default:
+
+- Pisahkan dua hal yang sekarang satu flag. Presence dan judgment untuk
+  partisipasi selalu menyala; yang boleh opt-in hanya penulisan evidence
+  partisipan (biaya dan privasi), dengan flag dan nama sendiri.
+  `participant_policy_enabled` berhenti menjadi gerbang admission.
+- Default di semua lapisan menjadi menyala (schema API,
+  `RuntimeConfig`, `TurnInteraction`). Mematikan judge hanya bisa lewat
+  konfigurasi eksplisit dan tercatat sebagai mode degraded di journal,
+  bukan keadaan diam-diam.
+- Judge yang tidak bisa dibangun adalah kegagalan yang terlihat: sesi
+  masuk mode degraded yang bernama (seperti `model_degraded` sekarang),
+  bukan jatuh ke aturan nama tanpa catatan. Fallback ke model chat
+  utama di-journal sebagai keputusan konfigurasi, bukan kejadian sunyi.
+- Roster di-journal (id dan nama saja) supaya replay punya presence yang
+  sama dengan sesi asli dan gate di bawah bisa menilai isi, menutup
+  catatan V0.7.
+
+Dipecah seperti tahap lain: slice 1 membalik default dan memisahkan
+flag evidence (perubahan perilaku admission, test yang mengandaikan
+policy mati ditulis ulang dengan sengaja); slice 2 mode degraded dan
+journal fallback model; slice 3 roster di journal plus presence di
+replay.
+
+Gate: sesi yang dibuat dari API tanpa flag apa pun menghasilkan
+`policy_decided` dengan `decision_source` judge dan payload presence
+yang tidak kosong di replay fixture; mematikan judge secara eksplisit
+menghasilkan mode degraded yang ter-journal, bukan behaviour rules-only
+yang sunyi.
+
 ## Track C: otak
 
 ### C1: Owner model
