@@ -16,6 +16,7 @@ from fakeyou.conversation.session import (
     MeetingAudio,
     SupportsCues,
     SupportsDucking,
+    SupportsFreezing,
     SupportsLouder,
 )
 from fakeyou.conversation.thinking_cue import ThinkingCue
@@ -151,6 +152,7 @@ class DeferredOptions:
 @dataclass(frozen=True, slots=True)
 class IngressTiming:
     duck_grace_seconds: float = 1.5
+    freeze_sustain_seconds: float = 0.6
     clock: Callable[[], float] = monotonic
 
 
@@ -258,8 +260,11 @@ class FloorActor:
         self._participant_policy = False
         self._others_speaking_signal: Callable[[], bool] | None = None
         self._duck_grace_seconds = resolved.duck_grace_seconds
+        self._freeze_sustain_seconds = resolved.freeze_sustain_seconds
         self._ducked = False
+        self._frozen = False
         self._duck_timer: asyncio.Task[None] | None = None
+        self._freeze_timer: asyncio.Task[None] | None = None
         self._voice_active = False
         self._barge_seq = 0
         self._barge_in_judge_enabled = ingress.barge_in_judge_enabled
@@ -686,9 +691,13 @@ class FloorActor:
 
     async def pause(self) -> None:
         self._paused = True
+        self._unduck(None)
         session = self._session
         if session is not None and session.is_speaking:
             await session.stop_playback()
+
+    def reset_duck(self) -> None:
+        self._unduck(None)
 
     def resume(self) -> None:
         self._paused = False
@@ -701,11 +710,17 @@ class FloorActor:
         self._deferred.clear()
         early_tasks = [
             task
-            for task in (self._early_timer, self._early_starting, self._duck_timer)
+            for task in (
+                self._early_timer,
+                self._early_starting,
+                self._duck_timer,
+                self._freeze_timer,
+            )
             if task is not None
         ]
         self._early_timer = self._early_starting = None
         self._duck_timer = None
+        self._freeze_timer = None
         for early_task in early_tasks:
             early_task.cancel()
         if early_tasks:
@@ -801,6 +816,24 @@ class FloorActor:
         session.duck()
         self._journal.record("barge_in_ducked", source="agent")
         self._duck_timer = asyncio.create_task(self._duck_grace())
+        if isinstance(session, SupportsFreezing):
+            self._freeze_timer = asyncio.create_task(self._freeze_after_sustain())
+
+    async def _freeze_after_sustain(self) -> None:
+        await asyncio.sleep(self._freeze_sustain_seconds)
+        session = self._session
+        if (
+            not self._ducked
+            or self._frozen
+            or not self._voice_active
+            or session is None
+            or not isinstance(session, SupportsFreezing)
+            or not self._twin_holds_floor(session)
+        ):
+            return
+        self._frozen = True
+        session.freeze()
+        self._journal.record("barge_in_frozen", source="agent")
 
     def _unduck(self, reason: str | None) -> None:
         if not self._ducked:
@@ -809,7 +842,18 @@ class FloorActor:
         timer, self._duck_timer = self._duck_timer, None
         if timer is not None and timer is not asyncio.current_task() and not timer.done():
             timer.cancel()
+        freeze_timer, self._freeze_timer = self._freeze_timer, None
+        if (
+            freeze_timer is not None
+            and freeze_timer is not asyncio.current_task()
+            and not freeze_timer.done()
+        ):
+            freeze_timer.cancel()
         session = self._session
+        if self._frozen:
+            self._frozen = False
+            if session is not None and isinstance(session, SupportsFreezing):
+                session.thaw()
         if session is not None and isinstance(session, SupportsDucking):
             session.unduck()
         if reason is not None:
@@ -1172,6 +1216,7 @@ class _ActorSpeaker:
         )
 
     async def stop_playback(self) -> None:
+        self._actor.reset_duck()
         await self._session().stop_playback()
 
     async def prepare(

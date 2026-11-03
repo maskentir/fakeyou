@@ -51,6 +51,7 @@ class PlaybackEvent:
 GAIN_STEP = 1.2
 MAX_GAIN = 2.4
 DUCK_GAIN = 0.15
+FREEZE_MAX_HOLD_SECONDS = 10.0
 FRAME_SECONDS = 0.02
 FADE_SECONDS = 0.01
 HALT_SECONDS = 0.1
@@ -84,6 +85,7 @@ class PlaybackTiming:
     synth_timeout_seconds: float = SYNTH_TIMEOUT_SECONDS
     playback_timeout_seconds: float = PLAYBACK_TIMEOUT_SECONDS
     cleanup_timeout_seconds: float = CLEANUP_TIMEOUT_SECONDS
+    freeze_max_hold_seconds: float = FREEZE_MAX_HOLD_SECONDS
 
 
 DEFAULT_PLAYBACK_TIMING = PlaybackTiming()
@@ -136,6 +138,13 @@ class DuckingPlayback(Protocol):
     def duck(self) -> None: ...
 
     def unduck(self) -> None: ...
+
+
+@runtime_checkable
+class FreezingPlayback(Protocol):
+    def freeze(self) -> None: ...
+
+    def thaw(self) -> None: ...
 
 
 @runtime_checkable
@@ -331,6 +340,10 @@ class PlaybackEngine:
         self._gain = 1.0
         self._burst_gain = 1.0
         self._duck_gain = 1.0
+        self._thawed = asyncio.Event()
+        self._thawed.set()
+        self._freeze_timer: asyncio.TimerHandle | None = None
+        self._freeze_max_hold_seconds = timing.freeze_max_hold_seconds
         self._last_sample = 0
         self._speaking = False
         self._generation = 0
@@ -425,6 +438,27 @@ class PlaybackEngine:
 
     def unduck(self) -> None:
         self._duck_gain = 1.0
+
+    def freeze(self) -> None:
+        if not self._thawed.is_set():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._thawed.clear()
+        self._freeze_timer = loop.call_later(self._freeze_max_hold_seconds, self._release_freeze)
+
+    def _release_freeze(self) -> None:
+        self.thaw()
+        if self._journal is not None:
+            self._journal.record("playback_thawed", source="playback", reason="max_hold")
+
+    def thaw(self) -> None:
+        if self._freeze_timer is not None:
+            self._freeze_timer.cancel()
+            self._freeze_timer = None
+        self._thawed.set()
 
     def _apply_gain(self, chunk: bytes) -> bytes:
         gain = self._burst_gain * self._duck_gain
@@ -586,6 +620,7 @@ class PlaybackEngine:
 
     async def stop(self) -> None:
         self._duck_gain = 1.0
+        self.thaw()
         self._stopping += 1
         try:
             async with self._stop_lock:
@@ -678,6 +713,7 @@ class PlaybackEngine:
             await self._close_audio(audio)
 
     async def _write_frame(self, frame: bytes, *, gain: bool) -> None:
+        await self._thawed.wait()
         pcm = self._apply_gain(frame) if gain else frame
         self._last_sample = _pcm_last_sample(pcm)
         self._clip_bytes += len(pcm)

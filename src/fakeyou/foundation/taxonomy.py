@@ -39,6 +39,7 @@ EventVerb = Literal[
     "failed",
     "finalized",
     "finished",
+    "frozen",
     "ingested",
     "observed",
     "opened",
@@ -58,6 +59,7 @@ EventVerb = Literal[
     "started",
     "stopped",
     "suppressed",
+    "thawed",
     "transitioned",
     "verified",
 ]
