@@ -97,6 +97,8 @@ def _commit_gaps(timed: Sequence[tuple[datetime, Row]]) -> list[float]:
         elif event == "early_turn_started" and stopped is not None:
             gaps.append(_ms(stopped, at))
             stopped = None
+        elif event == "transcript_finalized":
+            stopped = None
     return gaps
 
 

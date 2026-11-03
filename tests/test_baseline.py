@@ -104,6 +104,16 @@ def test_commit_latency_and_false_commit_share_are_measured() -> None:
     assert metrics["early_turn_declined"] == {"judge_unfinished": 2}
 
 
+def test_a_stop_consumed_by_a_final_does_not_pair_with_a_later_commit() -> None:
+    rows = [
+        row(0.0, "speech_stopped"),
+        row(1.0, "transcript_finalized", transcript_id="t1"),
+        row(9.0, "early_turn_started", transcript_id="early-9"),
+    ]
+
+    assert baseline_metrics(rows)["vad_stop_to_commit_ms"]["count"] == 0
+
+
 def test_a_commit_without_a_preceding_stop_is_not_paired() -> None:
     rows = [row(1.0, "early_turn_started", transcript_id="early-1")]
 

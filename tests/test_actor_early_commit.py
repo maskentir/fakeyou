@@ -259,6 +259,28 @@ async def test_a_declined_early_commit_is_journaled_with_its_reason(
         await loop.actor.close()
 
 
+async def test_a_hold_without_a_judge_is_journaled_as_declined(
+    journal: RecordingJournal,
+) -> None:
+    loop = build_meeting_turns(
+        FakeResponder(),
+        interaction=TurnInteraction(twin_names=["Rani"]),
+        diagnostics=Diagnostics(journal=journal),
+    )
+    loop.actor.bind(FakeReplyAudio())
+    loop.actor.configure_early(
+        EarlyOptions(hold_seconds=0.0, build_event=lambda text: event("early-0", text))
+    )
+
+    await loop.actor.note_interim(QUESTION)
+    loop.actor.note_speech(active=False)
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
+
+    [declined] = journal.events("early_turn_declined")
+    assert declined["reason"] == "no_judge"
+    await loop.actor.close()
+
+
 async def test_a_final_that_beats_the_hold_is_journaled_as_declined(
     journal: RecordingJournal,
 ) -> None:

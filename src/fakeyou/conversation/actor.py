@@ -799,7 +799,9 @@ class FloorActor:
     async def _early_readiness(self, text: str) -> str | None:
         judging = self._judging
         session = self._session
-        if judging is None or self._closed or self._failure is not None or not text.strip():
+        if judging is None:
+            return "no_judge"
+        if self._closed or self._failure is not None or not text.strip():
             return "unavailable"
         window = judging.windows.for_interim(
             text, twin_speaking=session is not None and session.is_speaking
@@ -908,8 +910,9 @@ class FloorActor:
     async def note_interim(self, text: str) -> None:
         if self._early_options is None:
             return
+        held_words = len(_early_words(self._early_text))
         self._early_text = text
-        self._restart_early(declined="superseded")
+        self._restart_early(declined="superseded", words=held_words)
         commit = self._early_commit
         if commit is not None and not commit.resumed and says_more(text, commit.text):
             await self._cancel_early(commit, reason="speech_resumed")
@@ -972,15 +975,7 @@ class FloorActor:
                     words=len(_early_words(text)),
                 )
             return
-        if version != self._early_version:
-            self._journal.record(
-                "early_turn_declined",
-                source="agent",
-                reason="raced",
-                words=len(_early_words(text)),
-            )
-            return
-        if self._early_commit is not None:
+        if version != self._early_version or self._early_commit is not None:
             return
         event = options.build_event(text)
         self._early_commit = _EarlyCommit(event, text)
