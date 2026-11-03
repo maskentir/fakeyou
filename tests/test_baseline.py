@@ -77,6 +77,40 @@ def test_an_early_turn_is_measured_against_the_final_it_was_verified_by() -> Non
     assert metrics["vad_stop_to_first_audio_ms"]["p50"] == 400.0
 
 
+def test_commit_latency_and_false_commit_share_are_measured() -> None:
+    rows = [
+        row(0.0, "speech_stopped"),
+        row(0.4, "early_turn_started", transcript_id="early-1"),
+        row(1.0, "early_turn_cancelled", transcript_id="early-1", reason="speech_resumed"),
+        row(2.0, "speech_stopped"),
+        row(2.3, "early_turn_started", transcript_id="early-2"),
+        row(3.0, "early_turn_verified", transcript_id="t2", early_transcript_id="early-2"),
+        row(4.0, "speech_stopped"),
+        row(4.9, "early_turn_declined", reason="judge_unfinished"),
+        row(5.0, "early_turn_declined", reason="judge_unfinished"),
+    ]
+
+    metrics = baseline_metrics(rows)
+
+    assert metrics["vad_stop_to_commit_ms"] == {
+        "count": 2,
+        "p50": 350.0,
+        "p95": 395.0,
+        "max": 400.0,
+    }
+    assert metrics["early_false_commits"] == {"count": 1, "of": 2, "ratio": 0.5}
+    assert metrics["early_turn_cancelled"] == 1
+    assert metrics["early_turn_verified"] == 1
+    assert metrics["early_turn_declined"] == {"judge_unfinished": 2}
+
+
+def test_a_commit_without_a_preceding_stop_is_not_paired() -> None:
+    rows = [row(1.0, "early_turn_started", transcript_id="early-1")]
+
+    assert baseline_metrics(rows)["vad_stop_to_commit_ms"]["count"] == 0
+    assert baseline_metrics(rows)["early_false_commits"] == {"count": 0, "of": 1, "ratio": 0.0}
+
+
 def test_a_barge_in_pairs_only_with_the_drop_of_the_turn_it_interrupted() -> None:
     rows = [
         row(0.0, "speech_started"),

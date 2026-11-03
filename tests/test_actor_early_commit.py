@@ -228,6 +228,75 @@ async def test_a_resumed_line_withdraws_a_queued_early_turn(journal: RecordingJo
     await loop.actor.close()
 
 
+async def test_a_declined_early_commit_is_journaled_with_its_reason(
+    journal: RecordingJournal,
+) -> None:
+    cases = (
+        (judged("reply", finished=False), "judge_unfinished"),
+        (judged("stay_silent"), "judge_not_admitted"),
+    )
+    for verdict, reason in cases:
+        loop = build_meeting_turns(
+            FakeResponder(),
+            interaction=TurnInteraction(
+                twin_names=["Rani"], judge=ScriptedJudge(constant(verdict))
+            ),
+            diagnostics=Diagnostics(journal=journal),
+        )
+        loop.actor.bind(FakeReplyAudio())
+        loop.actor.configure_early(
+            EarlyOptions(hold_seconds=0.0, build_event=lambda text: event("early-0", text))
+        )
+
+        await loop.actor.note_interim("Rani, so about the")
+        loop.actor.note_speech(active=False)
+        await asyncio.wait_for(loop.actor.wait_idle(), 2)
+
+        [declined] = journal.events("early_turn_declined")
+        assert declined["reason"] == reason
+        assert journal.events("early_turn_started") == []
+        journal.lines.clear()
+        await loop.actor.close()
+
+
+async def test_a_final_that_beats_the_hold_is_journaled_as_declined(
+    journal: RecordingJournal,
+) -> None:
+    loop, audio = early_loop(journal, FakeResponder())
+    loop.actor.configure_early(
+        EarlyOptions(hold_seconds=60.0, build_event=lambda text: event("early-0", text))
+    )
+    await loop.actor.note_interim(QUESTION)
+    loop.actor.note_speech(active=False)
+    await asyncio.sleep(0)
+
+    absorbed = await loop.actor.settle_early(event("final-1", QUESTION))
+
+    assert absorbed is False
+    [declined] = journal.events("early_turn_declined")
+    assert declined["reason"] == "final_first"
+    assert audio.spoken == []
+    await loop.actor.close()
+
+
+async def test_more_interim_during_the_hold_is_journaled_as_superseded(
+    journal: RecordingJournal,
+) -> None:
+    loop, _audio = early_loop(journal, FakeResponder())
+    loop.actor.configure_early(
+        EarlyOptions(hold_seconds=60.0, build_event=lambda text: event("early-0", text))
+    )
+    await loop.actor.note_interim(QUESTION)
+    loop.actor.note_speech(active=False)
+    await asyncio.sleep(0)
+
+    await loop.actor.note_interim(MORE)
+
+    [declined] = journal.events("early_turn_declined")
+    assert declined["reason"] == "superseded"
+    await loop.actor.close()
+
+
 async def test_an_unfinished_line_waits_for_the_final(journal: RecordingJournal) -> None:
     loop = build_meeting_turns(
         FakeResponder(),

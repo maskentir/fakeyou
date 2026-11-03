@@ -87,6 +87,19 @@ def _vad_stop_before_final(timed: Sequence[tuple[datetime, Row]]) -> dict[str, d
     return stops
 
 
+def _commit_gaps(timed: Sequence[tuple[datetime, Row]]) -> list[float]:
+    stopped: datetime | None = None
+    gaps: list[float] = []
+    for at, row in timed:
+        event = row.get("event")
+        if event == "speech_stopped":
+            stopped = at
+        elif event == "early_turn_started" and stopped is not None:
+            gaps.append(_ms(stopped, at))
+            stopped = None
+    return gaps
+
+
 def _sentence_gaps(timed: Sequence[tuple[datetime, Row]]) -> list[float]:
     finished: dict[tuple[str, int], datetime] = {}
     gaps: list[float] = []
@@ -147,6 +160,9 @@ def baseline_metrics(rows: Sequence[Row]) -> dict[str, Any]:
     rejected = Counter(
         str(row.get("reason")) for row in rows if row.get("event") == "speech_rejected"
     )
+    declined = Counter(
+        str(row.get("reason")) for row in rows if row.get("event") == "early_turn_declined"
+    )
     finished = next((row for row in reversed(rows) if row.get("event") == "session_finished"), None)
     return {
         "vad_stop_to_final_ms": summarize(_turn_gaps(stops_at, finals_at)),
@@ -155,6 +171,8 @@ def baseline_metrics(rows: Sequence[Row]) -> dict[str, Any]:
         ),
         "final_to_first_audio_ms": summarize(_turn_gaps(finals_at, audio_at)),
         "vad_stop_to_first_audio_ms": summarize(_turn_gaps(stops_at, audio_at)),
+        "vad_stop_to_commit_ms": summarize(_commit_gaps(timed)),
+        "early_false_commits": _share(events["early_turn_cancelled"], events["early_turn_started"]),
         "barge_in_to_silence_ms": summarize(_barge_in_to_silence(timed)),
         "sentence_gap_ms": summarize(_sentence_gaps(timed)),
         "speaker_bound": _share(sum(1 for row in finals if row.get("speaker_bound")), len(finals)),
@@ -162,6 +180,9 @@ def baseline_metrics(rows: Sequence[Row]) -> dict[str, Any]:
         "speech_rejected": dict(rejected),
         "barge_in_rejected": events["barge_in_rejected"],
         "early_turn_started": events["early_turn_started"],
+        "early_turn_cancelled": events["early_turn_cancelled"],
+        "early_turn_verified": events["early_turn_verified"],
+        "early_turn_declined": dict(declined),
         "screen_reads": events["screen_reading_finished"],
         "screen_duplicates": events["screen_duplicate_detected"],
         "memory_prefetches": sum(
