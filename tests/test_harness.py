@@ -36,6 +36,7 @@ def config(settings: Settings) -> SessionConfig:
         meeting_id=SessionId("replay"),
         link="https://meet.google.com/abc-defg-hij",
         twin_name="Harun",
+        participant_policy_enabled=False,
     )
 
 

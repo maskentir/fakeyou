@@ -108,6 +108,12 @@ class Snapshot(Protocol):
     @property
     def barge_in(self) -> bool: ...
 
+    @property
+    def participant_policy_enabled(self) -> bool: ...
+
+    @property
+    def participant_evidence_enabled(self) -> bool: ...
+
 
 class SnapshotStore(Protocol):
     def load(self, meeting_id: str) -> Snapshot | None: ...
@@ -169,6 +175,8 @@ def join_request_for(snapshot: Snapshot, settings: Settings, *, resume: bool) ->
         conversation_enabled=snapshot.conversation,
         wake_phrase=snapshot.wake_phrase,
         barge_in=snapshot.barge_in,
+        participant_policy_enabled=snapshot.participant_policy_enabled,
+        participant_evidence_enabled=snapshot.participant_evidence_enabled,
         brief_path=brief_path,
         resume=resume,
     )

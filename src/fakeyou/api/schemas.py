@@ -86,7 +86,8 @@ class SessionCreate(BaseModel):
     memory: bool = False
     wake_phrase: str | None = None
     barge_in: bool = False
-    participant_policy_enabled: bool = False
+    participant_policy_enabled: bool = True
+    participant_evidence_enabled: bool = False
 
     @model_validator(mode="after")
     def request_combinations_hold(self) -> Self:
@@ -136,7 +137,8 @@ class SessionSnapshot(BaseModel):
     memory: bool = False
     wake_phrase: str | None = None
     barge_in: bool = False
-    participant_policy_enabled: bool = False
+    participant_policy_enabled: bool = True
+    participant_evidence_enabled: bool = False
     keys_supplied: bool = False
     created_at: str
     snapshot_sha256: str

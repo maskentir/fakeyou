@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, override
 
 import pytest
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
@@ -9,6 +9,7 @@ from fakeyou.config.settings import Settings
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.conversation.turn_judge import JudgeLine, JudgeWindow, TurnJudgement
 from fakeyou.orchestration.assembly import ModelWiring, TurnBehavior
+from tests._conversation_support import event
 
 
 class RecordingJudge:
@@ -34,6 +35,7 @@ def _config(settings: Settings) -> SessionConfig:
         meeting_id=SessionId("model-wiring"),
         link="https://meet.google.com/abc-defg-hij",
         twin_name="Wiring Twin",
+        participant_policy_enabled=False,
     )
 
 
@@ -78,6 +80,40 @@ async def test_the_conversation_judges_with_the_injected_judge(
 
     assert len(judge.windows) == 1
     assert judge.windows[0].latest.text == "Rani?"
+
+
+class MidConfidenceJudge(RecordingJudge):
+    @override
+    async def judge(self, window: JudgeWindow) -> TurnJudgement:
+        judgement = await super().judge(window)
+        return judgement.model_copy(update={"confidence": 0.7})
+
+
+async def test_a_default_session_opens_with_the_policy_on(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(assembly_module, "create_meeting_agent", lambda *_args, **_kwargs: None)
+    config = SessionConfig(
+        owner_id=settings.identity.owner_id,
+        twin_id=settings.identity.twin_id,
+        meeting_id=SessionId("model-wiring"),
+        link="https://meet.google.com/abc-defg-hij",
+        twin_name="Wiring Twin",
+    )
+
+    async with assembly_module.open_conversation(
+        settings,
+        config,
+        behavior=TurnBehavior(on_transition=lambda *_args: None, twin_names=["Wiring Twin"]),
+        models=ModelWiring(judge=lambda _names: MidConfidenceJudge()),
+    ) as turns:
+        quoted = await turns.actor.receive_final(event("t1", "He said Wiring Twin agrees"))
+        addressed = await turns.actor.receive_final(event("t2", "Wiring Twin, hello?"))
+
+    assert quoted is not None
+    assert quoted.decision == "silent"
+    assert addressed is not None
+    assert addressed.decision == "speak"
 
 
 async def test_without_the_wiring_the_real_factories_are_used(

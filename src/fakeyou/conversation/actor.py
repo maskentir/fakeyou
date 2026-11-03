@@ -477,7 +477,7 @@ class FloorActor:
         self._addressing_names = addressing_phrases(names)
 
     def configure_policy(self, options: PolicyOptions) -> None:
-        if options.enabled and not self._wake_phrases:
+        if options.enabled and not (self._wake_phrases or self._addressing_names):
             raise ValueError("participant policy requires configured twin aliases")
         self._participant_policy = options.enabled
         self._others_speaking_signal = options.others_speaking
@@ -1044,7 +1044,7 @@ class FloorActor:
 
     def _addressed(self, text: str) -> bool:
         if self._participant_policy:
-            return is_vocative(text, self._wake_phrases)
+            return is_vocative(text, self._wake_phrases or self._addressing_names)
         return any(mentions_whole_phrase(text, name) for name in self._addressing_names)
 
     def _others_speaking(self) -> bool:

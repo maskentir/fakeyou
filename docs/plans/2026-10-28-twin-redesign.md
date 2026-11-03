@@ -1639,6 +1639,25 @@ yang tidak kosong di replay fixture; mematikan judge secara eksplisit
 menghasilkan mode degraded yang ter-journal, bukan behaviour rules-only
 yang sunyi.
 
+Slice 1, implementasi (2026-11-03): default dibalik di lapisan pembuat
+sesi — schema API, `SessionSnapshot`, `SessionConfig`, dan
+`JoinRequest` — karena di situlah deployment hidup. Ternyata flag-nya
+bahkan tidak pernah sampai: `join_request_for` tidak meneruskan
+`participant_policy_enabled` dari snapshot dan `build_session_config`
+tidak mengisinya, jadi sesi API selalu memakai default mati apa pun
+yang diminta klien; keduanya sekarang meneruskan flag itu (opt-out
+eksplisit tetap dihormati). Evidence dipisah jadi
+`participant_evidence_enabled` (default mati) yang menjadi satu-satunya
+gerbang `ParticipantObserver`. Default builder library
+(`TurnInteraction`, `PolicyOptions`) sengaja tetap mati: membaliknya
+mematahkan 39 test non-policy yang membangun loop tanpa alias, dan
+jalur produksi selalu melewati `SessionConfig`. Validasi policy kini
+menerima alias dari nama twin (`addressing_names`), bukan hanya wake
+phrase, dan `_addressed` memakai fallback yang sama; test assembly
+yang subjeknya bukan policy memilih opt-out secara eksplisit. Slice 2
+(mode degraded bernama) dan slice 3 (roster di journal) belum
+dikerjakan.
+
 ## Track C: otak
 
 ### C1: Owner model

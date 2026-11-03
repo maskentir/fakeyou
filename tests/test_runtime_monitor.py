@@ -98,7 +98,7 @@ async def test_participant_evidence_writer_bug_surfaces_as_poll_failure(
     evidence = tmp_path / "evidence.jsonl"
     clock = FakeClock()
     worker = MeetingWorker(
-        session_config(participant_policy_enabled=True, participant_evidence_path=evidence),
+        session_config(participant_evidence_enabled=True, participant_evidence_path=evidence),
         meet_page([], evaluates=[mining_payload() for _ in range(10)]),
         asyncio.Event(),
         DEFAULT_MEET_SIGNALS,
@@ -141,7 +141,7 @@ async def test_start_participant_observer_records_poll_faults(
 ) -> None:
     reporter = FaultReporter(journal=journal)
     worker = _bare_worker(
-        participant_policy_enabled=True,
+        participant_evidence_enabled=True,
         participant_evidence_path=tmp_path / "evidence.jsonl",
     )
     worker.faults = reporter
