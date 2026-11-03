@@ -62,6 +62,13 @@ class SupportsLouder(Protocol):
 
 
 @runtime_checkable
+class SupportsDucking(Protocol):
+    def duck(self) -> None: ...
+
+    def unduck(self) -> None: ...
+
+
+@runtime_checkable
 class SupportsMaintenance(Protocol):
     async def maintenance_tick(
         self, *, is_busy: bool, remote_participants: int | None = None

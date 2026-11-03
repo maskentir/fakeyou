@@ -89,7 +89,7 @@ async def test_barge_in_disabled_never_stops_playback() -> None:
     await loop.actor.close()
 
 
-async def test_interim_speech_interrupts_playback_after_enough_words(
+async def test_interim_speech_interrupts_playback_on_the_first_words(
     journal: RecordingJournal,
 ) -> None:
 
@@ -103,14 +103,11 @@ async def test_interim_speech_interrupts_playback_after_enough_words(
     )
     loop.actor.bind(audio)
 
-    await loop.actor.handle_interim("okay")
     await loop.actor.handle_interim("okay wait")
-    assert audio.stops == 0
-    await loop.actor.handle_interim("okay wait please")
 
     assert audio.stops == 1
     [row] = [json.loads(line) for line in lines if '"barge_in_detected"' in line]
-    assert (row["trigger"], row["words"]) == ("interim", 3)
+    assert (row["trigger"], row["words"]) == ("interim", 2)
 
 
 async def test_interim_speech_is_ignored_without_barge_in_or_playback() -> None:

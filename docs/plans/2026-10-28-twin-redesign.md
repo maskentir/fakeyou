@@ -1491,6 +1491,31 @@ Bentuk PR:
 Gate: live, interupsi dengan kalimat penuh membuat twin diam dalam 300 ms;
 backchannel tidak menghentikan twin.
 
+Dipecah (2026-11-02): B3-1 duck dulu, freeze hanya kalau live membuktikan
+duck kurang.
+
+- B3-1, implementasi (2026-11-02): `PlaybackEngine.duck()/unduck()`
+  menerapkan faktor gain `DUCK_GAIN` (0,15) di jalur gain yang sudah ada,
+  diekspos lewat protokol `SupportsDucking`; `stop()` meresetnya. Actor
+  men-duck pada tepi VAD aktif selama twin memegang floor
+  (`barge_in_ducked`), sebelum kata apa pun masuk. Syarat
+  `barge_in_min_words` dihapus beserta key config-nya (operator harus
+  membuang `FAKEYOU_CONVERSATION__BARGE_IN_MIN_WORDS` dari `.env`): interim
+  pertama langsung dinilai judge barge-in yang ada. Ditolak judge →
+  unduck (`barge_in_resumed`, reason `judge`); tidak ada kata yang
+  mengikuti → timer grace actor (1,5 dtk, `IngressTiming`) meng-unduck
+  (reason `grace`); yield tetap jalur stop penuh yang lama. Selama duck
+  kata-kata twin terus berjalan dengan volume pelan; itulah trade-off
+  yang diterima slice ini dan alasan freeze ditunda. Gate live plan ini
+  belum dibuktikan; bukti offline: test gain duck di level frame,
+  onset→duck, tolak→pulih, grace→pulih, dan baris pendek kini dinilai.
+  Temuan review yang ikut dibereskan: penolakan judge yang lambat tidak
+  boleh mengangkat duck yang lebih baru (nomor urut per penilaian), grace
+  tidak habis selama suara lawan masih aktif, `close()` mengangkat duck,
+  dan tepi suara diteruskan feed ke actor selalu — bukan hanya saat
+  early commit aktif — supaya duck juga bekerja di mode per-stream dan
+  saat early commit mati.
+
 ### B2: Commit giliran lokal
 
 - Floor actor meng-commit giliran saat VAD stop dan interim stabil, setelah

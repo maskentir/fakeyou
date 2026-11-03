@@ -57,7 +57,6 @@ class TurnInteraction:
     wake_phrases: Sequence[str] = ()
     twin_names: Sequence[str] = ()
     barge_in: bool = False
-    barge_in_min_words: int = DEFAULTS.conversation.barge_in_min_words
     barge_in_judge_enabled: bool = True
     participant_policy_enabled: bool = False
     others_speaking: Callable[[], bool] | None = None
@@ -218,10 +217,7 @@ def build_meeting_turns(
             ingress=IngressOptions(
                 addressing_names=wake_phrases or addressing_phrases(interaction.twin_names),
                 wake_phrases=wake_phrases,
-                timing=IngressTiming(
-                    barge_in_min_words=interaction.barge_in_min_words,
-                    clock=timing.clock,
-                ),
+                timing=IngressTiming(clock=timing.clock),
                 barge_in_judge_enabled=interaction.barge_in_judge_enabled,
             ),
         ),
