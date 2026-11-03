@@ -1566,9 +1566,19 @@ freeze tercatat untuk rekonsiliasi ucapan terpotong.
   suara berikutnya selama episode duck yang sama mempersenjatai ulang
   sustain-nya (temuan review: pengabaian tidak boleh final). Backchannel
   di sesi yang sama berperilaku benar (duck → ditolak → resume, tanpa
-  freeze; burst terpanjang 481 ms). Gate live B3-2 tetap belum
-  dibuktikan; sesi berikutnya memakai ucapan twin yang panjang
-  terkendali (menghitung 1–50) supaya interupsi pasti tumpang tindih.
+  freeze; burst terpanjang 481 ms). Gate live B3-2 terbukti untuk
+  mekanisme freeze-nya (2026-11-03, sesi `b3-freeze-2`): tiga
+  `barge_in_frozen` pada onset+601–602 ms selama interupsi berkelanjutan
+  — satu berakhir yield lewat stop-lexicon, satu ditolak judge lalu
+  thaw+resume, satu menyala lewat jalur re-arm setelah burst pertama
+  448 ms tidak mencapai sustain. Episode duck pada segmen backchannel
+  berakhir resume-grace tanpa freeze dan "yeah okay" dinilai silent.
+  Yang belum terisolasi bersih adalah sub-gate ≥ 3 backchannel selama
+  ucapan panjang: persona menolak tugas menghitung sebagai di luar
+  cakupan Orchid ("I cannot perform that task"), jadi ucapan twin tetap
+  pendek dan tumpang tindihnya didominasi kalimat penuh. Sesi live
+  berikutnya yang butuh ucapan panjang harus memakai permintaan dalam
+  cakupan persona atau persona uji yang lebih longgar.
   Temuan review yang ikut dibereskan: penolakan judge yang lambat tidak
   boleh mengangkat duck yang lebih baru (nomor urut per penilaian), grace
   tidak habis selama suara lawan masih aktif, `close()` mengangkat duck,
