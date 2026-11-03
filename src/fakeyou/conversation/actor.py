@@ -284,6 +284,7 @@ class FloorActor:
         self._early_starting: asyncio.Task[None] | None = None
         self._early_commit: _EarlyCommit | None = None
         self._early_withdrawn: set[str] = set()
+        self._early_declined: tuple[int, tuple[str, ...]] | None = None
         self._speaker = _ActorSpeaker(self)
 
     @property
@@ -900,8 +901,21 @@ class FloorActor:
                 self._arm_freeze()
         if self._early_options is None:
             return
-        self._restart_early(declined="superseded")
-        if active or not self._early_text.strip() or self._early_commit is not None:
+        if active:
+            self._cancel_early_hold(declined="superseded")
+            return
+        self._arm_early_hold()
+
+    def _arm_early_hold(self) -> None:
+        if (
+            self._voice_active
+            or self._closed
+            or self._failure is not None
+            or not self._early_text.strip()
+            or self._early_commit is not None
+            or (self._early_timer is not None and not self._early_timer.done())
+            or self._early_declined == (self._early_version, tuple(_early_words(self._early_text)))
+        ):
             return
         self._early_timer = asyncio.create_task(
             self._after_early_hold(self._early_version, self._early_text)
@@ -910,12 +924,15 @@ class FloorActor:
     async def note_interim(self, text: str) -> None:
         if self._early_options is None:
             return
-        held_words = len(_early_words(self._early_text))
+        changed = _early_words(text) != _early_words(self._early_text)
         self._early_text = text
-        self._restart_early(declined="superseded", words=held_words)
+        if changed:
+            self._cancel_early_hold()
         commit = self._early_commit
         if commit is not None and not commit.resumed and says_more(text, commit.text):
             await self._cancel_early(commit, reason="speech_resumed")
+        if changed:
+            self._arm_early_hold()
 
     async def settle_early(self, final: TranscriptEvent) -> bool:
         if self._early_options is None:
@@ -923,7 +940,7 @@ class FloorActor:
         commit, self._early_commit = self._early_commit, None
         words = len(_early_words(self._early_text))
         self._early_text = ""
-        self._restart_early(declined="final_first", words=words)
+        self._cancel_early_hold(declined="final_first", words=words)
         if commit is None:
             return False
         if (
@@ -945,7 +962,7 @@ class FloorActor:
         )
         return True
 
-    def _restart_early(self, *, declined: str | None = None, words: int | None = None) -> None:
+    def _cancel_early_hold(self, *, declined: str | None = None, words: int | None = None) -> None:
         self._early_version += 1
         timer, self._early_timer = self._early_timer, None
         if timer is not None and not timer.done():
@@ -968,6 +985,7 @@ class FloorActor:
         reason = await self._early_readiness(text)
         if reason is not None:
             if reason != "unavailable":
+                self._early_declined = (version, tuple(_early_words(text)))
                 self._journal.record(
                     "early_turn_declined",
                     source="agent",

@@ -1596,8 +1596,12 @@ freeze tercatat untuk rekonsiliasi ucapan terpotong.
   twin bicara, plan dibatalkan dan dinilai ulang; jika sudah bicara, final
   menjadi konteks turn berikutnya.
 
-Gate: replay V0 oue-4 menunjukkan commit p50 ≤ 0,5 s setelah VAD stop
-dengan false commit ≤ 5%.
+Gate: commit p50 ≤ 0,5 s setelah VAD stop dengan false commit ≤ 5%,
+diukur dari journal sesi live dengan metrik baseline B2-1 (revisi
+2026-11-03: replay oue-4 tidak bisa mengukurnya — interim replay
+disintesis dan judge terekam berjangkar pada final, jadi commit replay
+selalu kalah dari final; replay tetap penjaga regresi V0 dan counter
+decline-nya sinyal arah).
 
 Revisi riset: model Smart Turn v3.2 (BSD-2, ONNX int8 sekitar 8 MB, 23
 bahasa termasuk Indonesia, inferensi di bawah 100 ms di CPU menurut
@@ -1633,6 +1637,21 @@ dan live, bukan dari replay oue-4. False commit didefinisikan sebagai
   timer stabilitas: hold berjalan sejak perubahan teks terakhir selama
   VAD berhenti, sesuai redaksi tahap ini ("interim stabil, setelah
   300–500 ms hening").
+- B2-2, implementasi (2026-11-03): semantik hold diganti menjadi timer
+  stabilitas teks. `_arm_early_hold` mempersenjatai hold kapan pun VAD
+  berhenti dan teks interim ada (termasuk interim yang tiba *setelah*
+  VAD stop — jalur yang sebelumnya tidak pernah bisa commit); interim
+  yang teksnya berubah membatalkan hold secara sunyi dan mempersenjatai
+  ulang, interim identik tidak me-restart apa pun; suara berlanjut
+  membatalkan dengan decline `superseded`. Replay oue-4 sesudahnya:
+  gate V0 tetap hijau, episode yang mencapai judge naik 8 → 37 dan yang
+  bertahan sampai final 16 → 87 (di replay judge terekam selalu kalah
+  dari final secara konstruksi, jadi commit replay tetap 0 — dicoba
+  juga memodelkan judge interim replay dari-sekarang + resolusi prefix:
+  commit replay 20 dengan false 60% dan gate sintesis V0 pecah 21 → 10,
+  didominasi artefak interim sintesis; **ditolak**, fidelitas replay
+  tidak dikorbankan untuk angka commit). Bukti commit sesungguhnya
+  menunggu sesi live dengan kode ini.
 
 ### B4: Identitas dari stream
 
