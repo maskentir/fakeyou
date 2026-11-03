@@ -1617,8 +1617,10 @@ dan live, bukan dari replay oue-4. False commit didefinisikan sebagai
   `vad_stop_to_commit_ms` (speech_stopped terakhir → `early_turn_started`)
   dan `early_false_commits`, dan actor men-journal `early_turn_declined`
   dengan alasan (`judge_unfinished`, `judge_not_admitted`, `judge_failed`,
-  `raced`, `superseded`, `final_first`) di semua jalur keluar hold yang
-  sebelumnya sunyi. Angka awal: journal asli oue-4 punya 2 commit dari
+  `no_judge`, `superseded`, `final_first`) di semua jalur keluar hold yang
+  sebelumnya sunyi. Decline dihitung per episode hold, bukan per ujaran;
+  rasio false commit adalah rasio jendela journal dan memasukkan
+  pembatalan `final_says_more`. Angka awal: journal asli oue-4 punya 2 commit dari
   236 final (p50 587 ms, false 0); tiga sesi live terakhir 1 commit dari
   36 turn (dan yang satu itu dibatalkan). Replay oue-4 dengan instrumen
   baru: 0 commit dari 352 episode hold — 328 `superseded`, 16
