@@ -301,7 +301,7 @@ async def test_a_final_that_beats_the_hold_is_journaled_as_declined(
     await loop.actor.close()
 
 
-async def test_more_interim_during_the_hold_is_journaled_as_superseded(
+async def test_speech_resuming_during_the_hold_is_journaled_as_superseded(
     journal: RecordingJournal,
 ) -> None:
     loop, _audio = early_loop(journal, FakeResponder())
@@ -312,10 +312,64 @@ async def test_more_interim_during_the_hold_is_journaled_as_superseded(
     loop.actor.note_speech(active=False)
     await asyncio.sleep(0)
 
-    await loop.actor.note_interim(MORE)
+    loop.actor.note_speech(active=True)
 
     [declined] = journal.events("early_turn_declined")
     assert declined["reason"] == "superseded"
+    await loop.actor.close()
+
+
+async def test_an_interim_arriving_after_the_stop_still_commits(
+    journal: RecordingJournal,
+) -> None:
+    loop, audio = early_loop(journal, FakeResponder())
+    loop.actor.configure_early(
+        EarlyOptions(hold_seconds=0.05, build_event=lambda text: event("early-0", text))
+    )
+
+    loop.actor.note_speech(active=False)
+    await loop.actor.note_interim(QUESTION)
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
+
+    assert audio.spoken == [QUESTION]
+    assert journal.events("early_turn_started")
+    assert journal.events("early_turn_declined") == []
+    await loop.actor.close()
+
+
+async def test_text_growth_during_the_hold_restarts_stability_and_commits_the_grown_text(
+    journal: RecordingJournal,
+) -> None:
+    loop, audio = early_loop(journal, FakeResponder())
+    loop.actor.configure_early(
+        EarlyOptions(hold_seconds=0.08, build_event=lambda text: event("early-0", text))
+    )
+    await loop.actor.note_interim(QUESTION)
+    loop.actor.note_speech(active=False)
+    await asyncio.sleep(0.03)
+
+    await loop.actor.note_interim(MORE)
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
+
+    assert audio.spoken == [MORE]
+    assert journal.events("early_turn_started")
+    assert journal.events("early_turn_declined") == []
+    await loop.actor.close()
+
+
+async def test_a_repeated_interim_does_not_restart_the_hold(journal: RecordingJournal) -> None:
+    loop, audio = early_loop(journal, FakeResponder())
+    loop.actor.configure_early(
+        EarlyOptions(hold_seconds=0.1, build_event=lambda text: event("early-0", text))
+    )
+    await loop.actor.note_interim(QUESTION)
+    loop.actor.note_speech(active=False)
+    await asyncio.sleep(0.06)
+
+    await loop.actor.note_interim(QUESTION)
+    await asyncio.sleep(0.07)
+
+    assert audio.spoken == [QUESTION]
     await loop.actor.close()
 
 
