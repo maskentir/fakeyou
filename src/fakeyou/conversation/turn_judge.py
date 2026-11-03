@@ -341,6 +341,12 @@ class JudgeCache:
             raise RuntimeError("the judge task starts before it is awaited")
         return await asyncio.shield(task)
 
+    def completed(self, window: JudgeWindow) -> TurnJudgement | None:
+        task = self._tasks.get(window.key)
+        if task is None or not task.done() or task.cancelled() or task.exception() is not None:
+            return None
+        return task.result()
+
     def cancel(self) -> None:
         tasks = list(self._tasks.values())
         self._tasks.clear()
