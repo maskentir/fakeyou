@@ -1554,7 +1554,19 @@ freeze tercatat untuk rekonsiliasi ucapan terpotong.
   tetap duck-only. Terverifikasi offline: test frame freeze→thaw tanpa
   kehilangan kata, stop saat beku tidak menggantung, max-hold men-thaw
   sendiri, burst pendek tidak pernah membeku, penolakan judge men-thaw.
-  Gate live B3-2 belum dibuktikan.
+  Percobaan live pertama (2026-11-03, sesi `b3-freeze-1`) gagal
+  membekukan: nol `barge_in_frozen`. Akar masalahnya terukur dari
+  journal — burst interupsi terpecah jeda mikro VAD antar kata (220 ms,
+  jeda, 1984 ms) dan pemeriksaan sustain satu instant di 600 ms jatuh
+  di jeda itu, membatalkan freeze untuk seluruh episode. Perbaikan:
+  sustain mengakumulasi aktivitas suara dengan toleransi jeda
+  `freeze_gap_seconds` (0,25 dtk) — freeze terjadi begitu suara aktif
+  lagi setelah ambang sustain, selama jeda terakhir tidak melewati
+  toleransi; jeda lebih panjang menyerahkan ke jalur grace. Backchannel
+  di sesi yang sama berperilaku benar (duck → ditolak → resume, tanpa
+  freeze; burst terpanjang 481 ms). Gate live B3-2 tetap belum
+  dibuktikan; sesi berikutnya memakai ucapan twin yang panjang
+  terkendali (menghitung 1–50) supaya interupsi pasti tumpang tindih.
   Temuan review yang ikut dibereskan: penolakan judge yang lambat tidak
   boleh mengangkat duck yang lebih baru (nomor urut per penilaian), grace
   tidak habis selama suara lawan masih aktif, `close()` mengangkat duck,
