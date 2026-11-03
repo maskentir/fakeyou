@@ -288,6 +288,24 @@ async def test_a_rejected_barge_in_thaws_a_freeze() -> None:
     await lifecycle.close()
 
 
+async def test_pausing_lifts_the_duck_and_disarms_the_freeze() -> None:
+    judge = ScriptedJudge(lambda _window: judged("reply", addressee="twin"))
+    ingress, lifecycle, session, _journal = build(judge, freeze_sustain_seconds=0.05)
+    speech = await hold_the_floor(lifecycle)
+
+    ingress.note_speech(active=True)
+    await lifecycle.pause()
+    await asyncio.sleep(0.15)
+
+    assert session.ducks == 1
+    assert session.unducks == 1
+    assert session.freezes == 0
+    assert session.stops == 1
+    speech.cancel()
+    await asyncio.gather(speech, return_exceptions=True)
+    await lifecycle.close()
+
+
 async def test_a_rejected_barge_in_lifts_the_duck() -> None:
     judge = ScriptedJudge(lambda _window: judged("stay_silent", addressee="someone_else"))
     ingress, lifecycle, session, journal = build(judge)

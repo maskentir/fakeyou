@@ -442,11 +442,17 @@ class PlaybackEngine:
     def freeze(self) -> None:
         if not self._thawed.is_set():
             return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
         self._thawed.clear()
-        with suppress(RuntimeError):
-            self._freeze_timer = asyncio.get_running_loop().call_later(
-                self._freeze_max_hold_seconds, self.thaw
-            )
+        self._freeze_timer = loop.call_later(self._freeze_max_hold_seconds, self._release_freeze)
+
+    def _release_freeze(self) -> None:
+        self.thaw()
+        if self._journal is not None:
+            self._journal.record("playback_thawed", source="playback", reason="max_hold")
 
     def thaw(self) -> None:
         if self._freeze_timer is not None:

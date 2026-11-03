@@ -433,6 +433,36 @@ async def test_tick_slot_propagates_unexpected_error() -> None:
         await tick_slot(cast(Any, _BuggySession()), is_busy=False, remote_participants=None)
 
 
+def test_the_fleet_fans_duck_and_freeze_out_to_every_session() -> None:
+    from fakeyou.audio.stream_capture import StreamFleetSession
+
+    class _Slot:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def duck(self) -> None:
+            self.calls.append("duck")
+
+        def unduck(self) -> None:
+            self.calls.append("unduck")
+
+        def freeze(self) -> None:
+            self.calls.append("freeze")
+
+        def thaw(self) -> None:
+            self.calls.append("thaw")
+
+    slots = [_Slot(), _Slot()]
+    fleet = StreamFleetSession(cast(Any, slots), StreamRegistry())
+
+    fleet.duck()
+    fleet.freeze()
+    fleet.thaw()
+    fleet.unduck()
+
+    assert [slot.calls for slot in slots] == [["duck", "freeze", "thaw", "unduck"]] * 2
+
+
 async def test_tick_slot_returns_os_error_as_result() -> None:
     from fakeyou.audio.stream_capture import tick_slot
 

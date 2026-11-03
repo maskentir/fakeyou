@@ -691,9 +691,13 @@ class FloorActor:
 
     async def pause(self) -> None:
         self._paused = True
+        self._unduck(None)
         session = self._session
         if session is not None and session.is_speaking:
             await session.stop_playback()
+
+    def reset_duck(self) -> None:
+        self._unduck(None)
 
     def resume(self) -> None:
         self._paused = False
@@ -1212,6 +1216,7 @@ class _ActorSpeaker:
         )
 
     async def stop_playback(self) -> None:
+        self._actor.reset_duck()
         await self._session().stop_playback()
 
     async def prepare(

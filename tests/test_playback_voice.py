@@ -155,6 +155,22 @@ async def test_stop_releases_a_freeze_instead_of_hanging() -> None:
     assert not engine.is_speaking
 
 
+async def test_close_releases_a_freeze_instead_of_hanging() -> None:
+    writer, events = GatedWriter(), list[PlaybackEvent]()
+    writer.hold_after = 2
+    engine = engine_for(ScriptedSynth(tone(24000)), writer, events)
+    speaking = asyncio.create_task(engine.speak("A long answer."))
+    await writer.held.wait()
+
+    engine.freeze()
+    writer.gate.set()
+    async with asyncio.timeout(5):
+        await engine.close()
+        await speaking
+
+    assert not engine.is_speaking
+
+
 async def test_a_freeze_thaws_itself_after_the_max_hold() -> None:
     writer, events = GatedWriter(), list[PlaybackEvent]()
     synth = ScriptedSynth(tone(2400))

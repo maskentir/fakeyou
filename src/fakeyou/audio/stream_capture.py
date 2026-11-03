@@ -630,6 +630,22 @@ class StreamFleetSession:
             "stop_playback",
         )
 
+    def duck(self) -> None:
+        for session in self._sessions:
+            session.duck()
+
+    def unduck(self) -> None:
+        for session in self._sessions:
+            session.unduck()
+
+    def freeze(self) -> None:
+        for session in self._sessions:
+            session.freeze()
+
+    def thaw(self) -> None:
+        for session in self._sessions:
+            session.thaw()
+
     async def prepare(
         self,
         text: str,
