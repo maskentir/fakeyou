@@ -1488,11 +1488,29 @@ Bentuk PR:
   masuk. Batuk dan "hmm" tidak menghentikan twin.
 - Dihapus: syarat 3 kata STT (`barge_in_min_words`) sebelum aksi apa pun.
 
-Gate: live, interupsi dengan kalimat penuh membuat twin diam dalam 300 ms;
-backchannel tidak menghentikan twin.
+Gate (diperbarui 2026-11-03 dari bukti live B3-1): volume turun (duck)
+dalam ≤ 300 ms sejak onset; interupsi yang bertahan ≥ 600 ms membekukan
+playback sampai verdict; backchannel (< 600 ms) tidak pernah membekukan
+atau menghentikan twin.
 
 Dipecah (2026-11-02): B3-1 duck dulu, freeze hanya kalau live membuktikan
 duck kurang.
+
+Keputusan B3-2 (2026-11-03, dari sesi live `b8-live-2`): freeze-if-sustained.
+Data yang memutuskan: burst backchannel terukur 225–320 ms, burst
+interupsi sungguhan 2783 ms, jadi ambang durasi 300 ms akan membekukan
+backchannel dan ditolak; 600 ms ≈ 2× backchannel terpanjang yang teramati.
+Semantik: duck pada onset seperti B3-1; selama duck, bila suara lawan
+masih aktif pada 600 ms dan verdict judge belum datang, playback pause
+sungguhan (frame ditahan, bukan gain 0 yang membuang kata); judge menolak
+→ thaw dan lanjut dari titik pause; judge yield → stop penuh seperti
+sekarang; suara berhenti sebelum 600 ms → jalur grace yang ada. Freeze
+wajib punya max-hold dan selalu lepas saat stop/close supaya playback
+tidak bisa menggantung. Dipecah: B3-2a kapabilitas freeze/thaw di
+`PlaybackEngine` (test level frame), B3-2b kebijakan sustain di actor
+plus journal. Gate live B3-2: ≥ 3 interupsi kalimat penuh membeku
+≤ 600 ms, ≥ 3 backchannel tidak membeku, kata yang terucap sebelum
+freeze tercatat untuk rekonsiliasi ucapan terpotong.
 
 - B3-1, implementasi (2026-11-02): `PlaybackEngine.duck()/unduck()`
   menerapkan faktor gain `DUCK_GAIN` (0,15) di jalur gain yang sudah ada,
