@@ -1540,6 +1540,21 @@ freeze tercatat untuk rekonsiliasi ucapan terpotong.
   membekukan playback pada onset akan memenuhi redaksi gate apa
   adanya, dengan risiko potongan batuk/backchannel yang semula dihindari
   duck.
+- B3-2, implementasi (2026-11-03): `PlaybackEngine.freeze()/thaw()`
+  menahan frame di `_write_frame` lewat event asyncio (frame in-flight
+  terakhir tetap selesai, ±20 ms), dengan max-hold
+  `FREEZE_MAX_HOLD_SECONDS` (10 dtk, jaring pengaman) dan thaw wajib di
+  `stop()`. Actor membekukan dari `_freeze_after_sustain` bila suara
+  lawan masih aktif `IngressTiming.freeze_sustain_seconds` (0,6 dtk)
+  setelah duck dan twin masih memegang floor (`barge_in_frozen`);
+  semua jalur `_unduck` men-thaw dulu, jadi penolakan judge dan grace
+  melanjutkan dari titik pause tanpa kata hilang, dan yield tetap stop
+  penuh. Kapabilitas diekspos sebagai protokol `SupportsFreezing` /
+  `FreezingPlayback` mengikuti pola ducking, jadi sesi tanpa kapabilitas
+  tetap duck-only. Terverifikasi offline: test frame freeze→thaw tanpa
+  kehilangan kata, stop saat beku tidak menggantung, max-hold men-thaw
+  sendiri, burst pendek tidak pernah membeku, penolakan judge men-thaw.
+  Gate live B3-2 belum dibuktikan.
   Temuan review yang ikut dibereskan: penolakan judge yang lambat tidak
   boleh mengangkat duck yang lebih baru (nomor urut per penilaian), grace
   tidak habis selama suara lawan masih aktif, `close()` mengangkat duck,
