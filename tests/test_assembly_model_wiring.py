@@ -9,7 +9,11 @@ from fakeyou.config.settings import Settings
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.conversation.turn_judge import JudgeLine, JudgeWindow, TurnJudgement
 from fakeyou.orchestration.assembly import ModelWiring, TurnBehavior
+from fakeyou.orchestration.kernel_port import KernelPort
 from tests._conversation_support import event
+from tests._persistence_fakes import RecordingJournal
+
+REAL_BUILD_TURN_JUDGE = assembly_module.build_turn_judge
 
 
 class RecordingJudge:
@@ -114,6 +118,38 @@ async def test_a_default_session_opens_with_the_policy_on(
     assert quoted.decision == "silent"
     assert addressed is not None
     assert addressed.decision == "speak"
+
+
+async def test_the_judge_model_choice_is_journaled(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(assembly_module, "build_turn_judge", REAL_BUILD_TURN_JUDGE)
+    journal = RecordingJournal()
+
+    judge = assembly_module.build_turn_judge(settings, ["Wiring Twin"], journal)
+
+    assert judge is not None
+    [row] = journal.events("judge_model_selected")
+    assert (row["role"], row["model"]) == ("reply", "model")
+
+
+async def test_a_judge_that_cannot_be_built_degrades_the_session(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(assembly_module, "create_meeting_agent", lambda *_args, **_kwargs: None)
+    kernel = KernelPort.for_meeting("model-wiring")
+    kernel.call_state("in_call")
+
+    async with assembly_module.open_conversation(
+        settings,
+        _config(settings),
+        behavior=TurnBehavior(
+            on_transition=lambda *_args: None, twin_names=["Wiring Twin"], kernel=kernel
+        ),
+        models=ModelWiring(judge=lambda _names: None),
+    ):
+        kernel.drain()
+        assert "model_degraded" in kernel.modes()
 
 
 async def test_without_the_wiring_the_real_factories_are_used(
