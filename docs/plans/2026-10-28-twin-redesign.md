@@ -1562,7 +1562,9 @@ freeze tercatat untuk rekonsiliasi ucapan terpotong.
   sustain mengakumulasi aktivitas suara dengan toleransi jeda
   `freeze_gap_seconds` (0,25 dtk) — freeze terjadi begitu suara aktif
   lagi setelah ambang sustain, selama jeda terakhir tidak melewati
-  toleransi; jeda lebih panjang menyerahkan ke jalur grace. Backchannel
+  toleransi; jeda lebih panjang membuat checker berhenti, tetapi tepi
+  suara berikutnya selama episode duck yang sama mempersenjatai ulang
+  sustain-nya (temuan review: pengabaian tidak boleh final). Backchannel
   di sesi yang sama berperilaku benar (duck → ditolak → resume, tanpa
   freeze; burst terpanjang 481 ms). Gate live B3-2 tetap belum
   dibuktikan; sesi berikutnya memakai ucapan twin yang panjang
