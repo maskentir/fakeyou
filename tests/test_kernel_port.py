@@ -9,7 +9,7 @@ from fakeyou.identity.identity import SpeakerRow
 from fakeyou.orchestration.kernel_port import HealthReportingJudge, KernelPort
 from fakeyou.perception.meet_protocol import MeetUser
 from fakeyou.perception.roster import MeetRoster
-from fakeyou.session.contracts import ChatObserved
+from fakeyou.session.contracts import ChatObserved, Endpoint, RosterObserved
 from fakeyou.session.world import TWIN, Ref
 from tests._persistence_fakes import RecordingJournal
 
@@ -234,6 +234,58 @@ def test_unavailable_memory_and_failed_playback_are_degraded_modes() -> None:
     kernel.drain()
 
     assert kernel.modes() == frozenset({"memory_degraded", "voice_degraded"})
+
+
+def test_the_roster_is_journaled_once_per_change_with_names_only() -> None:
+    journal = RecordingJournal()
+    kernel = KernelPort.for_meeting("meeting-9", journal=journal)
+    joined(kernel)
+    joined(kernel)
+
+    rows = journal.events("roster_observed")
+    assert len(rows) == 1
+    assert rows[0]["people"] == [
+        {"id": "dev-twin", "name": "Rani"},
+        {"id": "dev-ayu", "name": "Ayu"},
+    ]
+    assert rows[0]["own_id"] == "dev-twin"
+
+    roster = MeetRoster()
+    roster.apply_users(
+        [
+            MeetUser(device_id="dev-twin", name="Rani", present=True, current_user=True),
+            MeetUser(device_id="dev-ayu", name="Ayu", present=True),
+            MeetUser(device_id="dev-bimo", name="Bimo", present=True),
+        ]
+    )
+    roster.mark_synced()
+    kernel.roster(roster)
+
+    rows = journal.events("roster_observed")
+    assert len(rows) == 2
+    assert rows[1]["people"][-1] == {"id": "dev-bimo", "name": "Bimo"}
+
+
+def test_a_replayed_roster_makes_presence_named() -> None:
+    kernel = port()
+    kernel.call_state("in_call")
+    kernel.observe(
+        "meet_protocol",
+        RosterObserved(
+            endpoints=(
+                Endpoint(
+                    device_id="dev-twin", display_name="Rani", present=True, current_user=True
+                ),
+                Endpoint(device_id="dev-ayu", display_name="Ayu", present=True),
+            ),
+            synced=True,
+        ),
+    )
+    kernel.drain()
+
+    fact = kernel.presence()
+    assert fact.twin_identified is True
+    assert [person.display_claim for person in fact.participants] == ["Ayu"]
 
 
 def test_degraded_identity_attributes_nobody() -> None:

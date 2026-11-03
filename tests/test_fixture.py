@@ -192,6 +192,27 @@ def test_a_sentence_that_never_reached_the_synthesizer_is_not_replayed() -> None
     assert [sentence.index for sentence in fixture.replies["t1"].sentences] == [0]
 
 
+def test_the_recorded_roster_is_kept_for_replay() -> None:
+    rows, entries = session()
+    rows.insert(
+        1,
+        row(
+            "roster_observed",
+            0.5,
+            people=[{"id": "dev-twin", "name": "Rani"}, {"id": "dev-ayu", "name": "Ayu"}],
+            own_id="dev-twin",
+        ),
+    )
+
+    fixture = build_fixture(rows, entries)
+
+    assert len(fixture.rosters) == 1
+    roster = fixture.rosters[0]
+    assert roster.offset == pytest.approx(0.5)
+    assert roster.people == (("dev-twin", "Rani"), ("dev-ayu", "Ayu"))
+    assert roster.own_id == "dev-twin"
+
+
 def test_an_empty_journal_cannot_be_replayed() -> None:
     with pytest.raises(ValueError, match="no rows"):
         build_fixture([], [])

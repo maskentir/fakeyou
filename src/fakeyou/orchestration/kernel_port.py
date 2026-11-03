@@ -146,6 +146,7 @@ class KernelPort:
         self._playing: str | None = None
         self._dom_remote: int | None = None
         self._call: CallState | None = None
+        self._roster_seen: tuple[tuple[str, str, bool], ...] | None = None
 
     @classmethod
     def for_meeting(
@@ -291,8 +292,27 @@ class KernelPort:
         )
 
     def roster(self, roster: MeetRoster) -> None:
-        for observation in roster_observations(roster):
+        observations = roster_observations(roster)
+        for observation in observations:
             self.observe("meet_protocol", observation)
+        seen = observations[0]
+        if not isinstance(seen, RosterObserved):
+            return
+        signature = tuple(
+            (endpoint.device_id, endpoint.display_name, endpoint.current_user)
+            for endpoint in seen.endpoints
+            if endpoint.present
+        )
+        if signature == self._roster_seen:
+            return
+        self._roster_seen = signature
+        if self._journal is not None:
+            self._journal.record(
+                "roster_observed",
+                source="perception",
+                people=[{"id": device_id, "name": name} for device_id, name, _own in signature],
+                own_id=next((device_id for device_id, _name, own in signature if own), None),
+            )
 
     def _transcript_observation(
         self, event: TranscriptEvent, row: SpeakerRow | None

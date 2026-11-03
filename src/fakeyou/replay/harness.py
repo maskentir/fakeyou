@@ -40,7 +40,7 @@ from fakeyou.replay.compare import Comparison, compare_journals
 from fakeyou.replay.fixture import ReplayFixture
 from fakeyou.replay.pacer import PacedWriter
 from fakeyou.replay.recorded import RecordedJudge, RecordedModel, RecordedSynthesizer
-from fakeyou.session.contracts import ChatObserved, ScreenObserved
+from fakeyou.session.contracts import ChatObserved, Endpoint, RosterObserved, ScreenObserved
 from fakeyou.session.kernel import SessionKernel
 from fakeyou.speech.contract import PreparedSpeech
 
@@ -51,6 +51,7 @@ LANES = {
     "chat": "meeting",
     "screen": "meeting",
     "attention": "meeting",
+    "roster": "meeting",
 }
 
 
@@ -61,6 +62,8 @@ class ReplayInput:
     text: str = ""
     entry: TranscriptEntry | ChatEntry | ScreenEntry | None = None
     active: bool = False
+    people: tuple[tuple[str, str], ...] = ()
+    own_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +159,10 @@ def schedule(fixture: ReplayFixture, *, attention: bool = False) -> tuple[Replay
     items: list[ReplayInput] = [
         ReplayInput(edge.offset, "vad", active=edge.active) for edge in fixture.edges
     ]
+    items.extend(
+        ReplayInput(roster.offset, "roster", people=roster.people, own_id=roster.own_id)
+        for roster in fixture.rosters
+    )
     for final in fixture.finals:
         items.extend(
             _interims(
@@ -380,6 +387,22 @@ async def _deliver(item: ReplayInput, sinks: _Sinks) -> None:
             )
         case "attention" if isinstance(entry, ScreenEntry):
             sinks.turns.receive_attention(_attention_event(entry), channel="voice")
+        case "roster":
+            sinks.kernel.observe(
+                "meet_protocol",
+                RosterObserved(
+                    endpoints=tuple(
+                        Endpoint(
+                            device_id=device_id,
+                            display_name=name,
+                            present=True,
+                            current_user=device_id == item.own_id,
+                        )
+                        for device_id, name in item.people
+                    ),
+                    synced=True,
+                ),
+            )
         case _:
             pass
 

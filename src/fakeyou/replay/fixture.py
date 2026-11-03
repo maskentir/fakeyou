@@ -34,6 +34,18 @@ class _Final(_Row):
     transcript_id: str
 
 
+class _Person(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    id: str
+    name: str = ""
+
+
+class _Roster(_Row):
+    people: tuple[_Person, ...] = ()
+    own_id: str | None = None
+
+
 class _Verdict(_Row):
     model_config = ConfigDict(extra="allow", frozen=True)
 
@@ -95,6 +107,13 @@ class Percept:
 
 
 @dataclass(frozen=True, slots=True)
+class RosterSnapshot:
+    offset: float
+    people: tuple[tuple[str, str], ...]
+    own_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class JudgeVerdict:
     delay_ms: float
     fields: Mapping[str, Any]
@@ -153,6 +172,7 @@ class ReplayFixture:
     synthesis_faults: Mapping[tuple[str, int], tuple[SynthesisFault, ...]]
     plans: Mapping[str, RecordedPlan]
     rows: tuple[dict[str, Any], ...] = field(repr=False)
+    rosters: tuple[RosterSnapshot, ...] = ()
 
 
 def load_fixture(journal_path: Path, record_path: Path) -> ReplayFixture:
@@ -175,9 +195,19 @@ def build_fixture(rows: Sequence[dict[str, Any]], entries: Sequence[RecordEntry]
     finals_at: dict[str, datetime] = {}
     edges: list[VoiceEdge] = []
     finals: list[SpokenFinal] = []
+    rosters: list[RosterSnapshot] = []
     stt: _SttTurn | None = None
     for row in rows:
         match row.get("event"):
+            case "roster_observed":
+                roster = _Roster.model_validate(row)
+                rosters.append(
+                    RosterSnapshot(
+                        offset(roster.at),
+                        tuple((person.id, person.name) for person in roster.people),
+                        roster.own_id,
+                    )
+                )
             case "speech_started" | "speech_stopped" as event:
                 at = _Row.model_validate(row).at
                 edges.append(VoiceEdge(offset(at), event == "speech_started"))
@@ -218,6 +248,7 @@ def build_fixture(rows: Sequence[dict[str, Any]], entries: Sequence[RecordEntry]
         synthesis_faults=_synthesis_faults(rows),
         plans=_plans(rows),
         rows=tuple(recorded),
+        rosters=tuple(rosters),
     )
 
 
