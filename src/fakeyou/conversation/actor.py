@@ -817,8 +817,9 @@ class FloorActor:
 
     async def _duck_grace(self) -> None:
         await asyncio.sleep(self._duck_grace_seconds)
-        while self._ducked and self._voice_active:
-            await asyncio.sleep(self._duck_grace_seconds)
+        if self._ducked and self._voice_active:
+            self._duck_timer = asyncio.create_task(self._duck_grace())
+            return
         self._unduck("grace")
 
     def note_speech(self, *, active: bool) -> None:
