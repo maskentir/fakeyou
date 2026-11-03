@@ -84,6 +84,7 @@ def build(
     barge_in_judge_enabled: bool = True,
     duck_grace_seconds: float = 1.5,
     freeze_sustain_seconds: float = 0.6,
+    freeze_gap_seconds: float = 0.25,
 ) -> tuple[FloorActor, FloorActor, FakeSession, FakeJournal]:
     journal = FakeJournal()
     lifecycle = FloorActor(
@@ -97,6 +98,7 @@ def build(
                 timing=IngressTiming(
                     duck_grace_seconds=duck_grace_seconds,
                     freeze_sustain_seconds=freeze_sustain_seconds,
+                    freeze_gap_seconds=freeze_gap_seconds,
                 ),
                 barge_in_judge_enabled=barge_in_judge_enabled,
             ),
@@ -259,6 +261,33 @@ async def test_a_word_gap_inside_a_sustained_interruption_still_freezes() -> Non
     ingress.note_speech(active=True)
     await asyncio.sleep(0.2)
 
+    assert session.freezes == 1
+    assert journal.of("barge_in_frozen") == [{"source": "agent"}]
+    speech.cancel()
+    await asyncio.gather(speech, return_exceptions=True)
+    await lifecycle.close()
+
+
+async def test_a_sustained_resumption_rearms_the_freeze() -> None:
+    judge = ScriptedJudge(lambda _window: judged("reply", addressee="twin"))
+    ingress, lifecycle, session, journal = build(
+        judge,
+        duck_grace_seconds=2.0,
+        freeze_sustain_seconds=0.10,
+        freeze_gap_seconds=0.03,
+    )
+    speech = await hold_the_floor(lifecycle)
+
+    ingress.note_speech(active=True)
+    await asyncio.sleep(0.02)
+    ingress.note_speech(active=False)
+    await asyncio.sleep(0.22)
+    assert session.freezes == 0
+
+    ingress.note_speech(active=True)
+    await asyncio.sleep(0.16)
+
+    assert session.ducks == 1
     assert session.freezes == 1
     assert journal.of("barge_in_frozen") == [{"source": "agent"}]
     speech.cancel()

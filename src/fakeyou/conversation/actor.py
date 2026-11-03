@@ -819,10 +819,17 @@ class FloorActor:
         session.duck()
         self._journal.record("barge_in_ducked", source="agent")
         self._duck_timer = asyncio.create_task(self._duck_grace())
-        if isinstance(session, SupportsFreezing):
-            self._freeze_timer = asyncio.create_task(
-                self._freeze_after_sustain(self._freeze_sustain_seconds)
-            )
+        self._arm_freeze()
+
+    def _arm_freeze(self) -> None:
+        session = self._session
+        if not isinstance(session, SupportsFreezing):
+            return
+        if self._freeze_timer is not None and not self._freeze_timer.done():
+            return
+        self._freeze_timer = asyncio.create_task(
+            self._freeze_after_sustain(self._freeze_sustain_seconds)
+        )
 
     async def _freeze_after_sustain(self, delay: float) -> None:
         await asyncio.sleep(delay)
@@ -830,6 +837,8 @@ class FloorActor:
         if (
             not self._ducked
             or self._frozen
+            or self._closed
+            or self._failure is not None
             or session is None
             or not isinstance(session, SupportsFreezing)
             or not self._twin_holds_floor(session)
@@ -880,6 +889,8 @@ class FloorActor:
         self._voice_active = active
         if active:
             self._duck()
+            if self._ducked and not self._frozen:
+                self._arm_freeze()
         if self._early_options is None:
             return
         self._restart_early()
