@@ -10,6 +10,7 @@ from fakeyou.audio.playback import (
     HALT_SECONDS,
     PlaybackEngine,
     PlaybackEvent,
+    PlaybackTiming,
 )
 from fakeyou.speech.contract import SpeechSynthesizer
 from tests._prepared_support import SentenceSynth
@@ -112,6 +113,61 @@ async def test_ducking_lowers_the_volume_until_it_is_lifted() -> None:
     assert ducked < full * 0.3
     assert full > 4000
     assert kinds(events) == ["playback_started", "playback_finished"] * 2
+
+
+async def test_freezing_holds_frames_and_thawing_resumes_without_losing_words() -> None:
+    pcm = tone(24000)
+    writer, events = GatedWriter(), list[PlaybackEvent]()
+    writer.hold_after = 2
+    engine = engine_for(ScriptedSynth(pcm), writer, events)
+    speaking = asyncio.create_task(engine.speak("A long answer."))
+    await writer.held.wait()
+
+    engine.freeze()
+    writer.gate.set()
+    await asyncio.sleep(0.05)
+    held_at = len(writer.writes)
+    await asyncio.sleep(0.05)
+
+    assert len(writer.writes) == held_at == 3
+    assert engine.is_speaking
+
+    engine.thaw()
+    await speaking
+
+    assert b"".join(writer.writes) == pcm
+    assert kinds(events) == ["playback_started", "playback_finished"]
+
+
+async def test_stop_releases_a_freeze_instead_of_hanging() -> None:
+    writer, events = GatedWriter(), list[PlaybackEvent]()
+    writer.hold_after = 2
+    engine = engine_for(ScriptedSynth(tone(24000)), writer, events)
+    speaking = asyncio.create_task(engine.speak("A long answer."))
+    await writer.held.wait()
+
+    engine.freeze()
+    writer.gate.set()
+    async with asyncio.timeout(5):
+        await engine.stop()
+        await speaking
+
+    assert not engine.is_speaking
+
+
+async def test_a_freeze_thaws_itself_after_the_max_hold() -> None:
+    writer, events = GatedWriter(), list[PlaybackEvent]()
+    synth = ScriptedSynth(tone(2400))
+    engine = PlaybackEngine(
+        synth, writer, on_event=events.append, timing=PlaybackTiming(freeze_max_hold_seconds=0.05)
+    )
+    writer.engine = engine
+
+    engine.freeze()
+    async with asyncio.timeout(5):
+        await engine.speak("Released on its own.")
+
+    assert b"".join(writer.writes) == tone(2400)
 
 
 async def test_stop_fades_out_the_next_frame_and_drains_to_silence() -> None:
