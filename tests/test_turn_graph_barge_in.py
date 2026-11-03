@@ -427,18 +427,16 @@ async def test_interim_during_speech_interrupts_and_journals_the_loop_names() ->
     assert audio.stops == 1
 
 
-async def test_interim_below_the_minimum_words_does_not_interrupt() -> None:
+async def test_a_two_word_interim_interrupts_without_a_minimum() -> None:
     journal = FakeJournal()
     ingress, lifecycle, audio = barge_ingress(journal, addressing_names=())
     speech = await start_speaking(lifecycle)
 
     await ingress.handle_interim("yeah right")
 
-    assert not speech.done()
-    assert journal.names == []
-    assert audio.stops == 0
-    speech.cancel()
-    await asyncio.gather(speech, return_exceptions=True)
+    assert await settle(speech) is False
+    assert "barge_in_detected" in journal.names
+    assert audio.stops == 1
 
 
 async def test_a_one_word_stop_interim_yields_the_floor_at_once() -> None:

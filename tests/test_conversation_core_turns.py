@@ -214,8 +214,6 @@ async def test_interim_cancels_pre_pcm_child_without_answering(journal: Recordin
     await loop.actor.receive_final(event("t1", "first"))
     assert await asyncio.wait_for(responder.started.wait(), 2)
     await loop.actor.handle_interim("one moment")
-    assert not responder.cancelled.is_set()
-    await loop.actor.handle_interim("please hold on a moment")
     assert responder.cancelled.is_set()
     assert len(responder.calls) == 1
     assert audio.spoken == []

@@ -25,6 +25,7 @@ from fakeyou.audio.graph import AudioGraph, GraphParts, OnVad, TurnAudioTap
 from fakeyou.audio.own_speech import FinalGate, OwnSpeech
 from fakeyou.audio.playback import (
     CuePlayback,
+    DuckingPlayback,
     PlaybackEngine,
     PlaybackError,
     PlaybackEvent,
@@ -562,6 +563,14 @@ class MeetingAudioSession:
 
     def louder(self) -> None:
         self._engine.louder()
+
+    def duck(self) -> None:
+        if isinstance(self._engine, DuckingPlayback):
+            self._engine.duck()
+
+    def unduck(self) -> None:
+        if isinstance(self._engine, DuckingPlayback):
+            self._engine.unduck()
 
     def prepare_cues(self, texts: Sequence[str]) -> None:
         engine = self._engine

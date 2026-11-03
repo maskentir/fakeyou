@@ -96,6 +96,24 @@ async def test_a_clip_is_written_in_frames_of_whole_samples() -> None:
     assert kinds(events) == ["playback_started", "playback_finished"]
 
 
+async def test_ducking_lowers_the_volume_until_it_is_lifted() -> None:
+    writer, events = GatedWriter(), list[PlaybackEvent]()
+    engine = engine_for(ScriptedSynth(tone(2400)), writer, events)
+
+    engine.duck()
+    await engine.speak("Quietly now.")
+    ducked = np.abs(np.frombuffer(b"".join(writer.writes), dtype="<i2")).max()
+
+    writer.writes.clear()
+    engine.unduck()
+    await engine.speak("At full volume.")
+    full = np.abs(np.frombuffer(b"".join(writer.writes), dtype="<i2")).max()
+
+    assert ducked < full * 0.3
+    assert full > 4000
+    assert kinds(events) == ["playback_started", "playback_finished"] * 2
+
+
 async def test_stop_fades_out_the_next_frame_and_drains_to_silence() -> None:
     pcm = tone(24000)
     writer, events = GatedWriter(), list[PlaybackEvent]()

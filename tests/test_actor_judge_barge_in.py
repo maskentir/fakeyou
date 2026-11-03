@@ -2,7 +2,7 @@ import asyncio
 from typing import Any, override
 
 from fakeyou.config.settings import DEFAULTS
-from fakeyou.conversation.actor import ActorWiring, FloorActor, IngressOptions
+from fakeyou.conversation.actor import ActorWiring, FloorActor, IngressOptions, IngressTiming
 from fakeyou.conversation.meeting_messages import NoHistory
 from fakeyou.conversation.participation_graph import JudgeThresholds, TurnJudging
 from fakeyou.conversation.reply_planner import SpokenChunk
@@ -16,7 +16,15 @@ class FakeSession(PreparedSpeaker):
     def __init__(self) -> None:
         self.spoken: list[str] = []
         self.stops = 0
+        self.ducks = 0
+        self.unducks = 0
         self.is_speaking = True
+
+    def duck(self) -> None:
+        self.ducks += 1
+
+    def unduck(self) -> None:
+        self.unducks += 1
 
     @override
     async def speak(self, text: str, **_: Any) -> None:
@@ -66,6 +74,7 @@ def build(
     judge: ScriptedJudge,
     *,
     barge_in_judge_enabled: bool = True,
+    duck_grace_seconds: float = 1.5,
 ) -> tuple[FloorActor, FloorActor, FakeSession, FakeJournal]:
     journal = FakeJournal()
     lifecycle = FloorActor(
@@ -76,6 +85,7 @@ def build(
             judging=judging(judge),
             ingress=IngressOptions(
                 addressing_names=("twin",),
+                timing=IngressTiming(duck_grace_seconds=duck_grace_seconds),
                 barge_in_judge_enabled=barge_in_judge_enabled,
             ),
         ),
@@ -176,18 +186,144 @@ async def test_a_silent_judge_still_yields_the_floor() -> None:
     assert session.stops == 1
 
 
-async def test_a_short_line_never_takes_the_floor() -> None:
+async def test_a_short_line_is_judged_like_any_other() -> None:
     judge = ScriptedJudge(lambda _window: judged("reply", addressee="twin"))
-    ingress, lifecycle, _, journal = build(judge)
+    ingress, lifecycle, session, journal = build(judge)
     speech = await hold_the_floor(lifecycle)
 
     await ingress.handle_interim("twin hello")
     await settle(lifecycle, ingress)
 
-    assert journal.of("barge_in_detected") == []
+    assert journal.of("barge_in_detected") == [
+        {"source": "agent", "trigger": "interim", "words": 2, "decided_by": "judge"}
+    ]
+    assert speech.done()
+    assert session.stops == 1
+
+
+async def test_voice_onset_ducks_before_any_words_arrive() -> None:
+    judge = ScriptedJudge(lambda _window: judged("reply", addressee="twin"))
+    ingress, lifecycle, session, journal = build(judge)
+    speech = await hold_the_floor(lifecycle)
+
+    ingress.note_speech(active=True)
+
+    assert session.ducks == 1
+    assert session.stops == 0
+    assert not speech.done()
+    assert journal.of("barge_in_ducked") == [{"source": "agent"}]
+    speech.cancel()
+    await asyncio.gather(speech, return_exceptions=True)
+    await lifecycle.close()
+
+
+async def test_a_rejected_barge_in_lifts_the_duck() -> None:
+    judge = ScriptedJudge(lambda _window: judged("stay_silent", addressee="someone_else"))
+    ingress, lifecycle, session, journal = build(judge)
+    speech = await hold_the_floor(lifecycle)
+
+    ingress.note_speech(active=True)
+    await ingress.handle_interim("ayu, can you hear me")
+    await settle(lifecycle, ingress)
+
+    assert session.ducks == 1
+    assert session.unducks == 1
+    assert journal.of("barge_in_resumed") == [{"source": "agent", "reason": "judge"}]
     assert not speech.done()
     speech.cancel()
     await asyncio.gather(speech, return_exceptions=True)
+    await lifecycle.close()
+
+
+class GatedJudge(ScriptedJudge):
+    def __init__(self) -> None:
+        super().__init__()
+        self.gates: dict[str, asyncio.Event] = {}
+
+    def gate(self, text: str) -> asyncio.Event:
+        event = asyncio.Event()
+        self.gates[text] = event
+        return event
+
+    @override
+    async def judge(self, window: Any) -> Any:
+        self.windows.append(window)
+        gate = self.gates.get(window.latest.text)
+        if gate is not None:
+            await gate.wait()
+        if window.latest.text.startswith("twin"):
+            return judged("reply", addressee="twin")
+        return judged("stay_silent", addressee="someone_else")
+
+
+async def test_a_slow_rejection_does_not_lift_a_newer_duck() -> None:
+    judge = GatedJudge()
+    first = judge.gate("ayu, can you hear me")
+    second = judge.gate("twin, can you hear me")
+    ingress, lifecycle, session, _journal = build(judge)
+    speech = await hold_the_floor(lifecycle)
+
+    ingress.note_speech(active=True)
+    await ingress.handle_interim("ayu, can you hear me")
+    await ingress.handle_interim("twin, can you hear me")
+    first.set()
+    await asyncio.sleep(0.05)
+
+    assert session.unducks == 0
+    second.set()
+    await settle(lifecycle, ingress)
+    assert speech.done()
+    await lifecycle.close()
+
+
+async def test_close_lifts_the_duck() -> None:
+    judge = ScriptedJudge(lambda _window: judged("reply", addressee="twin"))
+    ingress, lifecycle, session, _journal = build(judge)
+    speech = await hold_the_floor(lifecycle)
+
+    ingress.note_speech(active=True)
+    await lifecycle.close()
+
+    assert session.ducks == 1
+    assert session.unducks == 1
+    speech.cancel()
+    await asyncio.gather(speech, return_exceptions=True)
+
+
+async def test_ducking_stays_while_the_voice_is_still_active() -> None:
+    judge = ScriptedJudge(lambda _window: judged("reply", addressee="twin"))
+    ingress, lifecycle, session, journal = build(judge, duck_grace_seconds=0.05)
+    speech = await hold_the_floor(lifecycle)
+
+    ingress.note_speech(active=True)
+    await asyncio.sleep(0.12)
+    assert session.unducks == 0
+    ingress.note_speech(active=False)
+    await asyncio.sleep(0.12)
+
+    assert session.unducks == 1
+    assert journal.of("barge_in_resumed") == [{"source": "agent", "reason": "grace"}]
+    speech.cancel()
+    await asyncio.gather(speech, return_exceptions=True)
+    await lifecycle.close()
+
+
+async def test_ducking_lifts_itself_when_no_words_follow() -> None:
+    judge = ScriptedJudge(lambda _window: judged("reply", addressee="twin"))
+    ingress, lifecycle, session, journal = build(judge, duck_grace_seconds=0.05)
+    speech = await hold_the_floor(lifecycle)
+
+    ingress.note_speech(active=True)
+    ingress.note_speech(active=False)
+    await asyncio.sleep(0.2)
+
+    assert session.ducks == 1
+    assert session.unducks == 1
+    assert journal.of("barge_in_resumed") == [{"source": "agent", "reason": "grace"}]
+    assert not speech.done()
+    speech.cancel()
+    await asyncio.gather(speech, return_exceptions=True)
+    await lifecycle.close()
 
 
 async def test_the_word_count_barge_in_ignores_the_judge() -> None:

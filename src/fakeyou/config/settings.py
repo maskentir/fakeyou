@@ -349,7 +349,6 @@ class MemorySettings(Section):
 
 class ConversationSettings(Section):
     response_timeout_seconds: PositiveSeconds = 60.0
-    barge_in_min_words: int = Field(default=3, gt=0)
     barge_in_judge_enabled: bool = True
     max_spoken_sentences: int = Field(default=2, gt=0)
     sentence_streaming: bool = True
