@@ -15,6 +15,7 @@ from fakeyou.conversation.session import (
     ConversationError,
     MeetingAudio,
     SupportsCues,
+    SupportsDucking,
     SupportsLouder,
 )
 from fakeyou.conversation.thinking_cue import ThinkingCue
@@ -149,7 +150,7 @@ class DeferredOptions:
 
 @dataclass(frozen=True, slots=True)
 class IngressTiming:
-    barge_in_min_words: int = DEFAULTS.conversation.barge_in_min_words
+    duck_grace_seconds: float = 1.5
     clock: Callable[[], float] = monotonic
 
 
@@ -256,7 +257,9 @@ class FloorActor:
         self._wake_phrases = addressing_phrases(ingress.wake_phrases)
         self._participant_policy = False
         self._others_speaking_signal: Callable[[], bool] | None = None
-        self._barge_in_min_words = resolved.barge_in_min_words
+        self._duck_grace_seconds = resolved.duck_grace_seconds
+        self._ducked = False
+        self._duck_timer: asyncio.Task[None] | None = None
         self._barge_in_judge_enabled = ingress.barge_in_judge_enabled
         self._seen: set[str] = set()
         self._in_flight = False
@@ -695,9 +698,13 @@ class FloorActor:
         self._queue.clear()
         self._deferred.clear()
         early_tasks = [
-            task for task in (self._early_timer, self._early_starting) if task is not None
+            task
+            for task in (self._early_timer, self._early_starting, self._duck_timer)
+            if task is not None
         ]
         self._early_timer = self._early_starting = None
+        self._duck_timer = None
+        self._ducked = False
         for early_task in early_tasks:
             early_task.cancel()
         if early_tasks:
@@ -780,7 +787,39 @@ class FloorActor:
         verdict = decision_of(judgement, judging.thresholds, named=self._addressed(text))
         return verdict.decision in _ADMITTED
 
+    def _duck(self) -> None:
+        if self._ducked or self._closed or self._failure is not None or not self._barge_in:
+            return
+        session = self._session
+        if session is None or not isinstance(session, SupportsDucking):
+            return
+        if not self._twin_holds_floor(session):
+            return
+        self._ducked = True
+        session.duck()
+        self._journal.record("barge_in_ducked", source="agent")
+        self._duck_timer = asyncio.create_task(self._duck_grace())
+
+    def _unduck(self, reason: str | None) -> None:
+        if not self._ducked:
+            return
+        self._ducked = False
+        timer, self._duck_timer = self._duck_timer, None
+        if timer is not None and timer is not asyncio.current_task() and not timer.done():
+            timer.cancel()
+        session = self._session
+        if session is not None and isinstance(session, SupportsDucking):
+            session.unduck()
+        if reason is not None:
+            self._journal.record("barge_in_resumed", source="agent", reason=reason)
+
+    async def _duck_grace(self) -> None:
+        await asyncio.sleep(self._duck_grace_seconds)
+        self._unduck("grace")
+
     def note_speech(self, *, active: bool) -> None:
+        if active:
+            self._duck()
         if self._early_options is None:
             return
         self._restart_early()
@@ -887,7 +926,7 @@ class FloorActor:
                 self._barge.last_interim = text
                 await self._yield_the_floor(words, decided_by="stop_lexicon")
             return
-        if words < self._barge_in_min_words:
+        if not words:
             return
         active = self._floor.active
         if not session.is_speaking and (active is None or active.task.done()):
@@ -928,6 +967,7 @@ class FloorActor:
             self._journal.record(
                 "barge_in_rejected", source="agent", reason="stale_generation", words=words
             )
+            self._unduck(None)
             return
         if judgement is None:
             await self._yield_the_floor(words, decided_by="judge_unavailable")
@@ -941,6 +981,7 @@ class FloorActor:
                 addressee=judgement.addressee,
                 confidence=judgement.confidence,
             )
+            self._unduck("judge")
             return
         await self._yield_the_floor(words, decided_by="judge")
 
@@ -952,6 +993,7 @@ class FloorActor:
         active = self._floor.active
         if not session.is_speaking and (active is None or active.task.done()):
             return
+        self._unduck(None)
         if not latch.interrupted:
             latch.interrupted = True
             record_barge_in(

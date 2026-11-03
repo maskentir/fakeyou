@@ -30,6 +30,7 @@ EventVerb = Literal[
     "disabled",
     "dismissed",
     "dropped",
+    "ducked",
     "emitted",
     "enabled",
     "exhausted",

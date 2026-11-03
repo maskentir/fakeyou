@@ -50,6 +50,7 @@ class PlaybackEvent:
 
 GAIN_STEP = 1.2
 MAX_GAIN = 2.4
+DUCK_GAIN = 0.15
 FRAME_SECONDS = 0.02
 FADE_SECONDS = 0.01
 HALT_SECONDS = 0.1
@@ -128,6 +129,13 @@ class PlaybackPort(Protocol):
     async def stop(self) -> None: ...
 
     async def close(self) -> None: ...
+
+
+@runtime_checkable
+class DuckingPlayback(Protocol):
+    def duck(self) -> None: ...
+
+    def unduck(self) -> None: ...
 
 
 @runtime_checkable
@@ -322,6 +330,7 @@ class PlaybackEngine:
         self._play_tasks: set[asyncio.Task[Any]] = set()
         self._gain = 1.0
         self._burst_gain = 1.0
+        self._duck_gain = 1.0
         self._last_sample = 0
         self._speaking = False
         self._generation = 0
@@ -411,12 +420,19 @@ class PlaybackEngine:
         self._gain = min(MAX_GAIN, self._gain * GAIN_STEP)
         self._burst_gain = self._gain
 
+    def duck(self) -> None:
+        self._duck_gain = DUCK_GAIN
+
+    def unduck(self) -> None:
+        self._duck_gain = 1.0
+
     def _apply_gain(self, chunk: bytes) -> bytes:
-        if self._burst_gain == 1.0 or not chunk:
+        gain = self._burst_gain * self._duck_gain
+        if gain == 1.0 or not chunk:
             return chunk
         usable = len(chunk) - (len(chunk) % PCM16_SAMPLE_BYTES)
         samples = np.frombuffer(chunk[:usable], dtype="<i2").astype(np.float64)
-        scaled = np.clip(samples * self._burst_gain, -32768, 32767).astype("<i2").tobytes()
+        scaled = np.clip(samples * gain, -32768, 32767).astype("<i2").tobytes()
         return scaled + chunk[usable:]
 
     async def _paced_chunks(self, chunks: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
@@ -569,6 +585,7 @@ class PlaybackEngine:
             raise
 
     async def stop(self) -> None:
+        self._duck_gain = 1.0
         self._stopping += 1
         try:
             async with self._stop_lock:

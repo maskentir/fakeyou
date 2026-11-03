@@ -145,7 +145,6 @@ def streamed_loop(
         "on_transition",
         "wake_phrases",
         "barge_in",
-        "barge_in_min_words",
         "participant_policy_enabled",
         "judge",
     )

@@ -490,7 +490,6 @@ class _ConversationBuilder:
                 wake_phrases=self._behavior.wake_phrases,
                 twin_names=self._behavior.twin_names,
                 barge_in=self._behavior.barge_in,
-                barge_in_min_words=conversation_settings.barge_in_min_words,
                 barge_in_judge_enabled=conversation_settings.barge_in_judge_enabled,
                 participant_policy_enabled=participant_policy_enabled,
                 others_speaking=self._behavior.others_speaking,
