@@ -423,20 +423,34 @@ Footer: `first audio 0.87s p50 · recall verified · disclosure AI`.
 ### 10.8 Token (semua OKLCH, semua named)
 
 ```
---color-paper    oklch(98.5% 0.004 250)
---color-paper-2  oklch(96.2% 0.006 250)
---color-rule     oklch(91%   0.008 252)
---color-rule-2   oklch(85%   0.010 254)
---color-ink      oklch(24%   0.020 258)
---color-ink-2    oklch(34%   0.018 257)
---color-muted    oklch(52%   0.014 256)
---color-accent   oklch(58%   0.200 256)
---color-graphite oklch(22%   0.016 260)
+--color-paper        oklch(98.5% 0.004 250)
+--color-paper-2      oklch(96.2% 0.006 250)
+--color-paper-3      oklch(93.5% 0.008 251)
+--color-rule         oklch(91%   0.008 252)
+--color-rule-2       oklch(85%   0.010 254)
+--color-ink          oklch(24%   0.020 258)
+--color-ink-2        oklch(34%   0.018 257)
+--color-muted        oklch(52%   0.014 256)
+--color-accent       oklch(55%   0.200 256)
+--color-accent-hover oklch(51%   0.200 256)
+--color-accent-ink   oklch(99%   0.000 250)
+--color-accent-text  oklch(48%   0.160 256)
+--color-accent-soft  oklch(95%   0.022 250)
+--color-accent-line  oklch(72%   0.090 254)
+--color-control      oklch(60%   0.013 254)
+--color-graphite     oklch(22%   0.016 260)
 --color-graphite-ink   oklch(93% 0.006 250)
 --color-graphite-muted oklch(68% 0.014 258)
 --color-graphite-rule  oklch(32% 0.018 258)
---color-focus    oklch(58%   0.200 256)
+--color-graphite-accent oklch(80% 0.120 250)
+--color-focus        oklch(55%   0.200 256)
 ```
+
+Nilai accent diturunkan dari hasil pengukuran kontras, bukan dari dugaan:
+`--color-accent` (L55%) 4,80:1 terhadap teks tombol; `--color-accent-text` (L48%)
+6,37:1 di atas kertas untuk badge kecil; `--color-control` (L60%) 3,78:1 untuk border
+komponen interaktif. `--color-rule` hanya dipakai untuk garis dekoratif pemisah section,
+yang tidak tunduk pada ambang 3:1 karena bukan batas UI.
 
 Skala spasi 4pt (3xs→4xl), skala teks 1,25 dari 16 px, `--text-display:
 clamp(2.75rem, 5vw + 1rem, 5.25rem)`, tiga easing, tiga durasi, enam z-level bernama.
