@@ -250,6 +250,11 @@ def build_turn_judge(
     settings: Settings, twin_names: Sequence[str], journal: Journal | None = None
 ) -> TurnJudge | None:
     model = create_turn_judge_model(settings)
+    judge = ModelTurnJudge(
+        journal_model_inputs(model, journal, "judge"),
+        twin_names=twin_names,
+        timeout_seconds=settings.turn_judge.timeout_seconds,
+    )
     if journal is not None:
         role = settings.turn_judge.model
         journal.record(
@@ -258,11 +263,7 @@ def build_turn_judge(
             role="turn_judge" if role is not None else "reply",
             model=role.model if role is not None else getattr(settings.reply, "model", ""),
         )
-    return ModelTurnJudge(
-        journal_model_inputs(model, journal, "judge"),
-        twin_names=twin_names,
-        timeout_seconds=settings.turn_judge.timeout_seconds,
-    )
+    return judge
 
 
 def build_source_registry(
