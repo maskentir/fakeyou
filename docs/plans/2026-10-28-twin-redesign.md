@@ -1654,8 +1654,7 @@ mematahkan 39 test non-policy yang membangun loop tanpa alias, dan
 jalur produksi selalu melewati `SessionConfig`. Validasi policy kini
 menerima alias dari nama twin (`addressing_names`), bukan hanya wake
 phrase, dan `_addressed` memakai fallback yang sama; test assembly
-yang subjeknya bukan policy memilih opt-out secara eksplisit. Slice 3
-(roster di journal) belum dikerjakan.
+yang subjeknya bukan policy memilih opt-out secara eksplisit.
 - Slice 2, implementasi (2026-11-03): pilihan model judge kini
   ter-journal sebagai `judge_model_selected` (role `reply` untuk
   fallback ke model chat utama, `turn_judge` untuk model khusus, plus
@@ -1666,6 +1665,26 @@ yang subjeknya bukan policy memilih opt-out secara eksplisit. Slice 3
   (yang sudah ditangani `HealthReportingJudge`), bukan jatuh diam-diam
   ke aturan nama. Kegagalan konfigurasi model tetap meledak keras
   sebagai `FakeYouError` saat sesi dibangun, sesuai sebelumnya.
+- Slice 3, implementasi (2026-11-03): `KernelPort.roster` kini
+  men-journal `roster_observed` sekali per perubahan roster — snapshot
+  yang sama tidak diulang. Payload per endpoint: id, nama, dan flag
+  struktural yang dibutuhkan replay (`present`, `own`, `parent`)
+  plus `synced` — review membuktikan payload id+nama saja tidak cukup:
+  keberangkatan tidak ter-replay (kernel tidak menganggap endpoint
+  yang hilang dari sync sebagai absent), endpoint layar jadi
+  partisipan hantu tanpa `parent`, perangkat kedua twin jadi manusia
+  biasa dengan satu `own_id`, dan roster pra-sync ter-upgrade jadi
+  lengkap. Fixture replay membaca baris itu menjadi `RosterSnapshot`,
+  `schedule` menjadwalkannya sebagai input `roster` di lane speech
+  (urutan terhadap final eksak), dan harness mengumpannya ke kernel
+  replay sebagai `RosterObserved` yang sama dengan sesi asli, jadi
+  presence di replay sama dengan live dan menutup catatan V0.7.
+  Terverifikasi: test kernel (journal sekali per perubahan,
+  keberangkatan dan layar ter-journal, presence bernama, perangkat
+  kedua twin dan roster belum tersinkron berperilaku seperti live),
+  test fixture (parsing roster), dan replay CLI dengan roster tercatat
+  plus policy menyala menghasilkan `policy_decided`. Gate live (sesi
+  API tanpa flag di Meet sungguhan) belum dibuktikan.
 
 ## Track C: otak
 

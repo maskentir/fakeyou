@@ -11,6 +11,7 @@ from fakeyou.config.settings import Settings
 from fakeyou.observability.journal import journal_path
 from fakeyou.persistence.record import meeting_record_path
 from tests._replay_support import recorded_conversation
+from tests._replay_support import row as journal_row
 
 MEETING = SessionId("m-1")
 
@@ -78,6 +79,63 @@ def test_the_replay_command_reports_the_gate_and_writes_the_replayed_journal(
     assert all(check["reason"] for check in report["reported"])
     replayed = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
     assert any(row["event"] == "synthesis_pcm_emitted" for row in replayed)
+
+
+def test_a_replay_with_a_recorded_roster_decides_participation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    settings: Settings,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    journal_dir, record_dir = recorded_meeting(tmp_path)
+    journal = journal_path(journal_dir, MEETING)
+    rows = [json.loads(line) for line in journal.read_text(encoding="utf-8").splitlines()]
+    rows.insert(
+        1,
+        journal_row(
+            "roster_observed",
+            0.5,
+            people=[
+                {"id": "dev-twin", "name": "Harun", "own": True, "parent": None, "present": True},
+                {"id": "dev-ayu", "name": "Ayu", "own": False, "parent": None, "present": True},
+            ],
+            synced=True,
+        ),
+    )
+    journal.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    session = meeting_record_path(record_dir, MEETING).parent / "session.json"
+    session.write_text(
+        json.dumps(
+            {
+                "twin_name": "Harun",
+                "wake_phrase": "Harun",
+                "barge_in": True,
+                "participant_policy_enabled": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    out = tmp_path / "replay.jsonl"
+
+    code = run(
+        [
+            "--meeting-id",
+            str(MEETING),
+            "--journal-dir",
+            str(journal_dir),
+            "--record-dir",
+            str(record_dir),
+            "--out",
+            str(out),
+        ],
+        monkeypatch,
+        settings,
+    )
+
+    capsys.readouterr()
+    assert code == ExitCode.SUCCESS
+    replayed = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
+    assert any(row["event"] == "policy_decided" for row in replayed)
 
 
 def test_a_replay_that_misses_the_gate_exits_as_a_failed_eval_gate(
