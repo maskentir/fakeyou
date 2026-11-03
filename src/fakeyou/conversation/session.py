@@ -69,6 +69,13 @@ class SupportsDucking(Protocol):
 
 
 @runtime_checkable
+class SupportsFreezing(Protocol):
+    def freeze(self) -> None: ...
+
+    def thaw(self) -> None: ...
+
+
+@runtime_checkable
 class SupportsMaintenance(Protocol):
     async def maintenance_tick(
         self, *, is_busy: bool, remote_participants: int | None = None

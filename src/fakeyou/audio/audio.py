@@ -26,6 +26,7 @@ from fakeyou.audio.own_speech import FinalGate, OwnSpeech
 from fakeyou.audio.playback import (
     CuePlayback,
     DuckingPlayback,
+    FreezingPlayback,
     PlaybackEngine,
     PlaybackError,
     PlaybackEvent,
@@ -571,6 +572,14 @@ class MeetingAudioSession:
     def unduck(self) -> None:
         if isinstance(self._engine, DuckingPlayback):
             self._engine.unduck()
+
+    def freeze(self) -> None:
+        if isinstance(self._engine, FreezingPlayback):
+            self._engine.freeze()
+
+    def thaw(self) -> None:
+        if isinstance(self._engine, FreezingPlayback):
+            self._engine.thaw()
 
     def prepare_cues(self, texts: Sequence[str]) -> None:
         engine = self._engine

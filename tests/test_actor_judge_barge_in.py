@@ -18,6 +18,8 @@ class FakeSession(PreparedSpeaker):
         self.stops = 0
         self.ducks = 0
         self.unducks = 0
+        self.freezes = 0
+        self.thaws = 0
         self.is_speaking = True
 
     def duck(self) -> None:
@@ -25,6 +27,12 @@ class FakeSession(PreparedSpeaker):
 
     def unduck(self) -> None:
         self.unducks += 1
+
+    def freeze(self) -> None:
+        self.freezes += 1
+
+    def thaw(self) -> None:
+        self.thaws += 1
 
     @override
     async def speak(self, text: str, **_: Any) -> None:
@@ -75,6 +83,7 @@ def build(
     *,
     barge_in_judge_enabled: bool = True,
     duck_grace_seconds: float = 1.5,
+    freeze_sustain_seconds: float = 0.6,
 ) -> tuple[FloorActor, FloorActor, FakeSession, FakeJournal]:
     journal = FakeJournal()
     lifecycle = FloorActor(
@@ -85,7 +94,10 @@ def build(
             judging=judging(judge),
             ingress=IngressOptions(
                 addressing_names=("twin",),
-                timing=IngressTiming(duck_grace_seconds=duck_grace_seconds),
+                timing=IngressTiming(
+                    duck_grace_seconds=duck_grace_seconds,
+                    freeze_sustain_seconds=freeze_sustain_seconds,
+                ),
                 barge_in_judge_enabled=barge_in_judge_enabled,
             ),
         ),
@@ -212,6 +224,65 @@ async def test_voice_onset_ducks_before_any_words_arrive() -> None:
     assert session.stops == 0
     assert not speech.done()
     assert journal.of("barge_in_ducked") == [{"source": "agent"}]
+    speech.cancel()
+    await asyncio.gather(speech, return_exceptions=True)
+    await lifecycle.close()
+
+
+async def test_sustained_voice_freezes_playback_while_ducked() -> None:
+    judge = ScriptedJudge(lambda _window: judged("reply", addressee="twin"))
+    ingress, lifecycle, session, journal = build(judge, freeze_sustain_seconds=0.05)
+    speech = await hold_the_floor(lifecycle)
+
+    ingress.note_speech(active=True)
+    await asyncio.sleep(0.15)
+
+    assert session.ducks == 1
+    assert session.freezes == 1
+    assert session.stops == 0
+    assert not speech.done()
+    assert journal.of("barge_in_frozen") == [{"source": "agent"}]
+    speech.cancel()
+    await asyncio.gather(speech, return_exceptions=True)
+    await lifecycle.close()
+
+
+async def test_a_short_burst_never_freezes() -> None:
+    judge = ScriptedJudge(lambda _window: judged("reply", addressee="twin"))
+    ingress, lifecycle, session, _journal = build(
+        judge, duck_grace_seconds=0.05, freeze_sustain_seconds=0.3
+    )
+    speech = await hold_the_floor(lifecycle)
+
+    ingress.note_speech(active=True)
+    await asyncio.sleep(0.02)
+    ingress.note_speech(active=False)
+    await asyncio.sleep(0.4)
+
+    assert session.ducks == 1
+    assert session.freezes == 0
+    assert session.unducks == 1
+    assert not speech.done()
+    speech.cancel()
+    await asyncio.gather(speech, return_exceptions=True)
+    await lifecycle.close()
+
+
+async def test_a_rejected_barge_in_thaws_a_freeze() -> None:
+    judge = ScriptedJudge(lambda _window: judged("stay_silent", addressee="someone_else"))
+    ingress, lifecycle, session, journal = build(judge, freeze_sustain_seconds=0.02)
+    speech = await hold_the_floor(lifecycle)
+
+    ingress.note_speech(active=True)
+    await asyncio.sleep(0.08)
+    assert session.freezes == 1
+    await ingress.handle_interim("ayu, can you hear me")
+    await settle(lifecycle, ingress)
+
+    assert session.thaws == 1
+    assert session.unducks == 1
+    assert journal.of("barge_in_resumed") == [{"source": "agent", "reason": "judge"}]
+    assert not speech.done()
     speech.cancel()
     await asyncio.gather(speech, return_exceptions=True)
     await lifecycle.close()
