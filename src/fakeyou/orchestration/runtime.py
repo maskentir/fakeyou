@@ -518,7 +518,7 @@ class MeetingWorker:
     async def start_participant_observer(self) -> None:
         if self.observer is not None:
             return
-        if not self.config.participant_policy_enabled:
+        if not self.config.participant_evidence_enabled:
             return
         evidence_path = self.config.participant_evidence_path
         if evidence_path is None:

@@ -104,6 +104,8 @@ def build_session_config(request: JoinRequest) -> SessionConfig:
         drain_max_consecutive_failures=settings.audio.drain_max_consecutive_failures,
         drain_failure_journal_every=settings.audio.drain_failure_journal_every,
         participant_evidence_max_bytes=settings.conversation.participant_evidence_max_bytes,
+        participant_policy_enabled=request.participant_policy_enabled,
+        participant_evidence_enabled=request.participant_evidence_enabled,
         resume=request.resume,
     )
 

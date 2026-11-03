@@ -135,7 +135,8 @@ class SessionConfig:
     warmup_browser: bool = DEFAULTS.browser.warmup
     headless: bool = DEFAULTS.browser.headless
     license_key: str | None = field(default=None, repr=False)
-    participant_policy_enabled: bool = False
+    participant_policy_enabled: bool = True
+    participant_evidence_enabled: bool = False
     participant_evidence_path: Path | None = None
     per_stream_enabled: bool = False
     meet_actions_enabled: bool = False

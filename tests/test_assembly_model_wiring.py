@@ -34,6 +34,7 @@ def _config(settings: Settings) -> SessionConfig:
         meeting_id=SessionId("model-wiring"),
         link="https://meet.google.com/abc-defg-hij",
         twin_name="Wiring Twin",
+        participant_policy_enabled=False,
     )
 
 

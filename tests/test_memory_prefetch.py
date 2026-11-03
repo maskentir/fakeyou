@@ -486,6 +486,7 @@ async def opened_agent(
         meeting_id=SessionId("prefetch-wiring"),
         link="https://meet.google.com/abc-defg-hij",
         twin_name="Demo Twin",
+        participant_policy_enabled=False,
     )
     async with assembly.open_conversation(
         settings,

@@ -33,6 +33,8 @@ class JoinRequest:
     conversation_enabled: bool = False
     wake_phrase: str | None = None
     barge_in: bool = False
+    participant_policy_enabled: bool = True
+    participant_evidence_enabled: bool = False
     brief_path: Path | None = None
     resume: bool = False
     on_phase: Callable[[PublicPhase], None] | None = None

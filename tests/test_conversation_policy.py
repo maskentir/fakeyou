@@ -9,6 +9,7 @@ from langchain_core.messages import AIMessage, AnyMessage, BaseMessage, HumanMes
 from langchain_core.tools import tool
 from pydantic import SecretStr
 
+from fakeyou.api.schemas import SessionCreate, SessionSnapshot
 from fakeyou.conversation.agent import (
     DEFAULT_PERSONA,
     ENDING_RULE,
@@ -45,6 +46,7 @@ from tests._conversation_fakes import FakeResponder, ScriptedJudge, ToolCallingF
 from tests._conversation_support import event
 from tests._fakes_common import FakeClock
 from tests._persistence_fakes import RecordingJournal
+from tests._runtime_support import session_config
 
 
 async def test_wake_mode_ignores_unaddressed_transcripts_but_records_them() -> None:
@@ -65,7 +67,9 @@ async def test_wake_mode_ignores_unaddressed_transcripts_but_records_them() -> N
 
 async def test_barge_in_stops_playback_only_while_speaking() -> None:
     responder, audio = FakeResponder(), FakeReplyAudio()
-    loop = build_meeting_turns(responder, interaction=TurnInteraction(barge_in=True))
+    loop = build_meeting_turns(
+        responder, interaction=TurnInteraction(barge_in=True, participant_policy_enabled=False)
+    )
     loop.actor.bind(audio)
     await loop.actor.receive_final(event("one", "hello"))
     await loop.actor.wait_idle()
@@ -80,7 +84,9 @@ async def test_barge_in_stops_playback_only_while_speaking() -> None:
 
 async def test_barge_in_disabled_never_stops_playback() -> None:
     responder, audio = FakeResponder(), FakeReplyAudio()
-    loop = build_meeting_turns(responder)
+    loop = build_meeting_turns(
+        responder, interaction=TurnInteraction(participant_policy_enabled=False)
+    )
     loop.actor.bind(audio)
     audio.speaking = True
     await loop.actor.receive_final(event("one", "hello"))
@@ -98,7 +104,7 @@ async def test_interim_speech_interrupts_playback_on_the_first_words(
     audio.speaking = True
     loop = build_meeting_turns(
         FakeResponder(),
-        interaction=TurnInteraction(barge_in=True),
+        interaction=TurnInteraction(barge_in=True, participant_policy_enabled=False),
         diagnostics=Diagnostics(journal=journal),
     )
     loop.actor.bind(audio)
@@ -113,12 +119,17 @@ async def test_interim_speech_interrupts_playback_on_the_first_words(
 async def test_interim_speech_is_ignored_without_barge_in_or_playback() -> None:
     audio = FakeReplyAudio()
     audio.speaking = True
-    quiet = build_meeting_turns(FakeResponder())
+    quiet = build_meeting_turns(
+        FakeResponder(), interaction=TurnInteraction(participant_policy_enabled=False)
+    )
     quiet.actor.bind(audio)
     await quiet.actor.handle_interim("please stop for now")
 
     idle_audio = FakeReplyAudio()
-    idle = build_meeting_turns(FakeResponder(), interaction=TurnInteraction(barge_in=True))
+    idle = build_meeting_turns(
+        FakeResponder(),
+        interaction=TurnInteraction(barge_in=True, participant_policy_enabled=False),
+    )
     idle.actor.bind(idle_audio)
     await idle.actor.handle_interim("please stop for now")
 
@@ -151,7 +162,7 @@ async def test_final_barge_in_is_journaled_with_its_trigger(
     audio.speaking = True
     loop = build_meeting_turns(
         FakeResponder(),
-        interaction=TurnInteraction(barge_in=True),
+        interaction=TurnInteraction(barge_in=True, participant_policy_enabled=False),
         diagnostics=Diagnostics(journal=journal),
     )
     loop.actor.bind(audio)
@@ -172,7 +183,7 @@ async def test_one_interruption_is_journaled_and_stopped_once(
     audio.speaking = True
     loop = build_meeting_turns(
         FakeResponder(),
-        interaction=TurnInteraction(barge_in=True),
+        interaction=TurnInteraction(barge_in=True, participant_policy_enabled=False),
         diagnostics=Diagnostics(journal=journal),
     )
     loop.actor.bind(audio)
@@ -187,7 +198,10 @@ async def test_one_interruption_is_journaled_and_stopped_once(
 async def test_interim_barge_in_rearms_for_the_next_reply() -> None:
     audio = FakeReplyAudio()
     audio.speaking = True
-    loop = build_meeting_turns(FakeResponder(), interaction=TurnInteraction(barge_in=True))
+    loop = build_meeting_turns(
+        FakeResponder(),
+        interaction=TurnInteraction(barge_in=True, participant_policy_enabled=False),
+    )
     loop.actor.bind(audio)
 
     await loop.actor.handle_interim("wait a second")
@@ -240,6 +254,7 @@ async def test_local_transport_cancel_closes_loopback_without_fallback(
     agent = create_meeting_agent(model)
     loop = build_meeting_turns(
         MeetingResponder(agent, NoHistory(), journal=journal),
+        interaction=TurnInteraction(participant_policy_enabled=False),
         diagnostics=Diagnostics(journal=journal),
     )
     audio = FakeReplyAudio()
@@ -260,6 +275,36 @@ async def test_local_transport_cancel_closes_loopback_without_fallback(
     finally:
         server.close()
         await server.wait_closed()
+
+
+def test_participant_policy_is_on_by_default_for_sessions() -> None:
+    assert TurnInteraction().participant_policy_enabled is False
+    assert session_config().participant_policy_enabled is True
+    assert SessionCreate.model_fields["participant_policy_enabled"].default is True
+    assert SessionSnapshot.model_fields["participant_policy_enabled"].default is True
+
+
+def test_participant_evidence_writing_stays_opt_in() -> None:
+    assert session_config().participant_evidence_enabled is False
+
+
+async def test_policy_answers_to_the_twin_name_without_wake_phrases(
+    journal: RecordingJournal,
+) -> None:
+    responder, audio = FakeResponder(), FakeReplyAudio()
+    loop = build_meeting_turns(
+        responder,
+        interaction=TurnInteraction(twin_names=["Rani"], participant_policy_enabled=True),
+        diagnostics=Diagnostics(journal=journal),
+    )
+    loop.actor.bind(audio)
+    await loop.actor.receive_final(event("t1", "Rani, when is the demo?"))
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
+    await loop.actor.receive_final(event("t2", "Budi, when is the demo?"))
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
+
+    assert [call[0].text for call in responder.calls] == ["Rani, when is the demo?"]
+    await loop.actor.close()
 
 
 def test_policy_requires_configured_aliases() -> None:
@@ -553,6 +598,7 @@ async def test_stop_mid_tool_drains_the_turn_without_speaking(mode: str) -> None
     audio = FakeReplyAudio()
     turns = build_meeting_turns(
         MeetingResponder(agent, NoHistory(), language="en"),
+        interaction=TurnInteraction(participant_policy_enabled=False),
         generation=TurnGeneration(sentence_streaming=mode == "streamed", language="en"),
     )
     turns.actor.bind(audio)

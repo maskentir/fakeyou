@@ -219,7 +219,7 @@ async def test_reply_mode_maps_sentence_streaming_to_the_graph_mode() -> None:
 
 def test_policy_literals_are_in_the_graph_ingress_and_participation_source() -> None:
     ingress_literals = (
-        "return is_vocative(text, self._wake_phrases)",
+        "return is_vocative(text, self._wake_phrases or self._addressing_names)",
         "others_speaking=self._others_speaking(),",
         "return self._participant_policy and signal is not None and signal()",
         "return bool(self._addressing_names) or self._participant_policy",

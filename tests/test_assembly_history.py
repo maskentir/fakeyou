@@ -34,6 +34,7 @@ async def test_assembly_reads_history_from_the_meeting_record(
         meeting_id=SessionId("history-wiring"),
         link="https://meet.google.com/abc-defg-hij",
         twin_name="History Twin",
+        participant_policy_enabled=False,
     )
     record = MeetingRecord(tmp_path / "record.jsonl")
 
@@ -69,6 +70,7 @@ async def test_assembly_teardown_budgets_a_hanging_close(
         meeting_id=SessionId("history-teardown"),
         link="https://meet.google.com/abc-defg-hij",
         twin_name="History Twin",
+        participant_policy_enabled=False,
     )
 
     async def run() -> None:

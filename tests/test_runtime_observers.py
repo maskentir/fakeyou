@@ -26,7 +26,7 @@ async def test_run_meeting_session_collects_participant_evidence(tmp_path: Path)
     clock = FakeClock()
 
     result = await run_meeting_session(
-        session_config(participant_policy_enabled=True, participant_evidence_path=evidence),
+        session_config(participant_evidence_enabled=True, participant_evidence_path=evidence),
         SessionWiring(
             open_page=browser.open,
             sleep=clock.sleep,
@@ -76,7 +76,7 @@ async def test_owner_stop_produces_no_observer_or_audio_followups(tmp_path: Path
         payloads.append(payload)
     page = meet_page([], evaluates=payloads)
     worker = MeetingWorker(
-        session_config(participant_policy_enabled=True, participant_evidence_path=evidence),
+        session_config(participant_evidence_enabled=True, participant_evidence_path=evidence),
         page,
         stop,
         DEFAULT_MEET_SIGNALS,

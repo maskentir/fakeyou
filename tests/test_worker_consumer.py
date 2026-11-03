@@ -571,6 +571,8 @@ async def test_join_request_for_writes_persona_and_brief_server_side(settings: S
     assert request.initial_speech == "Hello everyone"
     assert request.wake_phrase == "hey twin"
     assert request.barge_in is True
+    assert request.participant_policy_enabled is True
+    assert request.participant_evidence_enabled is False
     assert request.headless is None
     assert request.profile_dir == str(
         meeting_profile_dir(
