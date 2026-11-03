@@ -1509,6 +1509,12 @@ duck kurang.
   yang diterima slice ini dan alasan freeze ditunda. Gate live plan ini
   belum dibuktikan; bukti offline: test gain duck di level frame,
   onset→duck, tolak→pulih, grace→pulih, dan baris pendek kini dinilai.
+  Temuan review yang ikut dibereskan: penolakan judge yang lambat tidak
+  boleh mengangkat duck yang lebih baru (nomor urut per penilaian), grace
+  tidak habis selama suara lawan masih aktif, `close()` mengangkat duck,
+  dan tepi suara diteruskan feed ke actor selalu — bukan hanya saat
+  early commit aktif — supaya duck juga bekerja di mode per-stream dan
+  saat early commit mati.
 
 ### B2: Commit giliran lokal
 
