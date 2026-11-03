@@ -249,11 +249,21 @@ class TurnBehavior:
 def build_turn_judge(
     settings: Settings, twin_names: Sequence[str], journal: Journal | None = None
 ) -> TurnJudge | None:
-    return ModelTurnJudge(
-        journal_model_inputs(create_turn_judge_model(settings), journal, "judge"),
+    model = create_turn_judge_model(settings)
+    judge = ModelTurnJudge(
+        journal_model_inputs(model, journal, "judge"),
         twin_names=twin_names,
         timeout_seconds=settings.turn_judge.timeout_seconds,
     )
+    if journal is not None:
+        role = settings.turn_judge.model
+        journal.record(
+            "judge_model_selected",
+            source="agent",
+            role="turn_judge" if role is not None else "reply",
+            model=role.model if role is not None else getattr(settings.reply, "model", ""),
+        )
+    return judge
 
 
 def build_source_registry(
@@ -440,7 +450,11 @@ class _ConversationBuilder:
             else build_turn_judge(self._settings, names, self._diagnostics.journal)
         )
         kernel = self._behavior.kernel
-        if judge is None or kernel is None:
+        if judge is None:
+            if kernel is not None:
+                kernel.source_health("model", "down")
+            return None
+        if kernel is None:
             return judge
         return HealthReportingJudge(judge, kernel)
 

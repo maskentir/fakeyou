@@ -1654,9 +1654,18 @@ mematahkan 39 test non-policy yang membangun loop tanpa alias, dan
 jalur produksi selalu melewati `SessionConfig`. Validasi policy kini
 menerima alias dari nama twin (`addressing_names`), bukan hanya wake
 phrase, dan `_addressed` memakai fallback yang sama; test assembly
-yang subjeknya bukan policy memilih opt-out secara eksplisit. Slice 2
-(mode degraded bernama) dan slice 3 (roster di journal) belum
-dikerjakan.
+yang subjeknya bukan policy memilih opt-out secara eksplisit. Slice 3
+(roster di journal) belum dikerjakan.
+- Slice 2, implementasi (2026-11-03): pilihan model judge kini
+  ter-journal sebagai `judge_model_selected` (role `reply` untuk
+  fallback ke model chat utama, `turn_judge` untuk model khusus, plus
+  nama modelnya) setiap `build_turn_judge` berhasil. Judge yang tidak
+  terbangun (factory wiring mengembalikan `None`) melaporkan source
+  `model` down ke kernel, jadi sesi masuk mode bernama
+  `model_degraded` yang sama seperti kegagalan judge saat runtime
+  (yang sudah ditangani `HealthReportingJudge`), bukan jatuh diam-diam
+  ke aturan nama. Kegagalan konfigurasi model tetap meledak keras
+  sebagai `FakeYouError` saat sesi dibangun, sesuai sebelumnya.
 
 ## Track C: otak
 
