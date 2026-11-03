@@ -236,6 +236,10 @@ def test_unavailable_memory_and_failed_playback_are_degraded_modes() -> None:
     assert kernel.modes() == frozenset({"memory_degraded", "voice_degraded"})
 
 
+def person(row: dict[str, Any], device_id: str) -> dict[str, Any]:
+    return next(entry for entry in row["people"] if entry["id"] == device_id)
+
+
 def test_the_roster_is_journaled_once_per_change_with_names_only() -> None:
     journal = RecordingJournal()
     kernel = KernelPort.for_meeting("meeting-9", journal=journal)
@@ -245,10 +249,10 @@ def test_the_roster_is_journaled_once_per_change_with_names_only() -> None:
     rows = journal.events("roster_observed")
     assert len(rows) == 1
     assert rows[0]["people"] == [
-        {"id": "dev-twin", "name": "Rani"},
-        {"id": "dev-ayu", "name": "Ayu"},
+        {"id": "dev-ayu", "name": "Ayu", "own": False, "parent": None, "present": True},
+        {"id": "dev-twin", "name": "Rani", "own": True, "parent": None, "present": True},
     ]
-    assert rows[0]["own_id"] == "dev-twin"
+    assert rows[0]["synced"] is True
 
     roster = MeetRoster()
     roster.apply_users(
@@ -263,7 +267,34 @@ def test_the_roster_is_journaled_once_per_change_with_names_only() -> None:
 
     rows = journal.events("roster_observed")
     assert len(rows) == 2
-    assert rows[1]["people"][-1] == {"id": "dev-bimo", "name": "Bimo"}
+    assert person(rows[1], "dev-bimo")["name"] == "Bimo"
+
+
+def test_a_departure_and_a_screen_are_journaled_for_replay() -> None:
+    journal = RecordingJournal()
+    kernel = KernelPort.for_meeting("meeting-9", journal=journal)
+    joined(kernel)
+
+    roster = MeetRoster()
+    roster.apply_users(
+        [
+            MeetUser(device_id="dev-twin", name="Rani", present=True, current_user=True),
+            MeetUser(device_id="dev-ayu", name="Ayu", present=False),
+            MeetUser(
+                device_id="dev-ayu-screen",
+                name="Ayu",
+                present=True,
+                parent_device_id="dev-ayu",
+            ),
+        ]
+    )
+    kernel.roster(roster)
+
+    rows = journal.events("roster_observed")
+    assert len(rows) == 2
+    assert rows[1]["synced"] is False
+    assert person(rows[1], "dev-ayu")["present"] is False
+    assert person(rows[1], "dev-ayu-screen")["parent"] == "dev-ayu"
 
 
 def test_a_replayed_roster_makes_presence_named() -> None:
@@ -286,6 +317,38 @@ def test_a_replayed_roster_makes_presence_named() -> None:
     fact = kernel.presence()
     assert fact.twin_identified is True
     assert [person.display_claim for person in fact.participants] == ["Ayu"]
+
+
+def test_a_replayed_departure_screen_and_second_twin_device_stay_out_of_presence() -> None:
+    kernel = port()
+    kernel.call_state("in_call")
+
+    def observe(endpoints: tuple[Endpoint, ...], *, synced: bool) -> None:
+        kernel.observe("meet_protocol", RosterObserved(endpoints=endpoints, synced=synced))
+        kernel.drain()
+
+    twin = Endpoint(device_id="dev-twin", display_name="Rani", present=True, current_user=True)
+    twin_phone = Endpoint(
+        device_id="dev-twin-phone", display_name="Rani", present=True, current_user=True
+    )
+    ayu = Endpoint(device_id="dev-ayu", display_name="Ayu", present=True)
+    screen = Endpoint(
+        device_id="dev-ayu-screen",
+        display_name="Ayu",
+        present=True,
+        parent_device_id="dev-ayu",
+    )
+    observe((twin, twin_phone, ayu, screen), synced=False)
+
+    fact = kernel.presence()
+    assert fact.complete is False
+    assert [person.display_claim for person in fact.participants] == ["Ayu"]
+
+    observe((twin, twin_phone, ayu, screen), synced=True)
+    assert kernel.presence().complete is True
+
+    observe((ayu.model_copy(update={"present": False}),), synced=True)
+    assert kernel.presence().participants == ()
 
 
 def test_degraded_identity_attributes_nobody() -> None:

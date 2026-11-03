@@ -37,7 +37,7 @@ from fakeyou.orchestration.turn_feed import EarlyCommit, TurnFeed
 from fakeyou.perception.percepts import MEETING_CONTENT
 from fakeyou.persistence.record import ChatEntry, MeetingRecord, ScreenEntry, TranscriptEntry
 from fakeyou.replay.compare import Comparison, compare_journals
-from fakeyou.replay.fixture import ReplayFixture
+from fakeyou.replay.fixture import ReplayFixture, RosterPerson
 from fakeyou.replay.pacer import PacedWriter
 from fakeyou.replay.recorded import RecordedJudge, RecordedModel, RecordedSynthesizer
 from fakeyou.session.contracts import ChatObserved, Endpoint, RosterObserved, ScreenObserved
@@ -51,7 +51,7 @@ LANES = {
     "chat": "meeting",
     "screen": "meeting",
     "attention": "meeting",
-    "roster": "meeting",
+    "roster": "speech",
 }
 
 
@@ -62,8 +62,8 @@ class ReplayInput:
     text: str = ""
     entry: TranscriptEntry | ChatEntry | ScreenEntry | None = None
     active: bool = False
-    people: tuple[tuple[str, str], ...] = ()
-    own_id: str | None = None
+    people: tuple[RosterPerson, ...] = ()
+    synced: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,7 +160,7 @@ def schedule(fixture: ReplayFixture, *, attention: bool = False) -> tuple[Replay
         ReplayInput(edge.offset, "vad", active=edge.active) for edge in fixture.edges
     ]
     items.extend(
-        ReplayInput(roster.offset, "roster", people=roster.people, own_id=roster.own_id)
+        ReplayInput(roster.offset, "roster", people=roster.people, synced=roster.synced)
         for roster in fixture.rosters
     )
     for final in fixture.finals:
@@ -393,14 +393,15 @@ async def _deliver(item: ReplayInput, sinks: _Sinks) -> None:
                 RosterObserved(
                     endpoints=tuple(
                         Endpoint(
-                            device_id=device_id,
-                            display_name=name,
-                            present=True,
-                            current_user=device_id == item.own_id,
+                            device_id=person.device_id,
+                            display_name=person.name,
+                            present=person.present,
+                            parent_device_id=person.parent,
+                            current_user=person.own,
                         )
-                        for device_id, name in item.people
+                        for person in item.people
                     ),
-                    synced=True,
+                    synced=item.synced,
                 ),
             )
         case _:

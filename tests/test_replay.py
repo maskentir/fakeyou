@@ -95,8 +95,11 @@ def test_a_replay_with_a_recorded_roster_decides_participation(
         journal_row(
             "roster_observed",
             0.5,
-            people=[{"id": "dev-twin", "name": "Harun"}, {"id": "dev-ayu", "name": "Ayu"}],
-            own_id="dev-twin",
+            people=[
+                {"id": "dev-twin", "name": "Harun", "own": True, "parent": None, "present": True},
+                {"id": "dev-ayu", "name": "Ayu", "own": False, "parent": None, "present": True},
+            ],
+            synced=True,
         ),
     )
     journal.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")

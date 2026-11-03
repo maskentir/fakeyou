@@ -39,11 +39,14 @@ class _Person(BaseModel):
 
     id: str
     name: str = ""
+    own: bool = False
+    parent: str | None = None
+    present: bool = True
 
 
 class _Roster(_Row):
     people: tuple[_Person, ...] = ()
-    own_id: str | None = None
+    synced: bool = False
 
 
 class _Verdict(_Row):
@@ -107,10 +110,19 @@ class Percept:
 
 
 @dataclass(frozen=True, slots=True)
+class RosterPerson:
+    device_id: str
+    name: str
+    own: bool
+    parent: str | None
+    present: bool
+
+
+@dataclass(frozen=True, slots=True)
 class RosterSnapshot:
     offset: float
-    people: tuple[tuple[str, str], ...]
-    own_id: str | None
+    people: tuple[RosterPerson, ...]
+    synced: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,8 +216,13 @@ def build_fixture(rows: Sequence[dict[str, Any]], entries: Sequence[RecordEntry]
                 rosters.append(
                     RosterSnapshot(
                         offset(roster.at),
-                        tuple((person.id, person.name) for person in roster.people),
-                        roster.own_id,
+                        tuple(
+                            RosterPerson(
+                                person.id, person.name, person.own, person.parent, person.present
+                            )
+                            for person in roster.people
+                        ),
+                        roster.synced,
                     )
                 )
             case "speech_started" | "speech_stopped" as event:

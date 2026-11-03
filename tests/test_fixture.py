@@ -6,6 +6,7 @@ import pytest
 
 from fakeyou.persistence.record import ChatEntry, RecordEntry, TranscriptEntry, TwinSpeechEntry
 from fakeyou.replay.fixture import (
+    RosterPerson,
     SynthesisTiming,
     VoiceEdge,
     build_fixture,
@@ -199,8 +200,19 @@ def test_the_recorded_roster_is_kept_for_replay() -> None:
         row(
             "roster_observed",
             0.5,
-            people=[{"id": "dev-twin", "name": "Rani"}, {"id": "dev-ayu", "name": "Ayu"}],
-            own_id="dev-twin",
+            people=[
+                {"id": "dev-twin", "name": "Rani", "own": True, "parent": None, "present": True},
+                {"id": "dev-ayu", "name": "Ayu", "own": False, "parent": None, "present": True},
+                {
+                    "id": "dev-ayu-screen",
+                    "name": "Ayu",
+                    "own": False,
+                    "parent": "dev-ayu",
+                    "present": True,
+                },
+                {"id": "dev-bimo", "name": "Bimo", "own": False, "parent": None, "present": False},
+            ],
+            synced=True,
         ),
     )
 
@@ -209,8 +221,13 @@ def test_the_recorded_roster_is_kept_for_replay() -> None:
     assert len(fixture.rosters) == 1
     roster = fixture.rosters[0]
     assert roster.offset == pytest.approx(0.5)
-    assert roster.people == (("dev-twin", "Rani"), ("dev-ayu", "Ayu"))
-    assert roster.own_id == "dev-twin"
+    assert roster.synced is True
+    assert roster.people == (
+        RosterPerson("dev-twin", "Rani", own=True, parent=None, present=True),
+        RosterPerson("dev-ayu", "Ayu", own=False, parent=None, present=True),
+        RosterPerson("dev-ayu-screen", "Ayu", own=False, parent="dev-ayu", present=True),
+        RosterPerson("dev-bimo", "Bimo", own=False, parent=None, present=False),
+    )
 
 
 def test_an_empty_journal_cannot_be_replayed() -> None:

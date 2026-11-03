@@ -146,7 +146,7 @@ class KernelPort:
         self._playing: str | None = None
         self._dom_remote: int | None = None
         self._call: CallState | None = None
-        self._roster_seen: tuple[tuple[str, str, bool], ...] | None = None
+        self._roster_seen: tuple[bool, tuple[tuple[str, str, bool, bool, str], ...]] | None = None
 
     @classmethod
     def for_meeting(
@@ -298,10 +298,20 @@ class KernelPort:
         seen = observations[0]
         if not isinstance(seen, RosterObserved):
             return
-        signature = tuple(
-            (endpoint.device_id, endpoint.display_name, endpoint.current_user)
-            for endpoint in seen.endpoints
-            if endpoint.present
+        signature = (
+            seen.synced,
+            tuple(
+                sorted(
+                    (
+                        endpoint.device_id,
+                        endpoint.display_name,
+                        endpoint.present,
+                        endpoint.current_user,
+                        endpoint.parent_device_id or "",
+                    )
+                    for endpoint in seen.endpoints
+                )
+            ),
         )
         if signature == self._roster_seen:
             return
@@ -310,8 +320,17 @@ class KernelPort:
             self._journal.record(
                 "roster_observed",
                 source="perception",
-                people=[{"id": device_id, "name": name} for device_id, name, _own in signature],
-                own_id=next((device_id for device_id, _name, own in signature if own), None),
+                people=[
+                    {
+                        "id": device_id,
+                        "name": name,
+                        "own": own,
+                        "parent": parent or None,
+                        "present": present,
+                    }
+                    for device_id, name, present, own, parent in signature[1]
+                ],
+                synced=seen.synced,
             )
 
     def _transcript_observation(
