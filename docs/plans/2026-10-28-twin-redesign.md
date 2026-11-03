@@ -1654,8 +1654,7 @@ mematahkan 39 test non-policy yang membangun loop tanpa alias, dan
 jalur produksi selalu melewati `SessionConfig`. Validasi policy kini
 menerima alias dari nama twin (`addressing_names`), bukan hanya wake
 phrase, dan `_addressed` memakai fallback yang sama; test assembly
-yang subjeknya bukan policy memilih opt-out secara eksplisit. Slice 3
-(roster di journal) belum dikerjakan.
+yang subjeknya bukan policy memilih opt-out secara eksplisit.
 - Slice 2, implementasi (2026-11-03): pilihan model judge kini
   ter-journal sebagai `judge_model_selected` (role `reply` untuk
   fallback ke model chat utama, `turn_judge` untuk model khusus, plus
@@ -1666,6 +1665,18 @@ yang subjeknya bukan policy memilih opt-out secara eksplisit. Slice 3
   (yang sudah ditangani `HealthReportingJudge`), bukan jatuh diam-diam
   ke aturan nama. Kegagalan konfigurasi model tetap meledak keras
   sebagai `FakeYouError` saat sesi dibangun, sesuai sebelumnya.
+- Slice 3, implementasi (2026-11-03): `KernelPort.roster` kini
+  men-journal `roster_observed` (id dan nama saja, plus `own_id`
+  perangkat twin) sekali per perubahan roster — snapshot yang sama
+  tidak diulang. Fixture replay membaca baris itu menjadi
+  `RosterSnapshot`, `schedule` menjadwalkannya sebagai input `roster`,
+  dan harness mengumpannya ke kernel replay sebagai `RosterObserved`
+  tersinkron, jadi presence di replay sama dengan sesi asli dan
+  menutup catatan V0.7. Terverifikasi: test kernel (journal sekali per
+  perubahan, presence bernama dari roster replay), test fixture
+  (parsing roster), dan replay CLI dengan roster tercatat plus policy
+  menyala menghasilkan `policy_decided`. Gate live (sesi API tanpa flag
+  di Meet sungguhan) belum dibuktikan.
 
 ## Track C: otak
 
