@@ -360,16 +360,70 @@ async def test_text_growth_during_the_hold_restarts_stability_and_commits_the_gr
 async def test_a_repeated_interim_does_not_restart_the_hold(journal: RecordingJournal) -> None:
     loop, audio = early_loop(journal, FakeResponder())
     loop.actor.configure_early(
-        EarlyOptions(hold_seconds=0.1, build_event=lambda text: event("early-0", text))
+        EarlyOptions(hold_seconds=0.2, build_event=lambda text: event("early-0", text))
     )
     await loop.actor.note_interim(QUESTION)
     loop.actor.note_speech(active=False)
-    await asyncio.sleep(0.06)
+    await asyncio.sleep(0.12)
 
     await loop.actor.note_interim(QUESTION)
-    await asyncio.sleep(0.07)
+    await asyncio.sleep(0.14)
 
     assert audio.spoken == [QUESTION]
+    await loop.actor.close()
+
+
+async def test_text_growth_while_the_judge_runs_commits_the_grown_text_once(
+    journal: RecordingJournal,
+) -> None:
+    loop = build_meeting_turns(
+        FakeResponder(),
+        interaction=TurnInteraction(
+            twin_names=["Rani"],
+            judge=ScriptedJudge(lambda _window: judged("reply"), delay=0.15),
+        ),
+        diagnostics=Diagnostics(journal=journal),
+    )
+    audio = FakeReplyAudio()
+    loop.actor.bind(audio)
+    loop.actor.configure_early(
+        EarlyOptions(hold_seconds=0.0, build_event=lambda text: event("early-0", text))
+    )
+    await loop.actor.note_interim(QUESTION)
+    loop.actor.note_speech(active=False)
+    await asyncio.sleep(0.03)
+
+    await loop.actor.note_interim(MORE)
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
+
+    assert audio.spoken == [MORE]
+    assert len(journal.events("early_turn_started")) == 1
+    assert journal.events("early_turn_declined") == []
+    await loop.actor.close()
+
+
+async def test_a_duplicate_stop_does_not_decline_the_same_text_twice(
+    journal: RecordingJournal,
+) -> None:
+    loop = build_meeting_turns(
+        FakeResponder(),
+        interaction=TurnInteraction(
+            twin_names=["Rani"], judge=ScriptedJudge(lambda _window: judged("stay_silent"))
+        ),
+        diagnostics=Diagnostics(journal=journal),
+    )
+    loop.actor.bind(FakeReplyAudio())
+    loop.actor.configure_early(
+        EarlyOptions(hold_seconds=0.0, build_event=lambda text: event("early-0", text))
+    )
+    await loop.actor.note_interim(QUESTION)
+    loop.actor.note_speech(active=False)
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
+
+    loop.actor.note_speech(active=False)
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
+
+    assert len(journal.events("early_turn_declined")) == 1
     await loop.actor.close()
 
 

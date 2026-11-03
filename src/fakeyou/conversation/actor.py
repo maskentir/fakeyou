@@ -284,6 +284,7 @@ class FloorActor:
         self._early_starting: asyncio.Task[None] | None = None
         self._early_commit: _EarlyCommit | None = None
         self._early_withdrawn: set[str] = set()
+        self._early_declined: tuple[int, tuple[str, ...]] | None = None
         self._speaker = _ActorSpeaker(self)
 
     @property
@@ -908,9 +909,12 @@ class FloorActor:
     def _arm_early_hold(self) -> None:
         if (
             self._voice_active
+            or self._closed
+            or self._failure is not None
             or not self._early_text.strip()
             or self._early_commit is not None
             or (self._early_timer is not None and not self._early_timer.done())
+            or self._early_declined == (self._early_version, tuple(_early_words(self._early_text)))
         ):
             return
         self._early_timer = asyncio.create_task(
@@ -981,6 +985,7 @@ class FloorActor:
         reason = await self._early_readiness(text)
         if reason is not None:
             if reason != "unavailable":
+                self._early_declined = (version, tuple(_early_words(text)))
                 self._journal.record(
                     "early_turn_declined",
                     source="agent",
