@@ -794,18 +794,25 @@ class FloorActor:
         return decision
 
     async def ready_to_answer(self, text: str) -> bool:
+        return await self._early_readiness(text) is None
+
+    async def _early_readiness(self, text: str) -> str | None:
         judging = self._judging
         session = self._session
-        if judging is None or self._closed or self._failure is not None or not text.strip():
-            return False
+        if judging is None:
+            return "no_judge"
+        if self._closed or self._failure is not None or not text.strip():
+            return "unavailable"
         window = judging.windows.for_interim(
             text, twin_speaking=session is not None and session.is_speaking
         )
         judgement, _ = await capture_error(partial(judging.cache.judgement, window))
-        if judgement is None or not judgement.finished:
-            return False
+        if judgement is None:
+            return "judge_failed"
+        if not judgement.finished:
+            return "judge_unfinished"
         verdict = decision_of(judgement, judging.thresholds, named=self._addressed(text))
-        return verdict.decision in _ADMITTED
+        return None if verdict.decision in _ADMITTED else "judge_not_admitted"
 
     def _duck(self) -> None:
         if self._ducked or self._closed or self._failure is not None or not self._barge_in:
@@ -893,7 +900,7 @@ class FloorActor:
                 self._arm_freeze()
         if self._early_options is None:
             return
-        self._restart_early()
+        self._restart_early(declined="superseded")
         if active or not self._early_text.strip() or self._early_commit is not None:
             return
         self._early_timer = asyncio.create_task(
@@ -903,8 +910,9 @@ class FloorActor:
     async def note_interim(self, text: str) -> None:
         if self._early_options is None:
             return
+        held_words = len(_early_words(self._early_text))
         self._early_text = text
-        self._restart_early()
+        self._restart_early(declined="superseded", words=held_words)
         commit = self._early_commit
         if commit is not None and not commit.resumed and says_more(text, commit.text):
             await self._cancel_early(commit, reason="speech_resumed")
@@ -913,8 +921,9 @@ class FloorActor:
         if self._early_options is None:
             return False
         commit, self._early_commit = self._early_commit, None
+        words = len(_early_words(self._early_text))
         self._early_text = ""
-        self._restart_early()
+        self._restart_early(declined="final_first", words=words)
         if commit is None:
             return False
         if (
@@ -936,11 +945,18 @@ class FloorActor:
         )
         return True
 
-    def _restart_early(self) -> None:
+    def _restart_early(self, *, declined: str | None = None, words: int | None = None) -> None:
         self._early_version += 1
         timer, self._early_timer = self._early_timer, None
         if timer is not None and not timer.done():
             timer.cancel()
+            if declined is not None:
+                self._journal.record(
+                    "early_turn_declined",
+                    source="agent",
+                    reason=declined,
+                    words=words if words is not None else len(_early_words(self._early_text)),
+                )
 
     async def _after_early_hold(self, version: int, text: str) -> None:
         options = self._early_options
@@ -949,7 +965,15 @@ class FloorActor:
         await asyncio.sleep(options.hold_seconds)
         if version != self._early_version:
             return
-        if not await self.ready_to_answer(text):
+        reason = await self._early_readiness(text)
+        if reason is not None:
+            if reason != "unavailable":
+                self._journal.record(
+                    "early_turn_declined",
+                    source="agent",
+                    reason=reason,
+                    words=len(_early_words(text)),
+                )
             return
         if version != self._early_version or self._early_commit is not None:
             return

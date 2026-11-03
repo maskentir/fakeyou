@@ -26,6 +26,7 @@ EventVerb = Literal[
     "captured",
     "cleared",
     "decided",
+    "declined",
     "detected",
     "disabled",
     "dismissed",
