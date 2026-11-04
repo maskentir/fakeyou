@@ -292,6 +292,7 @@ class FloorActor:
         self._early_withdrawn: set[str] = set()
         self._early_declined: tuple[int, tuple[str, ...]] | None = None
         self._interim_window: JudgeWindow | None = None
+        self._early_window: JudgeWindow | None = None
         self._speaker = _ActorSpeaker(self)
 
     @property
@@ -813,19 +814,29 @@ class FloorActor:
             return None
         return judging.cache.completed(window)
 
+    async def _early_judgement(self, text: str) -> TurnJudgement | None:
+        judging = self._judging
+        if judging is None:
+            return None
+        judgement = self._interim_judgement(text)
+        if judgement is not None:
+            return judgement
+        window = self._early_window
+        if window is None or _early_words(window.latest.text) != _early_words(text):
+            session = self._session
+            window = judging.windows.for_interim(
+                text, twin_speaking=session is not None and session.is_speaking
+            )
+        judgement, _ = await capture_error(partial(judging.cache.judgement, window))
+        return judgement
+
     async def _early_readiness(self, text: str) -> str | None:
         judging = self._judging
-        session = self._session
         if judging is None:
             return "no_judge"
         if self._closed or self._failure is not None or not text.strip():
             return "unavailable"
-        judgement = self._interim_judgement(text)
-        if judgement is None:
-            window = judging.windows.for_interim(
-                text, twin_speaking=session is not None and session.is_speaking
-            )
-            judgement, _ = await capture_error(partial(judging.cache.judgement, window))
+        judgement = await self._early_judgement(text)
         if judgement is None:
             return "judge_failed"
         if not judgement.finished:
@@ -956,6 +967,16 @@ class FloorActor:
             or self._early_declined == (self._early_version, tuple(_early_words(self._early_text)))
         ):
             return
+        self._early_window = None
+        judging = self._judging
+        if judging is not None:
+            session = self._session
+            window = judging.windows.for_interim(
+                self._early_text,
+                twin_speaking=session is not None and session.is_speaking,
+            )
+            judging.cache.prefetch(window)
+            self._early_window = window
         self._early_timer = asyncio.create_task(
             self._after_early_hold(self._early_version, self._early_text)
         )
@@ -978,6 +999,7 @@ class FloorActor:
             return False
         commit, self._early_commit = self._early_commit, None
         self._interim_window = None
+        self._early_window = None
         words = len(_early_words(self._early_text))
         self._early_text = ""
         self._cancel_early_hold(declined="final_first", words=words)
@@ -1004,6 +1026,7 @@ class FloorActor:
 
     def _cancel_early_hold(self, *, declined: str | None = None, words: int | None = None) -> None:
         self._early_version += 1
+        self._early_window = None
         timer, self._early_timer = self._early_timer, None
         if timer is not None and not timer.done():
             timer.cancel()

@@ -74,11 +74,13 @@ def early_loop(
     *,
     audio: FakeReplyAudio | None = None,
     prosody_expected: bool = False,
+    judge: ScriptedJudge | None = None,
 ) -> tuple[MeetingTurns, FakeReplyAudio]:
     loop = build_meeting_turns(
         responder,
         interaction=TurnInteraction(
-            twin_names=["Rani"], judge=ScriptedJudge(lambda _window: judged("reply"))
+            twin_names=["Rani"],
+            judge=judge or ScriptedJudge(lambda _window: judged("reply")),
         ),
         diagnostics=Diagnostics(journal=journal),
     )
@@ -540,6 +542,91 @@ async def test_a_changed_line_asks_the_judge_again_instead_of_reusing(
 
     assert audio.spoken == [MORE]
     assert len(judge.windows) > calls
+    await loop.actor.close()
+
+
+async def test_the_judge_starts_when_the_hold_arms(journal: RecordingJournal) -> None:
+    judge = ScriptedJudge(lambda _window: judged("reply"), delay=0.5)
+    loop, _audio = early_loop(journal, FakeResponder(), judge=judge)
+    loop.actor.configure_early(
+        EarlyOptions(hold_seconds=5.0, build_event=lambda text: event("early-0", text))
+    )
+    await loop.actor.note_interim(QUESTION)
+    loop.actor.note_speech(active=False)
+
+    for _ in range(50):
+        if judge.windows:
+            break
+        await asyncio.sleep(0.01)
+
+    assert [window.latest.text for window in judge.windows] == [QUESTION]
+    await loop.actor.close()
+
+
+class TimingJudge(ScriptedJudge):
+    def __init__(self, *, delay: float = 0.0, fail: BaseException | None = None) -> None:
+        super().__init__(lambda _window: judged("reply"), delay=delay, fail=fail)
+        self.started_at: list[float] = []
+
+    @override
+    async def judge(self, window: JudgeWindow) -> TurnJudgement:
+        self.started_at.append(asyncio.get_running_loop().time())
+        return await super().judge(window)
+
+
+async def test_the_commit_waits_only_for_the_judgement_started_at_arm(
+    journal: RecordingJournal,
+) -> None:
+    judge = TimingJudge(delay=0.5)
+    loop, audio = early_loop(journal, FakeResponder(), judge=judge)
+    loop.actor.configure_early(
+        EarlyOptions(hold_seconds=0.4, build_event=lambda text: event("early-0", text))
+    )
+    armed_at = asyncio.get_running_loop().time()
+    await loop.actor.note_interim(QUESTION)
+    loop.actor.note_speech(active=False)
+    await asyncio.wait_for(loop.actor.wait_idle(), 3)
+
+    assert audio.spoken == [QUESTION]
+    assert len(judge.windows) == 1
+    assert judge.started_at[0] - armed_at < 0.2
+    await loop.actor.close()
+
+
+async def test_a_resumed_arm_shares_one_judgement_with_the_next_stop(
+    journal: RecordingJournal,
+) -> None:
+    judge = TimingJudge(delay=0.3)
+    loop, audio = early_loop(journal, FakeResponder(), judge=judge)
+    loop.actor.configure_early(
+        EarlyOptions(hold_seconds=0.1, build_event=lambda text: event("early-0", text))
+    )
+    await loop.actor.note_interim(QUESTION)
+    loop.actor.note_speech(active=False)
+    await asyncio.sleep(0.05)
+    loop.actor.note_speech(active=True)
+    loop.actor.note_speech(active=False)
+    await asyncio.wait_for(loop.actor.wait_idle(), 3)
+
+    assert audio.spoken == [QUESTION]
+    assert len(judge.windows) == 1
+    await loop.actor.close()
+
+
+async def test_a_judge_failure_at_arm_declines_once(journal: RecordingJournal) -> None:
+    judge = TimingJudge(fail=RuntimeError("judge down"))
+    loop, audio = early_loop(journal, FakeResponder(), judge=judge)
+    await loop.actor.note_interim(QUESTION)
+    loop.actor.note_speech(active=False)
+    await asyncio.wait_for(loop.actor.wait_idle(), 3)
+
+    loop.actor.note_speech(active=False)
+    await asyncio.sleep(0.05)
+
+    assert audio.spoken == []
+    assert len(judge.windows) == 1
+    [declined] = journal.events("early_turn_declined")
+    assert declined["reason"] == "judge_failed"
     await loop.actor.close()
 
 
