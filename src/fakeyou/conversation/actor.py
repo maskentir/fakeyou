@@ -839,9 +839,7 @@ class FloorActor:
         probability = self._turn_end_probability
         if probability is None and options.prosody_expected and not self._voice_active:
             with suppress(TimeoutError):
-                await asyncio.wait_for(
-                    self._turn_end_scored.wait(), options.prosody_wait_seconds
-                )
+                await asyncio.wait_for(self._turn_end_scored.wait(), options.prosody_wait_seconds)
             probability = self._turn_end_probability
         self._turn_end_probability = None
         if probability is not None and probability < options.prosody_threshold:
