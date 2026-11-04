@@ -814,21 +814,29 @@ class FloorActor:
             return None
         return judging.cache.completed(window)
 
+    async def _early_judgement(self, text: str) -> TurnJudgement | None:
+        judging = self._judging
+        if judging is None:
+            return None
+        judgement = self._interim_judgement(text)
+        if judgement is not None:
+            return judgement
+        window = self._early_window
+        if window is None or _early_words(window.latest.text) != _early_words(text):
+            session = self._session
+            window = judging.windows.for_interim(
+                text, twin_speaking=session is not None and session.is_speaking
+            )
+        judgement, _ = await capture_error(partial(judging.cache.judgement, window))
+        return judgement
+
     async def _early_readiness(self, text: str) -> str | None:
         judging = self._judging
-        session = self._session
         if judging is None:
             return "no_judge"
         if self._closed or self._failure is not None or not text.strip():
             return "unavailable"
-        judgement = self._interim_judgement(text)
-        if judgement is None:
-            window = self._early_window
-            if window is None or _early_words(window.latest.text) != _early_words(text):
-                window = judging.windows.for_interim(
-                    text, twin_speaking=session is not None and session.is_speaking
-                )
-            judgement, _ = await capture_error(partial(judging.cache.judgement, window))
+        judgement = await self._early_judgement(text)
         if judgement is None:
             return "judge_failed"
         if not judgement.finished:

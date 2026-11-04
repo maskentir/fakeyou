@@ -75,7 +75,6 @@ def early_loop(
     audio: FakeReplyAudio | None = None,
     prosody_expected: bool = False,
     judge: ScriptedJudge | None = None,
-    hold: float = 0.0,
 ) -> tuple[MeetingTurns, FakeReplyAudio]:
     loop = build_meeting_turns(
         responder,
@@ -90,7 +89,7 @@ def early_loop(
     counter = iter(range(100))
     loop.actor.configure_early(
         EarlyOptions(
-            hold_seconds=hold,
+            hold_seconds=0.0,
             build_event=lambda text: event(f"early-{next(counter)}", text),
             prosody_expected=prosody_expected,
             prosody_wait_seconds=0.05,
@@ -548,7 +547,10 @@ async def test_a_changed_line_asks_the_judge_again_instead_of_reusing(
 
 async def test_the_judge_starts_when_the_hold_arms(journal: RecordingJournal) -> None:
     judge = ScriptedJudge(lambda _window: judged("reply"), delay=0.5)
-    loop, _audio = early_loop(journal, FakeResponder(), judge=judge, hold=5.0)
+    loop, _audio = early_loop(journal, FakeResponder(), judge=judge)
+    loop.actor.configure_early(
+        EarlyOptions(hold_seconds=5.0, build_event=lambda text: event("early-0", text))
+    )
     await loop.actor.note_interim(QUESTION)
     loop.actor.note_speech(active=False)
 
@@ -565,7 +567,10 @@ async def test_the_commit_waits_only_for_the_judgement_started_at_arm(
     journal: RecordingJournal,
 ) -> None:
     judge = ScriptedJudge(lambda _window: judged("reply"), delay=0.5)
-    loop, audio = early_loop(journal, FakeResponder(), judge=judge, hold=0.4)
+    loop, audio = early_loop(journal, FakeResponder(), judge=judge)
+    loop.actor.configure_early(
+        EarlyOptions(hold_seconds=0.4, build_event=lambda text: event("early-0", text))
+    )
     started = asyncio.get_running_loop().time()
     await loop.actor.note_interim(QUESTION)
     loop.actor.note_speech(active=False)
