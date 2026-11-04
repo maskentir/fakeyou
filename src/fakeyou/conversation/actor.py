@@ -967,9 +967,7 @@ class FloorActor:
             or self._early_declined == (self._early_version, tuple(_early_words(self._early_text)))
         ):
             return
-        self._early_timer = asyncio.create_task(
-            self._after_early_hold(self._early_version, self._early_text)
-        )
+        self._early_window = None
         judging = self._judging
         if judging is not None:
             session = self._session
@@ -979,6 +977,9 @@ class FloorActor:
             )
             judging.cache.prefetch(window)
             self._early_window = window
+        self._early_timer = asyncio.create_task(
+            self._after_early_hold(self._early_version, self._early_text)
+        )
 
     async def note_interim(self, text: str) -> None:
         if self._early_options is None:
