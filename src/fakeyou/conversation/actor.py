@@ -950,6 +950,7 @@ class FloorActor:
         if self._early_options is None:
             return False
         commit, self._early_commit = self._early_commit, None
+        self._interim_window = None
         words = len(_early_words(self._early_text))
         self._early_text = ""
         self._cancel_early_hold(declined="final_first", words=words)

@@ -513,6 +513,33 @@ async def test_the_commit_reuses_the_judgement_already_made_for_the_interim(
     await loop.actor.close()
 
 
+async def test_a_changed_line_asks_the_judge_again_instead_of_reusing(
+    journal: RecordingJournal,
+) -> None:
+    judge = ScriptedJudge(lambda _window: judged("reply"))
+    loop = build_meeting_turns(
+        FakeResponder(),
+        interaction=TurnInteraction(twin_names=["Rani"], judge=judge),
+        diagnostics=Diagnostics(journal=journal),
+    )
+    audio = FakeReplyAudio()
+    loop.actor.bind(audio)
+    loop.actor.configure_early(
+        EarlyOptions(hold_seconds=0.0, build_event=lambda text: event("early-0", text))
+    )
+    await loop.actor.handle_interim(QUESTION)
+    await asyncio.sleep(0.05)
+    calls = len(judge.windows)
+
+    await loop.actor.note_interim(MORE)
+    loop.actor.note_speech(active=False)
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
+
+    assert audio.spoken == [MORE]
+    assert len(judge.windows) > calls
+    await loop.actor.close()
+
+
 async def test_speech_before_the_hold_ends_starts_nothing(journal: RecordingJournal) -> None:
     loop = build_meeting_turns(
         FakeResponder(),
