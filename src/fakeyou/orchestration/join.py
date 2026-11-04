@@ -391,6 +391,16 @@ def _moment_observer(run: _JoinRun) -> Callable[[TranscriptEvent], Awaitable[Non
     return observe
 
 
+def _smart_turn_tap(
+    run: _JoinRun, on_turn_end: Callable[[float], Awaitable[None]]
+) -> SmartTurnTap | None:
+    try:
+        return SmartTurnTap(SmartTurnModel(), on_turn_end, journal=run.journal)
+    except (OSError, RuntimeError, ValueError) as error:
+        run.faults.record(classify_exception("audio", error, operation="smart_turn_model"))
+        return None
+
+
 def _build_audio_factory(
     prepared: PreparedJoin, run: _JoinRun, resources: AsyncExitStack, registry: SpeakerRegistry
 ) -> None:
@@ -407,6 +417,7 @@ def _build_audio_factory(
         scoring=LiveScoring(run.voiceprint_live, registry),
         options=DrainOptions(per_stream_enabled=per_stream),
     )
+    prosody = judge.smart_turn_enabled and judge.early_commit_enabled and not per_stream
     if run.conversation is not None and run.kernel is not None:
         feed = TurnFeed(
             run.conversation.actor,
@@ -417,6 +428,7 @@ def _build_audio_factory(
                     judge.commit_hold_seconds,
                     transcript.early_event,
                     prosody_threshold=judge.smart_turn_threshold,
+                    prosody_expected=prosody,
                 )
                 if judge.early_commit_enabled and not per_stream
                 else None
@@ -472,9 +484,10 @@ def _build_audio_factory(
         )
     else:
         smart_turn = None
-        if judge.smart_turn_enabled and judge.early_commit_enabled and not per_stream:
-            smart_turn = SmartTurnTap(SmartTurnModel(), transcript.on_turn_end, journal=run.journal)
-            resources.push_async_callback(smart_turn.close)
+        if prosody and run.conversation is not None:
+            smart_turn = _smart_turn_tap(run, transcript.on_turn_end)
+            if smart_turn is not None:
+                resources.push_async_callback(smart_turn.close)
         run.audio_factory = partial(
             open_meeting_audio,
             callbacks=audio_callbacks,

@@ -13,6 +13,7 @@ from fakeyou.audio.smart_turn import (
     SmartTurnTap,
     log_mel_spectrogram,
 )
+from tests._persistence_fakes import RecordingJournal
 
 
 def sine(seconds: int = 2) -> np.ndarray:
@@ -129,6 +130,47 @@ async def test_the_tap_scores_the_buffer_when_speech_stops() -> None:
     await asyncio.wait_for(scores.delivered.wait(), 5)
 
     assert scores.values[0] > 0.98
+    await tap.close()
+
+
+class FailingScorer:
+    def predict(self, _audio: np.ndarray) -> float:
+        raise RuntimeError("model unavailable")
+
+
+async def test_a_failing_scorer_is_journaled_and_delivers_nothing() -> None:
+    journal = RecordingJournal("meeting-9")
+    scores = Scores()
+    tap = SmartTurnTap(FailingScorer(), scores, journal=journal)
+    tap.feed(pcm16(np.zeros(16000, dtype=np.float32)))
+
+    tap.speech_stopped()
+    await asyncio.sleep(0.2)
+
+    assert scores.values == []
+    assert journal.events("speech_turn_scoring_failed")
+    await tap.close()
+
+
+async def test_close_waits_for_the_pending_score_to_stop() -> None:
+    scores = Scores()
+    tap = SmartTurnTap(SlowScorer(), scores)
+    tap.feed(pcm16(np.zeros(16000, dtype=np.float32)))
+    tap.speech_stopped()
+
+    await asyncio.wait_for(tap.close(), 1)
+
+    assert scores.values == []
+
+
+async def test_a_stop_without_audio_scores_nothing() -> None:
+    scores = Scores()
+    tap = SmartTurnTap(SmartTurnModel(), scores)
+
+    tap.speech_stopped()
+    await asyncio.sleep(0.1)
+
+    assert scores.values == []
     await tap.close()
 
 

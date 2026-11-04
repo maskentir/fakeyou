@@ -73,6 +73,7 @@ class EarlyCommit:
     hold_seconds: float
     build_event: Callable[[str], TranscriptEvent]
     prosody_threshold: float = 0.5
+    prosody_expected: bool = False
 
 
 class TurnFeed:
@@ -98,6 +99,7 @@ class TurnFeed:
                     hold_seconds=early.hold_seconds,
                     build_event=early.build_event,
                     prosody_threshold=early.prosody_threshold,
+                    prosody_expected=early.prosody_expected,
                 ),
                 answer=self.answer,
             )

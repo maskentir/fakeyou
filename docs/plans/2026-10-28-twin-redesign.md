@@ -1708,7 +1708,14 @@ dan live, bukan dari replay oue-4. False commit didefinisikan sebagai
   terbukti tidak portabel (ARM 0,77 vs x86 0,92 untuk sine 8 dtk),
   jadi test model menegaskan level keputusan; feature bank tetap
   golden ketat. Ambang 0,5 belum terkalibrasi live — itu bagian
-  validasi live B2 sekalian.
+  validasi live B2 sekalian. Review PR mempertajam invariantnya:
+  skor milik segmen stop terakhir dan sekali pakai (dibersihkan di
+  setiap tepi suara, diabaikan saat suara aktif), kesiapan menunggu
+  skor tertunda maksimal 0,25 dtk saat tap memang terpasang
+  (`prosody_expected`, inferensi terukur ±34 mdtk vs hold 0,3 dtk),
+  kegagalan scorer/model dijurnalkan (`speech_turn_scoring_failed`)
+  dan model yang gagal dimuat mematikan gerbang, bukan sesi;
+  observasi skor bersifat ephemeral di mailbox kernel.
 
 ### B4: Identitas dari stream
 
