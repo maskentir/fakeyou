@@ -1668,7 +1668,28 @@ dan live, bukan dari replay oue-4. False commit didefinisikan sebagai
   memakai judgement itu bila teksnya sama dengan teks hold, jatuh ke
   panggilan judge segar seperti sebelumnya bila belum selesai/tidak ada.
   Semantik admisi tidak berubah — `decision_of` tetap diterapkan actor
-  dengan `named` dari teks. Bukti live sesudahnya yang menentukan.
+  dengan `named` dari teks. Bukti live sesudahnya yang menentukan
+  (ditunda: verifikasi live B2 digabung dengan sesi berikutnya).
+- B2-3a, implementasi (2026-11-04): model Smart Turn v3.2 CPU di-vendor
+  dari HuggingFace `pipecat-ai/smart-turn-v3` (BSD-2-Clause, 8,3 MB,
+  sha256 tercatat di `audio/models/README.md`; repo ini tidak memakai
+  pipecat sama sekali — satu-satunya kaitan adalah provenance file
+  Silero). Ekstraksi log-mel Whisper ditulis sendiri di
+  `fakeyou.audio.smart_turn` dengan numpy (tanpa dependensi
+  transformers): komposisi persis upstream `predict_endpoint` — 8 detik
+  terakhir 16 kHz, **left-pad** nol sampai 8 detik (ucapan berakhir di
+  ujung buffer), normalisasi zero-mean/unit-var atas buffer penuh, mel
+  Slaney 80 bin. Identik dengan referensi sampai selisih absolut < 1e-6
+  pada kasus uji golden (hening/sine/sine-8s/noise). Review menangkap
+  divergensi awal untuk audio < 8 dtk (right-pad + normalisasi segmen,
+  probabilitas meleset jauh: 0,34 vs 0,02) — diperbaiki ke komposisi
+  upstream dan golden dibangkitkan ulang; audio non-finite dan
+  multichannel kini ditolak keras, bukan terbaca sebagai selesai.
+  `SmartTurnModel.predict` mengembalikan probabilitas selesai (output
+  model sudah sigmoid; terverifikasi empiris). Belum terhubung ke jalur
+  commit — itu B2-3b: buffer PCM 16 kHz non-destruktif di sisi VAD,
+  inferensi di executor pada tepi stop, dan gerbang kesiapan commit
+  (judge admit dan prosodi selesai).
 
 ### B4: Identitas dari stream
 
