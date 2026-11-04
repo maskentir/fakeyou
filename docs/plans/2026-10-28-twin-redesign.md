@@ -1740,6 +1740,18 @@ dan live, bukan dari replay oue-4. False commit didefinisikan sebagai
   dan readiness tinggal membaca hasil; target lantai teoritis
   ±450 mdtk (skor 150 + hold 300). Latensi balasan sesudah commit
   tetap besar (final→audio 5–27 dtk; wilayah B6, bukan B2).
+- B2-4, implementasi (2026-11-05): `_arm_early_hold` kini langsung
+  memulai judgement untuk teks kandidat (`cache.prefetch` atas
+  window interim teks itu, disimpan sebagai `_early_window`), dan
+  `_early_readiness` menunggu window yang sama persis — bukan
+  membangun window baru yang kuncinya bisa meleset dari prefetch
+  (satu panggilan judge per arm; `prefetch` cache men-dedupe per
+  kunci). Judge berjalan paralel dengan hold 0,3 dtk, jadi latensi
+  commit menjadi max(hold, durasi judge sejak arm) alih-alih
+  hold + durasi judge penuh. Prefetch interim di turn graph tidak
+  disentuh (head start barge-in + reuse final). Gate p50 ≤500 mdtk
+  tetap bergantung pada durasi judge absolut (0,26–1,9 dtk terukur
+  di host berbeban); dibuktikan ulang pada validasi live berikut.
 
 ### B4: Identitas dari stream
 

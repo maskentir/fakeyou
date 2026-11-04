@@ -74,11 +74,14 @@ def early_loop(
     *,
     audio: FakeReplyAudio | None = None,
     prosody_expected: bool = False,
+    judge: ScriptedJudge | None = None,
+    hold: float = 0.0,
 ) -> tuple[MeetingTurns, FakeReplyAudio]:
     loop = build_meeting_turns(
         responder,
         interaction=TurnInteraction(
-            twin_names=["Rani"], judge=ScriptedJudge(lambda _window: judged("reply"))
+            twin_names=["Rani"],
+            judge=judge or ScriptedJudge(lambda _window: judged("reply")),
         ),
         diagnostics=Diagnostics(journal=journal),
     )
@@ -87,7 +90,7 @@ def early_loop(
     counter = iter(range(100))
     loop.actor.configure_early(
         EarlyOptions(
-            hold_seconds=0.0,
+            hold_seconds=hold,
             build_event=lambda text: event(f"early-{next(counter)}", text),
             prosody_expected=prosody_expected,
             prosody_wait_seconds=0.05,
@@ -540,6 +543,38 @@ async def test_a_changed_line_asks_the_judge_again_instead_of_reusing(
 
     assert audio.spoken == [MORE]
     assert len(judge.windows) > calls
+    await loop.actor.close()
+
+
+async def test_the_judge_starts_when_the_hold_arms(journal: RecordingJournal) -> None:
+    judge = ScriptedJudge(lambda _window: judged("reply"), delay=0.5)
+    loop, _audio = early_loop(journal, FakeResponder(), judge=judge, hold=5.0)
+    await loop.actor.note_interim(QUESTION)
+    loop.actor.note_speech(active=False)
+
+    for _ in range(50):
+        if judge.windows:
+            break
+        await asyncio.sleep(0.01)
+
+    assert [window.latest.text for window in judge.windows] == [QUESTION]
+    await loop.actor.close()
+
+
+async def test_the_commit_waits_only_for_the_judgement_started_at_arm(
+    journal: RecordingJournal,
+) -> None:
+    judge = ScriptedJudge(lambda _window: judged("reply"), delay=0.5)
+    loop, audio = early_loop(journal, FakeResponder(), judge=judge, hold=0.4)
+    started = asyncio.get_running_loop().time()
+    await loop.actor.note_interim(QUESTION)
+    loop.actor.note_speech(active=False)
+    await asyncio.wait_for(loop.actor.wait_idle(), 3)
+    elapsed = asyncio.get_running_loop().time() - started
+
+    assert audio.spoken == [QUESTION]
+    assert len(judge.windows) == 1
+    assert elapsed < 0.75
     await loop.actor.close()
 
 
