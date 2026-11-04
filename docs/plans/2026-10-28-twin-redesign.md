@@ -1716,6 +1716,30 @@ dan live, bukan dari replay oue-4. False commit didefinisikan sebagai
   kegagalan scorer/model dijurnalkan (`speech_turn_scoring_failed`)
   dan model yang gagal dimuat mematikan gerbang, bukan sesi;
   observasi skor bersifat ephemeral di mailbox kernel.
+- B2, validasi live (2026-11-04, sesi `b2-live-6`, naskah 4 pertanyaan
+  utuh + 3 jeda tengah kalimat + penutup): early commit **menyala
+  pertama kalinya secara live** — 5 `early_turn_started`, 5
+  `early_turn_verified`, 0 cancelled, `early_false_commits` 0/5 (gate
+  ≤5% **lulus**), banding 0 started di `b2-live-2`. Skor Smart Turn
+  tiba +141–197 mdtk setelah VAD stop dan separasinya tegas: kalimat
+  utuh 0,95–0,99, jeda tengah kalimat 0,006–0,26; tiga jeda naskah
+  tidak satu pun disela (1× `prosody_incomplete` langsung, sisanya
+  `judge_unfinished`/`superseded`). Ambang 0,5 terkalibrasi cukup;
+  tidak diubah. **Gate latensi belum lulus**: `vad_stop_to_commit_ms`
+  p50 1939 mdtk (rentang 802–2460; target ≤500) — commit hanya
+  mendahului final STT 50–820 mdtk. Dekomposisi per commit: skor
+  siap ±150 mdtk, hold 300 mdtk, sisanya (0,26–1,9 dtk) panggilan
+  judge LLM di dalam readiness karena judgement interim untuk teks
+  terakhir belum selesai (teks interim masih berubah sesudah VAD
+  stop → cache miss → panggilan segar). Tercatat 134 panggilan judge
+  dalam satu sesi — judge dipanggil hampir di setiap interim.
+  Angka absolut ikut terinflasi beban host (load ±71 saat sesi),
+  tapi kasus terbaik pun 802 mdtk. Irisan berikutnya **B2-4**:
+  panggil judge saat teks stabil (saat hold dipersenjatai), bukan
+  per interim, supaya window yang dijudge == window yang di-commit
+  dan readiness tinggal membaca hasil; target lantai teoritis
+  ±450 mdtk (skor 150 + hold 300). Latensi balasan sesudah commit
+  tetap besar (final→audio 5–27 dtk; wilayah B6, bukan B2).
 
 ### B4: Identitas dari stream
 
