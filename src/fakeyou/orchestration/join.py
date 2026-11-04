@@ -473,9 +473,7 @@ def _build_audio_factory(
     else:
         smart_turn = None
         if judge.smart_turn_enabled and judge.early_commit_enabled and not per_stream:
-            smart_turn = SmartTurnTap(
-                SmartTurnModel(), transcript.on_turn_end, journal=run.journal
-            )
+            smart_turn = SmartTurnTap(SmartTurnModel(), transcript.on_turn_end, journal=run.journal)
             resources.push_async_callback(smart_turn.close)
         run.audio_factory = partial(
             open_meeting_audio,

@@ -377,7 +377,9 @@ class KernelPort:
         self._offer_turn("audio", VoiceActivityObserved(active=active), HeardVoice(active))
 
     def turn_end(self, probability: float) -> None:
-        self._offer_turn("audio", TurnEndObserved(probability=probability), HeardTurnEnd(probability))
+        self._offer_turn(
+            "audio", TurnEndObserved(probability=probability), HeardTurnEnd(probability)
+        )
 
     def chat(self, observation: ChatObserved, *, heard: TranscriptEvent | None = None) -> None:
         event_id = f"chat:{observation.message_id}"

@@ -1,12 +1,13 @@
 import asyncio
 from collections.abc import Awaitable, Callable
-from functools import cache
+from functools import cache, partial
 from pathlib import Path
 from typing import Protocol
 
 import numpy as np
 import onnxruntime
 
+from fakeyou.observability.faults import capture_error
 from fakeyou.observability.journal import Journal
 
 RATE = 16000
@@ -145,13 +146,10 @@ class SmartTurnTap:
         self._task = None
 
     async def _score(self, audio: np.ndarray) -> None:
-        try:
-            probability = await asyncio.to_thread(self._scorer.predict, audio)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            return
-        if not 0.0 <= probability <= 1.0:
+        probability, _ = await capture_error(
+            partial(asyncio.to_thread, self._scorer.predict, audio)
+        )
+        if probability is None or not 0.0 <= probability <= 1.0:
             return
         if self._journal is not None:
             self._journal.record(

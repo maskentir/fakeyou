@@ -15,9 +15,9 @@ from fakeyou.observability.faults import (
 from fakeyou.observability.journal import Journal
 from fakeyou.orchestration.kernel_port import (
     HeardChat,
-    HeardTurnEnd,
     HeardFinal,
     HeardInterim,
+    HeardTurnEnd,
     HeardVoice,
     KernelPort,
     TurnSignal,

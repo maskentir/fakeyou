@@ -22,7 +22,6 @@ from fakeyou.audio.deaf import (
     verdict_fault,
 )
 from fakeyou.audio.graph import AudioGraph, GraphParts, OnVad, TurnAudioTap
-from fakeyou.audio.smart_turn import SmartTurnTap
 from fakeyou.audio.own_speech import FinalGate, OwnSpeech
 from fakeyou.audio.playback import (
     CuePlayback,
@@ -34,6 +33,7 @@ from fakeyou.audio.playback import (
     PlaybackPort,
 )
 from fakeyou.audio.pulse_writer import PulseWriter
+from fakeyou.audio.smart_turn import SmartTurnTap
 from fakeyou.audio.stream_input import StreamAudioInput
 from fakeyou.audio.vad import VadAnalyzer, VadController, VadParams
 from fakeyou.audio.voice_activity import VoiceActivityTracker
