@@ -1652,6 +1652,23 @@ dan live, bukan dari replay oue-4. False commit didefinisikan sebagai
   didominasi artefak interim sintesis; **ditolak**, fidelitas replay
   tidak dikorbankan untuk angka commit). Bukti commit sesungguhnya
   menunggu sesi live dengan kode ini.
+- Live `b2-live-2` (2026-11-03, sesudah B2-2): tetap 0 commit, tapi profil
+  decline berubah total — 7 `final_first`, 4 `superseded`, 1
+  `judge_unfinished`, 2 `judge_not_admitted` (dua kalimat penolak memang
+  benar ditolak). Per turn terukur: final STT tiba ±1,07 dtk setelah VAD
+  stop, hold stabilitas kedaluwarsa ±0,3 dtk, tetapi `_early_readiness`
+  saat itu meluncurkan panggilan judge **baru** (latensi 1–1,8 dtk) dan
+  selalu kalah dari final. Judge interim sebenarnya sudah berjalan
+  selama ucapan lewat prefetch, hanya tidak dikonsumsi jalur commit.
+- B2-2b, implementasi (2026-11-03): keputusan commit memakai judgement
+  interim yang sudah selesai. `JudgeCache.completed(window)` mengintip
+  task yang sudah done tanpa menunggu; actor menyimpan window interim
+  terakhir dari `_prefetch` (objek yang sama yang diteruskan ke turn
+  graph, jadi kuncinya identik secara konstruksi) dan `_early_readiness`
+  memakai judgement itu bila teksnya sama dengan teks hold, jatuh ke
+  panggilan judge segar seperti sebelumnya bila belum selesai/tidak ada.
+  Semantik admisi tidak berubah — `decision_of` tetap diterapkan actor
+  dengan `named` dari teks. Bukti live sesudahnya yang menentukan.
 
 ### B4: Identitas dari stream
 

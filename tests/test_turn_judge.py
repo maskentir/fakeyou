@@ -132,6 +132,31 @@ async def test_the_cache_keeps_the_judgement_of_a_finished_line() -> None:
     assert len(judge.windows) == 1
 
 
+async def test_completed_returns_only_a_finished_judgement() -> None:
+    judge = ScriptedJudge(lambda _window: judged("reply"), delay=0.05)
+    cache = JudgeCache(judge)
+    window = JudgeWindow((), JudgeLine("ayu", "Rani, hi"))
+
+    assert cache.completed(window) is None
+    cache.prefetch(window)
+    assert cache.completed(window) is None
+
+    judgement = await cache.judgement(window)
+
+    assert cache.completed(window) is judgement
+    assert cache.completed(JudgeWindow((), JudgeLine("ayu", "unseen"))) is None
+
+
+async def test_completed_hides_a_failed_judgement() -> None:
+    cache = JudgeCache(ScriptedJudge(fail=ConnectionError("down")))
+    window = JudgeWindow((), JudgeLine("ayu", "Rani?"))
+    cache.prefetch(window)
+    with pytest.raises(ConnectionError):
+        await cache.judgement(window)
+
+    assert cache.completed(window) is None
+
+
 async def test_a_failed_judgement_surfaces_to_the_caller() -> None:
     cache = JudgeCache(ScriptedJudge(fail=ConnectionError("down")))
 
