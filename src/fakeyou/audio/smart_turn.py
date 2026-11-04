@@ -49,13 +49,22 @@ def _window() -> np.ndarray:
     return np.hanning(N_FFT + 1)[:-1]
 
 
+def _checked(audio: np.ndarray) -> np.ndarray:
+    waveform = np.asarray(audio)
+    if waveform.ndim != 1:
+        raise ValueError("audio must be mono 16 kHz samples in one dimension")
+    segment = waveform[-N_SAMPLES:].astype(np.float64)
+    if not np.isfinite(segment).all():
+        raise ValueError("audio must be finite 16 kHz samples")
+    return segment
+
+
 def log_mel_spectrogram(audio: np.ndarray) -> np.ndarray:
-    waveform = np.asarray(audio, dtype=np.float32).reshape(-1)[-N_SAMPLES:]
-    length = waveform.shape[0]
+    segment = _checked(audio)
     padded = np.zeros(N_SAMPLES, dtype=np.float64)
-    if length:
-        segment = waveform.astype(np.float64)
-        padded[:length] = (segment - segment.mean()) / np.sqrt(segment.var() + 1e-7)
+    if segment.shape[0]:
+        padded[-segment.shape[0] :] = segment
+    padded = (padded - padded.mean()) / np.sqrt(padded.var() + 1e-7)
     padded = np.pad(padded, [(N_FFT // 2, N_FFT // 2)], mode="reflect")
     num_frames = 1 + (padded.size - N_FFT) // HOP_LENGTH
     strides = (padded.strides[0] * HOP_LENGTH, padded.strides[0])
