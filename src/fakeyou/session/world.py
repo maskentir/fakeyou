@@ -17,6 +17,7 @@ from fakeyou.session.contracts import (
     SourceHealthObserved,
     SourceStatus,
     TranscriptObserved,
+    TurnEndObserved,
     VoiceActivityObserved,
     VoiceTrackObserved,
 )
@@ -424,7 +425,7 @@ def _observe(state: SessionState, seq: int, event: SessionEvent, limits: Limits)
             return _screen(state, seq, observation)
         case OwnerControlObserved():
             return _owner_control(state, observation)
-        case VoiceActivityObserved():
+        case VoiceActivityObserved() | TurnEndObserved():
             return state
         case _:
             return _observe_presence(state, observation)

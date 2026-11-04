@@ -81,6 +81,11 @@ class VoiceActivityObserved(Contract):
     active: bool
 
 
+class TurnEndObserved(Contract):
+    kind: Literal["turn_end"] = "turn_end"
+    probability: float = Field(ge=0.0, le=1.0)
+
+
 class ChatObserved(Contract):
     kind: Literal["chat"] = "chat"
     message_id: NonEmpty
@@ -129,6 +134,7 @@ Observation = Annotated[
     | VoiceTrackObserved
     | TranscriptObserved
     | VoiceActivityObserved
+    | TurnEndObserved
     | ChatObserved
     | ScreenObserved
     | CallStateObserved

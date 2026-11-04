@@ -73,6 +73,7 @@ def early_loop(
     responder: FakeResponder,
     *,
     audio: FakeReplyAudio | None = None,
+    prosody_expected: bool = False,
 ) -> tuple[MeetingTurns, FakeReplyAudio]:
     loop = build_meeting_turns(
         responder,
@@ -88,6 +89,8 @@ def early_loop(
         EarlyOptions(
             hold_seconds=0.0,
             build_event=lambda text: event(f"early-{next(counter)}", text),
+            prosody_expected=prosody_expected,
+            prosody_wait_seconds=0.05,
         )
     )
     return loop, audio
@@ -537,6 +540,81 @@ async def test_a_changed_line_asks_the_judge_again_instead_of_reusing(
 
     assert audio.spoken == [MORE]
     assert len(judge.windows) > calls
+    await loop.actor.close()
+
+
+async def test_incomplete_prosody_blocks_the_commit(journal: RecordingJournal) -> None:
+    loop, audio = early_loop(journal, FakeResponder())
+    await loop.actor.note_interim(QUESTION)
+    loop.actor.note_speech(active=False)
+    loop.actor.note_turn_end(probability=0.2)
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
+
+    assert audio.spoken == []
+    [declined] = journal.events("early_turn_declined")
+    assert declined["reason"] == "prosody_incomplete"
+    await loop.actor.close()
+
+
+async def test_a_score_arriving_during_speech_is_ignored(journal: RecordingJournal) -> None:
+    loop, audio = early_loop(journal, FakeResponder())
+    await loop.actor.note_interim(QUESTION)
+    loop.actor.note_speech(active=True)
+    loop.actor.note_turn_end(probability=0.1)
+    loop.actor.note_speech(active=False)
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
+
+    assert audio.spoken == [QUESTION]
+    await loop.actor.close()
+
+
+async def test_a_consumed_score_does_not_gate_the_next_utterance(
+    journal: RecordingJournal,
+) -> None:
+    loop, audio = early_loop(journal, FakeResponder())
+    await loop.actor.note_interim(QUESTION)
+    loop.actor.note_speech(active=False)
+    loop.actor.note_turn_end(probability=0.1)
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
+    assert audio.spoken == []
+
+    loop.actor.note_speech(active=True)
+    await loop.actor.note_interim("Rani, and the timeline?")
+    loop.actor.note_speech(active=False)
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
+
+    assert audio.spoken == ["Rani, and the timeline?"]
+    await loop.actor.close()
+
+
+async def test_readiness_waits_briefly_for_a_pending_score(journal: RecordingJournal) -> None:
+    loop, audio = early_loop(journal, FakeResponder(), prosody_expected=True)
+    await loop.actor.note_interim(QUESTION)
+    loop.actor.note_speech(active=False)
+
+    async def late_score() -> None:
+        await asyncio.sleep(0.01)
+        loop.actor.note_turn_end(probability=0.1)
+
+    task = asyncio.create_task(late_score())
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
+    await task
+
+    assert audio.spoken == []
+    [declined] = journal.events("early_turn_declined")
+    assert declined["reason"] == "prosody_incomplete"
+    await loop.actor.close()
+
+
+async def test_complete_prosody_lets_the_commit_through(journal: RecordingJournal) -> None:
+    loop, audio = early_loop(journal, FakeResponder())
+    await loop.actor.note_interim(QUESTION)
+    loop.actor.note_speech(active=False)
+    loop.actor.note_turn_end(probability=0.9)
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
+
+    assert audio.spoken == [QUESTION]
+    assert journal.events("early_turn_declined") == []
     await loop.actor.close()
 
 

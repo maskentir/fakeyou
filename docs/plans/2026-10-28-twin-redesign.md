@@ -1690,6 +1690,32 @@ dan live, bukan dari replay oue-4. False commit didefinisikan sebagai
   commit — itu B2-3b: buffer PCM 16 kHz non-destruktif di sisi VAD,
   inferensi di executor pada tepi stop, dan gerbang kesiapan commit
   (judge admit dan prosodi selesai).
+- B2-3b, implementasi (2026-11-04): wiring lengkap. `SmartTurnTap` di
+  `fakeyou.audio.smart_turn` menampung ≤8 detik PCM 16 kHz mono dari
+  `AudioGraph.ingest` (capture memang 16 kHz/1 kanal), pada tepi stop
+  menjalankan inferensi di thread (`asyncio.to_thread`), tepi start
+  membatalkan skor tertunda; setiap skor dijurnalkan sebagai
+  `speech_turn_scored` (kata kerja taksonomi baru `scored`). Skor
+  mengalir sebagai observasi kernel `TurnEndObserved` + sinyal
+  `HeardTurnEnd` → `TurnFeed` → `FloorActor.note_turn_end`;
+  `_early_readiness` menolak commit dengan alasan `prosody_incomplete`
+  bila skor terakhir di bawah ambang, dan **fail-open** bila belum ada
+  skor (jalur lama tidak berubah). Konfigurasi:
+  `turn_judge.smart_turn_enabled` (default true) dan
+  `turn_judge.smart_turn_threshold` (0,5); tap hanya dibangun pada
+  jalur mixed (bukan per-stream) saat early commit aktif — sama seperti
+  gerbang commit itu sendiri. Probabilitas golden lintas arsitektur
+  terbukti tidak portabel (ARM 0,77 vs x86 0,92 untuk sine 8 dtk),
+  jadi test model menegaskan level keputusan; feature bank tetap
+  golden ketat. Ambang 0,5 belum terkalibrasi live — itu bagian
+  validasi live B2 sekalian. Review PR mempertajam invariantnya:
+  skor milik segmen stop terakhir dan sekali pakai (dibersihkan di
+  setiap tepi suara, diabaikan saat suara aktif), kesiapan menunggu
+  skor tertunda maksimal 0,25 dtk saat tap memang terpasang
+  (`prosody_expected`, inferensi terukur ±34 mdtk vs hold 0,3 dtk),
+  kegagalan scorer/model dijurnalkan (`speech_turn_scoring_failed`)
+  dan model yang gagal dimuat mematikan gerbang, bukan sesi;
+  observasi skor bersifat ephemeral di mailbox kernel.
 
 ### B4: Identitas dari stream
 

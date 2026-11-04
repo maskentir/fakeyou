@@ -371,6 +371,8 @@ class TurnJudgeSettings(Section):
     unnamed_reply_threshold: float = Field(default=0.85, gt=0, lt=1)
     early_commit_enabled: bool = True
     commit_hold_seconds: float = Field(default=0.3, ge=0.0, le=3.0)
+    smart_turn_enabled: bool = True
+    smart_turn_threshold: float = Field(default=0.5, gt=0, lt=1)
 
 
 class MeetingSettings(Section):

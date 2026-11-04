@@ -17,6 +17,7 @@ from fakeyou.orchestration.kernel_port import (
     HeardChat,
     HeardFinal,
     HeardInterim,
+    HeardTurnEnd,
     HeardVoice,
     KernelPort,
     TurnSignal,
@@ -71,6 +72,8 @@ class _Lane:
 class EarlyCommit:
     hold_seconds: float
     build_event: Callable[[str], TranscriptEvent]
+    prosody_threshold: float = 0.5
+    prosody_expected: bool = False
 
 
 class TurnFeed:
@@ -95,6 +98,8 @@ class TurnFeed:
                 EarlyOptions(
                     hold_seconds=early.hold_seconds,
                     build_event=early.build_event,
+                    prosody_threshold=early.prosody_threshold,
+                    prosody_expected=early.prosody_expected,
                 ),
                 answer=self.answer,
             )
@@ -112,6 +117,8 @@ class TurnFeed:
                 self._voice.put(partial(self._settle, event))
             case HeardChat(event=event):
                 self._voice.put(partial(self._queue_chat, event))
+            case HeardTurnEnd(probability=probability):
+                self._voice.put(partial(self._turn_end, probability=probability))
 
     async def answer(self, event: TranscriptEvent) -> None:
         done: asyncio.Future[None] = asyncio.get_running_loop().create_future()
@@ -128,6 +135,9 @@ class TurnFeed:
 
     async def _voice_edge(self, *, active: bool) -> None:
         self._ingress.note_speech(active=active)
+
+    async def _turn_end(self, *, probability: float) -> None:
+        self._ingress.note_turn_end(probability=probability)
 
     async def _interim(self, text: str) -> None:
         await self._ingress.handle_interim(text)

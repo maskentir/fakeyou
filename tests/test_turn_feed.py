@@ -36,6 +36,7 @@ class Conversation:
         self.order: list[str] = []
         self.started: list[str] = []
         self.voice_edges: list[bool] = []
+        self.turn_ends: list[float] = []
         self.finals: list[TranscriptEvent] = []
         self.interims: list[str] = []
         self.chats: list[TranscriptEvent] = []
@@ -46,6 +47,9 @@ class Conversation:
 
     def note_speech(self, *, active: bool) -> None:
         self.voice_edges.append(active)
+
+    def note_turn_end(self, *, probability: float) -> None:
+        self.turn_ends.append(probability)
 
     async def handle_interim(self, text: str) -> None:
         self.interims.append(text)
@@ -241,6 +245,17 @@ async def test_without_a_ready_judgement_the_final_starts_the_turn(tmp_path: Pat
     await setup.settle_all()
 
     assert setup.audio.spoken == ["Rani, so about the beta?"]
+    await setup.close()
+
+
+async def test_a_turn_end_score_reaches_the_conversation(tmp_path: Path) -> None:
+    setup = Setup(tmp_path, Conversation())
+
+    setup.kernel.turn_end(0.9)
+    setup.kernel.drain()
+    await setup.feed.idle()
+
+    assert setup.conversation.turn_ends == [0.9]
     await setup.close()
 
 

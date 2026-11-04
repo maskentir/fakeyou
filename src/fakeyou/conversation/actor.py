@@ -1,6 +1,7 @@
 import asyncio
 import json
 from collections.abc import Awaitable, Callable, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from functools import partial
@@ -181,6 +182,9 @@ class ActorWiring:
 class EarlyOptions:
     hold_seconds: float
     build_event: Callable[[str], TranscriptEvent]
+    prosody_threshold: float = 0.5
+    prosody_expected: bool = False
+    prosody_wait_seconds: float = 0.25
 
 
 @dataclass(slots=True)
@@ -269,6 +273,8 @@ class FloorActor:
         self._freeze_timer: asyncio.Task[None] | None = None
         self._voice_active = False
         self._voice_last_at = 0.0
+        self._turn_end_probability: float | None = None
+        self._turn_end_scored = asyncio.Event()
         self._barge_seq = 0
         self._barge_in_judge_enabled = ingress.barge_in_judge_enabled
         self._seen: set[str] = set()
@@ -825,7 +831,20 @@ class FloorActor:
         if not judgement.finished:
             return "judge_unfinished"
         verdict = decision_of(judgement, judging.thresholds, named=self._addressed(text))
-        return None if verdict.decision in _ADMITTED else "judge_not_admitted"
+        if verdict.decision not in _ADMITTED:
+            return "judge_not_admitted"
+        options = self._early_options
+        if options is None:
+            return None
+        probability = self._turn_end_probability
+        if probability is None and options.prosody_expected and not self._voice_active:
+            with suppress(TimeoutError):
+                await asyncio.wait_for(self._turn_end_scored.wait(), options.prosody_wait_seconds)
+            probability = self._turn_end_probability
+        self._turn_end_probability = None
+        if probability is not None and probability < options.prosody_threshold:
+            return "prosody_incomplete"
+        return None
 
     def _duck(self) -> None:
         if self._ducked or self._closed or self._failure is not None or not self._barge_in:
@@ -903,10 +922,18 @@ class FloorActor:
             return
         self._unduck("grace")
 
+    def note_turn_end(self, *, probability: float) -> None:
+        if self._voice_active:
+            return
+        self._turn_end_probability = probability
+        self._turn_end_scored.set()
+
     def note_speech(self, *, active: bool) -> None:
         if active or self._voice_active:
             self._voice_last_at = self._clock()
         self._voice_active = active
+        self._turn_end_probability = None
+        self._turn_end_scored.clear()
         if active:
             self._duck()
             if self._ducked and not self._frozen:

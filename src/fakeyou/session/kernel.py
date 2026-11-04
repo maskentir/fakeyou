@@ -9,6 +9,7 @@ from fakeyou.session.contracts import (
     SessionEvent,
     Source,
     TranscriptObserved,
+    TurnEndObserved,
 )
 from fakeyou.session.world import DEFAULT_LIMITS, Limits, SessionState, reduce
 
@@ -26,7 +27,7 @@ def is_ephemeral(event: SessionEvent) -> bool:
     observation = event.observation
     if isinstance(observation, TranscriptObserved):
         return not observation.final
-    return isinstance(observation, ParticipantCountObserved)
+    return isinstance(observation, ParticipantCountObserved | TurnEndObserved)
 
 
 class Mailbox:

@@ -33,6 +33,7 @@ from fakeyou.audio.playback import (
     PlaybackPort,
 )
 from fakeyou.audio.pulse_writer import PulseWriter
+from fakeyou.audio.smart_turn import SmartTurnTap
 from fakeyou.audio.stream_input import StreamAudioInput
 from fakeyou.audio.vad import VadAnalyzer, VadController, VadParams
 from fakeyou.audio.voice_activity import VoiceActivityTracker
@@ -208,6 +209,7 @@ class StreamComponents:
     stt: SpeechSessionFactory | None = None
     playback: PlaybackPort | None = None
     turn_tap: TurnAudioTap | None = None
+    smart_turn: SmartTurnTap | None = None
     activity: CaptureActivity | None = None
     voice_activity: VoiceActivityTracker | None = None
     own_speech: OwnSpeech | None = None
@@ -857,6 +859,7 @@ async def _start_session(setup: SessionSetup) -> MeetingAudioSession:
             vad=VadController(VadAnalyzer(vad_params(setup.speech.vad_settings))),
             stt=stt,
             turn_tap=setup.components.turn_tap,
+            smart_turn=setup.components.smart_turn,
             voice_activity=setup.components.voice_activity,
             on_vad=setup.callbacks.on_vad,
             journal=setup.diagnostics.journal,

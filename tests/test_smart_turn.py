@@ -1,10 +1,19 @@
+import asyncio
 import hashlib
+import time
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from fakeyou.audio.smart_turn import MODEL_PATH, MODEL_SHA256, SmartTurnModel, log_mel_spectrogram
+from fakeyou.audio.smart_turn import (
+    MODEL_PATH,
+    MODEL_SHA256,
+    SmartTurnModel,
+    SmartTurnTap,
+    log_mel_spectrogram,
+)
+from tests._persistence_fakes import RecordingJournal
 
 
 def sine(seconds: int = 2) -> np.ndarray:
@@ -90,6 +99,105 @@ def test_the_model_scores_silence_as_complete_and_stays_a_probability() -> None:
     assert model.predict(sine()) < 0.5
     assert model.predict(sine(8)) > 0.5
     assert 0.0 < model.predict(noise()) < 1.0
+
+
+def pcm16(audio: np.ndarray) -> bytes:
+    return (audio * 32768).astype(np.int16).tobytes()
+
+
+class Scores:
+    def __init__(self) -> None:
+        self.values: list[float] = []
+        self.delivered = asyncio.Event()
+
+    async def __call__(self, probability: float) -> None:
+        self.values.append(probability)
+        self.delivered.set()
+
+
+class SlowScorer:
+    def predict(self, _audio: np.ndarray) -> float:
+        time.sleep(0.25)
+        return 0.9
+
+
+async def test_the_tap_scores_the_buffer_when_speech_stops() -> None:
+    scores = Scores()
+    tap = SmartTurnTap(SmartTurnModel(), scores)
+    tap.feed(pcm16(np.zeros(8 * 16000, dtype=np.float32)))
+
+    tap.speech_stopped()
+    await asyncio.wait_for(scores.delivered.wait(), 5)
+
+    assert scores.values[0] > 0.98
+    await tap.close()
+
+
+class FailingScorer:
+    def predict(self, _audio: np.ndarray) -> float:
+        raise RuntimeError("model unavailable")
+
+
+async def test_a_failing_scorer_is_journaled_and_delivers_nothing() -> None:
+    journal = RecordingJournal("meeting-9")
+    scores = Scores()
+    tap = SmartTurnTap(FailingScorer(), scores, journal=journal)
+    tap.feed(pcm16(np.zeros(16000, dtype=np.float32)))
+
+    tap.speech_stopped()
+    await asyncio.sleep(0.2)
+
+    assert scores.values == []
+    assert journal.events("speech_turn_scoring_failed")
+    await tap.close()
+
+
+async def test_close_waits_for_the_pending_score_to_stop() -> None:
+    scores = Scores()
+    tap = SmartTurnTap(SlowScorer(), scores)
+    tap.feed(pcm16(np.zeros(16000, dtype=np.float32)))
+    tap.speech_stopped()
+
+    await asyncio.wait_for(tap.close(), 1)
+
+    assert scores.values == []
+
+
+async def test_a_stop_without_audio_scores_nothing() -> None:
+    scores = Scores()
+    tap = SmartTurnTap(SmartTurnModel(), scores)
+
+    tap.speech_stopped()
+    await asyncio.sleep(0.1)
+
+    assert scores.values == []
+    await tap.close()
+
+
+async def test_a_resumed_voice_cancels_the_pending_score() -> None:
+    scores = Scores()
+    tap = SmartTurnTap(SlowScorer(), scores)
+    tap.feed(pcm16(np.zeros(16000, dtype=np.float32)))
+
+    tap.speech_stopped()
+    tap.speech_started()
+    await asyncio.sleep(0.4)
+
+    assert scores.values == []
+    await tap.close()
+
+
+async def test_the_tap_keeps_only_the_last_eight_seconds() -> None:
+    scores = Scores()
+    tap = SmartTurnTap(SmartTurnModel(), scores)
+    tap.feed(pcm16(sine(8)))
+    tap.feed(pcm16(np.zeros(8 * 16000, dtype=np.float32)))
+
+    tap.speech_stopped()
+    await asyncio.wait_for(scores.delivered.wait(), 5)
+
+    assert scores.values[0] > 0.98
+    await tap.close()
 
 
 def test_short_and_long_audio_are_padded_and_truncated_to_eight_seconds() -> None:

@@ -5,6 +5,7 @@ from functools import partial
 from typing import Protocol
 
 from fakeyou.audio.deaf import CaptureActivity, audio_duration_ms, rms_level
+from fakeyou.audio.smart_turn import SmartTurnTap
 from fakeyou.audio.vad import VadController, VadEvent, VadEventKind
 from fakeyou.audio.voice_activity import VoiceActivityTracker
 from fakeyou.foundation.invariants import CAPTURE_SAMPLE_RATE, PCM_CHANNELS
@@ -108,6 +109,7 @@ class GraphParts:
     vad: VadController
     stt: SpeechToText
     turn_tap: TurnAudioTap | None = None
+    smart_turn: SmartTurnTap | None = None
     voice_activity: VoiceActivityTracker | None = None
     on_vad: OnVad | None = None
     journal: Journal | None = None
@@ -119,6 +121,7 @@ class AudioGraph:
         self._vad = parts.vad
         self._stt = parts.stt
         self._turn_tap = parts.turn_tap
+        self._smart_turn = parts.smart_turn
         self._voice_activity = parts.voice_activity
         self._on_vad = parts.on_vad
         self._journal = parts.journal
@@ -138,6 +141,8 @@ class AudioGraph:
         )
         if self._turn_tap is not None:
             self._turn_tap.feed(pcm)
+        if self._smart_turn is not None:
+            self._smart_turn.feed(pcm)
         self._stt.send_audio(pcm)
         await self._dispatch(self._vad.feed(pcm))
 
@@ -157,6 +162,11 @@ class AudioGraph:
                 self._turn_tap.speech_started()
             else:
                 self._turn_tap.speech_stopped()
+        if self._smart_turn is not None:
+            if active:
+                self._smart_turn.speech_started()
+            else:
+                self._smart_turn.speech_stopped()
         self._observe_vad(active=active)
         if self._on_vad is not None:
             await guard_consumer(
