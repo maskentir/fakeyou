@@ -6,7 +6,7 @@ from fakeyou.audio.playback import PlaybackEvent
 from fakeyou.conversation.turn_judge import JudgeLine, JudgeWindow, TurnJudgement
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.identity.identity import SpeakerRow
-from fakeyou.orchestration.kernel_port import HealthReportingJudge, KernelPort
+from fakeyou.orchestration.kernel_port import HealthReportingJudge, HeardTurnEnd, KernelPort
 from fakeyou.perception.meet_protocol import MeetUser
 from fakeyou.perception.roster import MeetRoster
 from fakeyou.session.contracts import ChatObserved, Endpoint, RosterObserved
@@ -103,6 +103,25 @@ def test_an_early_transcript_is_attributed_without_starting_a_turn() -> None:
     assert (actor.kind, actor.device_id) == ("participant", "dev-ayu")
     assert kernel.state.dialogue.lines[-1].speaker == Ref("track", "uuid-a")
     assert signals == []
+
+
+def test_a_turn_end_score_is_offered_to_turn_consumers() -> None:
+    kernel = port()
+    joined(kernel)
+    signals: list[object] = []
+
+    class Collecting:
+        def accept(self, signal: object) -> None:
+            signals.append(signal)
+
+        async def idle(self) -> None:
+            return None
+
+    kernel.on_turn(cast(Any, Collecting()))
+    kernel.turn_end(0.9)
+    kernel.drain()
+
+    assert signals == [HeardTurnEnd(0.9)]
 
 
 def test_the_same_final_is_only_reduced_once() -> None:

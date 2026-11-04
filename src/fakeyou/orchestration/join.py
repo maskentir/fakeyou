@@ -20,6 +20,7 @@ from fakeyou.audio.audio import (
 )
 from fakeyou.audio.deaf import DeafTiming
 from fakeyou.audio.playback import PlaybackEvent
+from fakeyou.audio.smart_turn import SmartTurnModel, SmartTurnTap
 from fakeyou.audio.stream_capture import (
     STREAM_FLEET_SLOTS,
     FleetTopology,
@@ -412,7 +413,11 @@ def _build_audio_factory(
             journal=run.journal,
             faults=run.faults,
             early=(
-                EarlyCommit(judge.commit_hold_seconds, transcript.early_event)
+                EarlyCommit(
+                    judge.commit_hold_seconds,
+                    transcript.early_event,
+                    prosody_threshold=judge.smart_turn_threshold,
+                )
                 if judge.early_commit_enabled and not per_stream
                 else None
             ),
@@ -466,12 +471,19 @@ def _build_audio_factory(
             policy=audio_policy,
         )
     else:
+        smart_turn = None
+        if judge.smart_turn_enabled and judge.early_commit_enabled and not per_stream:
+            smart_turn = SmartTurnTap(
+                SmartTurnModel(), transcript.on_turn_end, journal=run.journal
+            )
+            resources.push_async_callback(smart_turn.close)
         run.audio_factory = partial(
             open_meeting_audio,
             callbacks=audio_callbacks,
             components=StreamComponents(
                 voice_activity=run.voice_activity,
                 turn_tap=(run.voiceprint_live.tap if run.voiceprint_live is not None else None),
+                smart_turn=smart_turn,
             ),
             diagnostics=audio_diagnostics,
             policy=audio_policy,

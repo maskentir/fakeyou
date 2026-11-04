@@ -181,6 +181,7 @@ class ActorWiring:
 class EarlyOptions:
     hold_seconds: float
     build_event: Callable[[str], TranscriptEvent]
+    prosody_threshold: float = 0.5
 
 
 @dataclass(slots=True)
@@ -269,6 +270,7 @@ class FloorActor:
         self._freeze_timer: asyncio.Task[None] | None = None
         self._voice_active = False
         self._voice_last_at = 0.0
+        self._turn_end_probability: float | None = None
         self._barge_seq = 0
         self._barge_in_judge_enabled = ingress.barge_in_judge_enabled
         self._seen: set[str] = set()
@@ -825,7 +827,17 @@ class FloorActor:
         if not judgement.finished:
             return "judge_unfinished"
         verdict = decision_of(judgement, judging.thresholds, named=self._addressed(text))
-        return None if verdict.decision in _ADMITTED else "judge_not_admitted"
+        if verdict.decision not in _ADMITTED:
+            return "judge_not_admitted"
+        options = self._early_options
+        probability = self._turn_end_probability
+        if (
+            options is not None
+            and probability is not None
+            and probability < options.prosody_threshold
+        ):
+            return "prosody_incomplete"
+        return None
 
     def _duck(self) -> None:
         if self._ducked or self._closed or self._failure is not None or not self._barge_in:
@@ -903,10 +915,15 @@ class FloorActor:
             return
         self._unduck("grace")
 
+    def note_turn_end(self, *, probability: float) -> None:
+        self._turn_end_probability = probability
+
     def note_speech(self, *, active: bool) -> None:
         if active or self._voice_active:
             self._voice_last_at = self._clock()
         self._voice_active = active
+        if active:
+            self._turn_end_probability = None
         if active:
             self._duck()
             if self._ducked and not self._frozen:

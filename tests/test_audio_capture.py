@@ -12,6 +12,7 @@ from fakeyou.audio.audio import (
 )
 from fakeyou.audio.deaf import CaptureActivity
 from fakeyou.audio.graph import AudioGraph, GraphParts
+from fakeyou.audio.smart_turn import SmartTurnTap
 from tests._audio_support import FakePlayback, NullSTT, ScriptedSpeech, build_run, wait_gate
 from tests._persistence_fakes import RecordingJournal
 
@@ -30,6 +31,40 @@ async def test_capture_meters_chunk_energy_and_duration() -> None:
     assert snapshot.frames_delivered == 2
     assert snapshot.energetic_ms == 20.0
     assert snapshot.last_energetic_at is not None
+
+
+async def test_capture_scores_the_turn_end_when_speech_stops(journal: RecordingJournal) -> None:
+    delivered = asyncio.Event()
+    scores: list[float] = []
+
+    class Scorer:
+        def predict(self, _audio: object) -> float:
+            return 0.9
+
+    async def on_turn_end(probability: float) -> None:
+        scores.append(probability)
+        delivered.set()
+
+    speech = ScriptedSpeech()
+    tap = SmartTurnTap(Scorer(), on_turn_end, journal=journal)
+    graph = AudioGraph(
+        GraphParts(
+            activity=CaptureActivity(),
+            vad=speech.controller,
+            stt=NullSTT(),
+            smart_turn=tap,
+            journal=journal,
+        )
+    )
+
+    await graph.ingest(speech.speaking(6))
+    await graph.ingest(speech.silent(6))
+    await asyncio.wait_for(delivered.wait(), 2)
+
+    assert scores == [0.9]
+    [scored] = journal.events("speech_turn_scored")
+    assert scored["turn_end_probability"] == 0.9
+    await tap.close()
 
 
 async def test_capture_journals_speech_boundaries(journal: RecordingJournal) -> None:

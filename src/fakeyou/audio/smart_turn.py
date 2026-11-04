@@ -1,8 +1,13 @@
+import asyncio
+from collections.abc import Awaitable, Callable
 from functools import cache
 from pathlib import Path
+from typing import Protocol
 
 import numpy as np
 import onnxruntime
+
+from fakeyou.observability.journal import Journal
 
 RATE = 16000
 N_SAMPLES = 8 * RATE
@@ -91,3 +96,67 @@ class SmartTurnModel:
         features = log_mel_spectrogram(audio)[np.newaxis, :, :]
         output = self._session.run(None, {"input_features": features})
         return float(np.asarray(output[0]).reshape(-1)[0])
+
+
+class TurnScorer(Protocol):
+    def predict(self, audio: np.ndarray) -> float: ...
+
+
+OnTurnEnd = Callable[[float], Awaitable[None]]
+
+
+class SmartTurnTap:
+    def __init__(
+        self, scorer: TurnScorer, on_turn_end: OnTurnEnd, *, journal: Journal | None = None
+    ) -> None:
+        self._scorer = scorer
+        self._on_turn_end = on_turn_end
+        self._journal = journal
+        self._buffer = np.zeros(0, dtype=np.int16)
+        self._task: asyncio.Task[None] | None = None
+        self._closed = False
+
+    def feed(self, pcm: bytes) -> None:
+        if self._closed:
+            return
+        samples = np.frombuffer(pcm, dtype=np.int16)
+        if samples.size == 0:
+            return
+        self._buffer = np.concatenate((self._buffer, samples))[-N_SAMPLES:]
+
+    def speech_started(self) -> None:
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
+        self._task = None
+
+    def speech_stopped(self) -> None:
+        if self._closed:
+            return
+        audio = self._buffer.astype(np.float32) / 32768.0
+        self._buffer = np.zeros(0, dtype=np.int16)
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
+        self._task = asyncio.create_task(self._score(audio))
+
+    async def close(self) -> None:
+        self._closed = True
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
+        self._task = None
+
+    async def _score(self, audio: np.ndarray) -> None:
+        try:
+            probability = await asyncio.to_thread(self._scorer.predict, audio)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            return
+        if not 0.0 <= probability <= 1.0:
+            return
+        if self._journal is not None:
+            self._journal.record(
+                "speech_turn_scored",
+                source="audio",
+                turn_end_probability=round(probability, 4),
+            )
+        await self._on_turn_end(probability)

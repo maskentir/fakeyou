@@ -540,6 +540,31 @@ async def test_a_changed_line_asks_the_judge_again_instead_of_reusing(
     await loop.actor.close()
 
 
+async def test_incomplete_prosody_blocks_the_commit(journal: RecordingJournal) -> None:
+    loop, audio = early_loop(journal, FakeResponder())
+    await loop.actor.note_interim(QUESTION)
+    loop.actor.note_speech(active=False)
+    loop.actor.note_turn_end(probability=0.2)
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
+
+    assert audio.spoken == []
+    [declined] = journal.events("early_turn_declined")
+    assert declined["reason"] == "prosody_incomplete"
+    await loop.actor.close()
+
+
+async def test_complete_prosody_lets_the_commit_through(journal: RecordingJournal) -> None:
+    loop, audio = early_loop(journal, FakeResponder())
+    await loop.actor.note_interim(QUESTION)
+    loop.actor.note_speech(active=False)
+    loop.actor.note_turn_end(probability=0.9)
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
+
+    assert audio.spoken == [QUESTION]
+    assert journal.events("early_turn_declined") == []
+    await loop.actor.close()
+
+
 async def test_speech_before_the_hold_ends_starts_nothing(journal: RecordingJournal) -> None:
     loop = build_meeting_turns(
         FakeResponder(),

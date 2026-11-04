@@ -35,6 +35,7 @@ from fakeyou.session.contracts import (
     SourceHealthObserved,
     SourceStatus,
     TranscriptObserved,
+    TurnEndObserved,
     VoiceActivityObserved,
     VoiceTrackObserved,
 )
@@ -75,7 +76,12 @@ class HeardChat:
     event: TranscriptEvent
 
 
-TurnSignal = HeardVoice | HeardInterim | HeardFinal | HeardChat
+@dataclass(frozen=True, slots=True)
+class HeardTurnEnd:
+    probability: float
+
+
+TurnSignal = HeardVoice | HeardInterim | HeardFinal | HeardChat | HeardTurnEnd
 
 
 class TurnConsumer(Protocol):
@@ -369,6 +375,9 @@ class KernelPort:
 
     def voice(self, *, active: bool) -> None:
         self._offer_turn("audio", VoiceActivityObserved(active=active), HeardVoice(active))
+
+    def turn_end(self, probability: float) -> None:
+        self._offer_turn("audio", TurnEndObserved(probability=probability), HeardTurnEnd(probability))
 
     def chat(self, observation: ChatObserved, *, heard: TranscriptEvent | None = None) -> None:
         event_id = f"chat:{observation.message_id}"

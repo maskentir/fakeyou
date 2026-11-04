@@ -187,6 +187,10 @@ class TranscriptDrain:
         if self._sinks.kernel is not None:
             self._sinks.kernel.voice(active=active)
 
+    async def on_turn_end(self, probability: float) -> None:
+        if self._sinks.kernel is not None:
+            self._sinks.kernel.turn_end(probability)
+
     def _registry(self) -> SpeakerRegistry | None:
         return self._scoring.registry if self._scoring is not None else None
 
