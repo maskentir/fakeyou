@@ -1758,6 +1758,28 @@ dan live, bukan dari replay oue-4. False commit didefinisikan sebagai
   absolut (0,26–1,9 dtk terukur di host berbeban); validasi live
   berikutnya mengukur p50 **dan** jumlah panggilan judge per sesi
   terhadap baseline 134.
+- B2, validasi live ulang (2026-11-05): `b2-live-7` gugur sebelum
+  mulai (toggle mic DOM Meet gagal 12,3 dtk sesudah admit,
+  bertepatan dengan putusnya socket STT provider 0,7 dtk
+  sebelumnya; detail error DOM tidak terjurnal — celah observasi)
+  dan `b2-live-8` diblokir platform saat join
+  (`blocked_by_platform`). `b2-live-9` (naskah sama, host load ±5):
+  sesi valid tapi bising — STT terfragmentasi dan banyak tumpang
+  tindih playback; **0 `early_turn_started`** dari 18 decline
+  (8 `final_first`, 5 `judge_unfinished`, 3 `judge_not_admitted`,
+  2 `superseded`). Bukan regresi kebenaran B2-4: decline adalah
+  verdict judge atas revisi interim yang memang tertinggal dari
+  final (5 vs 6 kata) atau nama salah dengar ("Danny"), plus final
+  STT memenangkan balapan. Tapi gate latensi tetap jauh:
+  stop→decline 1,9–3,5 dtk dengan 2–10 panggilan judge masuk di
+  setiap jendelanya — 81 panggilan judge/sesi membanjiri semaphore
+  4 slot `ModelTurnJudge`, sehingga judgement arm **mengantre di
+  belakang prefetch interim spekulatif**. Irisan berikutnya
+  **B2-5**: matikan prefetch judge per interim di turn graph saat
+  twin tidak memegang lantai — judge hanya (a) saat arm untuk
+  early commit, (b) saat twin memegang lantai untuk barge-in,
+  (c) saat final. Target: panggilan judge per sesi turun ke orde
+  jumlah stop, dan judgement arm benar-benar mulai seketika.
 
 ### B4: Identitas dari stream
 
