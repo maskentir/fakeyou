@@ -1984,6 +1984,23 @@ tetap tidak reachable selama partisipasi saja 1,2 dtk — diukur
 ulang sesudah B6-1/B6-2 sebelum diputuskan, pola yang sama
 dengan revisi gate B2.
 
+B6-1, implementasi (2026-11-06): giliran yang plan-nya memuat
+evidence (look: memory/chat/screen, termasuk `UNJUDGED_EVIDENCE`)
+kini membuka dengan opener dari `spoken_lines.json` (kunci
+`opener`, id+en) yang diucapkan **segera** di `_speak_reply` —
+paralel dengan pengambilan evidence dan generasi jawaban, bukan
+menunggu timer. Mesin cue yang sama dipakai (event jurnal
+`thinking_cue_*` tidak berubah); `cue_when_slow` tetap hidup hanya
+sebagai fallback untuk giliran tanpa evidence dan dilewati bila
+opener sudah berbunyi (`opener_played`). Penghapusan total
+`cue_when_slow` + `thinking_cue_after_seconds` ditunda ke B6-2,
+ketika tier model saat plan membuat giliran tanpa evidence
+benar-benar cepat; sampai saat itu menghapus fallback hanya akan
+mengembalikan keheningan 2–4 dtk pada giliran non-evidence yang
+model strong-nya tetap lambat. Audio pertama yang diharapkan:
+partisipasi + plan + sintesis opener (±1,6 dtk pola live-12),
+diukur pada validasi live berikutnya.
+
 ### B7: Perception layar yang murah
 
 - Frame dibaca setelah layar settle. OCR lokal dan hash teks menentukan
