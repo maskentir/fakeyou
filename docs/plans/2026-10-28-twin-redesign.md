@@ -1780,6 +1780,20 @@ dan live, bukan dari replay oue-4. False commit didefinisikan sebagai
   early commit, (b) saat twin memegang lantai untuk barge-in,
   (c) saat final. Target: panggilan judge per sesi turun ke orde
   jumlah stop, dan judgement arm benar-benar mulai seketika.
+- B2-5, implementasi (2026-11-05): gerbangnya status suara, bukan
+  mematikan prefetch total — `_prefetch_judgement` di turn graph
+  kini dilewati saat suara manusia masih aktif **dan** twin tidak
+  sedang berbicara (`voice_active` diteruskan actor lewat
+  `TurnInput`; absen = perilaku lama untuk produsen interim lain).
+  Prefetch tetap jalan untuk barge-in (twin memegang lantai) dan
+  untuk revisi interim sesudah VAD stop — jadi reuse judgement
+  oleh final (kontrak lama) dan jalur B2-2b tetap hidup, sementara
+  banjir panggilan selama ucapan berlangsung berhenti. Barge-in
+  tidak kehilangan head start: `_ask_the_judge` memang dipanggil
+  tepat sesudah prefetch di `handle_interim` dan memulai
+  judgement-nya sendiri lewat cache bila belum ada. Validasi live
+  berikutnya: panggilan judge/sesi (target orde jumlah stop,
+  baseline 81–134) dan p50 commit ≤500 mdtk.
 
 ### B4: Identitas dari stream
 

@@ -518,6 +518,25 @@ async def test_the_commit_reuses_the_judgement_already_made_for_the_interim(
     await loop.actor.close()
 
 
+async def test_interims_during_speech_do_not_start_judgements(
+    journal: RecordingJournal,
+) -> None:
+    judge = ScriptedJudge(lambda _window: judged("reply"))
+    loop, _audio = early_loop(journal, FakeResponder(), judge=judge)
+    loop.actor.note_speech(active=True)
+    await loop.actor.handle_interim(QUESTION)
+    await asyncio.sleep(0.05)
+
+    assert judge.windows == []
+
+    loop.actor.note_speech(active=False)
+    await loop.actor.handle_interim(QUESTION)
+    await asyncio.sleep(0.05)
+
+    assert len(judge.windows) == 1
+    await loop.actor.close()
+
+
 async def test_a_changed_line_asks_the_judge_again_instead_of_reusing(
     journal: RecordingJournal,
 ) -> None:

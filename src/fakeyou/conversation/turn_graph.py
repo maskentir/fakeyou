@@ -411,6 +411,7 @@ class TurnInput(TypedDict):
     pending: NotRequired[bool]
     admission: NotRequired[Admission]
     judge_window: NotRequired[JudgeWindow | None]
+    voice_active: NotRequired[bool]
 
 
 class TurnGraphState(TypedDict):
@@ -428,6 +429,7 @@ class TurnGraphState(TypedDict):
     admission: NotRequired[Admission]
     delivered: NotRequired[tuple[str, ...]]
     judge_window: NotRequired[JudgeWindow | None]
+    voice_active: NotRequired[bool]
 
 
 TurnRoute = Literal["speak", "end", "failed"]
@@ -459,6 +461,8 @@ def _prefetch_judgement(state: TurnGraphState, runtime: TurnContext) -> None:
     judging = runtime.judging
     text = state["transcript_text"]
     if judging is None or state.get("pending", False) or not text.strip():
+        return
+    if state.get("voice_active", False) and not runtime.speaker.is_speaking:
         return
     window = state.get("judge_window")
     if window is None:

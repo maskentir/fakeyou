@@ -94,12 +94,15 @@ def turn_input(*, addressed: bool = False, others_speaking: bool = False) -> Tur
     )
 
 
-def interim_input(text: str) -> TurnInput:
-    return TurnInput(
+def interim_input(text: str, *, voice_active: bool | None = None) -> TurnInput:
+    model_input = TurnInput(
         event=TurnEvent(kind="interim", event_id="e0", at=0.5, payload=text),
         context=ParticipationContext(addressed=False),
         speaking_generation=4,
     )
+    if voice_active is not None:
+        model_input["voice_active"] = voice_active
+    return model_input
 
 
 def stop_input() -> TurnInput:
@@ -124,6 +127,30 @@ def runtime(
         judging=judging(judge) if judge is not None else None,
         speech=build_speech_graph(),
     )
+
+
+async def test_an_interim_while_the_human_is_still_speaking_starts_no_judgement() -> None:
+    judge = ScriptedJudge(lambda _window: judged("reply"))
+    graph = build_turn_graph()
+    context = runtime(judge=judge)
+
+    await graph.run(interim_input("twin are you there", voice_active=True), context=context)
+    await asyncio.sleep(0.05)
+
+    assert judge.windows == []
+
+
+async def test_an_interim_while_the_twin_speaks_still_starts_the_judgement() -> None:
+    judge = ScriptedJudge(lambda _window: judged("reply"))
+    speaker = FakeSpeaker()
+    speaker.is_speaking = True
+    graph = build_turn_graph()
+    context = runtime(speaker, judge=judge)
+
+    await graph.run(interim_input("twin are you there", voice_active=True), context=context)
+    await asyncio.sleep(0.05)
+
+    assert [window.latest.text for window in judge.windows] == ["twin are you there"]
 
 
 async def test_the_final_reuses_the_judgement_started_on_its_interim() -> None:
