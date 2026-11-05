@@ -1146,13 +1146,17 @@ class FloorActor:
         last = self._last_final
         if last is None:
             return False
-        _participant, previous, _admitted_at = last
+        _participant, previous, admitted_at = last
+        if self._clock() - admitted_at > _OVERLAP_WINDOW_SECONDS:
+            return False
         before = previous.split()
         after = _tokens(text)
         if not before or not after:
             return False
         if after == before:
             return True
+        if abs(len(after) - len(before)) >= _EXTRA_WORDS_FOR_MORE:
+            return False
         shorter, longer = sorted((before, after), key=len)
         return SequenceMatcher(None, shorter, longer[: len(shorter)]).ratio() >= _RESUMED_MATCH
 

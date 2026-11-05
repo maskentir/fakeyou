@@ -612,6 +612,25 @@ async def test_a_trailing_revision_of_the_answered_line_keeps_the_answer(
     await loop.actor.close()
 
 
+async def test_a_long_amendment_of_the_answered_line_still_takes_the_floor(
+    journal: RecordingJournal,
+) -> None:
+    gate = asyncio.Event()
+    responder = FakeResponder(gate=gate)
+    loop, _audio = early_loop(journal, responder)
+    loop.actor.configure_barge_in(enabled=True)
+    await loop.actor.note_interim(QUESTION)
+    loop.actor.note_speech(active=False)
+    await asyncio.wait_for(responder.started.wait(), 2)
+
+    await loop.actor.handle_interim("Rani, when is the beta and who runs the QA for it")
+    await asyncio.sleep(0.1)
+
+    assert responder.cancelled.is_set()
+    gate.set()
+    await loop.actor.close()
+
+
 async def test_a_new_line_still_takes_the_floor_from_an_answer_in_flight(
     journal: RecordingJournal,
 ) -> None:
