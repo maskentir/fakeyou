@@ -1842,6 +1842,39 @@ dan live, bukan dari replay oue-4. False commit didefinisikan sebagai
   slot model) sehingga dekomposisi latensi berikutnya memisahkan
   waktu model dari waktu antre semaphore. Validasi live
   berikutnya: p50 commit dan distribusi `duration_ms` slot judge.
+- B2, validasi live B2-6 (2026-11-05, sesi `b2-live-11`, host load
+  ±4,5): commit terbanyak sejauh ini (7 started, 5 verified)
+  tetapi **2 false commit (2/7 = 29%) — gate ≤5% dilanggar
+  pertama kalinya**; keduanya dibatalkan settle (`speech_resumed`)
+  sebelum audio jawaban keluar, jadi tidak ada ucapan salah,
+  tetapi metriknya jelas mundur dan berkorelasi dengan reuse
+  B2-6. Panggilan judge justru naik ke 99/sesi (26 stop):
+  judgement teks arm yang pendek sering `judge_unfinished` (11×)
+  lalu siklus decline→re-arm menilai lagi. Durasi judge murni
+  kini terukur langsung: **p50 1282 mdtk** (p95 1736, min 930) —
+  satu panggilan judge saja sudah ±2,6× gate latensi 500 mdtk,
+  sebelum hold/antre apa pun. Latensi commit p50 1508 mdtk
+  (n=7). Temuan UX terpenting sesi ini (dilaporkan user sebagai
+  "dua kali cuma hmm/let me think"): **interim susulan dari
+  ucapan yang sedang dijawab dinilai judge sebagai barge-in**
+  (teksnya pertanyaan itu sendiri, 11 kata), lalu
+  `_yield_the_floor` membatalkan balasan commit yang sudah
+  terverifikasi (`agent_cancelled` reason `interim`); satu
+  `synthesis_failed` ternyata `CancelledError` dari jalur yang
+  sama. Thinking cue sempat berbunyi lalu jawaban tidak pernah
+  datang, sehingga user mengulang pertanyaannya. Ini interaksi
+  lama yang makin terlihat karena commit kini mulai lebih awal
+  (jendela tabrakannya lebih lebar), bukan regresi B2-6 murni —
+  tetapi harus diperbaiki sebelum gate latensi dikejar lebih
+  jauh. Irisan berikutnya **B2-7**, berurutan: (a) interim yang
+  merevisi ucapan yang sedang dijawab (kemiripan `says_more`
+  terhadap teks giliran aktif) tidak boleh memicu yield/cancel;
+  (b) perketat reuse B2-6 (mis. hanya ≤1 kata tambahan) atau
+  cabut, diputuskan dari angka false commit sesi berikutnya;
+  (c) gate ≤500 mdtk diputuskan ulang secara sadar: dengan
+  durasi judge p50 1,28 dtk, pilihannya adalah prompt/model judge
+  khusus jalur early yang jauh lebih kecil, atau gate ditulis
+  ulang mengikuti lantai terukur.
 
 ### B4: Identitas dari stream
 
