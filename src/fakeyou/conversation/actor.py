@@ -1308,6 +1308,7 @@ class FloorActor:
                 addressing_names=self._addressing_names,
                 pending=self._in_flight or self._queue.pending,
                 judge_window=window,
+                voice_active=self._voice_active,
             ),
             self,
         )
