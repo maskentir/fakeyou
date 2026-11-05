@@ -1800,6 +1800,31 @@ dan live, bukan dari replay oue-4. False commit didefinisikan sebagai
   judgement-nya sendiri lewat cache bila belum ada. Validasi live
   berikutnya: panggilan judge/sesi (target orde jumlah stop,
   baseline 81–134) dan p50 commit ≤500 mdtk.
+- B2, validasi live final B2-5 (2026-11-05, sesi `b2-live-10`,
+  host load ±4,5): commit kembali menyala — 2 `early_turn_started`,
+  2 verified, **0 false commit**; panggilan judge turun ke
+  63/sesi (20 stop; 3,2/stop vs 8,1 di `b2-live-9` dan 4,6 di
+  `b2-live-6`), decline lewat judge menyusut (unfinished 5→2,
+  not_admitted 3→1). Skor prosodi tetap tegas (jeda tengah
+  0,006/0,06/0,28; utuh 0,89–0,99) dan tidak ada selaan. **Gate
+  latensi tetap belum lulus**: dua commit di 1516 dan 1839 mdtk.
+  Dekomposisi: skor +147–213 mdtk, judge mulai +1–2 mdtk sejak
+  arm (antrean hilang), tapi revisi interim STT sesudah stop
+  (+325/+484/+514 mdtk) mempersenjatai ulang teks yang dijudge,
+  dan durasi judge LLM itu sendiri ±1,0–1,3 dtk (prompt ±5,8k
+  karakter, `gemini-3.1-flash-lite`); 7× `final_first` karena
+  final STT tiba +0,6–1,0 dtk sesudah stop. Kesimpulan terukur:
+  gate p50 ≤500 mdtk **tidak reachable** selama panggilan LLM
+  ±1 dtk wajib menilai teks persis terakhir di jalur commit.
+  Irisan berikutnya **B2-6**: pakai ulang judgement lintas revisi
+  yang hanya *menambah* kata (teks commit = teks saat arm;
+  jaring pengaman sudah ada — `settle_early` membatalkan commit
+  bila final berkata lebih banyak, dan prosodi tetap menggerbang),
+  plus ukur durasi judge murni per panggilan di jurnal agar
+  dekomposisi berikutnya tidak menebak. Alternatif yang ditolak
+  sementara: menurunkan hold (hemat ≤150 mdtk, tidak menentukan)
+  dan mengecilkan window judge (mengubah kualitas verdict demi
+  latensi tanpa bukti).
 
 ### B4: Identitas dari stream
 
