@@ -1,11 +1,13 @@
 import hashlib
 import json
+import time
 from typing import Any, override
 from uuid import UUID
 
 from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage, SystemMessage
+from langchain_core.outputs import LLMResult
 
 from fakeyou.observability.journal import Journal
 
@@ -30,6 +32,7 @@ class ModelInputJournal(AsyncCallbackHandler):
     def __init__(self, journal: Journal, slot: str) -> None:
         self._journal = journal
         self._slot = slot
+        self._started: dict[UUID, float] = {}
 
     @override
     async def on_chat_model_start(
@@ -43,6 +46,7 @@ class ModelInputJournal(AsyncCallbackHandler):
         metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
+        self._started[run_id] = time.monotonic()
         batch = messages[0] if messages else []
         system = "\n".join(message.text for message in batch if isinstance(message, SystemMessage))
         window = json.dumps(
@@ -66,6 +70,39 @@ class ModelInputJournal(AsyncCallbackHandler):
             chars=len(system) + len(window),
             **{key: context[key] for key in CORRELATION_KEYS if context.get(key)},
         )
+
+    @override
+    async def on_llm_end(
+        self,
+        response: LLMResult,
+        *,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,
+        **kwargs: Any,
+    ) -> None:
+        del response, parent_run_id, kwargs
+        started = self._started.pop(run_id, None)
+        if started is None:
+            return
+        self._journal.record(
+            "model_output_recorded",
+            source="llm",
+            slot=self._slot,
+            run_id=str(run_id),
+            duration_ms=round((time.monotonic() - started) * 1000, 1),
+        )
+
+    @override
+    async def on_llm_error(
+        self,
+        error: BaseException,
+        *,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,
+        **kwargs: Any,
+    ) -> None:
+        del error, parent_run_id, kwargs
+        self._started.pop(run_id, None)
 
 
 def journal_model_inputs(model: BaseChatModel, journal: Journal | None, slot: str) -> BaseChatModel:

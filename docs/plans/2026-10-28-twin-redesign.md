@@ -1825,6 +1825,23 @@ dan live, bukan dari replay oue-4. False commit didefinisikan sebagai
   sementara: menurunkan hold (hemat ≤150 mdtk, tidak menentukan)
   dan mengecilkan window judge (mengubah kualitas verdict demi
   latensi tanpa bukti).
+- B2-6, implementasi (2026-11-05): revisi interim yang hanya
+  *menambah* kata di bawah ambang yang sama dengan verifikasi
+  settle (`_EXTRA_WORDS_FOR_MORE` = 3) tidak lagi membatalkan
+  hold — judgement teks arm dipakai terus dan **teks commit =
+  teks saat arm**; revisi yang mengubah kata atau menambah ≥3
+  kata tetap mempersenjatai ulang dan menilai segar. Bila arm
+  ter-decline sementara teks sudah bergerak, arm berikutnya
+  langsung dipersenjatai untuk teks terkini; `wait_idle` kini
+  menunggu sampai tidak ada task early yang tertunda (rantai
+  re-arm terlihat). Jaring pengaman tidak berubah: prosodi
+  menggerbang segmen audio penuh dan `settle_early` membatalkan
+  commit yang finalnya berkata lebih banyak. Durasi judge murni
+  kini terukur: `ModelInputJournal` mencatat
+  `model_output_recorded` (`duration_ms`, per `run_id`, semua
+  slot model) sehingga dekomposisi latensi berikutnya memisahkan
+  waktu model dari waktu antre semaphore. Validasi live
+  berikutnya: p50 commit dan distribusi `duration_ms` slot judge.
 
 ### B4: Identitas dari stream
 
