@@ -553,6 +553,44 @@ async def test_a_commit_after_speech_uses_the_arm_judgement_only(
     await loop.actor.close()
 
 
+async def test_an_appended_revision_reuses_the_armed_judgement(
+    journal: RecordingJournal,
+) -> None:
+    judge = ScriptedJudge(lambda _window: judged("reply"), delay=0.3)
+    loop, audio = early_loop(journal, FakeResponder(), judge=judge)
+    await loop.actor.note_interim(QUESTION)
+    await loop.actor.note_interim("Rani, when is the beta launch")
+    loop.actor.note_speech(active=False)
+    await asyncio.wait_for(loop.actor.wait_idle(), 3)
+
+    assert audio.spoken == [QUESTION]
+    assert [window.latest.text for window in judge.windows] == [QUESTION]
+    await loop.actor.close()
+
+
+async def test_a_declined_arm_judges_the_appended_text_next(
+    journal: RecordingJournal,
+) -> None:
+    def verdict(window: JudgeWindow) -> TurnJudgement:
+        if len(window.latest.text.split()) < 7:
+            return judged("reply", finished=False)
+        return judged("reply")
+
+    judge = ScriptedJudge(verdict, delay=0.3)
+    loop, audio = early_loop(journal, FakeResponder(), judge=judge)
+    await loop.actor.note_interim(QUESTION)
+    await asyncio.sleep(0.05)
+    await loop.actor.note_interim("Rani, when is the beta launch date")
+    loop.actor.note_speech(active=False)
+    await asyncio.wait_for(loop.actor.wait_idle(), 3)
+
+    assert audio.spoken == ["Rani, when is the beta launch date"]
+    assert len(judge.windows) == 2
+    [declined] = journal.events("early_turn_declined")
+    assert declined["reason"] == "judge_unfinished"
+    await loop.actor.close()
+
+
 async def test_a_changed_line_asks_the_judge_again_instead_of_reusing(
     journal: RecordingJournal,
 ) -> None:

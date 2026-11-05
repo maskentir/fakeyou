@@ -680,8 +680,15 @@ class FloorActor:
             raise self._failure
 
     async def wait_idle(self) -> None:
-        for task in (self._early_timer, self._early_starting):
-            if task is not None and not task.done():
+        while True:
+            pending = [
+                task
+                for task in (self._early_timer, self._early_starting)
+                if task is not None and not task.done()
+            ]
+            if not pending:
+                break
+            for task in pending:
                 await asyncio.shield(task)
         for task in self._lane_tasks():
             if task is not None:
@@ -981,17 +988,30 @@ class FloorActor:
             self._after_early_hold(self._early_version, self._early_text)
         )
 
+    def _extends_armed_text(self, words: list[str]) -> bool:
+        window = self._early_window
+        timer = self._early_timer
+        if window is None or timer is None or timer.done():
+            return False
+        armed = _early_words(window.latest.text)
+        return (
+            len(armed) < len(words) < len(armed) + _EXTRA_WORDS_FOR_MORE
+            and words[: len(armed)] == armed
+        )
+
     async def note_interim(self, text: str) -> None:
         if self._early_options is None:
             return
-        changed = _early_words(text) != _early_words(self._early_text)
+        words = _early_words(text)
+        changed = words != _early_words(self._early_text)
+        extended = changed and self._extends_armed_text(words)
         self._early_text = text
-        if changed:
+        if changed and not extended:
             self._cancel_early_hold()
         commit = self._early_commit
         if commit is not None and not commit.resumed and says_more(text, commit.text):
             await self._cancel_early(commit, reason="speech_resumed")
-        if changed:
+        if changed and not extended:
             self._arm_early_hold()
 
     async def settle_early(self, final: TranscriptEvent) -> bool:
@@ -1055,6 +1075,12 @@ class FloorActor:
                     reason=reason,
                     words=len(_early_words(text)),
                 )
+                if version == self._early_version and _early_words(
+                    self._early_text
+                ) != _early_words(text):
+                    if self._early_timer is asyncio.current_task():
+                        self._early_timer = None
+                    self._arm_early_hold()
             return
         if version != self._early_version or self._early_commit is not None:
             return

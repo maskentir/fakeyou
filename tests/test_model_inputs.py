@@ -41,6 +41,19 @@ async def test_the_same_prompt_with_a_new_window_keeps_its_system_digest() -> No
     assert "transcript_id" not in first
 
 
+async def test_every_model_call_records_its_duration() -> None:
+    journal = RecordingJournal()
+    model = journal_model_inputs(fake_model(), journal, "judge")
+
+    await model.ainvoke([HumanMessage(content="hi")])
+
+    [started] = journal.events("model_input_recorded")
+    [finished] = journal.events("model_output_recorded")
+    assert finished["slot"] == "judge"
+    assert finished["run_id"] == started["run_id"]
+    assert finished["duration_ms"] >= 0
+
+
 def test_no_journal_leaves_the_model_untouched() -> None:
     model = fake_model()
 
