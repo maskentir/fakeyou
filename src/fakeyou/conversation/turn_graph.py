@@ -35,6 +35,7 @@ from fakeyou.conversation.thinking_cue import (
     CueTurn,
     ThinkingCue,
     cue_when_slow,
+    speak_opener,
 )
 from fakeyou.conversation.turn_judge import JudgeWindow
 from fakeyou.conversation.turn_queue import (
@@ -968,15 +969,14 @@ async def _speak_reply(
     streamed = runtime.whole_turn is None and runtime.whole is None
     sink = TurnSink(runtime, scope, final.id, generations, streamed=streamed)
     cue_state = CueState()
-    cue = _start_cue(
-        runtime,
-        CueTurn(
-            final.id,
-            partial(_cue_blocker, runtime, sink, generations),
-            state=cue_state,
-            source=final.source,
-        ),
+    cue_turn = CueTurn(
+        final.id,
+        partial(_cue_blocker, runtime, sink, generations, cue_state),
+        state=cue_state,
+        source=final.source,
     )
+    opener = _start_opener(runtime, cue_turn) if reply_event.evidence_needs else None
+    cue = _start_cue(runtime, cue_turn)
     try:
         reply_batch = (*batch[:-1], await with_evidence(runtime, final.text, reply_event))
         context = replace(
@@ -996,14 +996,15 @@ async def _speak_reply(
         )
     finally:
         farewell.started = sink.started
+        await _settle_cue(opener)
         await _settle_cue(cue)
-    if cue_state.played and not output.get("completed"):
-        runtime.journal.record(
-            "thinking_cue_orphaned",
-            source="agent",
-            transcript_id=final.id,
-            detail="no_answer",
-        )
+        if cue_state.played and not sink.started:
+            runtime.journal.record(
+                "thinking_cue_orphaned",
+                source="agent",
+                transcript_id=final.id,
+                detail="no_answer",
+            )
     _raise_reply_failure(output)
     _finish_turn(runtime, output, final.id, generations, streamed=streamed)
 
@@ -1015,6 +1016,13 @@ def _start_cue(runtime: TurnContext, turn: CueTurn) -> asyncio.Task[None] | None
     return asyncio.create_task(cue_when_slow(cue, speaker, runtime.journal, turn))
 
 
+def _start_opener(runtime: TurnContext, turn: CueTurn) -> asyncio.Task[None] | None:
+    cue, speaker = runtime.cue, runtime.speaker
+    if cue is None or runtime.shadow or not isinstance(speaker, CueSpeaker):
+        return None
+    return asyncio.create_task(speak_opener(cue, speaker, runtime.journal, turn))
+
+
 async def _settle_cue(task: asyncio.Task[None] | None) -> None:
     if task is None:
         return
@@ -1022,10 +1030,14 @@ async def _settle_cue(task: asyncio.Task[None] | None) -> None:
     await asyncio.gather(task, return_exceptions=True)
 
 
-def _cue_blocker(runtime: TurnContext, sink: TurnSink, generations: tuple[int, int]) -> str | None:
+def _cue_blocker(
+    runtime: TurnContext, sink: TurnSink, generations: tuple[int, int], state: CueState
+) -> str | None:
     generation, floor_generation = generations
     if sink.started:
         return "answered"
+    if state.played:
+        return "opener_played"
     if _paused(runtime) or not _bound(runtime):
         return "paused"
     if not _turn_current(runtime, generation, floor_generation):

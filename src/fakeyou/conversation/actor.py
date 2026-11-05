@@ -502,7 +502,7 @@ class FloorActor:
     def _prepare_cues(self) -> None:
         session = self._session
         if self._cue is not None and isinstance(session, SupportsCues):
-            session.prepare_cues(self._cue.lines)
+            session.prepare_cues(self._cue.prepared_lines())
 
     def _bind_control(self) -> None:
         control = self._control
