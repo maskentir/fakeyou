@@ -993,10 +993,7 @@ class FloorActor:
         if window is None or timer is None or timer.done():
             return False
         armed = _early_words(window.latest.text)
-        return (
-            len(armed) < len(words) < len(armed) + _EXTRA_WORDS_FOR_MORE
-            and words[: len(armed)] == armed
-        )
+        return len(words) == len(armed) + 1 and words[: len(armed)] == armed
 
     async def note_interim(self, text: str) -> None:
         if self._early_options is None:
@@ -1132,6 +1129,8 @@ class FloorActor:
         active = self._floor.active
         if not session.is_speaking and (active is None or active.task.done()):
             return
+        if self._revises_active_turn(text):
+            return
         latch = self._barge
         if text == latch.last_interim:
             return
@@ -1141,6 +1140,20 @@ class FloorActor:
             await self._yield_the_floor(words, decided_by=None)
             return
         self._ask_the_judge(text, words, window)
+
+    def _revises_active_turn(self, text: str) -> bool:
+        last = self._last_final
+        if last is None:
+            return False
+        _participant, previous, _admitted_at = last
+        before = previous.split()
+        after = _tokens(text)
+        if not before or not after:
+            return False
+        if after == before:
+            return True
+        shorter, longer = sorted((before, after), key=len)
+        return SequenceMatcher(None, shorter, longer[: len(shorter)]).ratio() >= _RESUMED_MATCH
 
     def _twin_holds_floor(self, session: Any) -> bool:
         active = self._floor.active

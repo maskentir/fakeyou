@@ -1603,6 +1603,20 @@ disintesis dan judge terekam berjangkar pada final, jadi commit replay
 selalu kalah dari final; replay tetap penjaga regresi V0 dan counter
 decline-nya sinyal arah).
 
+Revisi gate (2026-11-05, dari pengukuran live-6/9/10/11): durasi
+murni satu panggilan judge terukur p50 1,28 dtk (min 0,93 dtk) —
+lantai absolutnya saja sudah ±2,6× angka 0,5 dtk, jadi gate
+latensi absolut ditulis ulang menjadi anggaran **overhead sistem
+di luar durasi judge**: untuk setiap commit, overhead =
+`vad_stop_to_commit` − `duration_ms` panggilan judge penentu
+(berpasangan lewat `model_output_recorded` slot judge terakhir
+sebelum `early_turn_started`); gate-nya overhead p50 ≤ 650 mdtk
+(hold 300 + tunggu prosodi ≤250 + kelonggaran), commit harus
+mendahului final STT pada pertanyaan bersih naskah, dan false
+commit tetap ≤5%. Angka absolut stop→commit tetap dilaporkan apa
+adanya; menembus ±1,3 dtk ke bawah menuntut judge jalur-early
+yang jauh lebih kecil/cepat, keputusan desain terpisah.
+
 Revisi riset: model Smart Turn v3.2 (BSD-2, ONNX int8 sekitar 8 MB, 23
 bahasa termasuk Indonesia, inferensi di bawah 100 ms di CPU menurut
 dokumentasi Pipecat) di-vendor seperti Silero dan dijalankan dengan
@@ -1875,6 +1889,21 @@ dan live, bukan dari replay oue-4. False commit didefinisikan sebagai
   durasi judge p50 1,28 dtk, pilihannya adalah prompt/model judge
   khusus jalur early yang jauh lebih kecil, atau gate ditulis
   ulang mengikuti lantai terukur.
+- B2-7, implementasi (2026-11-06): (a) `handle_interim` kini
+  melewati jalur barge sepenuhnya bila interim adalah revisi
+  ucapan yang sedang dijawab (`_revises_active_turn`: kemiripan
+  token terhadap teks final terakhir yang diadmit ≥
+  `_RESUMED_MATCH`, dua arah) — interim susulan dari pertanyaan
+  yang sama tidak lagi bisa membatalkan jawabannya sendiri;
+  baris yang benar-benar baru tetap mengambil lantai (kedua arah
+  dipin test). Perintah stop eksplisit tidak berubah. (b) Reuse
+  B2-6 diperketat ke **tepat ≤1 kata tambahan**; penambahan ≥2
+  kata kembali mempersenjatai dan menilai segar. (c) Gate
+  latensi ditulis ulang sebagai anggaran overhead di luar durasi
+  judge (lihat revisi gate di kepala seksi ini). Validasi live
+  berikutnya menilai ketiganya: tidak ada lagi `agent_cancelled`
+  reason `interim` atas giliran aktif, false commit kembali ≤5%,
+  overhead commit p50 ≤650 mdtk.
 
 ### B4: Identitas dari stream
 

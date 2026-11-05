@@ -572,7 +572,7 @@ async def test_a_declined_arm_judges_the_appended_text_next(
     journal: RecordingJournal,
 ) -> None:
     def verdict(window: JudgeWindow) -> TurnJudgement:
-        if len(window.latest.text.split()) < 7:
+        if len(window.latest.text.split()) < 6:
             return judged("reply", finished=False)
         return judged("reply")
 
@@ -580,14 +580,54 @@ async def test_a_declined_arm_judges_the_appended_text_next(
     loop, audio = early_loop(journal, FakeResponder(), judge=judge)
     await loop.actor.note_interim(QUESTION)
     await asyncio.sleep(0.05)
-    await loop.actor.note_interim("Rani, when is the beta launch date")
+    await loop.actor.note_interim("Rani, when is the beta launch")
     loop.actor.note_speech(active=False)
     await asyncio.wait_for(loop.actor.wait_idle(), 3)
 
-    assert audio.spoken == ["Rani, when is the beta launch date"]
+    assert audio.spoken == ["Rani, when is the beta launch"]
     assert len(judge.windows) == 2
     [declined] = journal.events("early_turn_declined")
     assert declined["reason"] == "judge_unfinished"
+    await loop.actor.close()
+
+
+async def test_a_trailing_revision_of_the_answered_line_keeps_the_answer(
+    journal: RecordingJournal,
+) -> None:
+    gate = asyncio.Event()
+    responder = FakeResponder(gate=gate)
+    loop, audio = early_loop(journal, responder)
+    loop.actor.configure_barge_in(enabled=True)
+    await loop.actor.note_interim(QUESTION)
+    loop.actor.note_speech(active=False)
+    await asyncio.wait_for(responder.started.wait(), 2)
+
+    await loop.actor.handle_interim("Rani, when is the beta start")
+    await asyncio.sleep(0.1)
+
+    assert not responder.cancelled.is_set()
+    gate.set()
+    await asyncio.wait_for(loop.actor.wait_idle(), 3)
+    assert audio.spoken == [QUESTION]
+    await loop.actor.close()
+
+
+async def test_a_new_line_still_takes_the_floor_from_an_answer_in_flight(
+    journal: RecordingJournal,
+) -> None:
+    gate = asyncio.Event()
+    responder = FakeResponder(gate=gate)
+    loop, _audio = early_loop(journal, responder)
+    loop.actor.configure_barge_in(enabled=True)
+    await loop.actor.note_interim(QUESTION)
+    loop.actor.note_speech(active=False)
+    await asyncio.wait_for(responder.started.wait(), 2)
+
+    await loop.actor.handle_interim("Rani, forget that, what about the budget instead")
+    await asyncio.sleep(0.1)
+
+    assert responder.cancelled.is_set()
+    gate.set()
     await loop.actor.close()
 
 
