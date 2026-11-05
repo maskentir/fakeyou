@@ -537,6 +537,22 @@ async def test_interims_during_speech_do_not_start_judgements(
     await loop.actor.close()
 
 
+async def test_a_commit_after_speech_uses_the_arm_judgement_only(
+    journal: RecordingJournal,
+) -> None:
+    judge = ScriptedJudge(lambda _window: judged("reply"), delay=0.05)
+    loop, audio = early_loop(journal, FakeResponder(), judge=judge)
+    loop.actor.note_speech(active=True)
+    await loop.actor.handle_interim(QUESTION)
+    await loop.actor.note_interim(QUESTION)
+    loop.actor.note_speech(active=False)
+    await asyncio.wait_for(loop.actor.wait_idle(), 3)
+
+    assert audio.spoken == [QUESTION]
+    assert len(judge.windows) == 1
+    await loop.actor.close()
+
+
 async def test_a_changed_line_asks_the_judge_again_instead_of_reusing(
     journal: RecordingJournal,
 ) -> None:

@@ -1786,9 +1786,15 @@ dan live, bukan dari replay oue-4. False commit didefinisikan sebagai
   sedang berbicara (`voice_active` diteruskan actor lewat
   `TurnInput`; absen = perilaku lama untuk produsen interim lain).
   Prefetch tetap jalan untuk barge-in (twin memegang lantai) dan
-  untuk revisi interim sesudah VAD stop — jadi reuse judgement
-  oleh final (kontrak lama) dan jalur B2-2b tetap hidup, sementara
-  banjir panggilan selama ucapan berlangsung berhenti. Barge-in
+  untuk revisi interim sesudah VAD stop, sementara banjir
+  panggilan selama ucapan berlangsung berhenti. Konsekuensi yang
+  disadari (review): pada urutan stop→final tanpa revisi interim
+  sesudah stop, final tidak lagi memakai ulang judgement interim
+  — ia menilai window-nya sendiri (pembicara bernama, bukan
+  `SPEAKING_NOW`; satu panggilan juga, hanya mulai lebih lambat,
+  dan latensi final memang wilayah B6). Replay tidak mereproduksi
+  hitungan judge live baru ini (harness replay mengirim interim
+  tanpa tepi suara, jadi prefetch-nya berjalan seperti dulu). Barge-in
   tidak kehilangan head start: `_ask_the_judge` memang dipanggil
   tepat sesudah prefetch di `handle_interim` dan memulai
   judgement-nya sendiri lewat cache bila belum ada. Validasi live

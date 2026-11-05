@@ -153,6 +153,20 @@ async def test_an_interim_while_the_twin_speaks_still_starts_the_judgement() -> 
     assert [window.latest.text for window in judge.windows] == ["twin are you there"]
 
 
+async def test_a_final_after_a_gated_interim_judges_its_own_window() -> None:
+    judge = ScriptedJudge(lambda _window: judged("reply"), delay=0.01)
+    speaker = FakeSpeaker()
+    graph = build_turn_graph()
+    context = runtime(speaker, judge=judge)
+
+    await graph.run(interim_input("twin are you there", voice_active=True), context=context)
+    await graph.run(turn_input(), context=context)
+    await context.start_pending()
+
+    assert [window.latest.text for window in judge.windows] == [QUESTION]
+    assert speaker.utterances == [TWIN_REPLY]
+
+
 async def test_the_final_reuses_the_judgement_started_on_its_interim() -> None:
     judge = ScriptedJudge(lambda _window: judged("reply"), delay=0.01)
     speaker = FakeSpeaker()
