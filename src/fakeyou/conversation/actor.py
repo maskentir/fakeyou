@@ -681,18 +681,17 @@ class FloorActor:
 
     async def wait_idle(self) -> None:
         while True:
-            pending = [
-                task
-                for task in (self._early_timer, self._early_starting)
-                if task is not None and not task.done()
+            candidates = (self._early_timer, self._early_starting)
+            pending: list[asyncio.Task[None]] = [
+                task for task in candidates if task is not None and not task.done()
             ]
             if not pending:
                 break
             for task in pending:
                 await asyncio.shield(task)
-        for task in self._lane_tasks():
-            if task is not None:
-                await asyncio.shield(task)
+        for lane in self._lane_tasks():
+            if lane is not None:
+                await asyncio.shield(lane)
         active = self._floor.active
         if active is not None:
             await asyncio.shield(active.task)
