@@ -976,7 +976,7 @@ async def _speak_reply(
         source=final.source,
     )
     opener = _start_opener(runtime, cue_turn) if reply_event.evidence_needs else None
-    cue = None if opener is not None else _start_cue(runtime, cue_turn)
+    cue = _start_cue(runtime, cue_turn)
     try:
         reply_batch = (*batch[:-1], await with_evidence(runtime, final.text, reply_event))
         context = replace(
@@ -998,13 +998,13 @@ async def _speak_reply(
         farewell.started = sink.started
         await _settle_cue(opener)
         await _settle_cue(cue)
-    if cue_state.played and not output.get("completed"):
-        runtime.journal.record(
-            "thinking_cue_orphaned",
-            source="agent",
-            transcript_id=final.id,
-            detail="no_answer",
-        )
+        if cue_state.played and not sink.started:
+            runtime.journal.record(
+                "thinking_cue_orphaned",
+                source="agent",
+                transcript_id=final.id,
+                detail="no_answer",
+            )
     _raise_reply_failure(output)
     _finish_turn(runtime, output, final.id, generations, streamed=streamed)
 

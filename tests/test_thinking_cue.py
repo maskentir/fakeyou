@@ -136,7 +136,12 @@ async def test_an_evidence_turn_speaks_the_opener_without_waiting_for_the_timer(
 async def test_the_twin_prepares_its_cues_when_it_binds_to_the_audio() -> None:
     _, audio = cue_turns(FakeResponder(), after_seconds=0.5, journal=RecordingJournal())
 
-    assert audio.prepared == [(*THINKING_CUE_LINES["id"], *OPENER_LINES["id"])]
+    assert audio.prepared == [(*OPENER_LINES["id"], *THINKING_CUE_LINES["id"])]
+
+
+def test_opener_lines_fit_the_cue_length_cap() -> None:
+    for lines in OPENER_LINES.values():
+        assert all(len(line.split()) <= 4 for line in lines)
 
 
 async def test_a_quick_reply_needs_no_cue() -> None:

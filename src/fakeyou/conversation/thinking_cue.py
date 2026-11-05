@@ -78,7 +78,7 @@ class ThinkingCue:
     def prepared_lines(self) -> tuple[str, ...]:
         language = self.language()
         opener = self.opener_by_language.get(language) or self.opener_lines
-        return (*self.lines, *opener)
+        return (*opener, *self.lines)
 
 
 def thinking_cue_for(
@@ -114,7 +114,6 @@ async def speak_opener(
     cue: ThinkingCue, speaker: CueSpeaker, journal: JournalSink, turn: CueTurn
 ) -> None:
     if turn.source == "meeting_attention":
-        _record_skip(journal, turn, "attention_lane")
         return
     reason = turn.blocked()
     if reason is None and speaker.is_speaking:
