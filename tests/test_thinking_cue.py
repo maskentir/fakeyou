@@ -13,11 +13,16 @@ from fakeyou.conversation.meeting_turns import (
     build_meeting_turns,
 )
 from fakeyou.conversation.reply_planner import SpokenChunk, TurnLanguage
-from fakeyou.conversation.thinking_cue import THINKING_CUE_LINES, ThinkingCue, thinking_cue_for
+from fakeyou.conversation.thinking_cue import (
+    OPENER_LINES,
+    THINKING_CUE_LINES,
+    ThinkingCue,
+    thinking_cue_for,
+)
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.observability.diagnostics import Diagnostics
 from tests._audio_fakes import FakeReplyAudio
-from tests._conversation_fakes import FakeResponder
+from tests._conversation_fakes import FakeResponder, ScriptedJudge, judged
 from tests._conversation_support import event
 from tests._persistence_fakes import RecordingJournal
 
@@ -103,10 +108,35 @@ async def test_a_slow_reply_is_preceded_by_one_thinking_cue() -> None:
     assert audio.spoken == [QUESTION]
 
 
+async def test_an_evidence_turn_speaks_the_opener_without_waiting_for_the_timer() -> None:
+    journal = RecordingJournal()
+    gate = asyncio.Event()
+    responder = FakeResponder(gate)
+    judge = ScriptedJudge(lambda _window: judged("reply", evidence=["memory"]))
+    audio = CueAudio()
+    turns = build_meeting_turns(
+        responder,
+        interaction=TurnInteraction(twin_names=(TWIN,), judge=judge),
+        timing=TurnTiming(thinking_cue_after_seconds=30.0),
+        diagnostics=Diagnostics(journal=journal),
+    )
+    turns.actor.bind(audio)
+
+    final = asyncio.create_task(turns.actor.handle_final(event("t1", QUESTION)))
+    await responder.started.wait()
+    await asyncio.sleep(0.05)
+
+    assert audio.timeline == [("cue", OPENER_LINES["id"][0])]
+    gate.set()
+    await final
+    await turns.close()
+    assert audio.timeline == [("cue", OPENER_LINES["id"][0]), ("reply", QUESTION)]
+
+
 async def test_the_twin_prepares_its_cues_when_it_binds_to_the_audio() -> None:
     _, audio = cue_turns(FakeResponder(), after_seconds=0.5, journal=RecordingJournal())
 
-    assert audio.prepared == [THINKING_CUE_LINES["id"]]
+    assert audio.prepared == [(*THINKING_CUE_LINES["id"], *OPENER_LINES["id"])]
 
 
 async def test_a_quick_reply_needs_no_cue() -> None:

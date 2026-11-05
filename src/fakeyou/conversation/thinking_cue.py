@@ -15,6 +15,11 @@ THINKING_CUE_LINES: dict[str, tuple[str, ...]] = {
     ].items()
 }
 
+OPENER_LINES: dict[str, tuple[str, ...]] = {
+    language: tuple(lines)
+    for language, lines in json.loads(read_package_text("spoken_lines.json"))["opener"].items()
+}
+
 
 @runtime_checkable
 class CueSpeaker(Protocol):
@@ -30,7 +35,10 @@ class ThinkingCue:
     after_seconds: float
     lines_by_language: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     current_language: Callable[[], str] | None = None
+    opener_lines: tuple[str, ...] = ()
+    opener_by_language: Mapping[str, tuple[str, ...]] = field(default_factory=lambda: OPENER_LINES)
     _rotation: dict[str, Iterator[str]] = field(init=False, repr=False, default_factory=dict)
+    _opener_rotation: dict[str, Iterator[str]] = field(init=False, repr=False, default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.lines:
@@ -43,16 +51,34 @@ class ThinkingCue:
             return ""
         return self.current_language()
 
-    def next_line(self) -> str:
+    def _next(
+        self,
+        selected: Mapping[str, tuple[str, ...]],
+        fallback: tuple[str, ...],
+        rotation: dict[str, Iterator[str]],
+    ) -> str:
         language = self.language()
-        lines = self.lines_by_language.get(language) or self.lines
+        lines = selected.get(language) or fallback
         if not lines:
             raise ValueError("a thinking cue needs at least one line")
-        rotation = self._rotation.get(language)
-        if rotation is None:
-            rotation = cycle(lines)
-            self._rotation[language] = rotation
-        return next(rotation)
+        cycle_for = rotation.get(language)
+        if cycle_for is None:
+            cycle_for = cycle(lines)
+            rotation[language] = cycle_for
+        return next(cycle_for)
+
+    def next_line(self) -> str:
+        return self._next(self.lines_by_language, self.lines, self._rotation)
+
+    def next_opener_line(self) -> str:
+        language = self.language()
+        fallback = self.opener_by_language.get(language) or self.opener_lines or self.lines
+        return self._next(self.opener_by_language, fallback, self._opener_rotation)
+
+    def prepared_lines(self) -> tuple[str, ...]:
+        language = self.language()
+        opener = self.opener_by_language.get(language) or self.opener_lines
+        return (*self.lines, *opener)
 
 
 def thinking_cue_for(
@@ -67,6 +93,7 @@ def thinking_cue_for(
         after_seconds,
         lines_by_language=THINKING_CUE_LINES,
         current_language=current_language,
+        opener_lines=OPENER_LINES[language],
     )
 
 
@@ -81,6 +108,25 @@ class CueTurn:
     blocked: Callable[[], str | None]
     state: CueState = field(default_factory=CueState)
     source: str = "meeting_audio"
+
+
+async def speak_opener(
+    cue: ThinkingCue, speaker: CueSpeaker, journal: JournalSink, turn: CueTurn
+) -> None:
+    if turn.source == "meeting_attention":
+        _record_skip(journal, turn, "attention_lane")
+        return
+    reason = turn.blocked()
+    if reason is None and speaker.is_speaking:
+        reason = "speaking"
+    if reason is not None:
+        _record_skip(journal, turn, reason)
+        return
+    journal.record("thinking_cue_requested", source="agent", transcript_id=turn.transcript_id)
+    if not await speaker.play_cue(cue.next_opener_line()):
+        _record_skip(journal, turn, "unavailable")
+        return
+    turn.state.played = True
 
 
 async def cue_when_slow(
