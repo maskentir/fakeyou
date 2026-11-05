@@ -1904,6 +1904,30 @@ dan live, bukan dari replay oue-4. False commit didefinisikan sebagai
   berikutnya menilai ketiganya: tidak ada lagi `agent_cancelled`
   reason `interim` atas giliran aktif, false commit kembali ≤5%,
   overhead commit p50 ≤650 mdtk.
+- B2, validasi live B2-7 dan vonis akhir (2026-11-06, sesi
+  `b2-live-12`, host load ±3): **false commit kembali 0** (2
+  started, 2 verified, kata commit == kata final) dan **tidak
+  ada lagi balasan terverifikasi yang dibatalkan interim** —
+  satu-satunya `agent_cancelled` reason `interim` mengenai
+  giliran *attention* tertunda yang restart 1 dtk kemudian;
+  `thinking_cue_dropped` 0, `synthesis_failed` 0, dan ke-8 baris
+  naskah terjawab masing-masing sekali tanpa pengulangan dari
+  user. Kedua commit mendahului final STT (1322 dan 934 mdtk).
+  Overhead di luar judge penentu: 383 dan 677 mdtk (n=2; satu di
+  dalam anggaran 650, satu 27 mdtk di atasnya — **di batas,
+  belum terbukti** sebagai p50). Angka absolut stop→commit
+  1626/1836 mdtk dengan durasi judge murni p50 1255 mdtk
+  (59 panggilan, 20 stop). Hanya 2 dari 8 pertanyaan bersih yang
+  ter-commit dini; 5× `final_first` karena final STT tiba
+  +0,5–1,0 dtk sesudah stop, lebih cepat dari hold+judge.
+  **Vonis B2**: mekanisme commit lokal + prosodi benar dan aman
+  (gate kebenaran lulus; bug cue-tanpa-jawaban tertutup), tetapi
+  nilai praktisnya dibatasi durasi judge LLM ±1,3 dtk — selama
+  judge itu yang dipakai, early commit hanya menang pada ucapan
+  yang finalnya lambat. Melampaui titik ini adalah keputusan
+  desain terpisah (judge jalur-early yang jauh lebih kecil/cepat
+  atau menerima lantai ini), bukan tuning B2 lagi. B2 ditutup
+  pada keadaan ini; latensi balasan total tetap wilayah B6.
 
 ### B4: Identitas dari stream
 
