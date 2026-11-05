@@ -1963,6 +1963,27 @@ Retry menjadi satu lapis: `ModelRetryMiddleware`; loop
 `REPLY_STREAM_ATTEMPTS` dihapus dan `max_retries` SDK di jalur reply
 menjadi 0.
 
+Temuan B6-0 (2026-11-06, dekomposisi jurnal `b2-live-11`/`b2-live-12`
+dengan `duration_ms` per panggilan dari B2-6): final→audio-pertama
+p50 3798–4085 mdtk (gate ≤1,0 dtk). Rinciannya stabil: sintesis
+hanya 206–421 mdtk; yang berat adalah final→teks 1,6–4,3 dtk =
+judge partisipasi final ±1,2 dtk (panggilan segar; window final
+berbeda dari interim) **ditambah** satu panggilan model `strong`
+2,5–3,3 dtk dengan prompt ±14,8 ribu karakter — juga untuk
+jawaban sepele ("tidak ada di catatanku"). Thinking cue saat ini
+baru berbunyi di final+2,5–3,4 dtk (dipersenjatai di
+`_speak_reply` + tidur `thinking_cue_after_seconds` 2,0 dtk),
+jadi keheningan yang dirasakan user justru sebelum cue. Memory
+request hanya ±150 mdtk. Urutan irisan: **B6-1** opener dari plan
+menggantikan `cue_when_slow` (audio pertama ≈ partisipasi+plan+
+sintesis opener, bukan menunggu timer); **B6-2** tier model saat
+plan supaya jawaban tanpa action/evidence berat tidak membayar
+model strong 14,8k; **B6-3** reuse judgement interim untuk final
+bila teks sama (selisih label pembicara saja). Gate ≤1,0 dtk
+tetap tidak reachable selama partisipasi saja 1,2 dtk — diukur
+ulang sesudah B6-1/B6-2 sebelum diputuskan, pola yang sama
+dengan revisi gate B2.
+
 ### B7: Perception layar yang murah
 
 - Frame dibaca setelah layar settle. OCR lokal dan hash teks menentukan
