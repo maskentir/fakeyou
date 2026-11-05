@@ -1124,12 +1124,7 @@ class FloorActor:
                 self._barge.last_interim = text
                 await self._yield_the_floor(words, decided_by="stop_lexicon")
             return
-        if not words:
-            return
-        active = self._floor.active
-        if not session.is_speaking and (active is None or active.task.done()):
-            return
-        if self._revises_active_turn(text):
+        if not words or not self._floor_contested(session, text):
             return
         latch = self._barge
         if text == latch.last_interim:
@@ -1140,6 +1135,12 @@ class FloorActor:
             await self._yield_the_floor(words, decided_by=None)
             return
         self._ask_the_judge(text, words, window)
+
+    def _floor_contested(self, session: Any, text: str) -> bool:
+        active = self._floor.active
+        if not session.is_speaking and (active is None or active.task.done()):
+            return False
+        return not self._revises_active_turn(text)
 
     def _revises_active_turn(self, text: str) -> bool:
         last = self._last_final
