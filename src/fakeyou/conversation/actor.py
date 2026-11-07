@@ -795,7 +795,9 @@ class FloorActor:
         return decision
 
     def receive_chat(self, event: TranscriptEvent) -> bool:
-        if not event.text.strip() or not self._mentioned(event.text):
+        if not event.text.strip():
+            return False
+        if self._judging is None and not self._mentioned(event.text):
             return False
         return self.defer(event, channel="chat", needs_quiet_floor=False)
 

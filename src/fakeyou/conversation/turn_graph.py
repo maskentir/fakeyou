@@ -25,6 +25,7 @@ from fakeyou.conversation.participation_graph import (
     ParticipationRuntime,
     ParticipationState,
     TurnJudging,
+    decision_of,
     participate,
 )
 from fakeyou.conversation.reply_planner import SpokenChunk
@@ -1194,18 +1195,16 @@ async def _chat_reading(runtime: TurnContext, event: TranscriptEvent) -> tuple[R
     )
     judgement, _error = await capture_error(partial(judging.cache.judgement, window))
     if judgement is None:
-        return Reading("speak", "chat_named"), False
-    reading = Reading(
-        decision="speak",
-        reason="chat_named",
-        meet_action=judgement.meet_action,
-        reaction_emoji=judgement.reaction_emoji,
-        action_only=judgement.action_only,
-        evidence=judgement.evidence,
-        state_question=judgement.state_question,
-        language=judgement.language,
+        if window.names_twin:
+            return Reading("speak", "chat_named"), False
+        return Reading("silent", "chat_unjudged"), False
+    verdict = decision_of(
+        judgement,
+        judging.thresholds,
+        named=window.names_twin,
+        sole_human_responder=window.sole_human_responder,
     )
-    return reading, judgement.owner_claim
+    return reading_of(verdict), verdict.owner_claim
 
 
 async def _deliver_chat(
@@ -1254,6 +1253,9 @@ async def _run_chat_turn(runtime: TurnContext, event: TranscriptEvent, generatio
     reading, owner_claim = await _chat_reading(runtime, event)
     planned = plan_for(runtime, event, reading, "chat", owner_claim=owner_claim)
     _record_plan(runtime, event.id, planned)
+    if planned.plan.template == "silent":
+        _move_phase(runtime, "waiting", event.id)
+        return
     done, outcome = await act_first(runtime, event, planned)
     if done:
         _move_phase(runtime, "waiting", event.id)

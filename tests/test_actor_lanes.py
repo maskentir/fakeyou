@@ -12,6 +12,7 @@ from fakeyou.conversation.meeting_turns import (
 )
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_graph import PlannedTurn
+from fakeyou.conversation.turn_judge import JudgeWindow, TurnJudgement
 from fakeyou.foundation.transcript import EventSource, TranscriptEvent
 from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.session.commands import CommandOutcome, CommandSpec
@@ -19,7 +20,7 @@ from fakeyou.session.intent import Reading, intent_of
 from fakeyou.session.planner import plan_turn
 from fakeyou.session.policy import Actor, Channel, Grant, authorize
 from tests._audio_fakes import FakeReplyAudio
-from tests._conversation_fakes import FakeResponder
+from tests._conversation_fakes import FakeResponder, ScriptedJudge, judged
 from tests._conversation_support import event
 from tests._persistence_fakes import RecordingJournal
 
@@ -457,4 +458,51 @@ async def test_a_changed_attention_is_offered() -> None:
 
     assert first is True
     assert second is True
+    await turns.close()
+
+
+def judge_for_twin_unless(other: str) -> ScriptedJudge:
+    def verdict(window: JudgeWindow) -> TurnJudgement:
+        if other.casefold() in window.latest.text.casefold():
+            return judged("stay_silent")
+        return judged("reply")
+
+    return ScriptedJudge(verdict)
+
+
+async def test_a_chat_the_judge_reads_as_for_the_twin_is_answered_without_its_full_name() -> None:
+    chat = FakeChat()
+    turns, audio = lanes(
+        FixedResponder("Budi is running QA."),
+        interaction=interaction(
+            commands=chat, planning=chat_permitted, judge=judge_for_twin_unless("Budi,")
+        ),
+    )
+
+    accepted = turns.actor.receive_chat(
+        meeting_input("c1", "Rani, who is running QA for the beta?", "meeting_chat")
+    )
+    await settle(turns)
+
+    assert accepted
+    assert chat.sent == [("Budi is running QA.", "device-budi")]
+    assert audio.spoken == []
+    await turns.close()
+
+
+async def test_a_chat_the_judge_reads_as_for_someone_else_gets_no_reply() -> None:
+    chat = FakeChat()
+    responder = FakeResponder()
+    turns, _ = lanes(
+        responder,
+        interaction=interaction(
+            commands=chat, planning=chat_permitted, judge=judge_for_twin_unless("Budi,")
+        ),
+    )
+
+    turns.actor.receive_chat(meeting_input("c1", "Budi, can you send the deck?", "meeting_chat"))
+    await settle(turns)
+
+    assert responder.calls == []
+    assert chat.sent == []
     await turns.close()
