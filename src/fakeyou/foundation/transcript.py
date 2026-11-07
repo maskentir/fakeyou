@@ -24,6 +24,20 @@ class AttentionContext:
     source_text: str | None = None
 
 
+SYSTEM_NOTE_OPENING = "\n[System: "
+SYSTEM_NOTE_CLOSING = "]"
+
+
+def with_system_notes(text: str, notes: Sequence[str]) -> str:
+    if not notes:
+        return text
+    return f"{text}{SYSTEM_NOTE_OPENING}{' '.join(notes)}{SYSTEM_NOTE_CLOSING}"
+
+
+def spoken_part(text: str) -> str:
+    return text.split(SYSTEM_NOTE_OPENING, 1)[0]
+
+
 def attention_line(context: AttentionContext) -> str:
     if context.suggested_source_ref is None or context.source_text is None:
         return context.trigger_text

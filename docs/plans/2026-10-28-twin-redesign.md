@@ -2645,7 +2645,32 @@ yang mewakili sesi: ingest transcript sesi live yang tersimpan (`oue-*`,
 uji 275 giliran berlabel judge terhadap graph itu; ambang dipilih dari
 kurva presisi/recall terhadap label judge, dengan presisi diutamakan
 (memory tak relevan di konteks lebih merugikan daripada rute strong yang
-terlewat, karena giliran owner-claim tetap dirutekan judge). Untuk
+terlewat, karena giliran owner-claim tetap dirutekan judge).
+
+Kalibrasi tanpa kebocoran (2026-11-08): enam sesi `b2-live-*` (3–5 Nov)
+di-ingest ke grup scratch `calibration-b9` (±29 fakta; LLM memory dev
+ditolak provider dengan 403 `client_attestation_denied` karena key
+langganan Muse Code hanya untuk client Muse Code, jadi ingestion dev
+selama ini gagal diam-diam — run ini memakai Gemini lewat endpoint
+OpenAI-compatible), lalu 43 giliran berlabel judge dari `b6-live-*` (5–7
+Nov) diuji. Recall tetap tidak pernah kosong (43/43). Cosine kembali tidak
+memisahkan. Tumpang tindih ≥ 2 kata isi: presisi 0,92, recall 0,52 terhadap
+label judge; sebagian besar yang "terlewat" adalah pertanyaan yang memang
+tidak dijawab memory (mis. "who is running QA?" dengan fakta teratas yang
+tidak terkait), jadi rute strong di sana tidak berguna. Catatan untuk
+C5/C7: hampir semua fakta hasil ingestion adalah ucapan twin sendiri
+("Digital twin stated that …"), termasuk "tidak ada di catatan saya" —
+memory yang mengutip dirinya sendiri.
+
+Keputusan: gate relevansi leksikal dipasang di prefetch memory sekarang
+(`memory/relevance.py`, ≥ 2 kata isi sama dengan ucapan, kata fungsi EN/ID
+dari aset JSON, kata nama twin diabaikan): fakta yang tidak relevan tidak
+masuk konteks dan tidak memicu rute strong. Bukti tanpa regresi: eval
+persona lulus; `acc-0930-replay` model kecil gagal juga di `main`
+(`must_mention_any` 0,50/0,42), dan selisih di branch (0,25) berasal dari
+cek kata yang tidak menerima "mengonfirmasi" — jawaban "harga lisensi" 4/4
+jujur ("tidak ada di catatan saya, Rani perlu mengonfirmasi") — serta dari
+"itu sudah disetujui Rani." yang di produksi dirutekan ke strong. Untuk
 giliran memory, spekulasi B9b tetap menurunkan rantai dari ±0,6 + 1,1 +
 2,7 ≈ 4,4 dtk menjadi ±0,6 + 2,7 ≈ 3,3 dtk; gate p50 ≤ 2,0 dtk berlaku
 untuk giliran tanpa memory relevan.

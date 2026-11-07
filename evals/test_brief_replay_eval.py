@@ -181,7 +181,7 @@ async def test_brief_recall_settings_limit_native_evidence() -> None:
     fixture = load_brief_fixture()
     memory_case = load_trust_fixture()["cases"][0]
     case = next(case for case in fixture["cases"] if case["needs_recall"])
-    case = {**case, "memory": memory_case["memory"]}
+    case = {**case, "memory": memory_case["memory"], "turns": memory_case["turns"]}
     settings = Settings().model_copy(
         update={
             "conversation": Settings().conversation.model_copy(update={"sentence_streaming": False})

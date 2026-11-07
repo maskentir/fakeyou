@@ -53,6 +53,7 @@ from fakeyou.identity.verify import CalibrationArtifact, load_calibration_artifa
 from fakeyou.identity.voiceprint_embed import SpeakerEmbedder, load_embedder
 from fakeyou.identity.voiceprint_match import VoiceprintMatcher
 from fakeyou.memory.memory import (
+    RecallScope,
     create_memory_prefetch_middleware,
 )
 from fakeyou.memory.persona import (
@@ -350,7 +351,7 @@ class _ConversationBuilder:
         self._middleware.append(
             create_memory_prefetch_middleware(
                 graphiti,
-                group_id=profile.memory_group,
+                scope=RecallScope(profile.memory_group, (profile.display_name,)),
                 recall=self._settings.memory.recall,
                 diag=self._diagnostics,
                 on_prefetch=self._note_prefetch,

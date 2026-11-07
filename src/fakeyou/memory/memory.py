@@ -54,6 +54,7 @@ from fakeyou.config.settings import (
 )
 from fakeyou.conversation.contribution import memory_refs_from_evidence
 from fakeyou.foundation.provenance import render_evidence
+from fakeyou.foundation.transcript import spoken_part
 from fakeyou.foundation.triggers import current_trigger, meeting_event_of, trigger_kind
 from fakeyou.memory.evidence import (
     CURRENT_FACTS_FILTER as CURRENT_FACTS_FILTER,
@@ -76,6 +77,7 @@ from fakeyou.memory.owner_notes import (
 from fakeyou.memory.owner_notes import (
     forget_owner_note as forget_owner_note,
 )
+from fakeyou.memory.relevance import relevant_edges
 from fakeyou.observability.cleanup import TeardownStack
 from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
 from fakeyou.observability.faults import capture_error
@@ -303,10 +305,18 @@ async def search_memory_evidence(
     return await describe_facts(memory, edges, group_id=group_id, result_limit=recall.result_limit)
 
 
+@dataclass(frozen=True, slots=True)
+class RecallScope:
+    group_id: str
+    ignored_names: tuple[str, ...] = ()
+
+
 async def search_memory_evidence_pair(
-    memory: Graphiti, query: str, *, group_id: str, recall: RecallSettings
+    memory: Graphiti, query: str, *, scope: RecallScope, recall: RecallSettings, question: str
 ) -> tuple[str, str]:
-    edges = await search_edges(memory, query, group_id=group_id, recall=recall)
+    group_id = scope.group_id
+    found = await search_edges(memory, query, group_id=group_id, recall=recall)
+    edges = relevant_edges(question, found, ignored=scope.ignored_names)
     slim = await describe_facts(
         memory, edges, group_id=group_id, result_limit=recall.result_limit, compact=True
     )
@@ -336,16 +346,21 @@ def _trim_retained_evidence(evidence: ToolMessage) -> ToolMessage:
     return evidence.model_copy(update={"content": trimmed})
 
 
+def spoken_question(speech: Sequence[HumanMessage]) -> str:
+    return "\n".join(spoken_part(message.text) for message in speech).strip()
+
+
 def build_prefetch_query(messages: Sequence[AnyMessage], speech: Sequence[HumanMessage]) -> str:
-    current = "\n".join(message.text for message in speech).strip()
+    current = spoken_question(speech)
     current_ids = {message.id for message in speech}
     prior: list[str] = []
     for message in messages:
         if message.id in current_ids:
             continue
         if isinstance(message, HumanMessage):
-            if "meeting_event" in (message.additional_kwargs or {}) and message.text.strip():
-                prior.append(message.text)
+            spoken = spoken_part(message.text)
+            if "meeting_event" in (message.additional_kwargs or {}) and spoken.strip():
+                prior.append(spoken)
         elif isinstance(message, AIMessage) and message.text.strip():
             prior.append(message.text)
     parts = [*prior, current] if current else prior
@@ -371,14 +386,15 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
         self,
         memory: Graphiti,
         *,
-        group_id: str,
+        scope: RecallScope,
         recall: RecallSettings,
         diag: Diagnostics = DEFAULT_DIAGNOSTICS,
         on_prefetch: PrefetchListener | None = None,
     ) -> None:
         self._on_prefetch = on_prefetch
+        self._scope = scope
         self._memory = memory
-        self._group_id = group_id
+        self._group_id = scope.group_id
         self._recall = recall
         self._faults = diag.faults
         self._journal = diag.journal or Journal("", echo=False)
@@ -442,6 +458,7 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
         prior: bool,
     ) -> tuple[AIMessage, ToolMessage]:
         query = build_prefetch_query(messages, speech)
+        question = spoken_question(speech)
         transcript_id = speech[-1].id
         request_id = self._journal.request_started(
             source="memory", operation="prefetch", transcript_id=transcript_id
@@ -451,7 +468,11 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
         async def search() -> tuple[str, str]:
             async with asyncio.timeout(self._recall.timeout_seconds):
                 return await search_memory_evidence_pair(
-                    self._memory, query, group_id=self._group_id, recall=self._recall
+                    self._memory,
+                    query,
+                    scope=self._scope,
+                    recall=self._recall,
+                    question=question,
                 )
 
         try:
@@ -523,14 +544,14 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
 def create_memory_prefetch_middleware(
     memory: Graphiti,
     *,
-    group_id: str,
+    scope: RecallScope,
     recall: RecallSettings = DEFAULTS.memory.recall,
     diag: Diagnostics = DEFAULT_DIAGNOSTICS,
     on_prefetch: PrefetchListener | None = None,
 ) -> AgentMiddleware[Any, Any, Any]:
     return _MemoryPrefetchMiddleware(
         memory,
-        group_id=group_id,
+        scope=scope,
         recall=recall,
         diag=diag,
         on_prefetch=on_prefetch,

@@ -20,7 +20,7 @@ from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.conversation.conversation import MeetingResponder, cap_spoken_reply
 from fakeyou.conversation.speech_book import BookSource, TurnEvidence
 from fakeyou.foundation.transcript import TranscriptEvent
-from fakeyou.memory.memory import create_memory_prefetch_middleware
+from fakeyou.memory.memory import RecallScope, create_memory_prefetch_middleware
 from fakeyou.memory.persona import PersonaProfile
 from fakeyou.observability.faults import capture_error
 from fakeyou.orchestration.assembly import build_source_registry
@@ -158,7 +158,7 @@ async def _replay_session(
             middleware=[
                 create_memory_prefetch_middleware(
                     memory,
-                    group_id=profile.memory_group,
+                    scope=RecallScope(profile.memory_group, (profile.display_name,)),
                     on_prefetch=lambda _outcome, refs: evidence.note_memory(refs),
                 )
             ],

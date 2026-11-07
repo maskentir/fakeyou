@@ -59,7 +59,7 @@ from fakeyou.conversation.turn_recovery import (
 )
 from fakeyou.foundation.participation import ParticipationContext
 from fakeyou.foundation.protocols import SupportsAclose
-from fakeyou.foundation.transcript import TranscriptEvent
+from fakeyou.foundation.transcript import TranscriptEvent, with_system_notes
 from fakeyou.foundation.triggers import ReplyChannel
 from fakeyou.observability.cleanup import close_safely
 from fakeyou.observability.faults import FaultReporter, capture_error
@@ -873,8 +873,12 @@ def for_reply(
 ) -> TranscriptEvent:
     plan = planned.plan
     notes = plan_notes(plan, outcome, owner_claim=planned.owner_claim)
-    text = f"{event.text}\n[System: {' '.join(notes)}]" if notes else event.text
-    return replace(event, text=text, evidence_needs=plan.evidence, owner_claim=planned.owner_claim)
+    return replace(
+        event,
+        text=with_system_notes(event.text, notes),
+        evidence_needs=plan.evidence,
+        owner_claim=planned.owner_claim,
+    )
 
 
 async def with_evidence(
@@ -888,8 +892,7 @@ async def with_evidence(
         for need, result in evidence.items()
         if isinstance(result, Mapping) and result.get("code") != "ok"
     ]
-    text = f"{event.text}\n[System: {' '.join(notes)}]" if notes else event.text
-    return replace(event, text=text, evidence=evidence)
+    return replace(event, text=with_system_notes(event.text, notes), evidence=evidence)
 
 
 async def _run_action(runtime: TurnContext, planned: PlannedTurn) -> CommandOutcome | None:

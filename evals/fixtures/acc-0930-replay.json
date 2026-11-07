@@ -9,7 +9,7 @@
       "turns": [
         {"say": "Rani Twin kapan beta launch or chill", "must_mention": ["14 oktober"]},
         {"say": "demo customer old shield jadinya hari apa", "must_mention": ["jumat"]},
-        {"say": "Berapa harga lisensi orchid per user?", "must_mention_any": ["belum", "cek", "tanya", "konfirmasi"], "must_not_mention": ["rp", "juta", "$"]},
+        {"say": "Berapa harga lisensi orchid per user?", "must_mention_any": ["belum", "cek", "tanya", "konfirmasi", "mengonfirmasi"], "must_not_mention": ["rp", "juta", "$"]},
         {"say": "Siapa yang pegang checklist launch orchid?", "must_mention": ["rani"]},
         {"say": "Terus keputusan kontraknya harus lewat dia juga.", "must_mention": ["rani"], "must_mention_any": ["tertulis", "persetujuan", "approval"]},
         {"say": "Oke catat ya kick off vendor or chill kita putuskan hari Selasa jam sepuluh pagi PIC-nya Budi.", "must_mention": ["selasa"]}
@@ -25,7 +25,7 @@
       ],
       "turns": [
         {"say": "yang sebelumnya, kickoff vendor or kilt diputuskan kapan dan siapa PIC-nya?", "must_mention": ["selasa", "budi"], "must_mention_any": ["meeting", "rapat", "dibahas"]},
-        {"say": "itu sudah disetujui Rani.", "must_mention_any": ["belum", "konfirmasi", "cek", "pastikan"]}
+        {"say": "itu sudah disetujui Rani.", "must_mention_any": ["belum", "konfirmasi", "mengonfirmasi", "cek", "pastikan"]}
       ]
     }
   ]
