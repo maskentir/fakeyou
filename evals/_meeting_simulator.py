@@ -51,6 +51,7 @@ const button = (label, text) => {
   return element;
 };
 window.__simLeft = false;
+window.__simReactions = [];
 window.__simAdmit = () => {
   const app = document.querySelector("#app");
   app.innerHTML = "";
@@ -70,6 +71,22 @@ window.__simAdmit = () => {
     hand.setAttribute("aria-label", (raised ? "Raise hand" : "Lower hand") + " (ctrl + alt + h)");
   };
   app.append(hand);
+  const picker = document.createElement("div");
+  picker.setAttribute("role", "dialog");
+  picker.setAttribute("aria-label", "Send a reaction");
+  picker.style.display = "none";
+  for (const emoji of ["\\u{1F496}", "\\u{1F44D}", "\\u{1F389}", "\\u{1F44F}", "\\u{1F602}",
+    "\\u{1F62E}", "\\u{1F622}", "\\u{1F914}", "\\u{1F44E}"]) {
+    const choice = button(emoji, emoji);
+    choice.onclick = () => window.__simReactions.push(emoji);
+    picker.append(choice);
+  }
+  const reactions = button("Send a reaction", "Reactions");
+  reactions.onclick = () => { picker.style.display = "block"; };
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") picker.style.display = "none";
+  });
+  app.append(reactions, picker);
   const panel = document.createElement("div");
   panel.style.display = "none";
   const chat = button("Chat with everyone", "Chat");
@@ -106,6 +123,7 @@ window.__simAdmit = () => {
 window.__simState = () => ({
   left: window.__simLeft,
   hand: document.querySelector("#hand")?.getAttribute("aria-label") ?? null,
+  reactions: window.__simReactions,
   sent: [...document.querySelectorAll("#messages .sent")]
     .map((item) => item.firstChild.textContent),
 });
@@ -227,12 +245,55 @@ window.__simSay = async (deviceId, wav) => {
     audible.onended = resolve;
     audible.onerror = () => reject(new Error("participant audio did not play"));
   });
+  const started = performance.timeOrigin + performance.now();
   source.start();
   await audible.play();
   await heard;
-  return buffer.duration;
+  return { start: started / 1000, end: (performance.timeOrigin + performance.now()) / 1000 };
+};
+window.__simTwin = { segments: [], chunks: [] };
+window.__simListen = async () => {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const context = new AudioContext();
+  await context.resume();
+  const analyser = context.createAnalyser();
+  analyser.fftSize = 1024;
+  context.createMediaStreamSource(stream).connect(analyser);
+  const samples = new Float32Array(analyser.fftSize);
+  let open = null;
+  setInterval(() => {
+    analyser.getFloatTimeDomainData(samples);
+    const energy = samples.reduce((total, value) => total + value * value, 0);
+    const now = (performance.timeOrigin + performance.now()) / 1000;
+    if (Math.sqrt(energy / samples.length) > 0.01) {
+      if (!open) {
+        open = { start: now, end: now };
+        window.__simTwin.segments.push(open);
+      }
+      open.end = now;
+    } else if (open && now - open.end > 0.4) {
+      open = null;
+    }
+  }, 20);
+  const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+  recorder.ondataavailable = (event) => window.__simTwin.chunks.push(event.data);
+  recorder.start(1000);
+  window.__simKeep.listening = { stream, context, recorder };
+};
+window.__simRecording = async () => {
+  const blob = new Blob(window.__simTwin.chunks, { type: "audio/webm" });
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let raw = "";
+  for (let index = 0; index < bytes.length; index += 1) raw += String.fromCharCode(bytes[index]);
+  return btoa(raw);
 };
 </script></body></html>"""
+
+
+@dataclass(frozen=True, slots=True)
+class Span:
+    start: float
+    end: float
 
 
 @dataclass(slots=True)
@@ -325,6 +386,7 @@ class MeetingSimulator:
     async def admit(self) -> None:
         self.people[0].status = IN_CALL
         await self.page.evaluate("() => window.__simAdmit()")
+        await self.page.evaluate("() => window.__simListen()")
 
     async def _send(self, payload: bytes) -> None:
         await self.page.evaluate(
@@ -374,13 +436,30 @@ class MeetingSimulator:
                     return current
                 await asyncio.sleep(0.25)
 
-    async def say(self, clip: str, *, speaker: str) -> float:
+    async def say(self, clip: str, *, speaker: str) -> Span:
         wav = base64.b64encode((FIXTURES / clip).read_bytes()).decode()
         async with asyncio.timeout(PLAY_LIMIT_SECONDS):
-            seconds: float = await self.page.evaluate(
+            spoken = await self.page.evaluate(
                 "([device, wav]) => window.__simSay(device, wav)", [speaker, wav]
             )
-        return seconds
+        return Span(**spoken)
+
+    async def twin_voice(self) -> list[Span]:
+        segments = await self.page.evaluate("() => window.__simTwin.segments")
+        return [Span(**segment) for segment in segments]
+
+    async def wait_for_twin_voice(
+        self, condition: Callable[[Span], bool], within: float = 60.0
+    ) -> Span:
+        async with asyncio.timeout(within):
+            while True:
+                found = [span for span in await self.twin_voice() if condition(span)]
+                if found:
+                    return found[0]
+                await asyncio.sleep(0.1)
+
+    async def twin_recording(self) -> bytes:
+        return base64.b64decode(await self.page.evaluate("() => window.__simRecording()"))
 
 
 @asynccontextmanager
