@@ -2298,6 +2298,73 @@ Risiko: biaya model untuk baris vocative yang ternyata tidak dijawab,
 dan tool call (memory) yang sudah jalan untuk giliran yang dibatalkan —
 keduanya read-only, jadi pembatalan aman.
 
+Revisi 2 desain B6-4 (2026-11-08, sebelum implementasi): **draft di
+final, dilepas saat di-admit**, menggantikan prefetch di VAD stop.
+Dasarnya pengukuran dari journal simulator dengan model live (reply
+`gemini-3.1-flash-lite`, 9 giliran dari S1, S3, S4): final STT tiba
+0,74–1,13 dtk sesudah VAD stop; keputusan judge 1,6–2,7 dtk, yaitu
+±1,2 dtk **sesudah** final; audio jawaban 3,0–3,7 dtk. Judge harus
+dipanggil ulang karena pada VAD stop interim STT belum lengkap: kunci
+judge S1 berturut-turut "…the Orchid", "…the Orchid beta" (dinilai saat
+VAD stop) lalu "…the Orchid beta launch?" yang baru datang bersama
+final. Akibatnya prefetch jawaban di VAD stop (desain sebelumnya) akan
+menjawab pertanyaan yang belum lengkap: ia hampir selalu dibuang, dan
+aturan rekonsiliasi `says_more` yang menoleransi tambahan kecil justru
+bisa memakai jawaban untuk pertanyaan yang berbeda ("beta" vs "beta
+launch?"). Pemetaan kode juga menunjukkan request jawaban bergantung pada
+hal yang baru ada sesudah final (id transcript sebagai id pesan dan
+pengecualian riwayat, `view()` perception, evidence live), jadi kunci
+"identik" di VAD stop tidak pernah terpenuhi.
+
+Desain: saat final tiba pada baris yang memanggil twin (`names_twin`) dan
+judgement interim terakhir untuk ucapan itu sudah selesai dengan
+`action=reply`, turn graph memulai **draft**: jalur jawaban biasa
+(`plan_for` dari bacaan interim → `for_reply` → evidence → responder),
+paralel dengan judge final, dengan kalimat ditampung dan tidak
+disintesis. Saat verdict final tiba: bila giliran di-admit dan kunci plan
+sama (`evidence_needs`, bahasa, `owner_claim`, refusal, aksi, output),
+kalimat tampungan dilepas ke sintesis dan stream dilanjutkan; selain itu
+draft dibatalkan (journal `reply_draft_dropped` dengan alasan) dan
+giliran berjalan seperti sekarang. Izin bicara tetap sepenuhnya milik
+judge; draft hanya memakai jalur read-only (memory, look, model) dan tidak
+pernah menjalankan aksi Meet — giliran dengan aksi atau keluar tidak
+di-draft. Perkiraan: VAD stop → audio jawaban ≈ final 0,9 + model 1,2 ≈
+2,1–2,3 dtk (dari 3,0–3,7). Gate tetap: p50 ≤ 3,2 dtk di simulator dan
+live, nol audio untuk giliran yang diamkan judge, draft terbuang ≤ 30%,
+eval replay tidak turun.
+
+Hasil B6-4 revisi 2 (2026-11-08): **ditolak berdasarkan bukti, tidak
+di-merge.** Draft diimplementasikan lengkap (efek jawaban seperti
+`louder`/`shorter`/bahasa ditahan sampai giliran di-admit, draft dibuang di
+setiap jalan keluar giliran, kunci memuat ukuran riwayat; review
+independen menemukan sembilan cacat yang semuanya diperbaiki) dan diukur di
+simulator dengan model live. VAD stop → kalimat jawaban pertama: p50
+3,53 dtk tanpa draft, 3,34 dtk dengan draft — di dalam noise; S1 yang
+draft-nya diterima malah 3,17 dtk (dari 3,03). Penyebabnya terlihat di
+timeline: Muse mengirim interim yang sudah lengkap ±0,6 dtk sesudah VAD
+stop, judge langsung dimulai untuk teks itu, dan final yang tiba sesudahnya
+memakai kunci yang sama — jadi "judgement pertama yang selesai untuk ucapan
+ini" hampir selalu judgement final itu sendiri (selesai 2,1 dtk). Draft
+tanpa judgement juga tidak layak: verdict menentukan plan, dan dari 13
+giliran bersuara 6 meminta `memory`, 4 `participant`, 1 `screen`, hanya 2
+tanpa evidence, di luar giliran aksi dan chat. Kesimpulan: jalur kritis
+adalah **latensi judge** (±1,3–1,7 dtk per panggilan pada teks lengkap),
+bukan urutan judge → model. Kode draft disimpan di luar `main`.
+
+Pengukuran panggilan judge (2026-11-08, probe langsung ke
+`gemini-3.1-flash-lite`, jendela pertanyaan S1): p50 1,05–1,10 dtk dengan
+1.204 token input dan 142 token output (JSON lengkap yang di-pretty-print).
+Skema yang dipangkas menjadi satu field `action` (11 token output) tetap
+0,78 dtk — itu lantai panggilan (token pertama, jaringan, input), jadi
+panjang output hanya menyumbang ±0,27 dtk dan membuang `heard` hanya
+0,03 dtk. Tiga panggilan bersamaan tidak saling memperlambat (1,10 vs
+1,09 dtk); angka 1,3–1,7 dtk di simulator berasal dari jaringan container
+Docker di Mac. Rantai di jaringan biasa: teks lengkap dari STT ±0,6 dtk
+sesudah VAD stop + judge ±1,1 + kalimat pertama ±1,0 ≈ 2,7 dtk, sudah di
+bawah gate B6 (3,2 dtk). Menurunkannya lagi butuh keputusan arsitektur —
+misalnya penilaian lokal yang cepat untuk sapaan yang jelas, dengan judge
+model hanya untuk kasus ambigu — bukan pemangkasan prompt atau skema.
+
 Sesi live `b6-live-4` (2026-11-07, semua kemampuan, brief dengan izin
 `meet_act`/`meet_chat`/`meet_leave`, `knowledge_scope=persona_memory`,
 evidence partisipan aktif; 17 langkah): lulus — sapaan "Hai Rani, bisa
