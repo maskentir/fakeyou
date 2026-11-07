@@ -2614,7 +2614,15 @@ berarti selalu strong — data `b6-live-1` menunjukkan 10/10 giliran
 `memory_prefetch_found` dengan memory persona nyata. B9a karenanya
 memisahkan "memory ditemukan" dari "memory relevan": rute ke strong
 memakai ambang skor recall, bukan sekadar hasil tidak kosong, dan ambangnya
-dikalibrasi dengan skenario yang memang butuh memory vs yang tidak. Untuk
+dikalibrasi dengan skenario yang memang butuh memory vs yang tidak. Skor
+yang sudah ada tidak cukup: recall memakai `Graphiti.search` (tanpa skor),
+dan `search_` dengan resep RRF hanya mengembalikan peringkat gabungan
+(`edge_reranker_scores` RRF tidak absolut); resep cross-encoder memberi
+skor yang lebih terkalibrasi tetapi menambah panggilan model di jalur
+kritis. Pilihan B9a: cosine similarity antara query dan fakta teratas
+memakai embedder lokal yang sudah dikonfigurasi (`granite-embedding-97m`,
+puluhan ms), dengan ambang yang dikalibrasi dari pasangan pertanyaan
+berlabel "butuh memory"/"tidak" sebelum dipakai untuk rute. Untuk
 giliran memory, spekulasi B9b tetap menurunkan rantai dari ±0,6 + 1,1 +
 2,7 ≈ 4,4 dtk menjadi ±0,6 + 2,7 ≈ 3,3 dtk; gate p50 ≤ 2,0 dtk berlaku
 untuk giliran tanpa memory relevan.
