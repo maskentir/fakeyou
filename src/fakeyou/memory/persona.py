@@ -59,6 +59,15 @@ GOALS_RULE = (
     "Profile goals describe what the owner cares about, not tasks you can carry out: you "
     "cannot collect, store, or deliver anything for the owner after the meeting."
 )
+OWNER_MODEL_RULE = (
+    "The owner model JSON below lists the owner's own approved positions, preferences, "
+    "decision rules, style examples and facts. You may state them on the owner's behalf as "
+    "the owner's view, and cite in cites the id (om-...) of every item your reply states or "
+    "relies on. Voice an item whose confidence is leaning as tentative, as where the owner is "
+    "leaning, never as a settled view. Never invent a position, preference or decision rule "
+    "for the owner that is not listed. A listed item is the owner's view, never permission to "
+    "decide, approve or commit to anything new."
+)
 KNOWN_FACT_RULES: dict[KnowledgeScope | None, str] = {
     None: "Only the profile's verified_facts are known facts about the owner.",
     "persona_memory": (

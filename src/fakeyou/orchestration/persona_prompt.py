@@ -1,3 +1,4 @@
+import json
 from dataclasses import dataclass
 
 from fakeyou.config.settings import DEFAULTS
@@ -18,6 +19,7 @@ from fakeyou.memory.persona import (
     IDENTITY_RULE,
     KNOWN_FACT_RULES,
     NATURAL_SPEECH_RULE,
+    OWNER_MODEL_RULE,
     PROMPT_PROFILE_FIELDS,
     PROVENANCE_RULE,
     RECALL_RULE,
@@ -28,8 +30,10 @@ from fakeyou.memory.persona import (
 )
 from fakeyou.perception.context import PERCEPTION_GUIDANCE
 from fakeyou.persistence.brief import MeetingBrief
+from fakeyou.persistence.owner_model import FrozenOwnerModel
 
 PARAGRAPH = "\n\n"
+MAX_OWNER_MODEL_ITEMS = 40
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +45,7 @@ class _PromptParts:
     profile_json: str = ""
     brief_rules: str = ""
     brief_json: str = ""
+    owner_model_json: str = ""
     provenance: str = ""
     natural_speech: str = ""
     confidence: str = ""
@@ -52,10 +57,32 @@ def _paragraphs(*parts: str) -> str:
     return PARAGRAPH.join(part for part in parts if part)
 
 
+def owner_model_prompt_json(owner_model: FrozenOwnerModel | None) -> str:
+    if owner_model is None:
+        return ""
+    speakable = [item for item in owner_model.items if item.disclosure == "room_speakable"]
+    if not speakable:
+        return ""
+    return json.dumps(
+        [
+            {
+                "id": item.ref,
+                "kind": item.kind,
+                "topic": item.topic,
+                "statement": item.statement,
+                "confidence": item.confidence,
+            }
+            for item in speakable[-MAX_OWNER_MODEL_ITEMS:]
+        ],
+        indent=2,
+    )
+
+
 def _prompt_parts(
     profile: PersonaProfile | None,
     *,
     brief: MeetingBrief | None,
+    owner_model: FrozenOwnerModel | None,
     language: str,
     perception: bool,
 ) -> _PromptParts:
@@ -69,6 +96,7 @@ def _prompt_parts(
     persona_knowledge = scope != "brief_only"
     recall = persona_knowledge and "recall_meeting_context" in profile.allowed_tools
     profile_fields = PROMPT_PROFILE_FIELDS if persona_knowledge else BRIEF_ONLY_PROFILE_FIELDS
+    owner_model_json = owner_model_prompt_json(owner_model) if persona_knowledge else ""
     return _PromptParts(
         role=(MEETING_GUIDANCE, SPOKEN_LANGUAGE_GUIDANCE[profile.language]),
         authority=" ".join(
@@ -80,6 +108,7 @@ def _prompt_parts(
                 ATTENTION_RULE,
                 TOOL_ECONOMY_RULE,
                 KNOWN_FACT_RULES[scope],
+                OWNER_MODEL_RULE if owner_model_json else "",
                 SOURCE_RULES,
             )
             if rule
@@ -93,6 +122,7 @@ def _prompt_parts(
             if brief is not None
             else ""
         ),
+        owner_model_json=owner_model_json,
         provenance=PROVENANCE_RULE if recall else "",
         natural_speech=NATURAL_SPEECH_RULE,
         confidence=CONFIDENCE_RULE,
@@ -105,12 +135,14 @@ def build_persona_prompt(
     profile: PersonaProfile | None,
     *,
     brief: MeetingBrief | None = None,
+    owner_model: FrozenOwnerModel | None = None,
     language: str = DEFAULTS.speech.language,
     perception: bool = False,
 ) -> str:
     parts = _prompt_parts(
         profile,
         brief=brief,
+        owner_model=owner_model,
         language=language,
         perception=perception,
     )
@@ -120,6 +152,7 @@ def build_persona_prompt(
         parts.goals,
         parts.recall,
         f"Owner profile JSON:\n{parts.profile_json}" if parts.profile_json else "",
+        f"Owner model JSON:\n{parts.owner_model_json}" if parts.owner_model_json else "",
         parts.brief_rules,
         f"Meeting brief JSON:\n{parts.brief_json}" if parts.brief_json else "",
         parts.provenance,

@@ -9,6 +9,7 @@ import pytest
 from pydantic import SecretStr
 
 from fakeyou.api.app import ApiDeps, create_app
+from fakeyou.api.owner_model import owner_model
 from fakeyou.api.schemas import SessionCreate, build_snapshot
 from fakeyou.api.sessions import SessionStore
 from fakeyou.api.status import session_status
@@ -16,7 +17,7 @@ from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.db.session_status import PhaseUpdate
 from fakeyou.foundation.taxonomy import PublicPhase, TerminalReason
-from tests._session_status_fakes import MemorySessionStatus
+from tests._session_status_fakes import MemoryOwnerModel, MemorySessionStatus
 from tests.test_api_sessions import (
     ADMIN_TOKEN,
     AT,
@@ -226,6 +227,7 @@ class ApiEventsHarness(ApiHarness):
             ),
         )
         self.app.dependency_overrides[session_status] = lambda: self.status
+        self.app.dependency_overrides[owner_model] = lambda: MemoryOwnerModel()
         self.client = httpx2.AsyncClient(
             transport=httpx2.ASGITransport(app=self.app), base_url=BASE_URL
         )

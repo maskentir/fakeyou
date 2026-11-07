@@ -64,6 +64,9 @@ def _entries(source: BookSource, memory: Mapping[str, str]) -> Iterator[BookEntr
     for texts, namespace, disclosure, question in namespaces:
         for fact_id, text in texts.items():
             yield BookEntry(fact_id, text, namespace, disclosure, question=question)
+    for ref, item in registry.owner_model.items():
+        owned = item.disclosure if source.persona_knowledge else "owner_only"
+        yield BookEntry(ref, item.text, "owner_model", owned)
 
 
 def fact_book(

@@ -1,8 +1,19 @@
 from dataclasses import replace
 from datetime import datetime
 
+from fakeyou.db.owner_model import OwnerModelSnapshot, TwinScope
 from fakeyou.db.session_status import DesiredState, PhaseUpdate, SessionStatus
 from fakeyou.foundation.taxonomy import TERMINAL_PHASES
+
+
+class MemoryOwnerModel:
+    def __init__(self, current: OwnerModelSnapshot | None = None) -> None:
+        self.current = current or OwnerModelSnapshot(version=0, items=())
+        self.scopes: list[TwinScope] = []
+
+    async def snapshot(self, scope: TwinScope) -> OwnerModelSnapshot:
+        self.scopes.append(scope)
+        return self.current
 
 
 class MemorySessionStatus:

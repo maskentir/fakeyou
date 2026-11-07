@@ -82,6 +82,8 @@ class MeetingContext(BaseModel):
     brief: MeetingBrief
     brief_sha256: Sha256Hex
     persona_sha256: Sha256Hex
+    owner_model_version: int | None = None
+    owner_model_sha256: Sha256Hex | None = None
 
     @model_validator(mode="after")
     def brief_matches_its_digest(self) -> Self:

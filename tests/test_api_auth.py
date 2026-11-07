@@ -10,6 +10,7 @@ from pydantic import SecretStr
 
 from fakeyou.api.app import ApiDeps, create_app
 from fakeyou.api.auth import Principal, TokenStore, require_owned
+from fakeyou.api.owner_model import owner_model
 from fakeyou.api.ratelimit import RateLimiter
 from fakeyou.api.schemas import SessionCreate, build_snapshot
 from fakeyou.api.sessions import SessionStore
@@ -17,7 +18,7 @@ from fakeyou.api.status import session_status
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import Settings
 from tests._sanitize_support import SYNTHETIC_MARKERS, assert_no_synthetic_markers
-from tests._session_status_fakes import MemorySessionStatus
+from tests._session_status_fakes import MemoryOwnerModel, MemorySessionStatus
 
 AT = "2026-10-03T12:00:00+00:00"
 EPISODE = "9c8b7a6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d"
@@ -78,6 +79,7 @@ async def _client(
         ApiDeps(test_routes=True, transport=transport_factory),
     )
     app.dependency_overrides[session_status] = lambda: status
+    app.dependency_overrides[owner_model] = lambda: MemoryOwnerModel()
     async with httpx2.AsyncClient(
         transport=httpx2.ASGITransport(app=app), base_url="http://testserver"
     ) as client:

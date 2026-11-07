@@ -10,14 +10,22 @@ import pytest
 from pydantic import SecretStr
 
 from fakeyou.api.app import ApiDeps, create_app
+from fakeyou.api.owner_model import owner_model
 from fakeyou.api.schemas import SessionCreate, build_snapshot
 from fakeyou.api.sessions import SessionStore
 from fakeyou.api.status import session_status
 from fakeyou.config.identifiers import SessionId, is_identifier
 from fakeyou.config.settings import Settings
+from fakeyou.db.owner_model import (
+    OwnerModelEntry,
+    OwnerModelRevision,
+    OwnerModelSnapshot,
+    TwinScope,
+)
 from fakeyou.db.session_status import PhaseUpdate
 from fakeyou.foundation.taxonomy import PublicPhase, TerminalReason
-from tests._session_status_fakes import MemorySessionStatus
+from fakeyou.persistence.owner_model import FrozenOwnerModel
+from tests._session_status_fakes import MemoryOwnerModel, MemorySessionStatus
 
 EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
 BASE_URL = "http://testserver"
@@ -74,6 +82,8 @@ class ApiHarness:
             ),
         )
         self.app.dependency_overrides[session_status] = lambda: self.status
+        self.owner_model = MemoryOwnerModel()
+        self.app.dependency_overrides[owner_model] = lambda: self.owner_model
         self.client = httpx2.AsyncClient(
             transport=httpx2.ASGITransport(app=self.app), base_url=BASE_URL
         )
@@ -182,6 +192,47 @@ async def test_create_freezes_snapshot_and_join_records_the_wish(api: ApiHarness
     joined = await api.status.get(body["meeting_id"])
     assert joined is not None
     assert joined.desired_state == "joined"
+
+
+async def test_create_freezes_the_twin_owner_model_into_the_snapshot(api: ApiHarness) -> None:
+    approved = OwnerModelRevision(
+        revision_id="r1",
+        item_id="ship",
+        revision=1,
+        scope=TwinScope("demo_owner", "demo_twin"),
+        entry=OwnerModelEntry("position", "release", "Ship after the load test passes."),
+        source="owner",
+        status="approved",
+        model_version=4,
+        created_at=STATUS_AT,
+        decided_at=STATUS_AT,
+    )
+    api.owner_model.current = OwnerModelSnapshot(version=4, items=(approved,))
+
+    created = await api.post("/v1/sessions", json=SESSION_PAYLOAD)
+
+    stored = api.store.load(created.json()["meeting_id"])
+    assert stored is not None
+    assert api.owner_model.scopes == [TwinScope("demo_owner", "demo_twin")]
+    assert stored.owner_model == FrozenOwnerModel.model_validate(
+        {
+            "version": 4,
+            "items": [
+                {
+                    "item_id": "ship",
+                    "kind": "position",
+                    "topic": "release",
+                    "statement": "Ship after the load test passes.",
+                    "confidence": "firm",
+                    "disclosure": "room_speakable",
+                }
+            ],
+        }
+    )
+    unfrozen = build_snapshot(
+        SessionCreate.model_validate(SESSION_PAYLOAD), meeting_id=stored.meeting_id, at=AT
+    )
+    assert unfrozen.snapshot_sha256 != stored.snapshot_sha256
 
 
 async def test_create_rejects_principal_and_document_mismatch(api: ApiHarness) -> None:

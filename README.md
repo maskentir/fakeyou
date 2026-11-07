@@ -163,6 +163,9 @@ is an append-only revision in PostgreSQL, so earlier versions stay readable.
 Items the owner writes are active at once and bump the model version; items
 learned from a debrief arrive as proposals and change nothing until approved.
 `owner_only` items are for the owner's eyes and never spoken in a room.
+Each session freezes the model version it starts with: the twin answers from
+the `room_speakable` items, cites them as `om-<item>`, and a `brief_only`
+meeting uses none of them.
 
 ## CLI
 

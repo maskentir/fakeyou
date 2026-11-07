@@ -319,6 +319,8 @@ async def test_join_journals_brief_metadata_without_brief_text(
         "source": "cli",
         "brief_sha256": brief_digest(brief),
         "persona_sha256": persona_digest(profile),
+        "owner_model_version": None,
+        "owner_model_sha256": None,
         "knowledge_scope": "brief_only",
         "permissions": ["ask_brief_questions", "explain_facts"],
         "agenda_count": 1,

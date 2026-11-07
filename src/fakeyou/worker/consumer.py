@@ -28,6 +28,7 @@ from fakeyou.persistence.brief import MeetingBrief
 from fakeyou.persistence.ingestion_status import read_status
 from fakeyou.persistence.layout import RECORD_FILE_NAME, MeetingDir, meeting_profile_dir
 from fakeyou.persistence.lease import LeaseError
+from fakeyou.persistence.owner_model import FrozenOwnerModel
 from fakeyou.transport.schemas import (
     DEBRIEF_STREAM,
     INGESTION_STREAM,
@@ -98,6 +99,9 @@ class Snapshot(Protocol):
 
     @property
     def brief(self) -> MeetingBrief | None: ...
+
+    @property
+    def owner_model(self) -> FrozenOwnerModel | None: ...
 
     @property
     def memory(self) -> bool: ...
@@ -178,6 +182,7 @@ def join_request_for(snapshot: Snapshot, settings: Settings, *, resume: bool) ->
         participant_policy_enabled=snapshot.participant_policy_enabled,
         participant_evidence_enabled=snapshot.participant_evidence_enabled,
         brief_path=brief_path,
+        owner_model=snapshot.owner_model,
         resume=resume,
     )
 

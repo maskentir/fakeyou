@@ -29,6 +29,7 @@ from fakeyou.foundation.digest import canonical_json_digest
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.memory.persona import PersonaProfile
 from fakeyou.persistence.brief import MeetingBrief
+from fakeyou.persistence.owner_model import FrozenOwnerModel
 from fakeyou.persistence.record import MeetingRecord
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -291,6 +292,7 @@ class ResponderContext:
     fallback: BaseChatModel | None
     counter: ModelCallCounter
     trajectory: list[dict[str, Any]]
+    owner_model: FrozenOwnerModel | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -326,7 +328,11 @@ async def _open_native_conversation(
             settings,
             config,
             agent=assembly.AgentWiring(
-                profile=profile, brief=context.brief, graphiti=context.memory, history=record
+                profile=profile,
+                brief=context.brief,
+                graphiti=context.memory,
+                history=record,
+                owner_model=context.owner_model,
             ),
             behavior=assembly.TurnBehavior(
                 on_transition=lambda *_: None,
