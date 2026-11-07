@@ -2087,6 +2087,73 @@ ulang bila B4 (identitas dari stream) membuat pembicara interim
 diketahui, atau bila sesi live menunjukkan salah addressee pada jawaban
 atas pertanyaan twin.
 
+B6-2, pengukuran desain (2026-11-07): benchmark di jalur agent produksi
+(`create_meeting_agent` + `ProviderStrategy(ReplyPlan)`, `astream`
+mode messages, 3 run per varian, median):
+
+| Model, reasoning | Prompt | Token pertama | Field `text` | Total |
+|---|---|---|---|---|
+| `gemini-3.8-flash`, low | 16k | 2,28 dtk | 2,55 dtk | 2,69 dtk |
+| `gemini-3.8-flash`, low | 6k | 2,43 dtk | 2,78 dtk | 2,88 dtk |
+| `gemini-3.8-flash`, minimal | — | ditolak API (400) | — | — |
+| `gemini-3.1-flash-lite`, minimal | 16k | 0,96 dtk | 1,09 dtk | 1,16 dtk |
+| `gemini-3.1-flash-lite`, minimal | 6k | 1,06 dtk | 1,19 dtk | 1,22 dtk |
+| `gemini-3.1-flash-lite`, low | 16k | 1,40 dtk | 1,51 dtk | 1,56 dtk |
+
+Kesimpulan terukur:
+
+- ±90% waktu `strong` habis sebelum token pertama (thinking). `low`
+  adalah level terendah yang diterima 3.8-flash; profil LangChain model
+  itu kosong, jadi guard `_require_minimal_reasoning` tidak bisa
+  menjadi sumber kebenaran untuk model ini.
+- Ukuran prompt bukan tuas latensi: 6k vs 16k karakter tidak berbeda
+  pada kedua model. Pemangkasan prompt (C4) tetap berguna untuk biaya
+  dan kualitas, bukan untuk B6.
+- Streaming kalimat sudah benar (`ReplyPlanner.feed` +
+  `parse_partial_json`); playback jatuh di akhir panggilan karena
+  token pertama baru datang di akhir.
+- Aturan sekarang (`EvidenceRoutingMiddleware`: strong bila memory
+  prefetch `found` atau evidence tool `ok`) membuat 10/10 giliran
+  `b6-live-1` memakai strong; model `small` tidak pernah dipanggil.
+  Jadi B6-2 versi awal ("giliran tanpa evidence tidak membayar strong")
+  tidak akan mengubah satu pun giliran di sesi itu.
+
+Desain B6-2 (disetujui 2026-11-07; owner menyerahkan keputusan):
+
+- Tier dipilih **saat plan oleh judge**, bukan setelah tool message dan
+  bukan oleh tabel aturan (sejalan dengan keputusan turn judge: satu LLM
+  judge yang memutuskan). `TurnJudgement` mendapat field `depth`:
+  `recall` (jawaban berdiri di satu atau dua fakta yang diambil: kapan,
+  siapa, status, atau tidak butuh fakta sama sekali) atau `synthesis`
+  (membandingkan, menyimpulkan, merencanakan, atau menimbang beberapa
+  sumber).
+- `recall` → `small` (flash-lite, minimal) **termasuk** giliran
+  ber-evidence; `synthesis` → `strong`. Giliran tanpa judgement
+  (`UNJUDGED_EVIDENCE`) memakai `strong`, karena kedalamannya tidak
+  diketahui.
+- `depth` mengalir lewat jalur kanonik yang sama dengan `evidence`:
+  `TurnJudgement` → `ParticipationDecision` → `Reading` → intent →
+  `TurnPlan` → `TranscriptEvent` → metadata `meeting_event` pesan
+  pemicu, yang sudah dibaca middleware memory. Revisi terhadap catatan
+  riset (`context_schema`): satu kanal data per giliran sudah ada dan
+  dipakai; kanal kedua tidak ditambahkan.
+- Middleware tier menggantikan `EvidenceRoutingMiddleware`; event
+  `model_route_selected` tetap (dibaca report) dengan `route` dan
+  `depth`, field `trigger` dihapus. Gate `owner_commitment` tetap
+  bekerja sesudah generasi, jadi tidak ada routing khusus untuknya.
+- `cue_when_slow` + `thinking_cue_after_seconds` dihapus di irisan
+  berikutnya hanya bila gate di bawah lulus.
+
+Gate B6-2: (1) kualitas — eval replay live dengan tier baru lulus
+`REQUIRED_PASS_RATE` 0,9 dan rasio blokir gate grounding per giliran
+ber-evidence tidak lebih buruk daripada strong pada korpus yang sama;
+(2) latensi — final → playback jawaban p50 ≤ 2,5 dtk pada sesi live
+(perkiraan 0,9 keputusan + 1,1 small + 0,3 sintesis); (3) proporsi
+`synthesis` di sesi live tercatat, supaya terlihat berapa giliran yang
+tetap membayar 2,3 dtk thinking. Risiko utama: jawaban recall flash-lite
+salah memilih fakta atau mengutip tanpa dasar; itu yang diukur gate (1),
+bukan diasumsikan.
+
 ### B7: Perception layar yang murah
 
 - Frame dibaca setelah layar settle. OCR lokal dan hash teks menentukan
