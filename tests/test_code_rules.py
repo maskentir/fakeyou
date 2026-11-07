@@ -34,6 +34,7 @@ CROSS_CUTTING_SUITES = {
     "api_events",
     "api_memory",
     "api_overrides",
+    "api_owner_model",
     "api_schemas",
     "api_sessions",
     "code_rules",

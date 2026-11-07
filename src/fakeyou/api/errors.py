@@ -11,6 +11,8 @@ CONFLICT_CODES: frozenset[str] = frozenset(
         "meeting.unfinished_session",
         "meeting.already_ended",
         "memory.forget_session_live",
+        str(ErrorCode.OWNER_MODEL_ITEM_RETIRED),
+        str(ErrorCode.OWNER_MODEL_NOT_PROPOSED),
         *(code.value for code in NOTE_CONFLICT_CODES),
     }
 )
@@ -19,6 +21,7 @@ _API_STATUS: dict[str, int] = {
     str(ErrorCode.API_UNAUTHORIZED): 401,
     str(ErrorCode.API_FORBIDDEN): 403,
     str(ErrorCode.API_NOT_FOUND): 404,
+    str(ErrorCode.OWNER_MODEL_ITEM_UNKNOWN): 404,
     str(ErrorCode.API_RATE_LIMITED): 429,
 }
 

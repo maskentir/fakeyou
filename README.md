@@ -144,11 +144,25 @@ All routes are token-authenticated: `Authorization: Bearer <token>`, owner or ad
 | `GET` | `/v1/sessions/{id}/debrief` | Debrief status and report |
 | `POST` | `/v1/twins/{id}/notes` | Write an owner note into memory |
 | `POST` | `/v1/twins/{id}/reembeddings` | Queue an embedding refresh |
+| `GET` | `/v1/twins/{id}/owner-model` | Active owner model, or `?version=` |
+| `POST` | `/v1/twins/{id}/owner-model` | Add an item |
+| `POST` | `/v1/twins/{id}/owner-model/items/{item}/revisions` | Revise an item |
+| `DELETE` | `/v1/twins/{id}/owner-model/items/{item}` | Retire an item |
+| `GET` | `/v1/twins/{id}/owner-model/items/{item}` | Revision history |
+| `GET` | `/v1/twins/{id}/owner-model/proposals` | Learned items awaiting a decision |
+| `POST` | `/v1/twins/{id}/owner-model/proposals/{revision}/approve` | Approve, or `/reject` |
 | `POST` | `/v1/sessions/{id}/forget` | Erase a meeting from memory |
 | `POST` | `/v1/admin/memory-init` | Create Graphiti indexes |
 | `GET` | `/v1/admin/check` | Effective configuration, masked |
 
 Interactive docs: `http://127.0.0.1:8000/docs`.
+
+The owner model is what the twin may stand behind on the owner's behalf:
+positions, preferences, decision rules, style examples, and facts. Every change
+is an append-only revision in PostgreSQL, so earlier versions stay readable.
+Items the owner writes are active at once and bump the model version; items
+learned from a debrief arrive as proposals and change nothing until approved.
+`owner_only` items are for the owner's eyes and never spoken in a room.
 
 ## CLI
 
@@ -170,6 +184,9 @@ fakeyou memory-add "The Acme renewal closes on 3 March" --persona .runtime/audio
 fakeyou memory-correct "The Acme renewal closes on 28 February" --episode 5b7a3c1e-2f4d-4a6b-8c9d-0e1f2a3b4c5d --source-at 2026-02-01T00:00:00+00:00
 fakeyou memory-forget --meeting-id standup-1
 fakeyou memory-reembed
+fakeyou owner-model add position release "Ship the beta after the load test passes" --persona .runtime/audio/persona.json
+fakeyou owner-model show --persona .runtime/audio/persona.json
+fakeyou owner-model proposals --persona .runtime/audio/persona.json
 fakeyou worker start https://meet.google.com/abc-defg-hij --meeting-id standup-1 --audio
 fakeyou worker status standup-1
 fakeyou worker stop standup-1

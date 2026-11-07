@@ -15,10 +15,12 @@ from fakeyou.api.debrief import router as debrief_router
 from fakeyou.api.errors import DomainConflict, error_response, http_status_for
 from fakeyou.api.events import router as events_router
 from fakeyou.api.memory import router as memory_router
+from fakeyou.api.owner_model import router as owner_model_router
 from fakeyou.api.ratelimit import RateLimiter
 from fakeyou.api.sessions import router as sessions_router
 from fakeyou.catalog.errors import ErrorCode, FakeYouError, render_error
 from fakeyou.config.settings import Settings
+from fakeyou.db.owner_model import create_owner_model
 from fakeyou.db.session_status import create_session_status
 from fakeyou.transport.streams import StreamTransport
 
@@ -102,6 +104,9 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         exits.push_async_callback(store.close)
         exits.push_async_callback(_close_stream_transport, app)
         app.state.session_status = store
+        owner_model = create_owner_model(settings)
+        exits.push_async_callback(owner_model.close)
+        app.state.owner_model = owner_model
         yield
 
 
@@ -118,6 +123,7 @@ def create_app(settings: Settings, deps: ApiDeps | None = None) -> FastAPI:
     app.state.deps = resolved_deps
     app.state.stream_transport = None
     app.state.session_status = None
+    app.state.owner_model = None
     app.state.token_store = TokenStore.from_settings(settings)
     app.state.rate_limiter = RateLimiter(settings.api.rate_limit_per_minute)
 
@@ -130,6 +136,7 @@ def create_app(settings: Settings, deps: ApiDeps | None = None) -> FastAPI:
     app.include_router(memory_router)
     app.include_router(debrief_router)
     app.include_router(admin_router)
+    app.include_router(owner_model_router)
 
     if resolved_deps.test_routes:
 

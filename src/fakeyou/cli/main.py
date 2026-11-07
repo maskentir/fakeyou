@@ -33,6 +33,17 @@ from fakeyou.cli.memory import (
     twin_id_for,
 )
 from fakeyou.cli.output import emit_error, emit_json
+from fakeyou.cli.owner_model import (
+    OwnerModelItem,
+    OwnerModelTarget,
+    add_owner_model_item,
+    decide_owner_model_proposal,
+    retire_owner_model_item,
+    revise_owner_model_item,
+    show_owner_model,
+    show_owner_model_history,
+    show_owner_model_proposals,
+)
 from fakeyou.cli.replay import ReplaySource, replay_meeting, replay_report
 from fakeyou.cli.sessions import (
     SessionOptions,
@@ -52,6 +63,7 @@ from fakeyou.cli.voiceprint import (
 from fakeyou.config.identifiers import parse_session_id
 from fakeyou.config.settings import Settings
 from fakeyou.db.checkpoint import is_database_error
+from fakeyou.db.owner_model import Confidence, ItemDisclosure, OwnerModelKind
 from fakeyou.diarization.diarize_service import diarize_run
 from fakeyou.identity.enrollment import EnrollSubject, LivenessGate
 from fakeyou.memory.persona import OperatorIdentity
@@ -159,6 +171,13 @@ perception_app = typer.Typer(
     pretty_exceptions_enable=False,
     rich_markup_mode=None,
 )
+owner_model_app = typer.Typer(
+    help="Review and edit what the twin knows about the owner's positions and style",
+    add_completion=False,
+    no_args_is_help=False,
+    pretty_exceptions_enable=False,
+    rich_markup_mode=None,
+)
 diarize_app = typer.Typer(
     help="Run offline speaker correction for one meeting",
     add_completion=False,
@@ -173,6 +192,7 @@ app.add_typer(calibrate_app, name="calibrate")
 app.add_typer(audio_app, name="audio")
 app.add_typer(perception_app, name="perception")
 app.add_typer(diarize_app, name="diarize")
+app.add_typer(owner_model_app, name="owner-model")
 
 
 @app.command("check", help="Inspect installed packages and credential presence")
@@ -779,3 +799,116 @@ def _describe(error: ValidationError) -> str:
         f"{'.'.join(str(part) for part in issue['loc']) or 'input'}: {issue['msg']}"
         for issue in error.errors(include_url=False, include_input=False)
     )
+
+
+_PersonaOption = Annotated[Path | None, typer.Option("--persona")]
+_TwinOption = Annotated[str | None, typer.Option("--twin-id")]
+_KindArgument = Annotated[OwnerModelKind, typer.Argument()]
+_ConfidenceOption = Annotated[Confidence, typer.Option("--confidence")]
+_DisclosureOption = Annotated[ItemDisclosure, typer.Option("--disclosure")]
+_ReasonOption = Annotated[str | None, typer.Option("--reason")]
+
+
+def _owner_model_target(persona_path: Path | None, twin_id: str | None) -> OwnerModelTarget:
+    return OwnerModelTarget(client_settings_from_env(), twin_id_for(persona_path, twin_id))
+
+
+@owner_model_app.command("show", help="Show the active owner model, or an earlier version")
+@_guard_interrupts
+def owner_model_show_command(
+    *,
+    version: Annotated[int | None, typer.Option("--version", min=0)] = None,
+    persona_path: _PersonaOption = None,
+    twin_id: _TwinOption = None,
+) -> None:
+    asyncio.run(show_owner_model(_owner_model_target(persona_path, twin_id), version=version))
+
+
+@owner_model_app.command("add", help="Add an item the owner stands behind")
+@_guard_interrupts
+def owner_model_add_command(
+    kind: _KindArgument,
+    topic: Annotated[str, typer.Argument()],
+    statement: Annotated[str, typer.Argument()],
+    *,
+    confidence: _ConfidenceOption = "firm",
+    disclosure: _DisclosureOption = "room_speakable",
+    reason: _ReasonOption = None,
+    persona_path: _PersonaOption = None,
+    twin_id: _TwinOption = None,
+) -> None:
+    item = OwnerModelItem(kind, topic, statement, confidence, disclosure, reason)
+    asyncio.run(add_owner_model_item(_owner_model_target(persona_path, twin_id), item))
+
+
+@owner_model_app.command("revise", help="Replace an item with a new revision")
+@_guard_interrupts
+def owner_model_revise_command(
+    item_id: Annotated[str, typer.Argument()],
+    kind: _KindArgument,
+    topic: Annotated[str, typer.Argument()],
+    statement: Annotated[str, typer.Argument()],
+    *,
+    confidence: _ConfidenceOption = "firm",
+    disclosure: _DisclosureOption = "room_speakable",
+    reason: _ReasonOption = None,
+    persona_path: _PersonaOption = None,
+    twin_id: _TwinOption = None,
+) -> None:
+    item = OwnerModelItem(kind, topic, statement, confidence, disclosure, reason)
+    target = _owner_model_target(persona_path, twin_id)
+    asyncio.run(revise_owner_model_item(target, item_id, item))
+
+
+@owner_model_app.command("retire", help="Take an item out of the owner model")
+@_guard_interrupts
+def owner_model_retire_command(
+    item_id: Annotated[str, typer.Argument()],
+    *,
+    persona_path: _PersonaOption = None,
+    twin_id: _TwinOption = None,
+) -> None:
+    asyncio.run(retire_owner_model_item(_owner_model_target(persona_path, twin_id), item_id))
+
+
+@owner_model_app.command("history", help="Show every revision of one item")
+@_guard_interrupts
+def owner_model_history_command(
+    item_id: Annotated[str, typer.Argument()],
+    *,
+    persona_path: _PersonaOption = None,
+    twin_id: _TwinOption = None,
+) -> None:
+    asyncio.run(show_owner_model_history(_owner_model_target(persona_path, twin_id), item_id))
+
+
+@owner_model_app.command("proposals", help="List learned items waiting for the owner's decision")
+@_guard_interrupts
+def owner_model_proposals_command(
+    *, persona_path: _PersonaOption = None, twin_id: _TwinOption = None
+) -> None:
+    asyncio.run(show_owner_model_proposals(_owner_model_target(persona_path, twin_id)))
+
+
+@owner_model_app.command("approve", help="Approve a proposal into the owner model")
+@_guard_interrupts
+def owner_model_approve_command(
+    revision_id: Annotated[str, typer.Argument()],
+    *,
+    persona_path: _PersonaOption = None,
+    twin_id: _TwinOption = None,
+) -> None:
+    target = _owner_model_target(persona_path, twin_id)
+    asyncio.run(decide_owner_model_proposal(target, revision_id, approve=True))
+
+
+@owner_model_app.command("reject", help="Reject a proposal")
+@_guard_interrupts
+def owner_model_reject_command(
+    revision_id: Annotated[str, typer.Argument()],
+    *,
+    persona_path: _PersonaOption = None,
+    twin_id: _TwinOption = None,
+) -> None:
+    target = _owner_model_target(persona_path, twin_id)
+    asyncio.run(decide_owner_model_proposal(target, revision_id, approve=False))

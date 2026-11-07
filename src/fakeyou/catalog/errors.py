@@ -89,6 +89,9 @@ class ErrorCode(StrEnum):
     NOTE_ID_IN_USE = "note.id_in_use"
     NOTE_ALREADY_SUPERSEDED = "note.already_superseded"
     NOTE_PAYLOAD_MISMATCH = "note.payload_mismatch"
+    OWNER_MODEL_ITEM_UNKNOWN = "owner_model.item_unknown"
+    OWNER_MODEL_ITEM_RETIRED = "owner_model.item_retired"
+    OWNER_MODEL_NOT_PROPOSED = "owner_model.not_proposed"
     DEBRIEF_OWNERSHIP_UNVERIFIABLE = "debrief.ownership_unverifiable"
     DEBRIEF_SCOPE_MISMATCH = "debrief.scope_mismatch"
     DEBRIEF_RECORD_MISSING = "debrief.record_missing"
@@ -469,6 +472,15 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
     ),
     ErrorCode.NOTE_CORRECTION_TARGET_INACTIVE: ErrorSpec("correction target is no longer active"),
     ErrorCode.NOTE_NOT_PENDING: ErrorSpec("owner note is no longer pending"),
+    ErrorCode.OWNER_MODEL_ITEM_UNKNOWN: ErrorSpec(
+        "owner model item {item_id} does not exist for this twin", ExitCode.INPUT_REJECTED
+    ),
+    ErrorCode.OWNER_MODEL_ITEM_RETIRED: ErrorSpec(
+        "owner model item {item_id} is retired; add a new item instead", ExitCode.INPUT_REJECTED
+    ),
+    ErrorCode.OWNER_MODEL_NOT_PROPOSED: ErrorSpec(
+        "owner model revision {revision_id} is not awaiting a decision", ExitCode.INPUT_REJECTED
+    ),
     ErrorCode.NOTE_CORRECTION_CONCURRENT: ErrorSpec(
         "concurrent correction already replaced this note"
     ),

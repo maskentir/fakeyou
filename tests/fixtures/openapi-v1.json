@@ -62,6 +62,26 @@
     "/v1/twins/{twin_id}/notes/{episode_uuid}/corrections": [
       "post"
     ],
+    "/v1/twins/{twin_id}/owner-model": [
+      "get",
+      "post"
+    ],
+    "/v1/twins/{twin_id}/owner-model/items/{item_id}": [
+      "delete",
+      "get"
+    ],
+    "/v1/twins/{twin_id}/owner-model/items/{item_id}/revisions": [
+      "post"
+    ],
+    "/v1/twins/{twin_id}/owner-model/proposals": [
+      "get"
+    ],
+    "/v1/twins/{twin_id}/owner-model/proposals/{revision_id}/approve": [
+      "post"
+    ],
+    "/v1/twins/{twin_id}/owner-model/proposals/{revision_id}/reject": [
+      "post"
+    ],
     "/v1/twins/{twin_id}/reembeddings": [
       "post"
     ]
@@ -85,6 +105,9 @@
     "NoteCorrect",
     "NoteCreate",
     "NoteView",
+    "OwnerModelItemBody",
+    "OwnerModelRevisionView",
+    "OwnerModelView",
     "PersonaProfile",
     "SessionCreate",
     "SessionView",
