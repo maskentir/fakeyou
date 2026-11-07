@@ -1,13 +1,16 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import override
 
 from fakeyou.conversation import turn_graph
 from fakeyou.conversation.turn_graph import (
     OWNER_CLAIM_NOTE,
     PlannedTurn,
+    failed_look_note,
     for_reply,
+    language_note,
     plan_for,
     plan_notes,
+    with_evidence,
 )
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.orchestration.kernel_port import KernelPort
@@ -259,3 +262,34 @@ def test_a_claimed_owner_approval_tells_the_reply_not_to_take_it_as_fact() -> No
 
     assert reply.owner_claim is True
     assert OWNER_CLAIM_NOTE in reply.text
+
+
+def test_the_reply_is_told_to_answer_in_the_language_the_participant_spoke() -> None:
+    plan = TurnPlan("p", "speech_only", output="speech", language="en")
+
+    reply = for_reply(event("Shorter please."), PlannedTurn(plan), None)
+
+    note = language_note("en")
+    assert note is not None
+    assert note in reply.text
+
+
+def test_an_unknown_language_adds_no_language_note() -> None:
+    plan = TurnPlan("p", "speech_only", output="speech")
+
+    assert language_note(None) is None
+    assert for_reply(event("Hi."), PlannedTurn(plan), None).text == "Hi."
+
+
+async def test_a_failed_look_tells_the_reply_not_to_claim_it_saw_anything() -> None:
+    async def looks(question: str, needs: tuple[str, ...]) -> dict[str, object]:
+        del question, needs
+        return {"participant": {"code": "unknown_participant"}, "screen": {"code": "ok"}}
+
+    runtime = TurnTestContext(speaker=SilentSpeaker(), journal=RecordingJournal(), evidence=looks)
+    asked = replace(event("What color is my shirt?"), evidence_needs=("participant", "screen"))
+
+    reply = await with_evidence(runtime, asked.text, asked)
+
+    assert failed_look_note("participant", "unknown_participant") in reply.text
+    assert "the shared screen" not in reply.text

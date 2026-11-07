@@ -2316,13 +2316,16 @@ is my shirt" → `unknown_participant` karena "me" tidak menyebut nama dan
 suara belum terikat ke perangkat (B4) — #127 melihat satu-satunya
 peserta bila hanya ada satu; (3) di `b6-live-3` semua aksi ditolak
 `browser_unavailable` padahal penyebabnya brief tanpa izin — #129
-mendahulukan `not_permitted`. Masih terbuka: reaksi 👍 `effect_unobserved`
-(menunggu konfirmasi visual owner); jawaban "shorter" berbahasa
-Indonesia padahal dideklarasikan `en` — dipicu `speaking_style` persona
-uji yang berbahasa Indonesia, tetapi teks yang tidak cocok dengan bahasa
-deklarasinya tetap diucapkan (perlu keputusan deteksi bahasa); twin
-berkata "I can see you" padahal look gagal tanpa gambar (celah
-kejujuran evidence, masih ada untuk rapat dengan beberapa orang).
+mendahulukan `not_permitted`. Owner mengonfirmasi reaksi 👍 muncul, jadi
+`effect_unobserved` di sana adalah negatif palsu verifikasi (prioritas
+rendah). Dua celah lain ditutup sesudah sesi: bahasa jawaban kini
+dinyatakan eksplisit dari deteksi bahasa judge ("The participant spoke
+English; answer in English.") — probe dengan persona ber-`speaking_style`
+Indonesia dan "Shorter please.": `main` 2 dari 3 menjawab berbahasa
+Indonesia, sesudah perbaikan 3 dari 3 berbahasa Inggris; dan look yang
+gagal (kode selain `ok`) menambahkan catatan agar twin mengatakan tidak
+bisa melihat dan tidak mengklaim melihat apa pun. `conversation_replay`
+live sesudahnya: semua family 1,0.
 
 Temuan sampingan (2026-11-07): debrief gagal di **setiap** sesi live
 (`debrief_failed` di `b6-live-1` dan `b6-live-3`) karena
