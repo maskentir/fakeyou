@@ -883,3 +883,42 @@ def test_saying_more_means_the_line_grew_from_the_same_words() -> None:
     assert says_more("Rani, when is the beta and the launch", QUESTION)
     assert not says_more("Budi, can you share the deck", QUESTION)
     assert not says_more(QUESTION, QUESTION)
+
+
+async def test_a_verified_early_turn_settles_its_gate_as_kept(journal: RecordingJournal) -> None:
+    held = asyncio.Event()
+    responder = FakeResponder(held)
+    loop, _ = early_loop(journal, responder)
+    await loop.actor.note_interim(QUESTION)
+    loop.actor.note_speech(active=False)
+    assert await asyncio.wait_for(responder.started.wait(), 2)
+    gate = loop.actor.early_commit
+    assert gate is not None
+    assert not gate.settled.is_set()
+
+    assert await loop.actor.settle_early(event("final-1", QUESTION)) is True
+
+    assert gate.settled.is_set()
+    assert gate.resumed is False
+    held.set()
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
+    await loop.actor.close()
+
+
+async def test_a_withdrawn_early_turn_settles_its_gate_as_resumed(
+    journal: RecordingJournal,
+) -> None:
+    responder = FakeResponder(asyncio.Event())
+    loop, _ = early_loop(journal, responder)
+    await loop.actor.note_interim(QUESTION)
+    loop.actor.note_speech(active=False)
+    assert await asyncio.wait_for(responder.started.wait(), 2)
+    gate = loop.actor.early_commit
+    assert gate is not None
+
+    await loop.actor.note_interim(MORE)
+
+    assert gate.settled.is_set()
+    assert gate.resumed is True
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
+    await loop.actor.close()
