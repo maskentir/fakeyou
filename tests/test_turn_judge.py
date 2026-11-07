@@ -61,7 +61,7 @@ def test_an_interim_window_has_no_transcript(tmp_path: Path) -> None:
     record = _record(tmp_path)
 
     window = WindowSource(record, window_lines=8).for_interim(
-        "still talking", twin_speaking=True, purpose="interim"
+        "still talking", twin_speaking=True, purpose="interim", history_seq=None
     )
 
     assert window.transcript_id is None
@@ -74,7 +74,7 @@ def test_the_window_keeps_only_the_latest_lines(tmp_path: Path) -> None:
         record.add_transcript(event(f"t{index}", f"line {index}"))
 
     window = WindowSource(record, window_lines=2).for_interim(
-        "still talking", twin_speaking=True, purpose="interim"
+        "still talking", twin_speaking=True, purpose="interim", history_seq=None
     )
 
     assert [line.text for line in window.earlier] == ["line 3", "line 4"]
@@ -335,3 +335,18 @@ def test_the_purpose_of_a_window_does_not_split_the_cache_key() -> None:
         JudgeWindow((), line, purpose="interim").key
         == JudgeWindow((), line, purpose="early_hold").key
     )
+
+
+def test_an_interim_window_holds_only_lines_recorded_before_it_was_heard(
+    tmp_path: Path,
+) -> None:
+    record = _record(tmp_path)
+    record.add_transcript(event("t0", "line 0"))
+    heard_at = record.last_seq
+    record.add_transcript(event("t1", "Rani, beta?"))
+
+    window = WindowSource(record, window_lines=8).for_interim(
+        "Rani, beta?", twin_speaking=False, purpose="interim", history_seq=heard_at
+    )
+
+    assert [line.text for line in window.earlier] == ["line 0"]

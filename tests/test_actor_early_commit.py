@@ -120,7 +120,7 @@ async def test_a_finished_question_starts_the_turn_at_silence(
 ) -> None:
     loop, audio = early_loop(journal, FakeResponder())
 
-    await loop.actor.note_interim(QUESTION)
+    await loop.actor.note_interim(QUESTION, history_seq=None)
     loop.actor.note_speech(active=False)
     await asyncio.wait_for(loop.actor.wait_idle(), 2)
 
@@ -133,7 +133,7 @@ async def test_the_final_of_an_early_turn_does_not_start_a_second_turn(
     journal: RecordingJournal,
 ) -> None:
     loop, audio = early_loop(journal, FakeResponder())
-    await loop.actor.note_interim(QUESTION)
+    await loop.actor.note_interim(QUESTION, history_seq=None)
     loop.actor.note_speech(active=False)
     await asyncio.wait_for(loop.actor.wait_idle(), 2)
 
@@ -151,11 +151,11 @@ async def test_speaking_on_after_the_start_withdraws_the_early_turn(
 ) -> None:
     responder = FakeResponder(asyncio.Event())
     loop, audio = early_loop(journal, responder)
-    await loop.actor.note_interim(QUESTION)
+    await loop.actor.note_interim(QUESTION, history_seq=None)
     loop.actor.note_speech(active=False)
     assert await asyncio.wait_for(responder.started.wait(), 2)
 
-    await loop.actor.note_interim(MORE)
+    await loop.actor.note_interim(MORE, history_seq=None)
     await asyncio.wait_for(loop.actor.wait_idle(), 2)
 
     assert audio.spoken == []
@@ -168,13 +168,13 @@ async def test_speaking_on_after_the_start_withdraws_the_early_turn(
 async def test_a_resumed_line_does_not_withdraw_a_later_turn(journal: RecordingJournal) -> None:
     responder = GatedSecondResponder()
     loop, audio = early_loop(journal, responder)
-    await loop.actor.note_interim(QUESTION)
+    await loop.actor.note_interim(QUESTION, history_seq=None)
     loop.actor.note_speech(active=False)
     await asyncio.wait_for(loop.actor.wait_idle(), 2)
 
     await loop.actor.receive_final(event("t2", "Rani, second question?"))
     assert await asyncio.wait_for(responder.second_started.wait(), 2)
-    await loop.actor.note_interim(MORE)
+    await loop.actor.note_interim(MORE, history_seq=None)
     responder.second_gate.set()
     await asyncio.wait_for(loop.actor.wait_idle(), 2)
 
@@ -215,7 +215,7 @@ async def test_a_resumed_line_withdraws_a_queued_early_turn(journal: RecordingJo
     await loop.actor.receive_final(event("t1", "Rani, first?"))
     assert await asyncio.wait_for(audio.entered.wait(), 2)
 
-    await loop.actor.note_interim(QUESTION)
+    await loop.actor.note_interim(QUESTION, history_seq=None)
     loop.actor.note_speech(active=False)
     for _ in range(200):
         if loop.actor.queue.pending:
@@ -224,7 +224,7 @@ async def test_a_resumed_line_withdraws_a_queued_early_turn(journal: RecordingJo
     assert loop.actor.queue.pending
     assert journal.events("early_turn_started")
 
-    await loop.actor.note_interim(MORE)
+    await loop.actor.note_interim(MORE, history_seq=None)
     audio.release.set()
     await asyncio.wait_for(loop.actor.wait_idle(), 2)
 
@@ -253,7 +253,7 @@ async def test_a_declined_early_commit_is_journaled_with_its_reason(
             EarlyOptions(hold_seconds=0.0, build_event=lambda text: event("early-0", text))
         )
 
-        await loop.actor.note_interim("Rani, so about the")
+        await loop.actor.note_interim("Rani, so about the", history_seq=None)
         loop.actor.note_speech(active=False)
         await asyncio.wait_for(loop.actor.wait_idle(), 2)
 
@@ -277,7 +277,7 @@ async def test_a_hold_without_a_judge_is_journaled_as_declined(
         EarlyOptions(hold_seconds=0.0, build_event=lambda text: event("early-0", text))
     )
 
-    await loop.actor.note_interim(QUESTION)
+    await loop.actor.note_interim(QUESTION, history_seq=None)
     loop.actor.note_speech(active=False)
     await asyncio.wait_for(loop.actor.wait_idle(), 2)
 
@@ -293,7 +293,7 @@ async def test_a_final_that_beats_the_hold_is_journaled_as_declined(
     loop.actor.configure_early(
         EarlyOptions(hold_seconds=60.0, build_event=lambda text: event("early-0", text))
     )
-    await loop.actor.note_interim(QUESTION)
+    await loop.actor.note_interim(QUESTION, history_seq=None)
     loop.actor.note_speech(active=False)
     await asyncio.sleep(0)
 
@@ -313,7 +313,7 @@ async def test_speech_resuming_during_the_hold_is_journaled_as_superseded(
     loop.actor.configure_early(
         EarlyOptions(hold_seconds=60.0, build_event=lambda text: event("early-0", text))
     )
-    await loop.actor.note_interim(QUESTION)
+    await loop.actor.note_interim(QUESTION, history_seq=None)
     loop.actor.note_speech(active=False)
     await asyncio.sleep(0)
 
@@ -333,7 +333,7 @@ async def test_an_interim_arriving_after_the_stop_still_commits(
     )
 
     loop.actor.note_speech(active=False)
-    await loop.actor.note_interim(QUESTION)
+    await loop.actor.note_interim(QUESTION, history_seq=None)
     await asyncio.wait_for(loop.actor.wait_idle(), 2)
 
     assert audio.spoken == [QUESTION]
@@ -349,11 +349,11 @@ async def test_text_growth_during_the_hold_restarts_stability_and_commits_the_gr
     loop.actor.configure_early(
         EarlyOptions(hold_seconds=0.08, build_event=lambda text: event("early-0", text))
     )
-    await loop.actor.note_interim(QUESTION)
+    await loop.actor.note_interim(QUESTION, history_seq=None)
     loop.actor.note_speech(active=False)
     await asyncio.sleep(0.03)
 
-    await loop.actor.note_interim(MORE)
+    await loop.actor.note_interim(MORE, history_seq=None)
     await asyncio.wait_for(loop.actor.wait_idle(), 2)
 
     assert audio.spoken == [MORE]
@@ -367,11 +367,11 @@ async def test_a_repeated_interim_does_not_restart_the_hold(journal: RecordingJo
     loop.actor.configure_early(
         EarlyOptions(hold_seconds=0.2, build_event=lambda text: event("early-0", text))
     )
-    await loop.actor.note_interim(QUESTION)
+    await loop.actor.note_interim(QUESTION, history_seq=None)
     loop.actor.note_speech(active=False)
     await asyncio.sleep(0.12)
 
-    await loop.actor.note_interim(QUESTION)
+    await loop.actor.note_interim(QUESTION, history_seq=None)
     await asyncio.sleep(0.14)
 
     assert audio.spoken == [QUESTION]
@@ -394,11 +394,11 @@ async def test_text_growth_while_the_judge_runs_commits_the_grown_text_once(
     loop.actor.configure_early(
         EarlyOptions(hold_seconds=0.0, build_event=lambda text: event("early-0", text))
     )
-    await loop.actor.note_interim(QUESTION)
+    await loop.actor.note_interim(QUESTION, history_seq=None)
     loop.actor.note_speech(active=False)
     await asyncio.sleep(0.03)
 
-    await loop.actor.note_interim(MORE)
+    await loop.actor.note_interim(MORE, history_seq=None)
     await asyncio.wait_for(loop.actor.wait_idle(), 2)
 
     assert audio.spoken == [MORE]
@@ -421,7 +421,7 @@ async def test_a_duplicate_stop_does_not_decline_the_same_text_twice(
     loop.actor.configure_early(
         EarlyOptions(hold_seconds=0.0, build_event=lambda text: event("early-0", text))
     )
-    await loop.actor.note_interim(QUESTION)
+    await loop.actor.note_interim(QUESTION, history_seq=None)
     loop.actor.note_speech(active=False)
     await asyncio.wait_for(loop.actor.wait_idle(), 2)
 
@@ -446,7 +446,7 @@ async def test_an_unfinished_line_waits_for_the_final(journal: RecordingJournal)
         EarlyOptions(hold_seconds=0.0, build_event=lambda text: event("early-0", text))
     )
 
-    await loop.actor.note_interim("Rani, so about the")
+    await loop.actor.note_interim("Rani, so about the", history_seq=None)
     loop.actor.note_speech(active=False)
     await asyncio.wait_for(loop.actor.wait_idle(), 2)
 
@@ -460,7 +460,7 @@ async def test_a_final_that_says_much_more_withdraws_the_early_turn(
 ) -> None:
     responder = FakeResponder(asyncio.Event())
     loop, audio = early_loop(journal, responder)
-    await loop.actor.note_interim(QUESTION)
+    await loop.actor.note_interim(QUESTION, history_seq=None)
     loop.actor.note_speech(active=False)
     assert await asyncio.wait_for(responder.started.wait(), 2)
 
@@ -479,11 +479,11 @@ async def test_the_next_speaker_does_not_withdraw_the_early_turn(
     journal: RecordingJournal,
 ) -> None:
     loop, audio = early_loop(journal, FakeResponder())
-    await loop.actor.note_interim(QUESTION)
+    await loop.actor.note_interim(QUESTION, history_seq=None)
     loop.actor.note_speech(active=False)
     await asyncio.wait_for(loop.actor.wait_idle(), 2)
 
-    await loop.actor.note_interim("Budi, can you share the deck")
+    await loop.actor.note_interim("Budi, can you share the deck", history_seq=None)
 
     assert journal.events("early_turn_cancelled") == []
     assert audio.spoken == [QUESTION]
@@ -504,12 +504,12 @@ async def test_the_commit_reuses_the_judgement_already_made_for_the_interim(
     loop.actor.configure_early(
         EarlyOptions(hold_seconds=0.0, build_event=lambda text: event("early-0", text))
     )
-    await loop.actor.handle_interim(QUESTION)
+    await loop.actor.handle_interim(QUESTION, history_seq=None)
     await asyncio.sleep(0.05)
     calls = len(judge.windows)
     assert calls >= 1
 
-    await loop.actor.note_interim(QUESTION)
+    await loop.actor.note_interim(QUESTION, history_seq=None)
     loop.actor.note_speech(active=False)
     await asyncio.wait_for(loop.actor.wait_idle(), 2)
 
@@ -524,13 +524,13 @@ async def test_interims_during_speech_do_not_start_judgements(
     judge = ScriptedJudge(lambda _window: judged("reply"))
     loop, _audio = early_loop(journal, FakeResponder(), judge=judge)
     loop.actor.note_speech(active=True)
-    await loop.actor.handle_interim(QUESTION)
+    await loop.actor.handle_interim(QUESTION, history_seq=None)
     await asyncio.sleep(0.05)
 
     assert judge.windows == []
 
     loop.actor.note_speech(active=False)
-    await loop.actor.handle_interim(QUESTION)
+    await loop.actor.handle_interim(QUESTION, history_seq=None)
     await asyncio.sleep(0.05)
 
     assert len(judge.windows) == 1
@@ -543,8 +543,8 @@ async def test_a_commit_after_speech_uses_the_arm_judgement_only(
     judge = ScriptedJudge(lambda _window: judged("reply"), delay=0.05)
     loop, audio = early_loop(journal, FakeResponder(), judge=judge)
     loop.actor.note_speech(active=True)
-    await loop.actor.handle_interim(QUESTION)
-    await loop.actor.note_interim(QUESTION)
+    await loop.actor.handle_interim(QUESTION, history_seq=None)
+    await loop.actor.note_interim(QUESTION, history_seq=None)
     loop.actor.note_speech(active=False)
     await asyncio.wait_for(loop.actor.wait_idle(), 3)
 
@@ -558,8 +558,8 @@ async def test_an_appended_revision_reuses_the_armed_judgement(
 ) -> None:
     judge = ScriptedJudge(lambda _window: judged("reply"), delay=0.3)
     loop, audio = early_loop(journal, FakeResponder(), judge=judge)
-    await loop.actor.note_interim(QUESTION)
-    await loop.actor.note_interim("Rani, when is the beta launch")
+    await loop.actor.note_interim(QUESTION, history_seq=None)
+    await loop.actor.note_interim("Rani, when is the beta launch", history_seq=None)
     loop.actor.note_speech(active=False)
     await asyncio.wait_for(loop.actor.wait_idle(), 3)
 
@@ -578,9 +578,9 @@ async def test_a_declined_arm_judges_the_appended_text_next(
 
     judge = ScriptedJudge(verdict, delay=0.3)
     loop, audio = early_loop(journal, FakeResponder(), judge=judge)
-    await loop.actor.note_interim(QUESTION)
+    await loop.actor.note_interim(QUESTION, history_seq=None)
     await asyncio.sleep(0.05)
-    await loop.actor.note_interim("Rani, when is the beta launch")
+    await loop.actor.note_interim("Rani, when is the beta launch", history_seq=None)
     loop.actor.note_speech(active=False)
     await asyncio.wait_for(loop.actor.wait_idle(), 3)
 
@@ -598,11 +598,11 @@ async def test_a_trailing_revision_of_the_answered_line_keeps_the_answer(
     responder = FakeResponder(gate=gate)
     loop, audio = early_loop(journal, responder)
     loop.actor.configure_barge_in(enabled=True)
-    await loop.actor.note_interim(QUESTION)
+    await loop.actor.note_interim(QUESTION, history_seq=None)
     loop.actor.note_speech(active=False)
     await asyncio.wait_for(responder.started.wait(), 2)
 
-    await loop.actor.handle_interim("Rani, when is the beta start")
+    await loop.actor.handle_interim("Rani, when is the beta start", history_seq=None)
     await asyncio.sleep(0.1)
 
     assert not responder.cancelled.is_set()
@@ -619,11 +619,13 @@ async def test_a_long_amendment_of_the_answered_line_still_takes_the_floor(
     responder = FakeResponder(gate=gate)
     loop, _audio = early_loop(journal, responder)
     loop.actor.configure_barge_in(enabled=True)
-    await loop.actor.note_interim(QUESTION)
+    await loop.actor.note_interim(QUESTION, history_seq=None)
     loop.actor.note_speech(active=False)
     await asyncio.wait_for(responder.started.wait(), 2)
 
-    await loop.actor.handle_interim("Rani, when is the beta and who runs the QA for it")
+    await loop.actor.handle_interim(
+        "Rani, when is the beta and who runs the QA for it", history_seq=None
+    )
     await asyncio.sleep(0.1)
 
     assert responder.cancelled.is_set()
@@ -638,11 +640,13 @@ async def test_a_new_line_still_takes_the_floor_from_an_answer_in_flight(
     responder = FakeResponder(gate=gate)
     loop, _audio = early_loop(journal, responder)
     loop.actor.configure_barge_in(enabled=True)
-    await loop.actor.note_interim(QUESTION)
+    await loop.actor.note_interim(QUESTION, history_seq=None)
     loop.actor.note_speech(active=False)
     await asyncio.wait_for(responder.started.wait(), 2)
 
-    await loop.actor.handle_interim("Rani, forget that, what about the budget instead")
+    await loop.actor.handle_interim(
+        "Rani, forget that, what about the budget instead", history_seq=None
+    )
     await asyncio.sleep(0.1)
 
     assert responder.cancelled.is_set()
@@ -664,11 +668,11 @@ async def test_a_changed_line_asks_the_judge_again_instead_of_reusing(
     loop.actor.configure_early(
         EarlyOptions(hold_seconds=0.0, build_event=lambda text: event("early-0", text))
     )
-    await loop.actor.handle_interim(QUESTION)
+    await loop.actor.handle_interim(QUESTION, history_seq=None)
     await asyncio.sleep(0.05)
     calls = len(judge.windows)
 
-    await loop.actor.note_interim(MORE)
+    await loop.actor.note_interim(MORE, history_seq=None)
     loop.actor.note_speech(active=False)
     await asyncio.wait_for(loop.actor.wait_idle(), 2)
 
@@ -683,7 +687,7 @@ async def test_the_judge_starts_when_the_hold_arms(journal: RecordingJournal) ->
     loop.actor.configure_early(
         EarlyOptions(hold_seconds=5.0, build_event=lambda text: event("early-0", text))
     )
-    await loop.actor.note_interim(QUESTION)
+    await loop.actor.note_interim(QUESTION, history_seq=None)
     loop.actor.note_speech(active=False)
 
     for _ in range(50):
@@ -715,7 +719,7 @@ async def test_the_commit_waits_only_for_the_judgement_started_at_arm(
         EarlyOptions(hold_seconds=0.4, build_event=lambda text: event("early-0", text))
     )
     armed_at = asyncio.get_running_loop().time()
-    await loop.actor.note_interim(QUESTION)
+    await loop.actor.note_interim(QUESTION, history_seq=None)
     loop.actor.note_speech(active=False)
     await asyncio.wait_for(loop.actor.wait_idle(), 3)
 
@@ -733,7 +737,7 @@ async def test_a_resumed_arm_shares_one_judgement_with_the_next_stop(
     loop.actor.configure_early(
         EarlyOptions(hold_seconds=0.1, build_event=lambda text: event("early-0", text))
     )
-    await loop.actor.note_interim(QUESTION)
+    await loop.actor.note_interim(QUESTION, history_seq=None)
     loop.actor.note_speech(active=False)
     await asyncio.sleep(0.05)
     loop.actor.note_speech(active=True)
@@ -748,7 +752,7 @@ async def test_a_resumed_arm_shares_one_judgement_with_the_next_stop(
 async def test_a_judge_failure_at_arm_declines_once(journal: RecordingJournal) -> None:
     judge = TimingJudge(fail=RuntimeError("judge down"))
     loop, audio = early_loop(journal, FakeResponder(), judge=judge)
-    await loop.actor.note_interim(QUESTION)
+    await loop.actor.note_interim(QUESTION, history_seq=None)
     loop.actor.note_speech(active=False)
     await asyncio.wait_for(loop.actor.wait_idle(), 3)
 
@@ -764,7 +768,7 @@ async def test_a_judge_failure_at_arm_declines_once(journal: RecordingJournal) -
 
 async def test_incomplete_prosody_blocks_the_commit(journal: RecordingJournal) -> None:
     loop, audio = early_loop(journal, FakeResponder())
-    await loop.actor.note_interim(QUESTION)
+    await loop.actor.note_interim(QUESTION, history_seq=None)
     loop.actor.note_speech(active=False)
     loop.actor.note_turn_end(probability=0.2)
     await asyncio.wait_for(loop.actor.wait_idle(), 2)
@@ -777,7 +781,7 @@ async def test_incomplete_prosody_blocks_the_commit(journal: RecordingJournal) -
 
 async def test_a_score_arriving_during_speech_is_ignored(journal: RecordingJournal) -> None:
     loop, audio = early_loop(journal, FakeResponder())
-    await loop.actor.note_interim(QUESTION)
+    await loop.actor.note_interim(QUESTION, history_seq=None)
     loop.actor.note_speech(active=True)
     loop.actor.note_turn_end(probability=0.1)
     loop.actor.note_speech(active=False)
@@ -791,14 +795,14 @@ async def test_a_consumed_score_does_not_gate_the_next_utterance(
     journal: RecordingJournal,
 ) -> None:
     loop, audio = early_loop(journal, FakeResponder())
-    await loop.actor.note_interim(QUESTION)
+    await loop.actor.note_interim(QUESTION, history_seq=None)
     loop.actor.note_speech(active=False)
     loop.actor.note_turn_end(probability=0.1)
     await asyncio.wait_for(loop.actor.wait_idle(), 2)
     assert audio.spoken == []
 
     loop.actor.note_speech(active=True)
-    await loop.actor.note_interim("Rani, and the timeline?")
+    await loop.actor.note_interim("Rani, and the timeline?", history_seq=None)
     loop.actor.note_speech(active=False)
     await asyncio.wait_for(loop.actor.wait_idle(), 2)
 
@@ -808,7 +812,7 @@ async def test_a_consumed_score_does_not_gate_the_next_utterance(
 
 async def test_readiness_waits_briefly_for_a_pending_score(journal: RecordingJournal) -> None:
     loop, audio = early_loop(journal, FakeResponder(), prosody_expected=True)
-    await loop.actor.note_interim(QUESTION)
+    await loop.actor.note_interim(QUESTION, history_seq=None)
     loop.actor.note_speech(active=False)
 
     async def late_score() -> None:
@@ -827,7 +831,7 @@ async def test_readiness_waits_briefly_for_a_pending_score(journal: RecordingJou
 
 async def test_complete_prosody_lets_the_commit_through(journal: RecordingJournal) -> None:
     loop, audio = early_loop(journal, FakeResponder())
-    await loop.actor.note_interim(QUESTION)
+    await loop.actor.note_interim(QUESTION, history_seq=None)
     loop.actor.note_speech(active=False)
     loop.actor.note_turn_end(probability=0.9)
     await asyncio.wait_for(loop.actor.wait_idle(), 2)
@@ -852,7 +856,7 @@ async def test_speech_before_the_hold_ends_starts_nothing(journal: RecordingJour
         EarlyOptions(hold_seconds=0.0, build_event=lambda text: event("early-0", text))
     )
 
-    await loop.actor.note_interim(QUESTION)
+    await loop.actor.note_interim(QUESTION, history_seq=None)
     loop.actor.note_speech(active=False)
     await asyncio.sleep(0)
     loop.actor.note_speech(active=True)
@@ -868,7 +872,7 @@ async def test_close_cancels_a_pending_early_hold(journal: RecordingJournal) -> 
     loop.actor.configure_early(
         EarlyOptions(hold_seconds=60.0, build_event=lambda text: event("early-0", text))
     )
-    await loop.actor.note_interim(QUESTION)
+    await loop.actor.note_interim(QUESTION, history_seq=None)
     loop.actor.note_speech(active=False)
     await asyncio.sleep(0)
 
@@ -889,7 +893,7 @@ async def test_a_verified_early_turn_settles_its_gate_as_kept(journal: Recording
     held = asyncio.Event()
     responder = FakeResponder(held)
     loop, _ = early_loop(journal, responder)
-    await loop.actor.note_interim(QUESTION)
+    await loop.actor.note_interim(QUESTION, history_seq=None)
     loop.actor.note_speech(active=False)
     assert await asyncio.wait_for(responder.started.wait(), 2)
     gate = loop.actor.early_commit
@@ -910,13 +914,13 @@ async def test_a_withdrawn_early_turn_settles_its_gate_as_resumed(
 ) -> None:
     responder = FakeResponder(asyncio.Event())
     loop, _ = early_loop(journal, responder)
-    await loop.actor.note_interim(QUESTION)
+    await loop.actor.note_interim(QUESTION, history_seq=None)
     loop.actor.note_speech(active=False)
     assert await asyncio.wait_for(responder.started.wait(), 2)
     gate = loop.actor.early_commit
     assert gate is not None
 
-    await loop.actor.note_interim(MORE)
+    await loop.actor.note_interim(MORE, history_seq=None)
 
     assert gate.settled.is_set()
     assert gate.resumed is True

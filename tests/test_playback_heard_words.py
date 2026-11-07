@@ -322,7 +322,7 @@ def test_a_sentence_never_heard_stays_out_of_the_judge_window(tmp_path: Path) ->
     record.add_twin_speech("", interrupted=True, planned="One, two.")
 
     window = WindowSource(record, window_lines=8).for_interim(
-        "still talking", twin_speaking=True, purpose="interim"
+        "still talking", twin_speaking=True, purpose="interim", history_seq=None
     )
 
     assert window.earlier == ()

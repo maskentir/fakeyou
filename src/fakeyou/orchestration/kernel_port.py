@@ -64,6 +64,7 @@ class HeardVoice:
 @dataclass(frozen=True, slots=True)
 class HeardInterim:
     text: str
+    history_seq: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -365,12 +366,12 @@ class KernelPort:
             "stt", observation, HeardFinal(event), event_id=event_id, correlation_id=event.id
         )
 
-    def interim(self, text: str) -> None:
+    def interim(self, text: str, *, history_seq: int) -> None:
         self._interims += 1
         self._offer_turn(
             "stt",
             TranscriptObserved(transcript_id=f"interim-{self._interims}", text=text, final=False),
-            HeardInterim(text),
+            HeardInterim(text, history_seq),
         )
 
     def voice(self, *, active: bool) -> None:

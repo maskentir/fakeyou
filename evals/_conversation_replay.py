@@ -259,7 +259,7 @@ async def run_scenario(
                 event = _event(scenario, index, step)
                 started = time.monotonic()
                 if step.kind == "interim":
-                    await turns.actor.handle_interim(step.say)
+                    await turns.actor.handle_interim(step.say, history_seq=None)
                     await _settle(turns)
                     outcomes.append(
                         StepOutcome(
@@ -329,7 +329,7 @@ async def _speak_and_interrupt(
     audio.gate = gate
     turn = asyncio.create_task(turns.actor.receive_final(event))
     await _wait_for_speech(audio)
-    await turns.actor.handle_interim(interim)
+    await turns.actor.handle_interim(interim, history_seq=None)
     await turns.actor.settled()
     gate.set()
     audio.gate = None

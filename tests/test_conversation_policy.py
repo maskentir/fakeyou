@@ -109,7 +109,7 @@ async def test_interim_speech_interrupts_playback_on_the_first_words(
     )
     loop.actor.bind(audio)
 
-    await loop.actor.handle_interim("okay wait")
+    await loop.actor.handle_interim("okay wait", history_seq=None)
 
     assert audio.stops == 1
     [row] = [json.loads(line) for line in lines if '"barge_in_detected"' in line]
@@ -123,7 +123,7 @@ async def test_interim_speech_is_ignored_without_barge_in_or_playback() -> None:
         FakeResponder(), interaction=TurnInteraction(participant_policy_enabled=False)
     )
     quiet.actor.bind(audio)
-    await quiet.actor.handle_interim("please stop for now")
+    await quiet.actor.handle_interim("please stop for now", history_seq=None)
 
     idle_audio = FakeReplyAudio()
     idle = build_meeting_turns(
@@ -131,7 +131,7 @@ async def test_interim_speech_is_ignored_without_barge_in_or_playback() -> None:
         interaction=TurnInteraction(barge_in=True, participant_policy_enabled=False),
     )
     idle.actor.bind(idle_audio)
-    await idle.actor.handle_interim("please stop for now")
+    await idle.actor.handle_interim("please stop for now", history_seq=None)
 
     assert audio.stops == 0
     assert idle_audio.stops == 0
@@ -147,7 +147,7 @@ async def test_interim_speech_over_the_twin_stops_it_in_wake_mode() -> None:
     )
     loop.actor.bind(audio)
 
-    await loop.actor.handle_interim("someone else is talking now")
+    await loop.actor.handle_interim("someone else is talking now", history_seq=None)
 
     assert audio.stops == 1
     await loop.actor.close()
@@ -188,8 +188,8 @@ async def test_one_interruption_is_journaled_and_stopped_once(
     )
     loop.actor.bind(audio)
 
-    await loop.actor.handle_interim("wait a second")
-    await loop.actor.handle_interim("wait a second please")
+    await loop.actor.handle_interim("wait a second", history_seq=None)
+    await loop.actor.handle_interim("wait a second please", history_seq=None)
 
     assert audio.stops == 1
     assert len([line for line in lines if '"barge_in_detected"' in line]) == 1
@@ -204,12 +204,12 @@ async def test_interim_barge_in_rearms_for_the_next_reply() -> None:
     )
     loop.actor.bind(audio)
 
-    await loop.actor.handle_interim("wait a second")
+    await loop.actor.handle_interim("wait a second", history_seq=None)
     await loop.actor.receive_final(event("t1", "what is next"))
     await loop.actor.wait_idle()
     audio.speaking = True
     audio.stops = 0
-    await loop.actor.handle_interim("hold on one moment")
+    await loop.actor.handle_interim("hold on one moment", history_seq=None)
 
     assert audio.spoken == ["what is next"]
     assert audio.stops == 1
@@ -378,7 +378,7 @@ async def test_policy_keeps_barge_in_on_speech_onset(journal: RecordingJournal) 
     await loop.actor.receive_final(event("t0", "Rani Twin, when is the demo?"))
     await asyncio.wait_for(loop.actor.wait_idle(), 2)
     audio.speaking = True
-    await loop.actor.handle_interim("wait just a moment please")
+    await loop.actor.handle_interim("wait just a moment please", history_seq=None)
     assert audio.stops == 1
     await loop.actor.receive_final(event("t1", "Budi, when is the demo?"))
     await asyncio.wait_for(loop.actor.wait_idle(), 2)

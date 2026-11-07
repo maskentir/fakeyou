@@ -478,7 +478,7 @@ def _prefetch_judgement(state: TurnGraphState, runtime: TurnContext) -> None:
     window = state.get("judge_window")
     if window is None:
         window = judging.windows.for_interim(
-            text, twin_speaking=runtime.speaker.is_speaking, purpose="interim"
+            text, twin_speaking=runtime.speaker.is_speaking, purpose="interim", history_seq=None
         )
     judging.cache.prefetch(window)
 

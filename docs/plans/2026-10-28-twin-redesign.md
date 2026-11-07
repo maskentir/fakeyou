@@ -2043,6 +2043,50 @@ ekstra dari `judge_purpose`/`judge_key` lalu menghapus sumbernya;
 `strong` 2,85 dtk adalah ±70% dari final → jawaban; (3) B6-3 dihapus
 dari urutan.
 
+Temuan live `b6-live-3` (2026-11-07, sesudah #115 + #116; 19 final,
+13 giliran dengan playback): `judge_purpose` menjawab sumber panggilan
+ekstra — di **16/16** final panggilan +1–9 mdtk adalah `interim`
+dengan `judge_key` unik. Rantainya: STT mengirim interim terakhir lalu
+`speechComplete`; final ditulis ke record secara sinkron
+(`_mixed_stream` → `record.add_transcript`), sedangkan sinyal giliran
+lewat mailbox kernel yang async, jadi interim diproses sesudah record
+memuat finalnya sendiri. Window interim membawa baris itu dua kali
+(`earlier` + `latest`) sehingga kuncinya tidak pernah cocok. Final →
+playback p50 3,91 dtk, `strong` p50 3,12 dtk; route `small` dipakai 7×
+(aksi layar/chat tanpa evidence), `strong` 13×. Gate #115 terlihat di
+live: early turn "who is running QA and when do they start?" mulai
++3,13, opener ditahan sampai `early_turn_verified` +4,59 lalu
+diputar (ongkos opener ±1,5 dtk pada early turn); jalur penarikan
+early turn sendiri tidak terpicu di sesi ini.
+
+B6-0c, implementasi (2026-11-07): window interim memperlihatkan rapat
+**seperti saat baris itu didengar**. `TranscriptDrain.on_interim`
+mengambil `MeetingRecord.last_seq` secara sinkron (objek yang sama
+yang menulis final, jadi urutannya pasti) dan meneruskannya sebagai
+`HeardInterim.history_seq` → `TurnFeed` → `handle_interim` /
+`note_interim` → `WindowSource.for_interim(history_seq=...)`, yang
+hanya memakai entri dengan `seq` ≤ watermark. Interim yang tersalip
+finalnya kini berkunci sama dengan interim sebelumnya (cache hit),
+dan final memakai ulang judgement-nya. Interim tidak dibuang, jadi
+barge-in tetap jalan. Ditolak: penghitung final di `TurnFeed` — tidak
+bebas race karena mailbox kernel async terhadap penulisan record.
+`history_seq` wajib di setiap pembangun window interim (`None` hanya
+eksplisit di tes dan replay tanpa record); fallback window barge-in
+yang tidak pernah tercapai dihapus.
+
+Trade-off yang diterima secara sadar (review independen B6-0c): kunci
+window sengaja mengabaikan label pembicara (sejak #25), jadi keputusan
+final yang memakai ulang judgement interim dibuat tanpa tahu siapa
+pembicaranya (`SPEAKING_NOW`, dan `human_speakers` tidak memuatnya).
+Aturan judge yang bergantung pada identitas — "menjawab pertanyaan
+yang twin ajukan ke pembicara itu" — bisa berbeda dari judgement final
+penuh. Ini sudah terjadi sebelum B6-0c (4/5 giliran `b6-live-1`
+memakai ulang interim); memasukkan pembicara ke kunci berarti setiap
+final dinilai ulang (+0,7–1,3 dtk) dan bertentangan dengan B6. Ditinjau
+ulang bila B4 (identitas dari stream) membuat pembicara interim
+diketahui, atau bila sesi live menunjukkan salah addressee pada jawaban
+atas pertanyaan twin.
+
 ### B7: Perception layar yang murah
 
 - Frame dibaca setelah layar settle. OCR lokal dan hash teks menentukan

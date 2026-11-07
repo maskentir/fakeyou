@@ -255,6 +255,10 @@ class MeetingRecord:
     def attempt_id(self) -> str | None:
         return self._attempt_id
 
+    @property
+    def last_seq(self) -> int:
+        return self._seq
+
     def _next_seq(self) -> int:
         self._seq += 1
         return self._seq

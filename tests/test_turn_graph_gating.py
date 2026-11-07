@@ -192,7 +192,7 @@ async def test_every_interim_is_judged_in_the_background() -> None:
     judge = GatedJudge()
     lifecycle, _ = bound(judge, FakeJournal())
 
-    await ingress_for(lifecycle).handle_interim("nice weather today")
+    await ingress_for(lifecycle).handle_interim("nice weather today", history_seq=None)
     await settle(lifecycle)
 
     assert [window.latest.text for window in judge.calls] == ["nice weather today"]
@@ -242,9 +242,9 @@ async def test_repeated_interim_text_while_a_judgement_runs_is_deduped() -> None
     lifecycle, _ = bound(judge, FakeJournal())
     ingress = ingress_for(lifecycle)
 
-    await ingress.handle_interim("twin, hello")
+    await ingress.handle_interim("twin, hello", history_seq=None)
     await asyncio.sleep(0)
-    await ingress.handle_interim("twin, hello")
+    await ingress.handle_interim("twin, hello", history_seq=None)
     await asyncio.sleep(0)
     gate.set()
     await settle(lifecycle)
@@ -258,9 +258,9 @@ async def test_new_interim_text_keeps_the_running_judgement() -> None:
     lifecycle, _ = bound(judge, FakeJournal())
     ingress = ingress_for(lifecycle)
 
-    await ingress.handle_interim("twin, hello")
+    await ingress.handle_interim("twin, hello", history_seq=None)
     await asyncio.sleep(0)
-    await ingress.handle_interim("twin, hello again")
+    await ingress.handle_interim("twin, hello again", history_seq=None)
     await asyncio.sleep(0)
     gate.set()
     await settle(lifecycle)
@@ -274,7 +274,7 @@ async def test_lifecycle_close_cancels_the_running_judgement() -> None:
     judge = GatedJudge(gate=gate)
     lifecycle, _ = bound(judge, FakeJournal())
 
-    await ingress_for(lifecycle).handle_interim("twin, hello")
+    await ingress_for(lifecycle).handle_interim("twin, hello", history_seq=None)
     await asyncio.sleep(0)
     await lifecycle.close()
     await asyncio.sleep(0)
@@ -288,7 +288,7 @@ async def test_the_final_reuses_the_interim_judgement() -> None:
     lifecycle, session = bound(judge, journal)
     ingress = ingress_for(lifecycle)
 
-    await ingress.handle_interim("what about the beta")
+    await ingress.handle_interim("what about the beta", history_seq=None)
     await settle(lifecycle)
     await ingress.handle_final(transcript("f2", "What about the beta?"))
 

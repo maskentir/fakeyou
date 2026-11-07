@@ -416,7 +416,7 @@ async def test_interim_during_speech_interrupts_and_journals_the_loop_names() ->
     ingress, lifecycle, audio = barge_ingress(journal, addressing_names=())
     speech = await start_speaking(lifecycle)
 
-    await ingress.handle_interim("please stop talking now")
+    await ingress.handle_interim("please stop talking now", history_seq=None)
 
     assert await settle(speech) is False
     assert journal.names == ["barge_in_detected", "agent_cancel_requested", "agent_cancelled"]
@@ -432,7 +432,7 @@ async def test_a_two_word_interim_interrupts_without_a_minimum() -> None:
     ingress, lifecycle, audio = barge_ingress(journal, addressing_names=())
     speech = await start_speaking(lifecycle)
 
-    await ingress.handle_interim("yeah right")
+    await ingress.handle_interim("yeah right", history_seq=None)
 
     assert await settle(speech) is False
     assert "barge_in_detected" in journal.names
@@ -444,7 +444,7 @@ async def test_a_one_word_stop_interim_yields_the_floor_at_once() -> None:
     ingress, lifecycle, audio = barge_ingress(journal, addressing_names=("twin",))
     speech = await start_speaking(lifecycle)
 
-    await ingress.handle_interim("Stop.")
+    await ingress.handle_interim("Stop.", history_seq=None)
 
     assert await settle(speech) is False
     assert barge_names(journal) == [
@@ -461,7 +461,7 @@ async def test_a_repeated_stop_with_the_twins_name_yields_the_floor() -> None:
     ingress, lifecycle, audio = barge_ingress(journal, addressing_names=("twin",))
     speech = await start_speaking(lifecycle)
 
-    await ingress.handle_interim("twin stop stop")
+    await ingress.handle_interim("twin stop stop", history_seq=None)
 
     assert await settle(speech) is False
     assert audio.stops == 1
@@ -489,7 +489,7 @@ async def test_interim_is_a_barge_in_while_only_twin_names_are_configured() -> N
     ingress, lifecycle, audio = barge_ingress(journal, addressing_names=("twin",))
     speech = await start_speaking(lifecycle)
 
-    await ingress.handle_interim("twin please stop talking")
+    await ingress.handle_interim("twin please stop talking", history_seq=None)
 
     assert await settle(speech) is False
     assert barge_names(journal) == [
@@ -520,7 +520,7 @@ async def test_cancelled_generation_drops_its_late_chunks() -> None:
     )
     await sink.first_spoken.wait()
 
-    await ingress.handle_interim("please stop talking now")
+    await ingress.handle_interim("please stop talking now", history_seq=None)
     release.set()
     await asyncio.wait_for(speech, timeout=2)
 

@@ -197,7 +197,7 @@ async def test_interim_cancels_the_reply_still_waiting_for_the_model() -> None:
 
     await ingress.receive_final(final("f1", "first"))
     await asyncio.wait_for(replier.started.wait(), 2)
-    await ingress.handle_interim("please hold on a moment")
+    await ingress.handle_interim("please hold on a moment", history_seq=None)
 
     assert replier.cancelled.is_set()
     [requested] = journal.of("agent_cancel_requested")

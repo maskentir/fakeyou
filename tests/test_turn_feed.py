@@ -8,6 +8,7 @@ import pytest
 
 from fakeyou.audio.voice_activity import SlotBinder
 from fakeyou.config.identifiers import SessionId
+from fakeyou.conversation.meeting_messages import NoHistory
 from fakeyou.conversation.meeting_turns import TurnInteraction, build_meeting_turns
 from fakeyou.conversation.turn_judge import JudgeWindow, TurnJudgement
 from fakeyou.foundation.transcript import TranscriptEvent, TranscriptUpdate
@@ -51,7 +52,8 @@ class Conversation:
     def note_turn_end(self, *, probability: float) -> None:
         self.turn_ends.append(probability)
 
-    async def handle_interim(self, text: str) -> None:
+    async def handle_interim(self, text: str, *, history_seq: int) -> None:
+        del history_seq
         self.interims.append(text)
         self.interim_heard.set()
 
@@ -129,6 +131,7 @@ class RealSetup:
         *,
         responder: FakeResponder | None = None,
         verdict: Callable[[JudgeWindow], TurnJudgement] | None = None,
+        record_history: bool = False,
     ) -> None:
         self.journal = RecordingJournal("meeting-9")
         self.record = MeetingRecord(meeting_record_path(tmp_path, SessionId("meeting-9")))
@@ -141,6 +144,7 @@ class RealSetup:
             interaction=TurnInteraction(
                 twin_names=["Rani"],
                 judge=ScriptedJudge(verdict or (lambda _window: judged("reply"))),
+                history=self.record if record_history else NoHistory(),
             ),
             diagnostics=Diagnostics(journal=self.journal),
         )
@@ -328,10 +332,10 @@ async def test_a_chat_line_reaches_the_conversation_through_the_kernel(tmp_path:
 async def test_a_failing_consumer_is_recorded_and_the_lane_keeps_going(tmp_path: Path) -> None:
     class Broken(Conversation):
         @override
-        async def handle_interim(self, text: str) -> None:
+        async def handle_interim(self, text: str, *, history_seq: int) -> None:
             if text == "boom":
                 raise RuntimeError("broken")
-            await super().handle_interim(text)
+            await super().handle_interim(text, history_seq=history_seq)
 
     setup = Setup(tmp_path, Broken(), hold=None)
 
@@ -430,10 +434,10 @@ async def test_a_chat_after_a_final_reaches_the_turns_after_it(tmp_path: Path) -
 async def test_a_lane_survives_work_that_was_cancelled_under_it(tmp_path: Path) -> None:
     class Cancelling(Conversation):
         @override
-        async def handle_interim(self, text: str) -> None:
+        async def handle_interim(self, text: str, *, history_seq: int) -> None:
             if text == "cancelled":
                 raise asyncio.CancelledError
-            await super().handle_interim(text)
+            await super().handle_interim(text, history_seq=history_seq)
 
     setup = Setup(tmp_path, Cancelling(), hold=None)
 
@@ -496,7 +500,7 @@ async def test_payloads_the_kernel_never_reached_are_journaled_when_dropped(
     kernel.on_turn(cast(Any, SimpleNamespace(accept=lambda _signal: None)))
 
     for text in ("one", "two", "three"):
-        kernel.interim(text)
+        kernel.interim(text, history_seq=0)
 
     [evicted] = journal.events("turn_payload_dropped")
     assert evicted["kind"] == "HeardInterim"
@@ -512,7 +516,7 @@ async def test_a_dead_kernel_is_recorded_as_a_fault() -> None:
 
     async def run() -> None:
         async with kernel.running():
-            kernel.interim("anything")
+            kernel.interim("anything", history_seq=0)
             await asyncio.sleep(0.01)
 
     session.subscribe(explode)
@@ -522,3 +526,43 @@ async def test_a_dead_kernel_is_recorded_as_a_fault() -> None:
 
     [fault] = journal.events("fault_recorded")
     assert fault["detail"] == "session_kernel: RuntimeError"
+
+
+async def test_an_interim_is_judged_against_the_meeting_as_it_was_when_heard(
+    tmp_path: Path,
+) -> None:
+    windows: list[JudgeWindow] = []
+
+    def verdict(window: JudgeWindow) -> TurnJudgement:
+        windows.append(window)
+        return judged("reply")
+
+    setup = RealSetup(tmp_path, verdict=verdict, record_history=True)
+
+    await setup.drain.on_interim(TranscriptUpdate(text=QUESTION, final=False))
+    await setup.final(QUESTION)
+    await setup.settle_all()
+
+    assert [(window.purpose, window.latest.text, window.earlier) for window in windows] == [
+        ("interim", QUESTION, ())
+    ]
+    await setup.close()
+
+
+async def test_an_interim_heard_after_a_final_is_still_judged(tmp_path: Path) -> None:
+    windows: list[JudgeWindow] = []
+
+    def verdict(window: JudgeWindow) -> TurnJudgement:
+        windows.append(window)
+        return judged("stay_silent")
+
+    setup = RealSetup(tmp_path, verdict=verdict, record_history=True)
+
+    await setup.final("Budi, the export flow is fixed.")
+    await setup.settle_all()
+    await setup.drain.on_interim(TranscriptUpdate(text=QUESTION, final=False))
+    await setup.settle_all()
+
+    [interim] = [window for window in windows if window.purpose == "interim"]
+    assert [line.text for line in interim.earlier] == ["Budi, the export flow is fixed."]
+    await setup.close()
