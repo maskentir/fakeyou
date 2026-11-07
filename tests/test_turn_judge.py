@@ -13,10 +13,12 @@ from fakeyou.conversation.turn_judge import (
     ModelTurnJudge,
     WindowSource,
 )
+from fakeyou.observability.model_inputs import digest, journal_model_inputs
 from fakeyou.persistence.record import MeetingRecord
 from fakeyou.session.identity import Participant, PresenceFact, PresenceStatus
 from tests._conversation_fakes import ScriptedJudge, ToolCallingFakeModel, judged
 from tests._conversation_support import event, voiced_event
+from tests._persistence_fakes import RecordingJournal
 
 
 def _record(tmp_path: Path) -> MeetingRecord:
@@ -30,7 +32,9 @@ def test_the_window_holds_speech_and_the_twin_in_order(tmp_path: Path) -> None:
     latest = voiced_event("t2", "and the launch?", participant_id="unknown", voice_clusters=("A",))
     record.add_transcript(latest)
 
-    window = WindowSource(record, window_lines=8).for_final(latest, twin_speaking=False)
+    window = WindowSource(record, window_lines=8).for_final(
+        latest, twin_speaking=False, purpose="final"
+    )
 
     assert [(line.speaker, line.twin) for line in window.earlier] == [
         ("ayu", False),
@@ -45,7 +49,9 @@ def test_the_window_carries_the_transcript_it_came_from(tmp_path: Path) -> None:
     latest = event("t9", "Rani, when is the beta?", participant_id="ayu")
     record.add_transcript(latest)
 
-    window = WindowSource(record, window_lines=8).for_final(latest, twin_speaking=False)
+    window = WindowSource(record, window_lines=8).for_final(
+        latest, twin_speaking=False, purpose="final"
+    )
 
     assert window.transcript_id == "t9"
     record.close()
@@ -54,7 +60,9 @@ def test_the_window_carries_the_transcript_it_came_from(tmp_path: Path) -> None:
 def test_an_interim_window_has_no_transcript(tmp_path: Path) -> None:
     record = _record(tmp_path)
 
-    window = WindowSource(record, window_lines=8).for_interim("still talking", twin_speaking=True)
+    window = WindowSource(record, window_lines=8).for_interim(
+        "still talking", twin_speaking=True, purpose="interim"
+    )
 
     assert window.transcript_id is None
     record.close()
@@ -65,7 +73,9 @@ def test_the_window_keeps_only_the_latest_lines(tmp_path: Path) -> None:
     for index in range(5):
         record.add_transcript(event(f"t{index}", f"line {index}"))
 
-    window = WindowSource(record, window_lines=2).for_interim("still talking", twin_speaking=True)
+    window = WindowSource(record, window_lines=2).for_interim(
+        "still talking", twin_speaking=True, purpose="interim"
+    )
 
     assert [line.text for line in window.earlier] == ["line 3", "line 4"]
     assert window.latest.speaker == SPEAKING_NOW
@@ -286,3 +296,42 @@ async def test_the_judge_reports_own_action_questions_and_language() -> None:
 
     assert result.state_question == "own_action_status"
     assert result.language == "id"
+
+
+async def test_each_judge_call_records_who_asked_and_the_window_key() -> None:
+    journal = RecordingJournal()
+    payload = {
+        "heard": "When is the beta?",
+        "finished": True,
+        "backchannel": False,
+        "addressee": "twin",
+        "action": "reply",
+        "confidence": 0.8,
+    }
+    model = ToolCallingFakeModel(
+        responses=[
+            AIMessage(
+                content="", tool_calls=[{"name": "TurnJudgement", "args": payload, "id": "j"}]
+            )
+        ]
+    )
+    judge = ModelTurnJudge(
+        journal_model_inputs(model, journal, "judge"), twin_names=("Rani",), timeout_seconds=1.0
+    )
+    window = JudgeWindow((), JudgeLine("ayu", "Rani, beta?"), transcript_id="t1", purpose="final")
+
+    await judge.judge(window)
+
+    [row] = journal.events("model_input_recorded")
+    assert row["judge_purpose"] == "final"
+    assert row["judge_key"] == digest(repr(window.key))
+    assert row["transcript_id"] == "t1"
+
+
+def test_the_purpose_of_a_window_does_not_split_the_cache_key() -> None:
+    line = JudgeLine(SPEAKING_NOW, "Rani, beta?")
+
+    assert (
+        JudgeWindow((), line, purpose="interim").key
+        == JudgeWindow((), line, purpose="early_hold").key
+    )

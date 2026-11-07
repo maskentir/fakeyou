@@ -12,7 +12,7 @@ from langchain_core.outputs import LLMResult
 from fakeyou.observability.journal import Journal
 
 DIGEST_CHARS = 16
-CORRELATION_KEYS = ("transcript_id", "request_id")
+CORRELATION_KEYS = ("transcript_id", "request_id", "judge_purpose", "judge_key")
 
 
 def digest(text: str) -> str:

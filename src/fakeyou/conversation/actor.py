@@ -834,7 +834,9 @@ class FloorActor:
         if window is None or _early_words(window.latest.text) != _early_words(text):
             session = self._session
             window = judging.windows.for_interim(
-                text, twin_speaking=session is not None and session.is_speaking
+                text,
+                twin_speaking=session is not None and session.is_speaking,
+                purpose="early_hold",
             )
         judgement, _ = await capture_error(partial(judging.cache.judgement, window))
         return judgement
@@ -983,6 +985,7 @@ class FloorActor:
             window = judging.windows.for_interim(
                 self._early_text,
                 twin_speaking=session is not None and session.is_speaking,
+                purpose="early_hold",
             )
             judging.cache.prefetch(window)
             self._early_window = window
@@ -1198,7 +1201,7 @@ class FloorActor:
         session = self._session
         if window is None:
             window = judging.windows.for_interim(
-                text, twin_speaking=session is not None and session.is_speaking
+                text, twin_speaking=session is not None and session.is_speaking, purpose="barge_in"
             )
         judgement, _ = await capture_error(partial(judging.cache.judgement, window))
         if generation != self._floor.generation:
@@ -1347,7 +1350,9 @@ class FloorActor:
     async def _prefetch(self, text: str) -> JudgeWindow | None:
         judging = self._judging
         window = (
-            judging.windows.for_interim(text, twin_speaking=self.speaker.is_speaking)
+            judging.windows.for_interim(
+                text, twin_speaking=self.speaker.is_speaking, purpose="interim"
+            )
             if judging is not None
             else None
         )
