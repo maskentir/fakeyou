@@ -268,21 +268,21 @@ docker run --rm -v "$PWD/tests:/workspace/tests:ro" -v "$PWD/evals:/workspace/ev
   fakeyou-test:local uv run --no-sync pytest -m simulator evals/
 ```
 
-`SIMULATOR_PROVIDERS` picks where the models come from. `live` (the default) calls the
-real providers. `replay` answers every Gemini call from the cassettes in
-`evals/fixtures/simulator/cassettes/` and speaks through a synthetic Cartesia, so no
-model or TTS credit is spent; a request with no close enough cassette entry fails the
-scenario instead of passing silently. `record` forwards Gemini calls to Google and
-rewrites the cassettes; record after changing a prompt or a scenario, with the
-cassette folder mounted writable:
+`SIMULATOR_PROVIDERS` picks where the providers come from. `live` (the default) calls
+the real ones. `replay` needs no `.env` and no network: it rebuilds the settings from
+the recorded snapshot, answers every Gemini call and replays what Muse heard for each
+clip from the cassettes in `evals/fixtures/simulator/cassettes/`, and speaks through a
+synthetic Cartesia. A request with no close enough cassette entry fails the scenario
+instead of passing silently. CI runs `replay` on every pull request. `record` relays
+Gemini and Muse to the real services and rewrites the cassettes and the settings
+snapshot; record after changing a prompt, a setting or a scenario, with the cassette
+folder mounted writable:
 
 ```sh
 docker run --rm -e SIMULATOR_PROVIDERS=record \
   -v "$PWD/evals/fixtures/simulator/cassettes:/workspace/evals/fixtures/simulator/cassettes" \
   ...same mounts as above... fakeyou-test:local uv run --no-sync pytest -m simulator evals/
 ```
-
-Speech to text still uses the real provider in every mode.
 
 Meta-tests enforce the conventions mechanically rather than by review: no comments
 or docstrings in source, no Indonesian in source files, every test file named after

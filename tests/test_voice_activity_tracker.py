@@ -264,3 +264,22 @@ def test_anonymous_label_is_stable_and_never_a_display_name() -> None:
     second = tracker.attribute()
     assert first.participant_id == second.participant_id == "speaker-a"
     assert "Budi" not in first.participant_id
+
+
+def test_peek_leaves_the_utterance_for_the_attribution_that_closes_it() -> None:
+    clock = FakeClock(now=10.0)
+    tracker = tracker_at(clock)
+    speak(tracker, clock, 10.2, 11.2)
+    clock.now = 11.4
+    tracker.observe_batch(
+        batch(1000.0 + 11_400.0, [[1000.0 + 10_050.0, 3, 0.3]]),
+        sent_ms=11_400.0,
+        received_ms=11_400.0,
+    )
+
+    early = tracker.peek()
+    final = tracker.attribute()
+
+    assert (early.participant_id, early.slot) == ("speaker-a", 3)
+    assert (final.participant_id, final.slot) == ("speaker-a", 3)
+    assert tracker.attribute().reason == "no_speech"

@@ -271,6 +271,40 @@ regresi pertama di katalog.
   dan "belum terpakai" hanya memenangkan skor yang praktis seri.
   Perbandingan per kata, bukan per karakter (`SequenceMatcher` tanpa
   autojunk: 15 s vs 0,06 s untuk 20 entri). Hasil: replay 6/6.
+  S5b dan S5c, implementasi (2026-11-08): Muse tiruan di `/stt`. Saat
+  `record`, ia meneruskan handshake dan audio ke Muse asli dan menulis tiap
+  pesan Muse langsung ke kaset, ditempelkan ke klip yang sedang diputar
+  (`MeetingSimulator.on_say`) dengan offset dari awal suara; menulis per
+  pesan karena sesi yang ditutup lewat "leave" sempat menghilangkan semua
+  transkrip S2 saat ditulis di akhir sesi. Saat `replay`, awal suara
+  (RMS > 0,01 sesudah 0,6 s hening) mengambil klip terakhir yang diputar
+  dalam 3 s dan memutar ulang pesannya dengan waktu aslinya — interim,
+  tanda baca dan pemecahan giliran sama persis dengan Muse. Replay
+  membangun ulang setting dari `settings.json` (snapshot non-secret saat
+  record) karena perilaku worker ikut setting `.env` (bahasa,
+  `voice_labels_enabled`, model); tanpa itu replay tanpa `.env` gagal di
+  awal dan kaset tidak lagi mewakili run yang sama. Job CI
+  `.github/workflows/simulator.yml` membangun image tes dan menjalankan
+  `replay` tanpa secret di setiap PR.
+  Pertanyaan untuk redesign: chat "Rani, who owns…" (nama owner, bukan
+  "Rani Twin") kadang dijawab dan kadang didiamkan judge live — apakah
+  twin harus menjawab sapaan ke owner yang diwakilinya belum diputuskan.
+  Skenario S2 sekarang menyapa "Rani Twin" agar menguji jalur chat, bukan
+  ambiguitas itu.
+  Temuan produk dari replay deterministik (B4): `VoiceActivityTracker.attribute()`
+  memajukan cursor span suara di setiap panggilan, dan early commit serta
+  transkrip final untuk ucapan yang sama sama-sama memanggilnya. Yang kedua
+  selalu mendapat `no_speech`. Saat early commit ditolak (`floor_occupied`,
+  `superseded`), aksi pada final ditolak sebagai `unattributed_actor` —
+  "Rani Twin, please raise your hand" dijawab dengan suara, bukan tangan
+  terangkat. Run record lolos hanya karena early commit kebetulan menang.
+  Perbaikan: `peek()` untuk early commit (tidak menutup jendela), dan hanya
+  final yang memanggil `attribute()`. Ini juga sumber "sebagian final
+  `no_speech`" yang tercatat di S2 dan di sesi live.
+  Pencocokan kaset akhir: skor berurutan (12 kata terakhir — objek `latest`
+  di jendela judge —, 40 kata terakhir, keseluruhan); diterima bila
+  kemiripan `latest` atau keseluruhan ≥ 0,75, karena judge interim dipanggil
+  pada potongan yang berbeda di tiap run sehingga riwayatnya tidak sama.
 - **S6:** L2 smoke di Meet asli.
 
 Gate L1: setiap skenario katalog lulus ≥ 2 dari 3 run live dan 3 dari 3

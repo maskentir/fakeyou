@@ -7,6 +7,7 @@ import os
 import re
 import struct
 import time
+import uuid
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
@@ -16,6 +17,7 @@ from typing import Any, Literal, cast
 
 import httpx
 import uvicorn
+import websockets
 from pydantic import SecretStr
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -25,14 +27,15 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from fakeyou.config.settings import CartesiaTTS, GoogleReply, Settings
 from fakeyou.foundation.invariants import PLAYBACK_SAMPLE_RATE
+from fakeyou.speech.websocket import secure_scheme
 
 ProviderMode = Literal["live", "record", "replay"]
 GOOGLE = "https://generativelanguage.googleapis.com"
 CASSETTES = Path(__file__).parent / "fixtures" / "simulator" / "cassettes"
 MIN_SIMILARITY = 0.75
 SAME_CALL = 0.8
-TIE = 0.02
-LATEST_WORDS = 40
+LATEST_WORDS = 12
+RECENT_WORDS = 40
 WORD = re.compile(r"\w+")
 FORWARDED_HEADERS = ("content-type", "x-goog-api-key", "x-goog-api-client", "x-server-timeout")
 SPOKEN_CHARS_PER_SECOND = 14.0
@@ -41,6 +44,16 @@ CHUNK_SECONDS = 0.1
 TONE_HZ = 220.0
 TONE_LEVEL = 0.3
 UPSTREAM_TIMEOUT_SECONDS = 60.0
+SNAPSHOT = CASSETTES / "settings.json"
+SECRET_MASK = "**********"
+REPLY_ROLES = ("reply", "reply_strong", "reply_fallback", "debrief")
+DOUBLE_KEY = "double"
+STT_ROUTE = "stt"
+VOICE_LEVEL = 0.01
+QUIET_GAP_SECONDS = 0.6
+CLAIM_WINDOW_SECONDS = 3.0
+END_GRACE_SECONDS = 3.0
+VOICE_END = "simulatorVoiceEnd"
 VOLATILE = (
     (re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b"), "<id>"),
     (re.compile(r"\d{4}-\d{2}-\d{2}[T ][\d:.]+(?:Z|[+-]\d{2}:?\d{2})?"), "<time>"),
@@ -89,6 +102,23 @@ class RequestKey:
         return cls(_stable(request.get("systemInstruction")), _stable(contents[-1]))
 
 
+@dataclass(frozen=True, order=True, slots=True)
+class _Score:
+    latest: float
+    recent: float
+    whole: float
+    unused: bool
+    earlier: int
+
+    def __post_init__(self) -> None:
+        for name in ("latest", "recent", "whole"):
+            object.__setattr__(self, name, round(getattr(self, name), 2))
+
+    @property
+    def index(self) -> int:
+        return -self.earlier
+
+
 def _similarity(left: str, right: str, *, tail: int | None = None) -> float:
     if left == right:
         return 1.0
@@ -105,6 +135,7 @@ class Cassette:
     entries: list[dict[str, Any]] = field(default_factory=list)
     used: set[int] = field(default_factory=set)
     misses: list[str] = field(default_factory=list)
+    heard: set[str] = field(default_factory=set)
     reused: int = 0
 
     @classmethod
@@ -125,30 +156,165 @@ class Cassette:
         with self.path.open("a", encoding="utf-8") as file:
             file.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
+    def miss(self, detail: Mapping[str, Any]) -> None:
+        self.misses.append(json.dumps(detail, ensure_ascii=False)[:400])
+        artifacts = os.environ.get("SIMULATOR_ARTIFACT_DIR")
+        if artifacts:
+            with (Path(artifacts) / "cassette-misses.jsonl").open("a", encoding="utf-8") as file:
+                file.write(json.dumps({"cassette": self.path.stem, **detail}) + "\n")
+
+    def speech(self, clip: str) -> list[list[Any]] | None:
+        takes: dict[str, list[list[Any]]] = {}
+        for entry in self.entries:
+            if entry["route"] == STT_ROUTE and entry["clip"] == clip:
+                takes.setdefault(entry["take"], []).append([entry["offset"], entry["message"]])
+        if not takes:
+            return None
+        fresh = [take for take in takes if take not in self.heard]
+        chosen = fresh[0] if fresh else list(takes)[-1]
+        self.heard.add(chosen)
+        return takes[chosen]
+
     def match(self, route: str, key: RequestKey) -> dict[str, Any] | None:
-        scored = [
-            (
-                _similarity(key.focus, entry["focus"], tail=LATEST_WORDS),
-                _similarity(key.focus, entry["focus"]),
-                index,
-            )
+        candidates = [
+            index
             for index, entry in enumerate(self.entries)
             if entry["route"] == route and _similarity(key.system, entry["system"]) >= SAME_CALL
         ]
-        best = max((latest for latest, _, _ in scored), default=0.0)
-        if best < MIN_SIMILARITY:
-            self.misses.append(f"{route} ({best:.2f}): {key.focus[-200:]}")
+        scored = [
+            _Score(
+                latest=_similarity(key.focus, self.entries[index]["focus"], tail=LATEST_WORDS),
+                recent=_similarity(key.focus, self.entries[index]["focus"], tail=RECENT_WORDS),
+                whole=_similarity(key.focus, self.entries[index]["focus"]),
+                unused=index not in self.used,
+                earlier=-index,
+            )
+            for index in candidates
+        ]
+        closest = max(scored, default=None)
+        if closest is None or max(closest.latest, closest.whole) < MIN_SIMILARITY:
+            self.miss(
+                {
+                    "route": route,
+                    "score": max(closest.latest, closest.whole) if closest else 0.0,
+                    "asked": key.focus[-600:],
+                    "closest": self.entries[closest.index]["focus"][-600:] if closest else None,
+                }
+            )
             return None
-        near = sorted(
-            (index not in self.used, round(whole, 2), -index)
-            for latest, whole, index in scored
-            if best - latest <= TIE
-        )
-        unused, _, negative_index = near[-1]
-        if not unused:
+        if not closest.unused:
             self.reused += 1
-        self.used.add(-negative_index)
-        return self.entries[-negative_index]
+        self.used.add(closest.index)
+        return self.entries[closest.index]
+
+
+@dataclass(frozen=True, slots=True)
+class Said:
+    clip: str
+    at: float
+
+
+@dataclass(slots=True)
+class Claim:
+    clip: str
+    onset: float
+    take: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
+    end: float | None = None
+    ended: asyncio.Event = field(default_factory=asyncio.Event)
+
+
+HeardEvent = tuple[Literal["start", "end"], Claim]
+
+
+class _Hearing:
+    def __init__(self, said: list[Said]) -> None:
+        self._said = said
+        self._taken: set[int] = set()
+        self._loud = False
+        self._quiet_since = -math.inf
+        self.claim: Claim | None = None
+
+    def hear(self, pcm: bytes) -> HeardEvent | None:
+        now = time.monotonic()
+        if _level(pcm) < VOICE_LEVEL:
+            if self._loud:
+                self._loud = False
+                self._quiet_since = now
+            claim = self.claim
+            if (
+                claim is not None
+                and claim.end is None
+                and now - self._quiet_since >= QUIET_GAP_SECONDS
+            ):
+                claim.end = self._quiet_since
+                claim.ended.set()
+                return ("end", claim)
+            return None
+        starting = not self._loud and now - self._quiet_since >= QUIET_GAP_SECONDS
+        self._loud = True
+        if not starting:
+            return None
+        recent = [
+            index
+            for index, said in enumerate(self._said)
+            if index not in self._taken and 0 <= now - said.at <= CLAIM_WINDOW_SECONDS
+        ]
+        if not recent:
+            return None
+        self._taken.add(recent[-1])
+        self.claim = Claim(self._said[recent[-1]].clip, now)
+        return ("start", self.claim)
+
+
+def _level(pcm: bytes) -> float:
+    samples = memoryview(pcm[: len(pcm) - len(pcm) % 2]).cast("h")
+    if not len(samples):
+        return 0.0
+    return math.sqrt(sum(sample * sample for sample in samples) / len(samples)) / 32768
+
+
+async def _spoken(socket: WebSocket, claim: Claim, messages: list[list[Any]]) -> None:
+    marker = next(
+        (offset for offset, message in messages if message.get("type") == VOICE_END), None
+    )
+    for offset, message in messages:
+        if message.get("type") == VOICE_END:
+            continue
+        due = claim.onset + offset
+        if marker is not None and offset >= marker:
+            with suppress(TimeoutError):
+                await asyncio.wait_for(
+                    claim.ended.wait(), max(0.0, due - time.monotonic()) + END_GRACE_SECONDS
+                )
+            if claim.end is not None:
+                due = claim.end + offset - marker
+        delay = due - time.monotonic()
+        if delay > 0:
+            await asyncio.sleep(delay)
+        with suppress(WebSocketDisconnect, RuntimeError):
+            await socket.send_json(message)
+
+
+def _without_secrets(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _without_secrets(item) for key, item in value.items() if item != SECRET_MASK}
+    if isinstance(value, list):
+        return [_without_secrets(item) for item in value]
+    return value
+
+
+def _require_google(settings: Settings) -> None:
+    roles = {name: getattr(settings, name) for name in REPLY_ROLES}
+    roles["turn_judge"] = settings.turn_judge.model
+    unsupported = [
+        name
+        for name, role in roles.items()
+        if role is not None and not isinstance(role, GoogleReply)
+    ]
+    if settings.perception.interpreter.provider != "google":
+        unsupported.append("perception")
+    if unsupported:
+        raise ValueError(f"recording supports Google models only, not {unsupported}")
 
 
 @dataclass(slots=True)
@@ -157,34 +323,59 @@ class ProviderDoubles:
     cassette: Cassette
     base_url: str = ""
     _client: httpx.AsyncClient | None = None
+    _stt_upstream: str = ""
+    _said: list["Said"] = field(default_factory=list)
 
     def settings(self, settings: Settings) -> Settings:
         if self.mode == "live":
             return settings
-        update: dict[str, Any] = {
-            name: role.model_copy(update={"base_url": self.base_url})
-            for name in ("reply", "reply_strong", "reply_fallback", "debrief")
-            if isinstance(role := getattr(settings, name), GoogleReply)
-        }
-        judge = settings.turn_judge.model
-        if isinstance(judge, GoogleReply):
-            update["turn_judge"] = settings.turn_judge.model_copy(
-                update={"model": judge.model_copy(update={"base_url": self.base_url})}
-            )
-        interpreter = settings.perception.interpreter
-        if interpreter.provider == "google":
-            update["perception"] = settings.perception.model_copy(
-                update={"interpreter": interpreter.model_copy(update={"base_url": self.base_url})}
-            )
-        update["tts"] = CartesiaTTS(api_key=SecretStr("double"), base_url=self.base_url)
-        update["tts_fallback"] = None
-        return settings.model_copy(update=update)
+        if self.mode == "record":
+            _require_google(settings)
+            snapshot = _without_secrets(settings.model_dump(mode="json", exclude={"paths"}))
+            SNAPSHOT.write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n")
+            self._stt_upstream = settings.stt.url
+            return self._pointed(settings, None)
+        snapshot = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
+        recorded = Settings.model_validate({**snapshot, "paths": settings.paths.model_dump()})
+        return self._pointed(recorded, SecretStr(DOUBLE_KEY))
+
+    def _pointed(self, settings: Settings, key: SecretStr | None) -> Settings:
+        pointed: dict[str, Any] = {"base_url": self.base_url, **({"api_key": key} if key else {})}
+
+        def google(role: Any) -> Any:
+            return role.model_copy(update=pointed) if isinstance(role, GoogleReply) else role
+
+        return settings.model_copy(
+            update={
+                **{name: google(getattr(settings, name)) for name in REPLY_ROLES},
+                "turn_judge": settings.turn_judge.model_copy(
+                    update={"model": google(settings.turn_judge.model)}
+                ),
+                "perception": settings.perception.model_copy(
+                    update={
+                        "interpreter": settings.perception.interpreter.model_copy(update=pointed)
+                    }
+                ),
+                "tts": CartesiaTTS(api_key=SecretStr(DOUBLE_KEY), base_url=self.base_url),
+                "tts_fallback": None,
+                "stt": settings.stt.model_copy(
+                    update={
+                        "url": secure_scheme(self.base_url) + "/stt",
+                        **({"api_key": key} if key else {}),
+                    }
+                ),
+            }
+        )
+
+    def script(self, clip: str) -> None:
+        self._said.append(Said(clip, time.monotonic()))
 
     def app(self) -> Starlette:
         return Starlette(
             routes=[
                 Route("/v1beta/models/{call:path}", self._gemini, methods=["POST"]),
                 WebSocketRoute("/tts/websocket", self._cartesia),
+                WebSocketRoute("/stt", self._muse),
             ]
         )
 
@@ -256,6 +447,76 @@ class ProviderDoubles:
             pass
         finally:
             await speaker.close()
+
+    async def _muse(self, socket: WebSocket) -> None:
+        await socket.accept()
+        handshake = await socket.receive_text()
+        hearing = _Hearing(self._said)
+        if self.mode == "record":
+            await self._relay_muse(socket, handshake, hearing)
+        else:
+            await self._replay_muse(socket, hearing)
+
+    def _keep_heard(self, claim: Claim | None, message: Any, *, at: float | None = None) -> None:
+        if claim is None:
+            return
+        self.cassette.add(
+            {
+                "route": STT_ROUTE,
+                "clip": claim.clip,
+                "take": claim.take,
+                "offset": round((at or time.monotonic()) - claim.onset, 3),
+                "message": message,
+            }
+        )
+
+    async def _relay_muse(self, socket: WebSocket, handshake: str, hearing: "_Hearing") -> None:
+        query = socket.url.query
+        async with websockets.connect(f"{self._stt_upstream}?{query}") as upstream:
+            await upstream.send(handshake)
+            await socket.send_text(str(await upstream.recv()))
+
+            async def answers() -> None:
+                async for raw in upstream:
+                    if isinstance(raw, str):
+                        self._keep_heard(hearing.claim, json.loads(raw))
+                        await socket.send_text(raw)
+
+            answering = asyncio.ensure_future(answers())
+            try:
+                while (message := await socket.receive())["type"] != "websocket.disconnect":
+                    if audio := message.get("bytes"):
+                        heard = hearing.hear(audio)
+                        if heard is not None and heard[0] == "end":
+                            self._keep_heard(heard[1], {"type": VOICE_END}, at=heard[1].end)
+                        await upstream.send(audio)
+                    elif text := message.get("text"):
+                        await upstream.send(text)
+            finally:
+                answering.cancel()
+                with suppress(asyncio.CancelledError, websockets.ConnectionClosed):
+                    await answering
+
+    async def _replay_muse(self, socket: WebSocket, hearing: "_Hearing") -> None:
+        await socket.send_json({"sessionId": f"double-{id(hearing)}"})
+        speaking: list[asyncio.Task[None]] = []
+        try:
+            while (message := await socket.receive())["type"] != "websocket.disconnect":
+                audio = message.get("bytes")
+                heard = hearing.hear(audio) if audio else None
+                if heard is None or heard[0] != "start":
+                    continue
+                claim = heard[1]
+                recorded = self.cassette.speech(claim.clip)
+                if recorded is None:
+                    self.cassette.miss({"route": STT_ROUTE, "clip": claim.clip})
+                    continue
+                speaking.append(asyncio.ensure_future(_spoken(socket, claim, recorded)))
+        finally:
+            for task in speaking:
+                task.cancel()
+            with suppress(asyncio.CancelledError):
+                await asyncio.gather(*speaking, return_exceptions=True)
 
     @asynccontextmanager
     async def running(self) -> AsyncIterator["ProviderDoubles"]:
