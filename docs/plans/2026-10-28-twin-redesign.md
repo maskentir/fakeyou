@@ -2224,6 +2224,45 @@ diam; slide harga → diam). Hasil live sesudah ketiganya: `attention`
 0,889, `control` 1,0, `small_talk` 1,0, `recall` 1,0; `honesty` gagal
 karena s21/s22 (lihat celah trust di atas).
 
+B6-4, desain (2026-11-07, belum diimplementasi): **mulai generasi
+jawaban sebelum boleh bicara.** Data `b6-live-3`: final STT tiba p50
+1,05 dtk sesudah VAD stop; early commit kalah oleh `final_first` 12×
+(hold + judge ±1,2 dtk); sesudah final, keputusan judge (memakai
+judgement interim) p50 0,9 dtk, lalu `strong` p50 2,85–3,12 dtk dengan
+lantai thinking ±2,3 dtk yang tidak bisa dipangkas dari prompt atau
+model (B6-2 ditolak). Rantai yang dirasakan: VAD stop → jawaban
+terdengar ≈ 1,05 + 0,9 + 2,85 ≈ 4,8 dtk, dengan opener B6-1 menutup
+keheningan sejak keputusan.
+
+Desain: pisahkan **mulai generasi** dari **izin bicara**.
+
+- Pemicu spekulasi: VAD stop pada baris yang memanggil twin secara
+  vocative (`is_vocative`, deterministik, murah). Baris tanpa nama
+  tidak dispekulasikan, jadi biaya terbuang dibatasi ke baris yang
+  hampir selalu untuk twin.
+- Yang dimulai: jalur jawaban penuh (prefetch memory, routing, panggilan
+  model) atas teks interim terakhir, sebagai giliran yang **belum
+  boleh bicara**: kalimat yang keluar ditahan di sink, tidak disintesis
+  ke audio.
+- Izin: judge tetap satu-satunya yang memutuskan. `speak` → kalimat
+  yang ditahan dilepas ke sintesis; `silent`/`clarify` → giliran
+  spekulatif dibatalkan (agent cancel, tidak ada audio, journal
+  `speculation_dropped` dengan alasan).
+- Rekonsiliasi dengan final memakai aturan early commit yang ada
+  (`says_more` + `_EXTRA_WORDS_FOR_MORE`): final yang menambah isi
+  material membatalkan spekulasi dan memulai giliran dari final; revisi
+  kecil memakai spekulasi.
+- Satu spekulasi per ucapan; ucapan berikutnya membatalkan yang lama.
+  Tidak ada spekulasi saat twin sedang bicara (jalur barge-in tetap).
+
+Gate: (1) VAD stop → audio jawaban p50 ≤ 3,2 dtk di sesi live (dari
+±4,8); (2) nol jawaban terdengar untuk baris yang judge-nya `silent`;
+(3) spekulasi terbuang ≤ 30% dari spekulasi yang dimulai, diukur per
+sesi; (4) `conversation_replay` dan `acc-0930-replay` tidak turun.
+Risiko: biaya model untuk baris vocative yang ternyata tidak dijawab,
+dan tool call (memory) yang sudah jalan untuk giliran yang dibatalkan —
+keduanya read-only, jadi pembatalan aman.
+
 Temuan sampingan (2026-11-07): debrief gagal di **setiap** sesi live
 (`debrief_failed` di `b6-live-1` dan `b6-live-3`) karena
 `FAKEYOU_DEBRIEF__MODEL=gemini-3.8-flash` tanpa `REASONING_EFFORT`
