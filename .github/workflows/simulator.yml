@@ -1,0 +1,42 @@
+name: Meeting simulator
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the audio test image
+        run: docker build -f docker/audio/Dockerfile --target test -t fakeyou-test:local .
+      - name: Replay every simulator scenario from its cassette
+        run: |
+          mkdir -p "$RUNNER_TEMP/simulator"
+          chmod 777 "$RUNNER_TEMP/simulator"
+          docker run --rm \
+            -e SIMULATOR_PROVIDERS=replay \
+            -e SIMULATOR_ARTIFACT_DIR=/artifacts \
+            -v "$RUNNER_TEMP/simulator:/artifacts" \
+            -v "$PWD/tests:/workspace/tests:ro" \
+            -v "$PWD/evals:/workspace/evals:ro" \
+            -v "$PWD/src:/workspace/src:ro" \
+            -v "$PWD/conftest.py:/workspace/conftest.py:ro" \
+            -v "$PWD/pyproject.toml:/workspace/pyproject.toml:ro" \
+            fakeyou-test:local uv run --no-sync pytest -m simulator evals/test_meeting_simulator_eval.py -q -p no:cacheprovider
+      - name: Show the twin's journals when a scenario fails
+        if: failure()
+        run: |
+          for journal in "$RUNNER_TEMP"/simulator/journals/*.jsonl; do
+            echo "::group::$journal"
+            grep -E '"event":"(policy_decided|plan_selected|meet_action_finished|transcript_finalized|turn_failed|fault_recorded)"' "$journal" || true
+            echo "::endgroup::"
+          done

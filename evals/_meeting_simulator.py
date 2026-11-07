@@ -318,6 +318,7 @@ class MeetingSimulator:
     _page: Page | None = None
     _chats: int = 0
     left: bool = False
+    on_say: Callable[[str], None] | None = None
 
     def __post_init__(self) -> None:
         self.people.insert(0, Participant(TWIN_DEVICE, self.twin_name, LOBBY, current=True))
@@ -438,6 +439,8 @@ class MeetingSimulator:
 
     async def say(self, clip: str, *, speaker: str) -> Span:
         wav = base64.b64encode((FIXTURES / clip).read_bytes()).decode()
+        if self.on_say is not None:
+            self.on_say(clip)
         async with asyncio.timeout(PLAY_LIMIT_SECONDS):
             spoken = await self.page.evaluate(
                 "([device, wav]) => window.__simSay(device, wav)", [speaker, wav]

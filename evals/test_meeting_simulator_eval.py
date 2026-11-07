@@ -166,7 +166,7 @@ async def _meeting(
     doubles = provider_doubles(meeting_id)
     async with doubles.running():
         settings = doubles.settings(_settings(tmp_path))
-        simulator = MeetingSimulator(twin_name="Rani Twin")
+        simulator = MeetingSimulator(twin_name="Rani Twin", on_say=doubles.script)
         journal = journal_path(settings.paths.journal_dir, SessionId(meeting_id))
         briefing = _brief(tmp_path, meeting_id) if brief else None
         request = _request(settings, meeting_id, duration, briefing)
@@ -200,7 +200,7 @@ async def test_the_twin_joins_a_simulated_meeting_and_answers_a_spoken_question(
 async def test_the_twin_answers_chat_and_acts_on_the_meeting_when_asked(tmp_path: Path) -> None:
     async with _meeting(tmp_path, "sim-s2") as meeting:
         simulator = meeting.simulator
-        await simulator.chat(HARUN, "Rani, who owns the Orchid launch checklist?")
+        await simulator.chat(HARUN, "Rani Twin, who owns the Orchid launch checklist?")
         answered = await simulator.wait_for_state(
             lambda state: any("rani" in line.casefold() for line in state["sent"]), within=60
         )

@@ -312,9 +312,16 @@ class TranscriptDrain:
         await self._drain_ordered()
         await self._score_turn(extra.get("speaker_uuid"), stream_id, device, finalized=update.final)
 
-    def _attributed(self, update: TranscriptUpdate) -> tuple[TranscriptEvent, Any]:
+    def _attributed(
+        self, update: TranscriptUpdate, *, closes_turn: bool
+    ) -> tuple[TranscriptEvent, Any]:
         voice_activity = self._voice_activity
-        attribution = voice_activity.attribute() if voice_activity is not None else None
+        if voice_activity is None:
+            attribution = None
+        elif closes_turn:
+            attribution = voice_activity.attribute()
+        else:
+            attribution = voice_activity.peek()
         speaker_uuid = attribution.speaker_uuid if attribution is not None else None
         capture = CaptureContext(display_claim=_claim_for_uuid(self._registry(), speaker_uuid))
         if attribution is None:
@@ -326,13 +333,13 @@ class TranscriptDrain:
 
     def early_event(self, text: str) -> TranscriptEvent:
         update = TranscriptUpdate(text=text, final=True, timestamp=datetime.now(UTC).isoformat())
-        event, attribution = self._attributed(update)
+        event, attribution = self._attributed(update, closes_turn=False)
         extra = attribution.journal_fields() if attribution is not None else None
         self._observe_early(event, extra)
         return event
 
     async def _mixed_stream(self, update: TranscriptUpdate) -> None:
-        event, attribution = self._attributed(update)
+        event, attribution = self._attributed(update, closes_turn=True)
         speaker_uuid = attribution.speaker_uuid if attribution is not None else None
         extra = attribution.journal_fields() if attribution is not None else None
         self._observe(event, extra)

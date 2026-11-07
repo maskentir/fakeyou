@@ -1,0 +1,211 @@
+{
+  "api": {
+    "host": "127.0.0.1",
+    "port": 8000,
+    "rate_limit_per_minute": 120
+  },
+  "audio": {
+    "drain_failure_journal_every": 10,
+    "drain_max_consecutive_failures": 40,
+    "persist_enabled": false,
+    "retention_days": 30
+  },
+  "audio_health": {
+    "deaf_grace_seconds": 120.0,
+    "deaf_window_seconds": 120.0
+  },
+  "browser": {
+    "headless": false,
+    "license_key": null,
+    "warmup": true
+  },
+  "conversation": {
+    "barge_in_judge_enabled": true,
+    "history_max_tokens": 32000,
+    "max_spoken_sentences": 2,
+    "meet_chat_per_minute": 3,
+    "participant_evidence_max_bytes": 8388608,
+    "per_stream_enabled": false,
+    "response_timeout_seconds": 60.0,
+    "sentence_streaming": true,
+    "thinking_cue_after_seconds": 2.0,
+    "thinking_cue_enabled": true,
+    "voice_labels_enabled": true
+  },
+  "database": {
+    "connect_timeout_seconds": 5.0,
+    "keepalive_idle_seconds": 30.0,
+    "statement_timeout_seconds": 30.0
+  },
+  "debrief": {
+    "base_url": "https://generativelanguage.googleapis.com",
+    "max_retries": 2,
+    "model": "gemini-3.8-flash",
+    "provider": "google",
+    "reasoning_effort": "low",
+    "timeout_seconds": 60.0
+  },
+  "identity": {
+    "owner_id": "hard_owner",
+    "twin_id": "hard_twin",
+    "twin_name": "Fakeyou Twin",
+    "voiceprint_calibration_path": "",
+    "voiceprint_enabled": false,
+    "voiceprint_min_margin": 0.15,
+    "voiceprint_min_seconds": 3.0,
+    "voiceprint_model_path": "",
+    "voiceprint_model_sha256": "c59158379255ad66e161679cca6af8d52d51e389e3224ab7d7a7baae295c2db5",
+    "voiceprint_policy_version": "v1",
+    "voiceprint_retention_days": 90,
+    "voiceprint_threshold": 0.6,
+    "voiceprint_timeout_seconds": 5.0
+  },
+  "meeting": {
+    "alone_leave_seconds": 600.0,
+    "join_max_attempts": 3,
+    "join_poll_seconds": 2.0,
+    "join_retry_base_seconds": 2.0,
+    "join_retry_cap_seconds": 30.0,
+    "leave_timeout_seconds": 30.0,
+    "lobby_timeout_seconds": 300.0,
+    "monitor_poll_seconds": 5.0,
+    "session_duration_seconds": 7200.0
+  },
+  "memory": {
+    "close_callback_seconds": 5.0,
+    "close_hard_seconds": 30.0,
+    "embedder": {
+      "base_url": "http://127.0.0.1:8080/v1",
+      "dim": 384,
+      "max_retries": 2,
+      "model": "ibm-granite/granite-embedding-97m-multilingual-r2",
+      "timeout_seconds": 60.0
+    },
+    "ingestion": {
+      "episode_timeout_seconds": 120.0,
+      "extraction_concurrency": 20,
+      "window_seconds": 60.0,
+      "window_utterances": 20
+    },
+    "llm": {
+      "base_url": "https://api.meta.ai/v1",
+      "client": "openai_generic",
+      "max_retries": 2,
+      "model": "muse-spark-1.2",
+      "small_model": "muse-spark-1.2",
+      "timeout_seconds": 60.0
+    },
+    "recall": {
+      "result_limit": 5,
+      "timeout_seconds": 15.0
+    },
+    "store": {
+      "database": "neo4j",
+      "uri": "bolt://localhost:7687",
+      "user": "neo4j"
+    }
+  },
+  "perception": {
+    "attention": {
+      "enabled": true,
+      "floor_gap_seconds": 1.2,
+      "grounding_confidence": 0.7,
+      "max_interjections_per_10min": 2,
+      "moment_confidence": 0.8,
+      "owner_names": [],
+      "similarity_threshold": 0.15,
+      "transcript_moments": true,
+      "ttl_seconds": 30.0,
+      "unanswered_seconds": 15.0
+    },
+    "budget_usd": 1.0,
+    "cameras": true,
+    "chat": true,
+    "enabled": true,
+    "interpreter": {
+      "base_url": null,
+      "max_concurrent": 2,
+      "max_retries": 2,
+      "model": "gemini-3.8-flash",
+      "provider": "google",
+      "timeout_seconds": 30.0
+    },
+    "max_calls": 240,
+    "retention_raw_days": 7,
+    "retention_text_days": 30,
+    "screen": true,
+    "signals": true,
+    "view_max_chars": 3000
+  },
+  "preflight": {
+    "budget_seconds": 5.0
+  },
+  "reply": {
+    "base_url": "https://generativelanguage.googleapis.com",
+    "max_retries": 2,
+    "model": "gemini-3.1-flash-lite",
+    "provider": "google",
+    "reasoning_effort": "minimal",
+    "timeout_seconds": 15.0
+  },
+  "reply_fallback": null,
+  "reply_strong": {
+    "base_url": "https://generativelanguage.googleapis.com",
+    "max_retries": 1,
+    "model": "gemini-3.8-flash",
+    "provider": "google",
+    "reasoning_effort": "low",
+    "timeout_seconds": 15.0
+  },
+  "speech": {
+    "language": "en"
+  },
+  "stt": {
+    "diarize_max_retries": 3,
+    "diarize_timeout_seconds": 60.0,
+    "idle_reconnect_seconds": 0.0,
+    "mode": "DIARIZATION",
+    "model": "muse-voice-transcribe-1.0",
+    "provider": "muse",
+    "ready_timeout_seconds": 10.0,
+    "url": "wss://api.meta.ai/v1/asr/realtime"
+  },
+  "transport": {
+    "redis": {
+      "connect_timeout_seconds": 5.0,
+      "lease_seconds": 30.0,
+      "stream_max_len": 10000,
+      "url": null
+    }
+  },
+  "tts": {
+    "base_url": "https://api.cartesia.ai",
+    "model": "sonic-3",
+    "provider": "cartesia",
+    "sample_rate": 24000,
+    "voice": "d7518ffa-ddda-4b48-8948-80598c09e573"
+  },
+  "tts_fallback": null,
+  "turn_judge": {
+    "barge_in_threshold": 0.6,
+    "clarify_threshold": 0.5,
+    "commit_hold_seconds": 0.3,
+    "early_commit_enabled": true,
+    "model": null,
+    "reply_threshold": 0.6,
+    "smart_turn_enabled": true,
+    "smart_turn_threshold": 0.5,
+    "timeout_seconds": 4.0,
+    "unnamed_reply_threshold": 0.85,
+    "window_lines": 8
+  },
+  "vad": {
+    "confidence": 0.7,
+    "min_volume": 0.6,
+    "start_secs": 0.2,
+    "stop_secs": 0.2
+  },
+  "worker": {
+    "audio": false
+  }
+}
