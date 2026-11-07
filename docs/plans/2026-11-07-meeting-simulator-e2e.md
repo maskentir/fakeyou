@@ -205,8 +205,31 @@ regresi pertama di katalog.
   sebelum pertanyaan berikutnya agar tidak memotong twin sendiri. Catatan:
   setelah menjelaskan slide twin mengulang koreksi tanggalnya sekali; satu
   run S2 gagal karena chat tidak dijawab dalam 60 detik (tidak berulang).
+- **Reaksi** (2026-11-07): tombol "Send a reaction" membuka dialog
+  `role=dialog` berisi sembilan emoji Meet (💖 👍 🎉 👏 😂 😮 😢 🤔 👎);
+  klik dicatat di `__simReactions`. Lulus: "react with a thumbs up"
+  mengirim 👍 dan "send a heart reaction" mengirim 💖 lewat pemetaan
+  keluarga emoji. Plannya `action_only` (twin tidak bicara) dan statusnya
+  `effect_unobserved`, karena Meet tidak memberi tanda baca-balik untuk
+  reaksi sendiri; itu jujur, bukan false negative yang perlu diperbaiki.
 - **S4:** rekaman suara twin dan metrik waktu (latensi, berhenti saat
   dipotong).
+  S4, implementasi (2026-11-07): halaman simulator membuka mic lewat
+  `getUserMedia` seperti Meet (sumber `agent_mic`, jadi yang diukur adalah
+  suara twin yang benar-benar sampai ke meeting), mengukur RMS tiap 20 ms
+  lewat `AnalyserNode` menjadi segmen suara (ambang 0,01, jeda 0,4 s), dan
+  merekam `twin.webm` untuk didengarkan saat gagal; rekaman itu tidak
+  dipakai untuk timing karena potongan MediaRecorder menggeser waktu
+  sampai ~1 s. `say()` mengembalikan rentang waktu klip. Metrik:
+  `reply_latency` = awal suara twin pertama setelah pertanyaan selesai
+  dikurangi akhir pertanyaan; `stop_latency` = akhir suara twin terakhir
+  yang terdengar selama potongan dikurangi awal potongan (suara yang di-duck
+  tetap dihitung kalau masih di atas ambang). Run pertama: reply 3,7 s,
+  stop 1,2 s; gerbang awal 8 s dan 4 s, dicatat ke `timing.json` beserta
+  segmen mentah sebelum assert. Temuan produk dari run penuh: S2 kadang
+  gagal karena twin menjawab "I own the Orchid launch checklist" — twin
+  mengaku sebagai owner; `IDENTITY_RULE` sekarang mewajibkan orang ketiga
+  untuk apa yang dimiliki, dilakukan atau diputuskan owner.
 - **S5:** mode `recorded` untuk CI; katalog lengkap.
 - **S6:** L2 smoke di Meet asli.
 

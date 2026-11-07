@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import sys
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,8 @@ LINK = "https://meet.google.com/sim-ulat-edm"
 HARUN = "spaces/simulated/devices/harun"
 BIMA = "spaces/simulated/devices/bima"
 RED = "#c62828"
+MAX_REPLY_LATENCY_SECONDS = 8.0
+MAX_STOP_LATENCY_SECONDS = 4.0
 
 
 def _settings(tmp_path: Path) -> Settings:
@@ -251,3 +254,74 @@ async def test_the_twin_only_describes_a_camera_it_can_attribute(tmp_path: Path)
     assert "red" not in unattributed
     assert "red" in named
     assert "turn_failed" not in {row["event"] for row in journal_rows(journal)}
+
+
+async def test_the_twin_sends_the_reaction_meet_offers_for_what_was_asked(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    meeting_id = "sim-reactions"
+    simulator = MeetingSimulator(twin_name="Rani Twin")
+    journal = journal_path(settings.paths.journal_dir, SessionId(meeting_id))
+    request = _request(settings, meeting_id, duration=300, brief=_brief(tmp_path, meeting_id))
+
+    async with running_session(run_join_session(request, _ports(simulator))) as session:
+        await _admitted(simulator, session, journal)
+        await simulator.say("react-thumbs-up.wav", speaker=HARUN)
+        thumbs = await simulator.wait_for_state(
+            lambda state: "\N{THUMBS UP SIGN}" in state["reactions"], within=45
+        )
+        await wait_for_event(journal, "meet_action_finished", within=30)
+        await simulator.say("send-heart.wav", speaker=HARUN)
+        heart = await simulator.wait_for_state(
+            lambda state: "\N{SPARKLING HEART}" in state["reactions"], within=45
+        )
+
+    assert thumbs["reactions"][0] == "\N{THUMBS UP SIGN}"
+    assert heart["reactions"] == ["\N{THUMBS UP SIGN}", "\N{SPARKLING HEART}"]
+    assert "turn_failed" not in {row["event"] for row in journal_rows(journal)}
+
+
+def _keep(settings: Settings, meeting_id: str, name: str, data: bytes) -> None:
+    folder = settings.paths.record_dir / meeting_id
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / name).write_bytes(data)
+
+
+async def test_the_meeting_hears_the_twin_answer_quickly_and_stop_when_cut_off(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    meeting_id = "sim-s4-timing"
+    simulator = MeetingSimulator(twin_name="Rani Twin")
+    journal = journal_path(settings.paths.journal_dir, SessionId(meeting_id))
+    request = _request(settings, meeting_id, duration=300, brief=_brief(tmp_path, meeting_id))
+
+    async with running_session(run_join_session(request, _ports(simulator))) as session:
+        await _admitted(simulator, session, journal)
+        question = await simulator.say("beta-question.wav", speaker=HARUN)
+        answer = await simulator.wait_for_twin_voice(lambda span: span.start > question.end)
+        await _next_turn(settings, meeting_id, journal, 0)
+        before = len(_twin_speech(settings, meeting_id))
+        request_plan = await simulator.say("walk-through-plan.wav", speaker=HARUN)
+        await simulator.wait_for_twin_voice(lambda span: span.start > request_plan.end)
+        await asyncio.sleep(1.0)
+        cut = await simulator.say("hold-on.wav", speaker=HARUN)
+        await asyncio.sleep(3.0)
+        voice = await simulator.twin_voice()
+        _keep(settings, meeting_id, "twin.webm", await simulator.twin_recording())
+
+    heard_over = [span.end for span in voice if span.start < cut.end and span.end > cut.start]
+    reply_latency = answer.start - question.end
+    stop_latency = max(heard_over, default=cut.start) - cut.start
+    timing = {
+        "reply_latency": reply_latency,
+        "stop_latency": stop_latency,
+        "question": asdict(question),
+        "cut": asdict(cut),
+        "twin_voice": [asdict(span) for span in voice],
+    }
+    _keep(settings, meeting_id, "timing.json", json.dumps(timing, indent=2).encode())
+    later = _twin_speech(settings, meeting_id)[before:]
+    interrupted = [entry for entry in later if entry.interrupted]
+    assert reply_latency < MAX_REPLY_LATENCY_SECONDS
+    assert stop_latency < MAX_STOP_LATENCY_SECONDS
+    assert interrupted
