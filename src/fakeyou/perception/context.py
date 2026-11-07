@@ -159,14 +159,20 @@ def _mentioned(snapshot: TimelineSnapshot, text: str) -> str | None:
     )
 
 
+def _sole_participant(snapshot: TimelineSnapshot) -> str | None:
+    people = snapshot.participants
+    return people[0].ref if len(people) == 1 else None
+
+
 async def _look_for(context: PerceptionContext, need: str, question: str) -> str:
     if need == "screen":
         return await context.look_at_screen("current", question)
     if need == "participant":
-        name = _mentioned(context.timeline.snapshot(), question)
-        if name is None:
+        snapshot = context.timeline.snapshot()
+        target = _mentioned(snapshot, question) or _sole_participant(snapshot)
+        if target is None:
             return _look_result("unknown_participant", participant="")
-        return await context.look_at_participant(name, question)
+        return await context.look_at_participant(target, question)
     return context.backlog_chat()
 
 

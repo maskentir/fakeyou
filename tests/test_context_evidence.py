@@ -57,9 +57,10 @@ async def test_a_planned_screen_look_answers_the_spoken_question() -> None:
     }
 
 
-async def test_a_participant_look_needs_a_named_participant() -> None:
+async def test_a_participant_look_among_several_people_needs_a_name() -> None:
     timeline = read_timeline()
     timeline.participant("device-budi", "Budi")
+    timeline.participant("device-ayu", "Ayu")
     timeline.camera_frames.put("device-budi", slide_jpeg("Mockup"))
     seeing = context(timeline, "A paper mockup.")
 
@@ -68,6 +69,20 @@ async def test_a_participant_look_needs_a_named_participant() -> None:
 
     assert named["participant"]["code"] == "ok"
     assert unnamed == {"participant": {"code": "unknown_participant", "participant": ""}}
+
+
+async def test_the_only_person_in_the_meeting_is_looked_at_without_a_name() -> None:
+    timeline = MeetingTimeline()
+    timeline.participant("device-harun", "Harun")
+    timeline.camera_frames.put("device-harun", slide_jpeg("Shirt"))
+    seeing = context(timeline, "A dark blue shirt.")
+
+    evidence = await gather_evidence(
+        seeing, "Can you see me? What color is my shirt?", ("participant",)
+    )
+
+    assert evidence["participant"]["code"] == "ok"
+    assert evidence["participant"]["answer"] == "A dark blue shirt."
 
 
 async def test_unknown_needs_are_ignored_and_chat_history_needs_no_model() -> None:
