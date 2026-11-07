@@ -13,7 +13,7 @@ from fakeyou.foundation.participation import mentions_whole_phrase
 from fakeyou.foundation.triggers import current_trigger, meeting_event_of
 from fakeyou.observability.journal import Journal
 from fakeyou.observability.provider_faults import ProviderFault
-from fakeyou.perception.interpreter import PerceptionInterpreter
+from fakeyou.perception.interpreter import CAMERA_SOURCE, SCREEN_SOURCE, PerceptionInterpreter
 from fakeyou.perception.roster import MeetingState
 from fakeyou.perception.timeline import MeetingTimeline, TimelineSnapshot
 from fakeyou.perception.view import (
@@ -105,7 +105,9 @@ class PerceptionContext:
         data = self.timeline.keyframes.get(segment.keyframe.sha256)
         if data is None:
             return _look_result("frame_unavailable", screen=segment.ref)
-        return await self._look(data, question, subject={"screen": segment.ref})
+        return await self._look(
+            data, question, source=SCREEN_SOURCE, subject={"screen": segment.ref}
+        )
 
     def backlog_chat(self, limit: int = 20) -> str:
         now = self.clock()
@@ -127,14 +129,21 @@ class PerceptionContext:
         data = self.timeline.camera_frames.get(person.participant_id)
         if data is None:
             return _look_result("camera_unavailable", participant=person.ref)
-        return await self._look(data, question, subject={"participant": person.ref})
+        return await self._look(
+            data,
+            question,
+            source=CAMERA_SOURCE.format(name=person.name),
+            subject={"participant": person.ref},
+        )
 
-    async def _look(self, data: bytes, question: str, *, subject: dict[str, str]) -> str:
+    async def _look(
+        self, data: bytes, question: str, *, source: str, subject: dict[str, str]
+    ) -> str:
         if self.interpreter is None:
             return _look_result("budget_exhausted", **subject)
         try:
             async with asyncio.timeout(LOOK_TIMEOUT_SECONDS):
-                answer = await self.interpreter.answer(data, question)
+                answer = await self.interpreter.answer(data, question, source=source)
         except (ProviderFault, FakeYouError, OSError, TimeoutError) as error:
             return _look_result("look_failed", error_type=type(error).__name__, **subject)
         if answer is None:

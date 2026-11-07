@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,8 @@ from fakeyou.persistence.record import TwinSpeechEntry, load_meeting_record, mee
 MEETING_AUDIO_MONITOR = "meeting_audio.monitor"
 LINK = "https://meet.google.com/sim-ulat-edm"
 HARUN = "spaces/simulated/devices/harun"
+BIMA = "spaces/simulated/devices/bima"
+RED = "#c62828"
 
 
 def _settings(tmp_path: Path) -> Settings:
@@ -94,6 +97,43 @@ pytestmark = [
 
 def _ports(simulator: MeetingSimulator) -> JoinPorts:
     return JoinPorts(run_session=simulator.run_session, open_memory=open_persona_memory)
+
+
+def _twin_speech(settings: Settings, meeting_id: str) -> list[TwinSpeechEntry]:
+    path = meeting_record_path(settings.paths.record_dir, SessionId(meeting_id))
+    if not path.exists():
+        return []
+    return [entry for entry in load_meeting_record(path) if isinstance(entry, TwinSpeechEntry)]
+
+
+async def _next_turn(
+    settings: Settings, meeting_id: str, journal: Path, after: int, within: float = 60.0
+) -> str:
+    async with asyncio.timeout(within):
+        while True:
+            spoken = [entry for entry in _twin_speech(settings, meeting_id)[after:] if entry.text]
+            if spoken:
+                break
+            await asyncio.sleep(0.25)
+    started = spoken[0].at
+    await wait_for_event(
+        journal,
+        "conversation_transitioned",
+        matching=lambda row: (
+            row.get("to_phase") == "listening" and datetime.fromisoformat(row["at"]) > started
+        ),
+        within=within,
+    )
+    heard = _twin_speech(settings, meeting_id)[after:]
+    return " ".join(entry.text for entry in heard).casefold()
+
+
+async def _ask(
+    simulator: MeetingSimulator, settings: Settings, meeting_id: str, journal: Path, clip: str
+) -> str:
+    before = len(_twin_speech(settings, meeting_id))
+    await simulator.say(clip, speaker=HARUN)
+    return await _next_turn(settings, meeting_id, journal, before)
 
 
 async def _admitted(simulator: MeetingSimulator, session: asyncio.Task[Any], journal: Path) -> None:
@@ -169,4 +209,45 @@ async def test_the_twin_answers_chat_and_acts_on_the_meeting_when_asked(tmp_path
     assert any("14 october" in line.casefold() for line in dated["sent"])
     assert simulator.left
     assert outcome.session.phase == "ended"
+    assert "turn_failed" not in {row["event"] for row in journal_rows(journal)}
+
+
+async def test_the_twin_corrects_a_wrong_slide_and_reads_the_shared_screen(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    meeting_id = "sim-s3-screen"
+    simulator = MeetingSimulator(twin_name="Rani Twin")
+    journal = journal_path(settings.paths.journal_dir, SessionId(meeting_id))
+    request = _request(settings, meeting_id, duration=300, brief=_brief(tmp_path, meeting_id))
+
+    async with running_session(run_join_session(request, _ports(simulator))) as session:
+        await _admitted(simulator, session, journal)
+        await simulator.share(
+            HARUN, "Orchid Launch Plan", ["Beta launch: 21 October 2026", "Checklist: Rani"]
+        )
+        await wait_for_event(journal, "screen_reading_finished", within=60)
+        correction = await _next_turn(settings, meeting_id, journal, 0, within=90)
+        described = await _ask(simulator, settings, meeting_id, journal, "whats-on-screen.wav")
+
+    assert "14 october" in correction
+    assert "orchid" in described or "launch" in described
+    assert "turn_failed" not in {row["event"] for row in journal_rows(journal)}
+
+
+async def test_the_twin_only_describes_a_camera_it_can_attribute(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    meeting_id = "sim-s3-camera"
+    simulator = MeetingSimulator(twin_name="Rani Twin")
+    journal = journal_path(settings.paths.journal_dir, SessionId(meeting_id))
+    request = _request(settings, meeting_id, duration=300)
+
+    async with running_session(run_join_session(request, _ports(simulator))) as session:
+        await _admitted(simulator, session, journal)
+        await simulator.join(BIMA, "Bima")
+        await simulator.camera(HARUN, RED)
+        await asyncio.sleep(5)
+        unattributed = await _ask(simulator, settings, meeting_id, journal, "shirt-color.wav")
+        named = await _ask(simulator, settings, meeting_id, journal, "harun-shirt-color.wav")
+
+    assert "red" not in unattributed
+    assert "red" in named
     assert "turn_failed" not in {row["event"] for row in journal_rows(journal)}
