@@ -147,6 +147,15 @@ def create_turn_judge_model(settings: Settings) -> BaseChatModel:
     return _init_chat_model(role, ConfigKey.TURN_JUDGE_API_KEY)
 
 
+def session_models(settings: Settings) -> tuple[BaseChatModel | None, ...]:
+    return (
+        create_chat_model(settings),
+        create_strong_chat_model(settings),
+        create_fallback_chat_model(settings),
+        create_turn_judge_model(settings),
+    )
+
+
 MEMORY_CONNECT_TIMEOUT_SECONDS = 10.0
 
 

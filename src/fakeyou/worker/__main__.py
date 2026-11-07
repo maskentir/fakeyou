@@ -12,11 +12,11 @@ from fakeyou.config.settings import Settings
 from fakeyou.db.session_status import create_session_status
 from fakeyou.orchestration.assembly import stop_signal_handlers
 from fakeyou.orchestration.join_types import JoinPorts
-from fakeyou.orchestration.providers import open_persona_memory
+from fakeyou.orchestration.providers import open_persona_memory, session_models
 from fakeyou.orchestration.runtime import run_meeting_session
 from fakeyou.transport.streams import StreamTransport
 from fakeyou.worker.consumer import SnapshotStore, WorkerConsumer, WorkerDeps
-from fakeyou.worker.debrief import DebriefConsumer, DebriefDeps
+from fakeyou.worker.debrief import DebriefConsumer, DebriefDeps, debrief_models
 from fakeyou.worker.ingestion import IngestionConsumer, IngestionDeps
 from fakeyou.worker.reembed import ReembedConsumer, ReembedDeps, TwinDirectory
 
@@ -58,12 +58,20 @@ async def verify_boot_dependencies(settings: Settings, ports: JoinPorts) -> None
         return
 
 
+def verify_role_models(role: str, settings: Settings) -> None:
+    if role == SESSIONS_ROLE:
+        session_models(settings)
+    elif role == DEBRIEF_ROLE:
+        debrief_models(settings)
+
+
 async def serve(role: str) -> None:
     settings = Settings()
     ports = JoinPorts(
         run_session=run_meeting_session,
         open_memory=open_persona_memory,
     )
+    verify_role_models(role, settings)
     await verify_boot_dependencies(settings, ports)
     if role == SESSIONS_ROLE:
         await verify_session_schema(settings)

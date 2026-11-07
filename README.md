@@ -225,6 +225,13 @@ When `reply_strong` is set, the response budget
 (`FAKEYOU_CONVERSATION__RESPONSE_TIMEOUT_SECONDS`) is checked against it instead of
 `reply`.
 
+A Google role (`provider=google`) thinks at `REASONING_EFFORT=minimal` unless you set
+another level. Some Gemini models reject `minimal` (for example `gemini-3.8-flash`, whose
+lowest level is `low`), so set `FAKEYOU_<ROLE>__REASONING_EFFORT=low` for them. A
+worker checks the models of its role when it starts — `sessions`: reply, strong,
+fallback and turn judge; `debrief`: debrief and fallback — and refuses to start on a
+level its model does not support, instead of failing every meeting later.
+
 The persona's `ai_disclosure` sets when the twin says it is an AI: `when_asked`
 (the default) or `upfront`, the first time it speaks. Either way it answers
 honestly when asked and never claims to be human; no value lets it deny being an

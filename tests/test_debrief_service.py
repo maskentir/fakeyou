@@ -1,4 +1,5 @@
 import asyncio
+import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -20,6 +21,7 @@ from fakeyou.debrief.debrief_service import (
     run_debrief,
 )
 from fakeyou.memory.persona import PersonaProfile
+from fakeyou.observability.journal import journal_path
 from fakeyou.orchestration.assembly import SignalHandlers
 from fakeyou.persistence.ingestion_status import IngestionStatus, status_path, write_status
 from fakeyou.persistence.record import TranscriptEntry, meeting_record_path
@@ -134,3 +136,31 @@ def test_debrief_total_budget_comes_from_the_debrief_role_and_fallback(settings:
     settings.reply_fallback = GoogleReply(timeout_seconds=15.0, max_retries=1)
 
     assert debrief_total_budget(settings, 2) == 420.0
+
+
+async def test_a_failed_debrief_journals_the_error_code(settings: Settings) -> None:
+    profile = _profile(settings)
+    _seed_meeting(settings, "debrief-misconfigured", profile)
+    request = DebriefRequest(
+        meeting_id=SessionId("debrief-misconfigured"),
+        operator=profile,
+        settings=settings,
+        force=False,
+    )
+
+    def misconfigured() -> DebriefModels:
+        raise FakeYouError(ErrorCode.CONFIG_INVALID, reason="unsupported reasoning effort")
+
+    wiring = DebriefWiring(models=misconfigured, stop_signals=_quiet_signals)
+
+    with pytest.raises(FakeYouError, match="unsupported reasoning effort"):
+        await run_debrief(request, wiring)
+
+    rows = [
+        json.loads(line)
+        for line in journal_path(settings.paths.journal_dir, SessionId("debrief-misconfigured"))
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    [failed] = [row for row in rows if row["event"] == "debrief_failed"]
+    assert (failed["error"], failed["code"]) == ("FakeYouError", ErrorCode.CONFIG_INVALID.value)
