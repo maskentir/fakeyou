@@ -203,6 +203,7 @@ class ReplayOptions:
     record_path: Path
     behavior: RecordedBehavior = field(default_factory=RecordedBehavior)
     reply_latency_scale: float = 1.0
+    speculative_replies: bool = False
 
 
 async def replay_session(
@@ -212,8 +213,12 @@ async def replay_session(
     options: ReplayOptions,
 ) -> ReplayResult:
     loop = asyncio.get_running_loop()
+    conversation = settings.conversation.model_copy(
+        update={"speculative_replies": options.speculative_replies}
+    )
+    replayed = settings.model_copy(update={"conversation": conversation})
     with using_clock(loop.time):
-        return await _replay(fixture, settings, config, options)
+        return await _replay(fixture, replayed, config, options)
 
 
 async def _replay(

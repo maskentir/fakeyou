@@ -2,6 +2,7 @@ import asyncio
 from collections.abc import AsyncIterator, Callable, Sequence
 
 from fakeyou.config.settings import DEFAULTS
+from fakeyou.conversation.reply_draft import HeldEffects
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.foundation.transcript import TranscriptEvent
 
@@ -18,9 +19,11 @@ class StreamingResponder:
         on_tool_start: Callable[[], None],
         *,
         request_id: str,
+        effects: HeldEffects | None = None,
     ) -> AsyncIterator[SpokenChunk]:
         del on_tool_start
         del request_id
+        del effects
         self.calls.append(list(events))
         return self._generate()
 

@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.floor import SpeechFloor
 from fakeyou.conversation.participation_graph import TurnJudging
+from fakeyou.conversation.reply_draft import ReplyDrafts
 from fakeyou.conversation.thinking_cue import ThinkingCue
 from fakeyou.conversation.turn_graph import (
     CommandPort,
@@ -44,6 +45,7 @@ class TurnTestContext:
     state_speech: StateSpeech | None = None
     evidence: EvidencePort | None = None
     cue: ThinkingCue | None = None
+    drafts: ReplyDrafts | None = None
     faults: FaultReporter | None = None
     others_speaking: Callable[[], bool] | None = None
     floor: SpeechFloor = field(default_factory=lambda: SpeechFloor(generation=4))

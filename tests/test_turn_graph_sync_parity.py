@@ -10,6 +10,7 @@ from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation import actor, turn_graph
 from fakeyou.conversation.actor import ActorWiring, FloorActor, ReplyOptions
 from fakeyou.conversation.model_responder import ReplierWholeResponder
+from fakeyou.conversation.reply_draft import HeldEffects
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_graph import (
     Responder,
@@ -141,8 +142,15 @@ class Harness:
         self.actor = self.actor
 
     def _stream_turn(
-        self, events: tuple[TranscriptEvent, ...], _hook: ToolStartHook, _request_id: str
+        self,
+        events: tuple[TranscriptEvent, ...],
+        _hook: ToolStartHook,
+        _request_id: str,
+        /,
+        *,
+        effects: HeldEffects | None = None,
     ) -> Responder:
+        del effects
         return FixedStream(tuple(event.id for event in events), self.stream_batches)
 
     def batches(self) -> list[tuple[str, ...]]:

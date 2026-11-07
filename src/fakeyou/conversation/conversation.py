@@ -23,6 +23,7 @@ from fakeyou.conversation.meeting_messages import (
     request_messages,
 )
 from fakeyou.conversation.middleware import SPEECH_MARK, SpeechMark
+from fakeyou.conversation.reply_draft import HeldEffects
 from fakeyou.conversation.reply_planner import (
     IntentHandler,
     PlanHandler,
@@ -62,6 +63,7 @@ class StreamingConversationResponder(Protocol):
         on_tool_start: Callable[[], None],
         *,
         request_id: str,
+        effects: HeldEffects | None = None,
     ) -> AsyncIterator[SpokenChunk]: ...
 
 
@@ -635,15 +637,21 @@ class MeetingResponder:
         events: Sequence[TranscriptEvent],
         on_tool_start: Callable[[], None],
         request_id: str = "",
+        effects: HeldEffects | None = None,
     ) -> StreamTrace:
+        on_intent: IntentHandler = self.on_intent
+        on_language: Callable[[str], None] = self.turn_language.declare
+        if effects is not None:
+            effects.bind(on_intent, on_language)
+            on_intent, on_language = effects.intent, effects.language
         return StreamTrace(
             language=self.language,
             journal=self.journal,
             request_id=request_id,
             transcript_id=events[-1].id if events else None,
             on_tool_start=on_tool_start,
-            on_intent=self.on_intent,
-            on_language=self.turn_language.declare,
+            on_intent=on_intent,
+            on_language=on_language,
             speech_gate=SpeechGate(
                 partial(self._book, tuple(events)), proactive=self._is_attention(events)
             ),
@@ -764,6 +772,7 @@ class MeetingResponder:
         on_tool_start: Callable[[], None],
         *,
         request_id: str,
+        effects: HeldEffects | None = None,
     ) -> AsyncIterator[SpokenChunk]:
         if self._is_attention(events):
             return self._stream_gated(events, on_tool_start)
@@ -772,7 +781,7 @@ class MeetingResponder:
             self.messages(events),
             REPLY_CONFIG,
             max_sentences=self.limit,
-            trace=self._trace(events, on_tool_start, request_id),
+            trace=self._trace(events, on_tool_start, request_id, effects),
         )
 
     async def _stream_gated(

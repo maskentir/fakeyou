@@ -5,6 +5,7 @@ from typing import Any, override
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.actor import ActorWiring, FloorActor, IngressOptions, ReplyOptions
 from fakeyou.conversation.model_responder import ReplierWholeResponder
+from fakeyou.conversation.reply_draft import HeldEffects
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_graph import (
     SentenceLimits,
@@ -99,8 +100,15 @@ class SentenceSource:
         self.hooks: list[ToolStartHook] = []
 
     def responder(
-        self, _events: tuple[TranscriptEvent, ...], hook: ToolStartHook, request_id: str
+        self,
+        _events: tuple[TranscriptEvent, ...],
+        hook: ToolStartHook,
+        request_id: str,
+        /,
+        *,
+        effects: HeldEffects | None = None,
     ) -> "SentenceStream":
+        del effects
         self.requests.append(request_id)
         self.hooks.append(hook)
         return SentenceStream(self._sentences, self._gate)

@@ -12,6 +12,7 @@ from fakeyou.conversation.control import ReplyControl
 from fakeyou.conversation.floor import SpeechFloor
 from fakeyou.conversation.participation_decision import ParticipationDecision
 from fakeyou.conversation.participation_graph import JudgeThresholds, TurnJudging, decision_of
+from fakeyou.conversation.reply_draft import ReplyDrafts
 from fakeyou.conversation.session import (
     ConversationError,
     MeetingAudio,
@@ -175,6 +176,7 @@ class ActorWiring:
     ingress: IngressOptions = DEFAULT_INGRESS_OPTIONS
     responder: Responder | None = None
     judging: TurnJudging | None = None
+    speculative_replies: bool = False
     clock: Callable[[], float] = monotonic
 
 
@@ -236,6 +238,9 @@ class FloorActor:
         self._journal = journal
         self._responder = responder
         self._judging = judging
+        self._drafts = (
+            ReplyDrafts(journal) if judging is not None and wiring.speculative_replies else None
+        )
         self._control: ReplyControl | None = None
         self._clock = resolved.clock
         self._options = RecoveryOptions()
@@ -345,6 +350,10 @@ class FloorActor:
     @property
     def judging(self) -> TurnJudging | None:
         return self._judging
+
+    @property
+    def drafts(self) -> ReplyDrafts | None:
+        return self._drafts
 
     @property
     def barge_in(self) -> bool:
@@ -753,6 +762,8 @@ class FloorActor:
             self._wakeup = None
         if self._judging is not None:
             self._judging.cache.cancel()
+        if self._drafts is not None:
+            await self._drafts.close()
         self._session = None
         await self._release_floor()
         lanes: list[asyncio.Task[None]] = []

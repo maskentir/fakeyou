@@ -28,6 +28,17 @@ from fakeyou.conversation.participation_graph import (
     decision_of,
     participate,
 )
+from fakeyou.conversation.reply_draft import (
+    DRAFT_REQUEST,
+    DraftKey,
+    DraftRequest,
+    DraftResponder,
+    DropReason,
+    HeldEffects,
+    ReplyDraft,
+    ReplyDrafts,
+    ToolUse,
+)
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.sentence_stream import shape_sentences
 from fakeyou.conversation.thinking_cue import (
@@ -166,7 +177,18 @@ ToolStartHook = Callable[[], None]
 
 
 WholeTurnFactory = Callable[[tuple[TranscriptEvent, ...], ToolStartHook], WholeResponder]
-StreamTurnFactory = Callable[[tuple[TranscriptEvent, ...], ToolStartHook, str], Responder]
+
+
+class StreamTurnFactory(Protocol):
+    def __call__(
+        self,
+        batch: tuple[TranscriptEvent, ...],
+        hook: ToolStartHook,
+        request_id: str,
+        /,
+        *,
+        effects: HeldEffects | None = None,
+    ) -> Responder: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -266,6 +288,9 @@ class TurnContext(Protocol):
 
     @property
     def cue(self) -> ThinkingCue | None: ...
+
+    @property
+    def drafts(self) -> ReplyDrafts | None: ...
 
     def early_gate(self, transcript_id: str) -> EarlyGate | None: ...
 
@@ -504,20 +529,29 @@ async def _participate(
         if judging is not None
         else None
     )
-    result = await participate(
-        ParticipationState(
-            window=window,
-            context=state["context"],
-            transcript_id=state["event"].event_id,
-            last_participation=None,
-            decision_source=None,
-        ),
-        ParticipationRuntime(
-            journal=runtime.journal,
-            thresholds=judging.thresholds if judging is not None else _NO_THRESHOLDS,
-            cache=judging.cache if judging is not None else None,
-        ),
-    )
+    if window is not None:
+        _start_draft(runtime, event, window)
+    admitted = False
+    try:
+        result = await participate(
+            ParticipationState(
+                window=window,
+                context=state["context"],
+                transcript_id=state["event"].event_id,
+                last_participation=None,
+                decision_source=None,
+            ),
+            ParticipationRuntime(
+                journal=runtime.journal,
+                thresholds=judging.thresholds if judging is not None else _NO_THRESHOLDS,
+                cache=judging.cache if judging is not None else None,
+            ),
+        )
+        decision = result["last_participation"]
+        admitted = isinstance(decision, ParticipationDecision) and decision.decision in _ADMITTED
+    finally:
+        if not admitted:
+            _drop_draft(runtime, (event,), "not_admitted")
     return {
         "participation": result["last_participation"],
         "decision_source": result["decision_source"],
@@ -692,12 +726,16 @@ def _turn_whole(
 
 
 def _turn_responder(
-    runtime: TurnContext, batch: tuple[TranscriptEvent, ...], hook: ToolStartHook, request_id: str
+    runtime: TurnContext,
+    batch: tuple[TranscriptEvent, ...],
+    hook: ToolStartHook,
+    request_id: str,
+    effects: HeldEffects | None = None,
 ) -> Responder | None:
     factory = runtime.stream_turn
     if factory is None:
         return runtime.responder
-    return factory(batch, hook, request_id)
+    return factory(batch, hook, request_id, effects=effects)
 
 
 def _speech_context(
@@ -991,6 +1029,19 @@ async def _run_turn(
     scope: TurnScope,
     generation: int,
 ) -> None:
+    try:
+        await _answer_turn(runtime, speech, batch, scope, generation)
+    finally:
+        _drop_draft(runtime, batch, "unused")
+
+
+async def _answer_turn(
+    runtime: TurnContext,
+    speech: SpeechGraph,
+    batch: tuple[TranscriptEvent, ...],
+    scope: TurnScope,
+    generation: int,
+) -> None:
     final = batch[-1]
     judged = runtime.plans.pop(final.id, None)
     planned = judged or plan_for(
@@ -1015,6 +1066,76 @@ async def _run_turn(
     finally:
         if farewell.started:
             await _leave(runtime, planned)
+
+
+DRAFTED_TEMPLATES = frozenset({"speech_only", "evidence_then_speech"})
+
+
+def _streams_replies(runtime: TurnContext) -> bool:
+    return runtime.stream_turn is not None and runtime.whole_turn is None and runtime.whole is None
+
+
+def _history_size(runtime: TurnContext) -> int:
+    judging = runtime.judging
+    return len(judging.windows.history.entries()) if judging is not None else 0
+
+
+SPECULATIVE_READING = Reading("speak", "speculative")
+
+
+def _start_draft(runtime: TurnContext, event: TranscriptEvent, window: JudgeWindow) -> None:
+    drafts = runtime.drafts
+    if (
+        drafts is None
+        or not window.names_twin
+        or window.twin_speaking
+        or runtime.shadow
+        or not _streams_replies(runtime)
+    ):
+        return
+    drafts.start(event.id, partial(_open_draft, runtime, event))
+
+
+async def _open_draft(runtime: TurnContext, event: TranscriptEvent) -> DraftRequest | None:
+    planned = plan_for(runtime, event, SPECULATIVE_READING, "speech", owner_claim=False)
+    if planned.plan.template not in DRAFTED_TEMPLATES or planned.plan.action is not None:
+        return None
+    reply_event = for_reply(event, planned, None)
+    request_id = f"{event.id}:{DRAFT_REQUEST}"
+    effects, tool = HeldEffects(), ToolUse()
+
+    async def chunks() -> AsyncIterator[SpokenChunk]:
+        responder = _turn_responder(runtime, (reply_event,), tool.start, request_id, effects)
+        if responder is None:
+            return
+        async for chunk in responder.stream_reply(event.text):
+            yield chunk
+
+    key = DraftKey.of((event,), reply_event, history=_history_size(runtime))
+    return DraftRequest(key, request_id, chunks(), effects, tool)
+
+
+def _take_draft(
+    runtime: TurnContext,
+    batch: tuple[TranscriptEvent, ...],
+    reply_event: TranscriptEvent,
+    on_tool_start: ToolStartHook,
+) -> ReplyDraft | None:
+    drafts = runtime.drafts
+    if drafts is None:
+        return None
+    draft = drafts.take(DraftKey.of(batch, reply_event, history=_history_size(runtime)))
+    if draft is not None:
+        draft.accept(on_tool_start)
+    return draft
+
+
+def _drop_draft(
+    runtime: TurnContext, events: tuple[TranscriptEvent, ...], reason: DropReason
+) -> None:
+    drafts = runtime.drafts
+    if drafts is not None:
+        drafts.drop([event.id for event in events], reason)
 
 
 @dataclass(slots=True)
@@ -1045,13 +1166,25 @@ async def _speak_reply(
         state=cue_state,
         source=final.source,
     )
-    opener = _start_opener(runtime, cue_turn, gate) if reply_event.evidence_needs else None
+    draft = _take_draft(runtime, batch, reply_event, hook) if streamed else None
+    opener = (
+        _start_opener(runtime, cue_turn, gate)
+        if reply_event.evidence_needs and draft is None
+        else None
+    )
     cue = _start_cue(runtime, cue_turn)
     try:
-        reply_batch = (*batch[:-1], await with_evidence(runtime, final.text, reply_event))
+        if draft is not None:
+            reply_batch = batch
+            responder: Responder | None = DraftResponder(draft)
+        else:
+            reply_batch = (*batch[:-1], await with_evidence(runtime, final.text, reply_event))
+            responder = (
+                _turn_responder(runtime, reply_batch, hook, request_id) if streamed else None
+            )
         context = replace(
             _speech_context(runtime, sink, scope, generations, final.id),
-            responder=_turn_responder(runtime, reply_batch, hook, request_id) if streamed else None,
+            responder=responder,
             whole=_turn_whole(runtime, reply_batch, hook),
             sentences=runtime.sentences,
             cue_state=cue_state,
@@ -1066,6 +1199,8 @@ async def _speak_reply(
         )
     finally:
         farewell.started = sink.started
+        if draft is not None:
+            await draft.cancel()
         await _settle_cue(opener)
         await _settle_cue(cue)
         if cue_state.played and not sink.started:
@@ -1369,6 +1504,7 @@ async def _admit_final(
 ) -> dict[str, int | str | None | tuple[str, ...]]:
     final = _final_of(state)
     if runtime.shadow:
+        _drop_draft(runtime, (final,), "not_admitted")
         runtime.journal.record(
             "transcript_suppressed", source="agent", transcript_id=final.id, reason="shadow"
         )
@@ -1380,6 +1516,7 @@ async def _admit_final(
         )
         _record_plan(runtime, final.id, planned)
         if planned.plan.template == "silent":
+            _drop_draft(runtime, (final,), "not_admitted")
             return {"speaking_generation": state["speaking_generation"]}
         runtime.plans[final.id] = planned
         for stale in list(runtime.plans)[:-MAX_PENDING_PLANS]:

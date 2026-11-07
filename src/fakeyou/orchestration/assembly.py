@@ -535,6 +535,7 @@ class _ConversationBuilder:
                 max_spoken_sentences=conversation_settings.max_spoken_sentences,
                 language=self._settings.speech.language,
                 sentence_streaming=conversation_settings.sentence_streaming,
+                speculative_replies=conversation_settings.speculative_replies,
             ),
             diagnostics=Diagnostics(
                 faults=self._diagnostics.faults, journal=self._diagnostics.journal

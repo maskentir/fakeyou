@@ -352,6 +352,7 @@ class ConversationSettings(Section):
     barge_in_judge_enabled: bool = True
     max_spoken_sentences: int = Field(default=2, gt=0)
     sentence_streaming: bool = True
+    speculative_replies: bool = True
     thinking_cue_enabled: bool = True
     thinking_cue_after_seconds: float = Field(default=2.0, ge=0.0, le=10.0)
     participant_evidence_max_bytes: int = Field(default=8388608, gt=0)
