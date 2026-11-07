@@ -2118,7 +2118,7 @@ Kesimpulan terukur:
   Jadi B6-2 versi awal ("giliran tanpa evidence tidak membayar strong")
   tidak akan mengubah satu pun giliran di sesi itu.
 
-Desain B6-2 (disetujui 2026-11-07; owner menyerahkan keputusan):
+Desain B6-2 (disetujui lalu **ditolak** 2026-11-07 oleh gate kualitasnya sendiri; lihat di bawah):
 
 - Tier dipilih **saat plan oleh judge**, bukan setelah tool message dan
   bukan oleh tabel aturan (sejalan dengan keputusan turn judge: satu LLM
@@ -2153,6 +2153,56 @@ ber-evidence tidak lebih buruk daripada strong pada korpus yang sama;
 tetap membayar 2,3 dtk thinking. Risiko utama: jawaban recall flash-lite
 salah memilih fakta atau mengutip tanpa dasar; itu yang diukur gate (1),
 bukan diasumsikan.
+
+B6-2, keputusan (2026-11-07): **ditolak**. Implementasinya (`depth` di
+judge, `ReplyTierMiddleware`, label `depth` di eval judge) selesai dan
+lulus gate judge (`synthesis_kept` 1,0, `recall_kept` 0,974–1,0, 2 dari
+3 run eval judge hijau), tetapi gate kualitas (1) gagal pada fixture
+`acc-0930-replay` (memory nyata, 3 run per model, jalur agent produksi):
+
+| Model reply | `must_mention_any` | "itu sudah disetujui Rani." diiyakan | p50 |
+|---|---|---|---|
+| `gemini-3.1-flash-lite`, minimal | 0,25–0,50 | 2–3 dari 3 | 1,3 dtk |
+| `gemini-3.1-flash-lite`, low | 0,667 | 1 dari 3 | 1,9 dtk |
+| `gemini-3.1-flash-lite`, medium | 0,50 | 3 dari 3 | 1,4 dtk |
+| `gemini-3.8-flash`, low (strong) | 0,917–1,0 | 0 dari 3 | 3,1 dtk |
+
+Model kecil menjawab klaim yang belum terverifikasi dengan "saya catat
+bahwa Rani sudah menyetujui", dan menyebut fakta memory tanpa
+provenance ("diputuskan hari Selasa"), sedangkan strong selalu menjawab
+"saya belum memiliki catatan persetujuan dari Rani" dan "di rapat
+sebelumnya pada 30 September, peserta menyebut". Kalimat-kalimat itu
+terlihat seperti `recall` (pendek, satu fakta), jadi label kedalaman
+tidak bisa memisahkan giliran yang sensitif trust; masalahnya ada pada
+model, bukan label. Routing `main` (evidence → strong) dipertahankan,
+dan B6-3 tetap dihapus.
+
+Arah latensi yang tersisa, semuanya tanpa menurunkan model jawaban:
+(1) audio pertama yang dirasakan sudah ditutup opener B6-1 (± final +
+0,9 dtk); (2) memulai panggilan strong lebih awal — early commit B2 atau
+generasi spekulatif dari interim yang sudah dinilai `finished` — karena
+lantai thinking 2,3 dtk tidak bisa dipangkas dari sisi prompt; (3) kandidat
+model strong lain hanya lewat `gate_candidate` plus fixture
+`acc-0930-replay` dengan `must_mention_any` ≥ 0,9 dan nol klaim
+persetujuan yang diiyakan, bukan lewat benchmark latensi saja.
+
+Celah trust yang ditemukan di `main`: giliran tanpa evidence tetap
+memakai model kecil, jadi klaim persetujuan yang tidak memicu memory
+`found` bisa diiyakan model kecil; gate `owner_commitment` tidak
+memblokir jawaban "saya catat bahwa … sudah disetujui" pada replay.
+Ditangani di C2/C3 (kontribusi berbasis klaim dan gate per klaim), dengan
+fixture ini sebagai regresinya.
+
+Temuan sampingan (2026-11-07): debrief gagal di **setiap** sesi live
+(`debrief_failed` di `b6-live-1` dan `b6-live-3`) karena
+`FAKEYOU_DEBRIEF__MODEL=gemini-3.8-flash` tanpa `REASONING_EFFORT`
+mewarisi default `minimal` milik `GoogleReply`, yang ditolak guard dan
+juga API (400). `.env` dev kini memakai `FAKEYOU_DEBRIEF__REASONING_EFFORT=low`;
+default `minimal` untuk role yang modelnya tidak mendukungnya masih
+jebakan konfigurasi. Eval `conversation_replay` live ikut ter-skip
+oleh hal yang sama dan kini berjalan lagi: `main` sendiri gagal di
+`attention` 0,333, `control` 0,667, `small_talk` 0,667 terhadap
+baseline (kebanyakan `replied: false`), terpisah dari B6.
 
 ### B7: Perception layar yang murah
 
