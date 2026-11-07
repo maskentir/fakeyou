@@ -55,23 +55,23 @@ class Grant:
 
 
 def _action_refusal(action: MeetAction, actor: Actor, grant: Grant) -> Refusal | None:
+    needed: Permission = "meet_leave" if action.kind == "leave" else "meet_act"
+    if needed not in grant.permissions:
+        return Refusal(action.kind, "not_permitted")
     if not grant.browser_available:
         return Refusal(action.kind, "browser_unavailable")
     if actor.kind != "participant":
         return Refusal(action.kind, "unattributed_actor")
-    needed: Permission = "meet_leave" if action.kind == "leave" else "meet_act"
-    if needed not in grant.permissions:
-        return Refusal(action.kind, "not_permitted")
     return None
 
 
 def _chat_refusal(actor: Actor, grant: Grant) -> Refusal | None:
+    if "meet_chat" not in grant.permissions:
+        return Refusal("send_chat", "chat_not_permitted")
     if not grant.browser_available:
         return Refusal("send_chat", "browser_unavailable")
     if actor.kind != "participant":
         return Refusal("send_chat", "unattributed_actor")
-    if "meet_chat" not in grant.permissions:
-        return Refusal("send_chat", "chat_not_permitted")
     return None
 
 
