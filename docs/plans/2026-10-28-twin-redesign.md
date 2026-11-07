@@ -2298,6 +2298,32 @@ Risiko: biaya model untuk baris vocative yang ternyata tidak dijawab,
 dan tool call (memory) yang sudah jalan untuk giliran yang dibatalkan —
 keduanya read-only, jadi pembatalan aman.
 
+Sesi live `b6-live-4` (2026-11-07, semua kemampuan, brief dengan izin
+`meet_act`/`meet_chat`/`meet_leave`, `knowledge_scope=persona_memory`,
+evidence partisipan aktif; 17 langkah): lulus — sapaan "Hai Rani, bisa
+dengar saya?" dijawab (#122), recall memory, klaim owner dirutekan ke
+strong dan ditolak (#125, "That is not in my records, and budget
+decisions need Rani's written approval."), "Wait, stop" memotong twin,
+baris untuk Budi didiamkan, kejujuran AI, layar dibaca dan tanggal yang
+salah **dikoreksi proaktif** ("Just to note, the Orchid beta launch is
+planned for 14 October 2026."), kirim chat (`effect_observed`), angkat
+dan turunkan tangan (`effect_observed`), jumlah peserta, dan keluar
+sendiri (`left_by_participant`). Gagal dan diperbaiki: (1) pertanyaan
+yang **diketik** di chat ("Rani, who is running QA…") tidak pernah
+dijawab karena `receive_chat` mensyaratkan nama persis "Rani Twin" —
+#128 menyerahkan keputusan chat ke judge seperti ucapan; (2) "what color
+is my shirt" → `unknown_participant` karena "me" tidak menyebut nama dan
+suara belum terikat ke perangkat (B4) — #127 melihat satu-satunya
+peserta bila hanya ada satu; (3) di `b6-live-3` semua aksi ditolak
+`browser_unavailable` padahal penyebabnya brief tanpa izin — #129
+mendahulukan `not_permitted`. Masih terbuka: reaksi 👍 `effect_unobserved`
+(menunggu konfirmasi visual owner); jawaban "shorter" berbahasa
+Indonesia padahal dideklarasikan `en` — dipicu `speaking_style` persona
+uji yang berbahasa Indonesia, tetapi teks yang tidak cocok dengan bahasa
+deklarasinya tetap diucapkan (perlu keputusan deteksi bahasa); twin
+berkata "I can see you" padahal look gagal tanpa gambar (celah
+kejujuran evidence, masih ada untuk rapat dengan beberapa orang).
+
 Temuan sampingan (2026-11-07): debrief gagal di **setiap** sesi live
 (`debrief_failed` di `b6-live-1` dan `b6-live-3`) karena
 `FAKEYOU_DEBRIEF__MODEL=gemini-3.8-flash` tanpa `REASONING_EFFORT`
