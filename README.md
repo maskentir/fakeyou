@@ -281,7 +281,7 @@ folder mounted writable:
 ```sh
 docker run --rm -e SIMULATOR_PROVIDERS=record \
   -v "$PWD/evals/fixtures/simulator/cassettes:/workspace/evals/fixtures/simulator/cassettes" \
-  ...same mounts as above... fakeyou-test:local uv run --no-sync pytest -m simulator evals/test_meeting_simulator_eval.pytest_meeting_simulator_eval.py
+  ...same mounts as above... fakeyou-test:local uv run --no-sync pytest -m simulator evals/test_meeting_simulator_eval.py
 ```
 
 Meta-tests enforce the conventions mechanically rather than by review: no comments
