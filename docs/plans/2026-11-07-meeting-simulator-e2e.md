@@ -188,6 +188,23 @@ regresi pertama di katalog.
   teratribusi lewat early commit.
 - **S3:** layar dan kamera lewat track canvas, vision live atau
   `FakeVisionModel`.
+  S3, implementasi (2026-11-07): `share()` menggambar slide di canvas dan
+  mengirim device layar ber-`parent_device_id` presenter lewat channel
+  `collections`; `camera()` menggambar figur orang berkaus warna tertentu
+  sebagai output video device peserta. Vision live. Lulus: slide bertanggal
+  salah dikoreksi tanpa ditanya ("actually planned for 14 October 2026"),
+  pertanyaan isi layar dijawab dari slide, "can you see me" dengan dua
+  manusia tanpa nama dijawab jujur tidak bisa, dan "what color is Harun's
+  shirt" dijawab merah. Temuan produk: pertanyaan look dikirim mentah ke
+  vision, yang tidak bisa tahu siapa "Harun" dari gambar dan selalu
+  menjawab "not visible"; prompt look sekarang menyebut sumber frame
+  (kamera peserta bernama X, atau layar yang sedang dibagikan). Temuan
+  fixture: kotak dan lingkaran dibaca vision sebagai bentuk abstrak, bukan
+  kaus, jadi kamera harus menggambar figur yang mirip orang. Helper uji
+  menunggu giliran twin selesai (`conversation_transitioned` ke listening)
+  sebelum pertanyaan berikutnya agar tidak memotong twin sendiri. Catatan:
+  setelah menjelaskan slide twin mengulang koreksi tanggalnya sekali; satu
+  run S2 gagal karena chat tidak dijawab dalam 60 detik (tidak berulang).
 - **S4:** rekaman suara twin dan metrik waktu (latensi, berhenti saat
   dipotong).
 - **S5:** mode `recorded` untuk CI; katalog lengkap.

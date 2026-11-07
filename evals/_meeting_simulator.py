@@ -15,7 +15,13 @@ from fakeyou.meet.browser import open_direct_page
 from fakeyou.orchestration.runtime import SessionWiring, run_meeting_session
 from fakeyou.perception.meet_protocol import SYNC_COLLECTIONS_PATH
 from tests._fakes_common import STREAM_CAPTURE_TEST_FLAG
-from tests._meet_protocol_fakes import chat_message, collection_payload, sync_body, user_info
+from tests._meet_protocol_fakes import (
+    chat_message,
+    collection_payload,
+    output,
+    sync_body,
+    user_info,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures" / "simulator"
 TWIN_DEVICE = "spaces/simulated/devices/twin"
@@ -129,6 +135,82 @@ const voice = (deviceId) => {
   return window.__simVoices[deviceId];
 };
 window.__simVoice = (deviceId) => voice(deviceId).destination.stream.id;
+window.__simVideos = {};
+const shape = (context, color, points) => {
+  context.fillStyle = color;
+  context.beginPath();
+  points.forEach(([x, y], index) => (index ? context.lineTo(x, y) : context.moveTo(x, y)));
+  context.closePath();
+  context.fill();
+};
+const oval = (context, color, x, y, radiusX, radiusY, from = 0, to = Math.PI * 2) => {
+  context.fillStyle = color;
+  context.beginPath();
+  context.ellipse(x, y, radiusX, radiusY, 0, from, to);
+  context.fill();
+};
+const drawPerson = (context, shirt) => {
+  const skin = "#e0ad86";
+  const hair = "#2b1d14";
+  context.fillStyle = "#bfb6a3";
+  context.fillRect(0, 0, 1280, 90);
+  context.fillStyle = "#8a6b4a";
+  context.fillRect(980, 120, 200, 300);
+  shape(context, shirt, [[380, 720], [400, 520], [470, 450], [560, 420], [720, 420],
+    [810, 450], [880, 520], [900, 720]]);
+  shape(context, shirt, [[400, 520], [300, 640], [340, 690], [440, 600]]);
+  shape(context, shirt, [[880, 520], [980, 640], [940, 690], [840, 600]]);
+  context.fillStyle = "#d9a07a";
+  context.fillRect(600, 360, 80, 80);
+  shape(context, "rgba(0, 0, 0, 0.18)", [[560, 420], [640, 500], [720, 420], [690, 420],
+    [640, 470], [590, 420]]);
+  oval(context, skin, 640, 270, 110, 130);
+  oval(context, hair, 640, 220, 120, 110, Math.PI, Math.PI * 2);
+  oval(context, hair, 597, 255, 12, 10);
+  oval(context, hair, 682, 255, 12, 10);
+  oval(context, skin, 533, 270, 15, 30);
+  oval(context, skin, 747, 270, 15, 30);
+  context.strokeStyle = "#7a3b2e";
+  context.lineWidth = 6;
+  context.beginPath();
+  context.arc(640, 300, 40, Math.PI * 0.15, Math.PI * 0.85);
+  context.stroke();
+};
+const paintScene = (context, scene, tick) => {
+  const { width, height } = context.canvas;
+  context.fillStyle = scene.background;
+  context.fillRect(0, 0, width, height);
+  if (scene.shirt) drawPerson(context, scene.shirt);
+  context.fillStyle = "#ffffff";
+  context.font = "64px sans-serif";
+  context.fillText(scene.title ?? "", 80, 140);
+  context.fillStyle = "#ffc440";
+  context.font = "40px sans-serif";
+  (scene.lines ?? []).forEach((line, index) => context.fillText(line, 100, 260 + index * 80));
+  context.fillStyle = tick % 2 ? "#010101" : "#000000";
+  context.fillRect(width - 1, height - 1, 1, 1);
+};
+window.__simPaint = (key, scene) => {
+  if (!window.__simVideos[key]) {
+    const canvas = document.createElement("canvas");
+    canvas.width = 1280;
+    canvas.height = 720;
+    const context = canvas.getContext("2d");
+    const entry = { context, scene, tick: 0 };
+    entry.timer = setInterval(() => {
+      entry.tick += 1;
+      paintScene(context, entry.scene, entry.tick);
+    }, 100);
+    const stream = canvas.captureStream(10);
+    entry.stream = stream;
+    window.__fakeyouRtc.emitTestTrack(stream.getVideoTracks()[0], [stream]);
+    window.__simVideos[key] = entry;
+  }
+  const entry = window.__simVideos[key];
+  entry.scene = scene;
+  paintScene(entry.context, scene, entry.tick);
+  return entry.stream.id;
+};
 window.__simSay = async (deviceId, wav) => {
   const { destination } = voice(deviceId);
   const context = window.__simAudio;
@@ -159,9 +241,12 @@ class Participant:
     name: str
     status: int = IN_CALL
     current: bool = False
+    parent: str = ""
 
     def as_user(self) -> dict[str, Any]:
-        return user_info(self.device_id, self.name, status=self.status, current=self.current)
+        return user_info(
+            self.device_id, self.name, status=self.status, parent=self.parent, current=self.current
+        )
 
 
 @dataclass(slots=True)
@@ -241,15 +326,39 @@ class MeetingSimulator:
         self.people[0].status = IN_CALL
         await self.page.evaluate("() => window.__simAdmit()")
 
-    async def chat(self, device_id: str, text: str) -> None:
-        self._chats += 1
-        sent_us = int(time.time() * 1_000_000)
-        payload = collection_payload(
-            chat=[chat_message(f"sim-chat-{self._chats}", device_id, text, sent_us)]
-        )
+    async def _send(self, payload: bytes) -> None:
         await self.page.evaluate(
             "(b64) => window.__simSend(b64)", base64.b64encode(payload).decode()
         )
+
+    async def chat(self, device_id: str, text: str) -> None:
+        self._chats += 1
+        sent_us = int(time.time() * 1_000_000)
+        await self._send(
+            collection_payload(
+                chat=[chat_message(f"sim-chat-{self._chats}", device_id, text, sent_us)]
+            )
+        )
+
+    async def _show(self, device_id: str, scene: Mapping[str, Any]) -> None:
+        stream_id: str = await self.page.evaluate(
+            "([key, scene]) => window.__simPaint(key, scene)", [device_id, dict(scene)]
+        )
+        await self._send(
+            collection_payload(
+                users=[person.as_user() for person in self.people],
+                outputs=[output(device_id, stream_id)],
+            )
+        )
+
+    async def share(self, presenter: str, title: str, lines: list[str]) -> None:
+        screen = f"{presenter}/screen"
+        if all(person.device_id != screen for person in self.people):
+            self.people.append(Participant(screen, "", parent=presenter))
+        await self._show(screen, {"background": "#122048", "title": title, "lines": lines})
+
+    async def camera(self, device_id: str, shirt: str) -> None:
+        await self._show(device_id, {"background": "#d8d2c4", "shirt": shirt})
 
     async def state(self) -> dict[str, Any]:
         state: dict[str, Any] = await self.page.evaluate("() => window.__simState()")

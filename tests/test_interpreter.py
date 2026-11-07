@@ -9,6 +9,7 @@ from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.observability.provider_faults import ProviderFault
 from fakeyou.perception.budget import PerceptionBudget, usd_for
 from fakeyou.perception.interpreter import (
+    CAMERA_SOURCE,
     PAYLOAD_MAX_EDGE,
     PREVIOUS_SCREEN_PROMPT,
     PerceptionInterpreter,
@@ -105,11 +106,14 @@ async def test_answer_looks_at_the_image_for_a_specific_question() -> None:
     model = vision_model(answers=["The beta is on 17 March 2027."])
     interpreter = _interpreter(model)
 
-    answer = await interpreter.answer(slide_jpeg(*TIMELINE), "When is the beta?")
+    answer = await interpreter.answer(
+        slide_jpeg(*TIMELINE), "When is the beta?", source=CAMERA_SOURCE.format(name="Harun")
+    )
 
     [[message]] = model.seen
     assert answer == "The beta is on 17 March 2027."
     assert "Question: When is the beta?" in content_block(message, 1)["text"]
+    assert "the person shown is Harun" in content_block(message, 1)["text"]
     assert interpreter.budget.calls == 1
 
 

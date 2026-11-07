@@ -101,8 +101,8 @@ def test_memory_is_searched_only_when_the_plan_asks_for_it() -> None:
 
 
 class StalledInterpreter:
-    async def answer(self, image: bytes, question: str) -> str | None:
-        del image, question
+    async def answer(self, image: bytes, question: str, *, source: str) -> str | None:
+        del image, question, source
         await asyncio.sleep(5.0)
         return "too late"
 
