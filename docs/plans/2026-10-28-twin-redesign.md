@@ -2622,7 +2622,30 @@ skor yang lebih terkalibrasi tetapi menambah panggilan model di jalur
 kritis. Pilihan B9a: cosine similarity antara query dan fakta teratas
 memakai embedder lokal yang sudah dikonfigurasi (`granite-embedding-97m`,
 puluhan ms), dengan ambang yang dikalibrasi dari pasangan pertanyaan
-berlabel "butuh memory"/"tidak" sebelum dipakai untuk rute. Untuk
+berlabel "butuh memory"/"tidak" sebelum dipakai untuk rute.
+
+Kalibrasi pertama (2026-11-08) menolak cosine dan menunjukkan masalah yang
+lebih besar. (1) Cosine query ↔ fakta dengan `granite-embedding-97m` tidak
+memisahkan apa pun: pertanyaan yang butuh memory 0,02–0,31, yang tidak
+0,00–0,33 ("Gimana harimu?" 0,263 > "kickoff vendor … diputuskan kapan"
+0,189). (2) Tumpang tindih kata isi (≥ 2) memisahkan sempurna di
+`acc-0930` (fakta memory 3–5, baris tanpa memory ≤ 1), tetapi sampelnya
+hanya 5 fakta. (3) Pada 231 pertanyaan unik dari journal live (77 yang
+diberi `evidence: memory` oleh judge), recall ke graph dev
+`hard_owner/hard_twin` **tidak pernah kosong** — graph itu kini hanya
+berisi dua fakta "proyek zebra … 14 November 2026", dan keduanya kembali
+untuk setiap pertanyaan, termasuk "Hi Rani, how is your day going?".
+Recall top-k tanpa ambang menjawab "found" selama graph tidak kosong, jadi
+rute `memory_prefetch_found` → strong praktis berarti "selalu strong" dan
+jawaban selalu membawa memory yang tidak relevan. Itu menjelaskan
+`b6-live-1` (10/10 strong) dan merupakan cacat produk tersendiri, terlepas
+dari B9: gate relevansi memory wajib ada. Kalibrasi yang sah butuh graph
+yang mewakili sesi: ingest transcript sesi live yang tersimpan (`oue-*`,
+`b6-live-*`) ke grup scratch dengan pipeline ingestion yang sama, lalu
+uji 275 giliran berlabel judge terhadap graph itu; ambang dipilih dari
+kurva presisi/recall terhadap label judge, dengan presisi diutamakan
+(memory tak relevan di konteks lebih merugikan daripada rute strong yang
+terlewat, karena giliran owner-claim tetap dirutekan judge). Untuk
 giliran memory, spekulasi B9b tetap menurunkan rantai dari ±0,6 + 1,1 +
 2,7 ≈ 4,4 dtk menjadi ±0,6 + 2,7 ≈ 3,3 dtk; gate p50 ≤ 2,0 dtk berlaku
 untuk giliran tanpa memory relevan.
