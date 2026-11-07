@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Callable
 from typing import Any, cast
 
 import pytest
@@ -27,7 +28,15 @@ class _ClosableStatus(MemorySessionStatus):
         type(self).closed += 1
 
 
-async def _started_roles(monkeypatch: pytest.MonkeyPatch, role: str) -> list[type[Any]]:
+def _models_ok(_role: str, _settings: Settings) -> None:
+    return None
+
+
+async def _started_roles(
+    monkeypatch: pytest.MonkeyPatch,
+    role: str,
+    role_models: Callable[[str, Settings], None] = _models_ok,
+) -> list[type[Any]]:
     started: list[type[Any]] = []
 
     async def capture(*consumers: Any) -> None:
@@ -38,6 +47,7 @@ async def _started_roles(monkeypatch: pytest.MonkeyPatch, role: str) -> list[typ
 
     monkeypatch.setattr(worker_main, "run_consumers", capture)
     monkeypatch.setattr(worker_main, "verify_boot_dependencies", boot_ok)
+    monkeypatch.setattr(worker_main, "verify_role_models", role_models)
 
     async def schema_is_current(_settings: Settings) -> None:
         return None
@@ -129,7 +139,5 @@ async def test_the_worker_checks_its_role_models_before_it_consumes(
     def refuse(role: str, _settings: Settings) -> None:
         raise FakeYouError(ErrorCode.CONFIG_INVALID, reason=f"{role} model")
 
-    monkeypatch.setattr(worker_main, "verify_role_models", refuse)
-
     with pytest.raises(FakeYouError, match="debrief model"):
-        await _started_roles(monkeypatch, "debrief")
+        await _started_roles(monkeypatch, "debrief", refuse)
