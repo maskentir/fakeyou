@@ -108,7 +108,9 @@ class _Attempt:
     context_sha256: str | None = None
     correction_sha256: str | None = None
 
-    def fail(self, state: Literal["failed", "interrupted"], error: str) -> None:
+    def fail(
+        self, state: Literal["failed", "interrupted"], error: str, code: str | None = None
+    ) -> None:
         payload = {
             "status": state,
             "error": error,
@@ -125,7 +127,7 @@ class _Attempt:
             self.journal.record(
                 "debrief_attempt_write_failed", source="cli", error=type(fault).__name__
             )
-        self.journal.record("debrief_failed", source="cli", error=error)
+        self.journal.record("debrief_failed", source="cli", error=error, code=code)
 
 
 async def _debrief_locked(
@@ -146,7 +148,11 @@ async def _debrief_locked(
         attempt.fail("interrupted", "CancelledError")
         raise
     except Exception as error:
-        attempt.fail("failed", type(error).__name__)
+        attempt.fail(
+            "failed",
+            type(error).__name__,
+            error.code if isinstance(error, FakeYouError) else None,
+        )
         if isinstance(error, (FakeYouError, ProviderFault)):
             raise
         raise FakeYouError(ErrorCode.DEBRIEF_FAILED, reason=type(error).__name__) from error

@@ -1,10 +1,13 @@
 import asyncio
+from collections.abc import Callable
 from typing import Any, cast
 
 import pytest
+from pydantic import SecretStr
 
 import fakeyou.worker.__main__ as worker_main
-from fakeyou.config.settings import Settings
+from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.config.settings import GoogleReply, ReasoningEffort, Settings
 from fakeyou.transport.streams import StreamTransport
 from fakeyou.worker.consumer import WorkerConsumer
 from fakeyou.worker.debrief import DebriefConsumer
@@ -25,7 +28,15 @@ class _ClosableStatus(MemorySessionStatus):
         type(self).closed += 1
 
 
-async def _started_roles(monkeypatch: pytest.MonkeyPatch, role: str) -> list[type[Any]]:
+def _models_ok(_role: str, _settings: Settings) -> None:
+    return None
+
+
+async def _started_roles(
+    monkeypatch: pytest.MonkeyPatch,
+    role: str,
+    role_models: Callable[[str, Settings], None] = _models_ok,
+) -> list[type[Any]]:
     started: list[type[Any]] = []
 
     async def capture(*consumers: Any) -> None:
@@ -36,6 +47,7 @@ async def _started_roles(monkeypatch: pytest.MonkeyPatch, role: str) -> list[typ
 
     monkeypatch.setattr(worker_main, "run_consumers", capture)
     monkeypatch.setattr(worker_main, "verify_boot_dependencies", boot_ok)
+    monkeypatch.setattr(worker_main, "verify_role_models", role_models)
 
     async def schema_is_current(_settings: Settings) -> None:
         return None
@@ -98,3 +110,34 @@ def test_the_entrypoint_requires_a_known_role() -> None:
         worker_main.main(["everything"])
     with pytest.raises(SystemExit):
         worker_main.main(["jobs"])
+
+
+def _with_debrief(settings: Settings, reasoning_effort: ReasoningEffort | None) -> Settings:
+    debrief = GoogleReply(
+        model="gemini-3.8-flash",
+        api_key=SecretStr("debrief-key"),
+        reasoning_effort=reasoning_effort,
+    )
+    return settings.model_copy(update={"debrief": debrief})
+
+
+def test_a_debrief_model_its_provider_cannot_run_is_refused_at_boot(settings: Settings) -> None:
+    with pytest.raises(FakeYouError, match="does not support minimal reasoning effort"):
+        worker_main.verify_role_models("debrief", _with_debrief(settings, "minimal"))
+
+
+def test_a_debrief_model_with_a_supported_effort_passes_the_boot_check(
+    settings: Settings,
+) -> None:
+    worker_main.verify_role_models("debrief", _with_debrief(settings, "low"))
+
+
+@pytest.mark.usefixtures("settings")
+async def test_the_worker_checks_its_role_models_before_it_consumes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def refuse(role: str, _settings: Settings) -> None:
+        raise FakeYouError(ErrorCode.CONFIG_INVALID, reason=f"{role} model")
+
+    with pytest.raises(FakeYouError, match="debrief model"):
+        await _started_roles(monkeypatch, "debrief", refuse)
