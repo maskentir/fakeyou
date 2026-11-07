@@ -2760,6 +2760,70 @@ approval, atau disclosure. C1 menyerap rantai `FakeyouOwnerNote`
 (`memory/owner_notes.py`) agar tidak ada store ketiga. Item yang di-approve
 ditulis juga sebagai episode Graphiti agar terambil recall.
 
+Desain rinci C1 (2026-11-08, sebelum implementasi), dari pemetaan kode:
+pengetahuan owner kini ada di dua tempat — `persona.verified_facts`/
+`goals`/`speaking_style` (JSON yang ikut snapshot sesi) dan owner note di
+Graphiti (`FakeyouOwnerNote`: `pending → active → superseded`, koreksi
+lewat `SUPERSEDES`, forget menghapus episode). Tidak ada approval,
+proposal, atau versi untuk konten owner; lapisan DB memakai SQLAlchemy
+Core (tanpa ORM), migrasi alembic manual (terakhir `0003`), repository
+Protocol + kelas konkret; speech gate sudah punya `Disclosure`
+(`room_speakable`/`owner_only`) dan registry sitasi per namespace.
+
+Keputusan:
+
+- **Satu tabel revisi append-only** `owner_model_revisions`: `item_id`,
+  `revision` (naik per item), `kind` (`position`, `preference`,
+  `decision_rule`, `style_example`, `fact`), `topic`, `statement`,
+  `reason`, `confidence` (`firm`/`leaning`), `disclosure`
+  (`room_speakable`/`owner_only`), `source` (`owner`, `debrief`,
+  `import`), `status` (`proposed`, `approved`, `rejected`, `retired`),
+  `model_version`, waktu dibuat dan diputuskan. Baris tidak pernah
+  di-update kecuali status keputusan; isi baru selalu revisi baru. Item
+  aktif = revisi `approved` terbaru per item; `model_version` naik setiap
+  approval atau pensiun, sehingga replay per versi (C7) tinggal memilih
+  `model_version ≤ v`. Satu tabel, bukan item + revisi terpisah, karena
+  setiap baca adalah "revisi terbaru yang di-approve" dan riwayat lengkap
+  adalah fitur, bukan beban.
+- **Hanya owner yang meng-approve.** Isi yang ditulis owner — lewat API/CLI
+  (`source=owner`) atau dari file persona miliknya yang diimpor
+  (`source=import`) — langsung `approved`; isi buatan mesin
+  (`source=debrief`, C7) selalu `proposed` dan tidak pernah masuk prompt
+  sebelum owner meng-approve-nya.
+- **Owner note diserap sebagai `kind=fact`.** Owner note baru ditulis ke
+  owner model; saat approval, revisinya diproyeksikan ke Graphiti sebagai
+  episode `owner note` (pipeline yang ada) agar recall menemukannya, dan
+  revisi yang menggantikan menandai episode lama `superseded` lewat rantai
+  yang ada. Graphiti menjadi proyeksi baca, owner model sumber kebenaran —
+  tidak ada store ketiga. Owner note lama dimigrasi sekali menjadi revisi
+  `approved` dengan `source=owner`, karena memang ditulis owner; hanya
+  isi yang diimpor dari persona memakai `source=import`.
+- **Persona menyusut** menjadi identitas dan suara (`display_name`,
+  `role`, `language`, `speaking_style`, `vocabulary`, `ai_disclosure`,
+  `allowed_tools`). `verified_facts` diimpor sekali sebagai `fact`,
+  `goals` sebagai `preference`; kalimat perilaku di `verified_facts`
+  (mis. "Budget and contract decisions need Rani's written approval")
+  menjadi `decision_rule`. Persona lama tetap dibaca selama transisi:
+  field yang sudah diimpor diabaikan bila owner model ada.
+- **Masuk prompt** sebagai blok `owner_model` (JSON berisi id `om-<item>`,
+  kind, topic, statement), hanya item `room_speakable` yang aktif, dipilih
+  berdasarkan topik brief + kata isi dengan batas token (sampai C5
+  menggantinya dengan recall set). Item `owner_only` tidak pernah masuk
+  prompt jawaban — gate C1 — tetapi boleh dipakai debrief/brief untuk
+  owner.
+- **Speech gate:** namespace baru `owner_model` di `SourceRegistry`
+  dengan disclosure dari item; sitasi `om-<item>` lolos hanya bila
+  `room_speakable`. Ini juga fondasi C2/C3 (`basis=owner_position`).
+
+Irisan: **C1a** tabel, migrasi `0004`, repository async, API
+(`/v1/twins/{twin_id}/owner-model`: list, tambah, revisi, pensiun,
+approve/reject proposal), CLI `owner-model` lewat API; **C1b** blok prompt
++ namespace speech gate + replay yang memakai item; **C1c** owner note
+ditulis lewat owner model dan diproyeksikan ke Graphiti, migrasi note lama;
+**C1d** impor persona (`verified_facts`/`goals`) dan penyusutan persona.
+Gate C1 tetap: owner menambah posisi dan melihatnya dipakai di replay;
+prompt tidak pernah berisi item `owner_only`.
+
 ### C2 dan C3: Kontribusi berbasis klaim dan gate per klaim
 
 Satu PR, karena kontrak dan gate tidak bisa dipisah.
