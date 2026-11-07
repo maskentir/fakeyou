@@ -55,12 +55,11 @@ from fakeyou.config.settings import (
 from fakeyou.conversation.contribution import memory_refs_from_evidence
 from fakeyou.foundation.provenance import render_evidence
 from fakeyou.foundation.transcript import spoken_part
-from fakeyou.foundation.triggers import current_trigger, meeting_event_of, trigger_kind
+from fakeyou.foundation.triggers import current_trigger
 from fakeyou.memory.evidence import (
     CURRENT_FACTS_FILTER as CURRENT_FACTS_FILTER,
 )
 from fakeyou.memory.evidence import (
-    PREFETCH_ADDITIONAL_EMPTY_EVIDENCE,
     PREFETCH_EMPTY_EVIDENCE,
     PREFETCH_UNAVAILABLE_EVIDENCE,
     RECALL_EMPTY_RESULT,
@@ -91,6 +90,7 @@ PREFETCH_EVIDENCE_PREFIX = (
 )
 PREFETCH_QUERY_MAX_CHARS = 2000
 PREFETCH_RETAINED_EVIDENCE = 3
+INJECTED_OUTCOMES = frozenset({"found", "unavailable"})
 PREFETCH_RETAINED_MAX_CHARS = 1200
 PREFETCH_TOOL_NAME = "recall_meeting_context"
 FORGET_BATCH_SIZE = 100
@@ -324,9 +324,13 @@ async def search_memory_evidence_pair(
     return slim, full
 
 
-def _found(evidence: ToolMessage) -> bool:
+def _outcome(evidence: ToolMessage) -> str | None:
     prefetch = evidence.additional_kwargs.get("memory_prefetch")
-    return isinstance(prefetch, dict) and prefetch.get("outcome") == "found"
+    return prefetch.get("outcome") if isinstance(prefetch, dict) else None
+
+
+def _found(evidence: ToolMessage) -> bool:
+    return _outcome(evidence) == "found"
 
 
 def _trim_retained_evidence(evidence: ToolMessage) -> ToolMessage:
@@ -378,14 +382,6 @@ def build_prefetch_query(messages: Sequence[AnyMessage], speech: Sequence[HumanM
 PrefetchListener = Callable[[str, Mapping[str, str]], None]
 
 
-def memory_planned(trigger: AnyMessage) -> bool:
-    if trigger_kind(trigger) not in ("speech", "chat"):
-        return True
-    event = meeting_event_of(trigger)
-    needs = event.get("evidence_needs") if event is not None else None
-    return isinstance(needs, list) and "memory" in needs
-
-
 class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
     def __init__(
         self,
@@ -433,25 +429,23 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
         position, speech = current_trigger(request.messages)
         if not speech:
             return await handler(request)
-        planned = memory_planned(speech[-1])
         key = speech[-1].id
         kept = self._retained_pairs(request.messages, exclude=key)
         if key is None or self._latest is None or self._latest[0] != key:
-            call, evidence = await self._evidence(
-                request.messages, speech, prior=bool(kept), planned=planned
-            )
+            call, evidence = await self._evidence(request.messages, speech)
             self._latest = (key or "", call, evidence)
-            if key is not None and (planned or _found(evidence)):
+            if key is not None and _found(evidence):
                 self._retained[key] = (call, evidence)
                 while len(self._retained) > PREFETCH_RETAINED_EVIDENCE:
                     self._retained.pop(next(iter(self._retained)))
         _, call, evidence = self._latest
-        if not planned and not _found(evidence):
+        current = _outcome(evidence) in INJECTED_OUTCOMES
+        if not current and not kept:
             return await handler(request)
         assembled: list[AnyMessage] = []
         for index, message in enumerate(request.messages):
             assembled.append(message)
-            if index == position - 1:
+            if index == position - 1 and current:
                 assembled.extend([call, evidence])
             elif (
                 isinstance(message, HumanMessage) and message.id is not None and message.id in kept
@@ -464,9 +458,6 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
         self,
         messages: Sequence[AnyMessage],
         speech: list[HumanMessage],
-        *,
-        prior: bool,
-        planned: bool,
     ) -> tuple[AIMessage, ToolMessage]:
         query = build_prefetch_query(messages, speech)
         question = spoken_question(speech)
@@ -507,16 +498,13 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
             assert outcome_pair is not None
             slim, full = outcome_pair
             if slim == RECALL_EMPTY_RESULT:
-                if prior:
-                    outcome, content = "empty", PREFETCH_ADDITIONAL_EMPTY_EVIDENCE
-                else:
-                    outcome, content = "empty", PREFETCH_EMPTY_EVIDENCE
+                outcome, content = "empty", PREFETCH_EMPTY_EVIDENCE
                 evidence_full = ""
             else:
                 outcome, content = "found", PREFETCH_EVIDENCE_PREFIX + slim
                 evidence_full = full
             self._journal.request_finished(request_id, transcript_id=transcript_id, outcome=outcome)
-        if self._on_prefetch is not None and (planned or outcome == "found"):
+        if self._on_prefetch is not None:
             refs = memory_refs_from_evidence(content.removeprefix(PREFETCH_EVIDENCE_PREFIX))
             self._on_prefetch(outcome, refs if outcome == "found" else {})
         self._sequence += 1

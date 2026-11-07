@@ -5,7 +5,6 @@ from typing import cast
 import pytest
 from langchain_core.messages import HumanMessage
 
-from fakeyou.memory.memory import memory_planned
 from fakeyou.perception import context as context_module
 from fakeyou.perception.budget import PerceptionBudget
 from fakeyou.perception.context import PerceptionContext, gather_evidence
@@ -91,13 +90,6 @@ async def test_unknown_needs_are_ignored_and_chat_history_needs_no_model() -> No
     )
 
     assert evidence == {"chat_history": {"code": "ok", "lines": []}}
-
-
-def test_memory_is_searched_only_when_the_plan_asks_for_it() -> None:
-    assert memory_planned(trigger("Where did we land last time?", "memory")) is True
-    assert memory_planned(trigger("Good morning")) is False
-    assert memory_planned(trigger("Morning", kind="chat")) is False
-    assert memory_planned(trigger("Screen changed", kind="attention")) is True
 
 
 class StalledInterpreter:

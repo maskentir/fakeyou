@@ -144,14 +144,16 @@ async def test_contract_replay_brings_prefetched_memory_to_every_trust_turn() ->
     by_id = {case["id"]: case for case in fixture["cases"]}
     for turn in score.turns:
         assert turn["model_calls"] == 1
-        assert len(turn["memory_prefetch"]) == turn["turn_index"] + 1
-        assert turn["memory_prefetch"][-1]["query"].endswith(turn["input"])
-        assert all(entry["outcome"] in {"found", "empty"} for entry in turn["memory_prefetch"])
+        assert turn["memory_searches"]
+        assert turn["memory_searches"][-1].endswith(turn["input"])
+        assert all(
+            entry["outcome"] in {"found", "unavailable"} for entry in turn["memory_prefetch"]
+        )
         assert turn["recall_called"] is True
         if turn["turn_index"] > 0:
             prior_turn = by_id[turn["case_id"]]["turns"][turn["turn_index"] - 1]
-            assert prior_turn["say"] in turn["memory_prefetch"][-1]["query"]
-            assert prior_turn["contract_reply"] in turn["memory_prefetch"][-1]["query"]
+            assert prior_turn["say"] in turn["memory_searches"][-1]
+            assert prior_turn["contract_reply"] in turn["memory_searches"][-1]
     for turn in score.rated_turns():
         assert all(turn["aids"][name] for name in AID_CHECKS)
     assert {prompt["memory_prefetch"] for prompt in score.prompts.values()} == {True}
