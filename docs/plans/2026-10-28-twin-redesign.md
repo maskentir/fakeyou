@@ -2600,6 +2600,25 @@ menyebut twin tetapi didiamkan judge — diukur sebagai rasio spekulasi
 terbuang; (3) prefetch memory untuk setiap baris bernama twin menambah
 beban recall — dibatasi laju dan digantikan listener C5.
 
+Bukti tier model untuk giliran memory (2026-11-08, `acc-0930-replay`,
+3 run per model, memory yang sama): pada "yang sebelumnya, kickoff vendor
+… kapan dan siapa PIC-nya?" model kecil (`gemini-3.1-flash-lite`) menolak
+menjawab di 2 dari 3 run ("Saya belum yakin soal itu, jadi saya tidak mau
+menebak.") walau memory tersedia, sedangkan strong menjawab 3/3 dengan
+provenance ("Di rapat sebelumnya pada 30 September…"); pada "itu sudah
+disetujui Rani." model kecil menerima klaim di 1 dari 3 run, strong 0/3
+(di produksi giliran ini sudah dirutekan ke strong lewat `owner_claim`).
+Jadi rute "memory relevan → strong" tetap wajib, karena kualitas, bukan
+hanya trust. Konsekuensi untuk B9: memory yang selalu diambil tidak boleh
+berarti selalu strong — data `b6-live-1` menunjukkan 10/10 giliran
+`memory_prefetch_found` dengan memory persona nyata. B9a karenanya
+memisahkan "memory ditemukan" dari "memory relevan": rute ke strong
+memakai ambang skor recall, bukan sekadar hasil tidak kosong, dan ambangnya
+dikalibrasi dengan skenario yang memang butuh memory vs yang tidak. Untuk
+giliran memory, spekulasi B9b tetap menurunkan rantai dari ±0,6 + 1,1 +
+2,7 ≈ 4,4 dtk menjadi ±0,6 + 2,7 ≈ 3,3 dtk; gate p50 ≤ 2,0 dtk berlaku
+untuk giliran tanpa memory relevan.
+
 Gate (simulator dengan model live, lalu live): VAD stop → audio jawaban
 p50 ≤ 2,0 dtk dan p90 ≤ 2,5 dtk; nol audio untuk giliran yang diamkan
 judge; spekulasi terbuang ≤ 30%; `conversation_replay`, trust eval
