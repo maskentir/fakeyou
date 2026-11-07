@@ -1,11 +1,10 @@
-import json
 import re
 from collections.abc import Iterable, Sequence
 from functools import cache
 
 from graphiti_core.edges import EntityEdge
 
-from fakeyou.foundation.resources import read_package_text
+from fakeyou.foundation.language import function_words
 
 MIN_SHARED_WORDS = 2
 MIN_WORD_LENGTH = 3
@@ -14,7 +13,7 @@ WORD = re.compile(r"\w+")
 
 @cache
 def _function_words() -> frozenset[str]:
-    return frozenset(json.loads(read_package_text("assets", "function_words.json")))
+    return frozenset().union(*function_words().values())
 
 
 def content_words(text: str, *, ignored: Iterable[str] = ()) -> frozenset[str]:
