@@ -503,7 +503,7 @@ async def test_interim_stop_between_sentences_speaks_nothing_further(
     await loop.actor.receive_final(event("t1", "first"))
     assert await asyncio.wait_for(ready.wait(), 10)
     audio.speaking = True
-    await loop.actor.handle_interim("wait just a moment")
+    await loop.actor.handle_interim("wait just a moment", history_seq=None)
     assert audio.stops == 1
     release.set()
     await loop.actor.wait_idle()
@@ -659,7 +659,7 @@ async def test_stopped_drop_terminates_turn_with_agent_cancelled(journal: Record
     await loop.actor.receive_final(event("t1", "first"))
     assert await asyncio.wait_for(ready.wait(), 10)
     audio.speaking = True
-    await loop.actor.handle_interim("wait just a moment")
+    await loop.actor.handle_interim("wait just a moment", history_seq=None)
     release.set()
     await loop.actor.wait_idle()
     [dropped] = journal.events("sentence_dropped")

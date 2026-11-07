@@ -130,7 +130,7 @@ class ActorModel(RuleBasedStateMachine):
 
     @rule()
     def an_interim_arrives(self) -> None:
-        self.run(self.actor.handle_interim("twin, please stop talking now"))
+        self.run(self.actor.handle_interim("twin, please stop talking now", history_seq=None))
 
     @rule()
     def the_room_becomes_active(self) -> None:

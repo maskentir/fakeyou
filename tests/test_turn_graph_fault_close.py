@@ -283,7 +283,7 @@ async def test_an_interim_is_judged_while_the_twin_is_speaking() -> None:
     ingress = lifecycle
 
     session.is_speaking = True
-    await ingress.handle_interim("twin, what do you think")
+    await ingress.handle_interim("twin, what do you think", history_seq=None)
     judging = lifecycle.judging
     assert judging is not None
     await judging.cache.wait_idle()

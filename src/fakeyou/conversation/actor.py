@@ -286,6 +286,7 @@ class FloorActor:
         self._early_options: EarlyOptions | None = None
         self._early_answer: Callable[[TranscriptEvent], Awaitable[None]] | None = None
         self._early_text = ""
+        self._early_history_seq: int | None = None
         self._early_version = 0
         self._early_timer: asyncio.Task[None] | None = None
         self._early_starting: asyncio.Task[None] | None = None
@@ -837,6 +838,7 @@ class FloorActor:
                 text,
                 twin_speaking=session is not None and session.is_speaking,
                 purpose="early_hold",
+                history_seq=self._early_history_seq,
             )
         judgement, _ = await capture_error(partial(judging.cache.judgement, window))
         return judgement
@@ -986,6 +988,7 @@ class FloorActor:
                 self._early_text,
                 twin_speaking=session is not None and session.is_speaking,
                 purpose="early_hold",
+                history_seq=self._early_history_seq,
             )
             judging.cache.prefetch(window)
             self._early_window = window
@@ -1001,13 +1004,14 @@ class FloorActor:
         armed = _early_words(window.latest.text)
         return len(words) == len(armed) + 1 and words[: len(armed)] == armed
 
-    async def note_interim(self, text: str) -> None:
+    async def note_interim(self, text: str, *, history_seq: int | None) -> None:
         if self._early_options is None:
             return
         words = _early_words(text)
         changed = words != _early_words(self._early_text)
         extended = changed and self._extends_armed_text(words)
         self._early_text = text
+        self._early_history_seq = history_seq
         if changed and not extended:
             self._cancel_early_hold()
         commit = self._early_commit
@@ -1024,6 +1028,7 @@ class FloorActor:
         self._early_window = None
         words = len(_early_words(self._early_text))
         self._early_text = ""
+        self._early_history_seq = None
         self._cancel_early_hold(declined="final_first", words=words)
         if commit is None:
             return False
@@ -1128,12 +1133,12 @@ class FloorActor:
         if active is not None and active.transcript_id == commit.event.id:
             await cancel_speech(self._floor, self._journal, reason=reason)
 
-    async def handle_interim(self, text: str) -> None:
+    async def handle_interim(self, text: str, *, history_seq: int | None) -> None:
         if text.strip():
             self.note_activity()
         window: JudgeWindow | None = None
         if not self._closed and self._failure is None:
-            window = await self._prefetch(text)
+            window = await self._prefetch(text, history_seq)
         session = self._session
         if self._closed or self._failure is not None or not self._barge_in or session is None:
             return
@@ -1149,11 +1154,10 @@ class FloorActor:
         if text == latch.last_interim:
             return
         latch.last_interim = text
-        judging = self._judging
-        if judging is None or not self._barge_in_judge_enabled:
+        if window is None or not self._barge_in_judge_enabled:
             await self._yield_the_floor(words, decided_by=None)
             return
-        self._ask_the_judge(text, words, window)
+        self._ask_the_judge(words, window)
 
     def _floor_contested(self, session: Any, text: str) -> bool:
         active = self._floor.active
@@ -1183,26 +1187,21 @@ class FloorActor:
         active = self._floor.active
         return bool(session.is_speaking or (active is not None and not active.task.done()))
 
-    def _ask_the_judge(self, text: str, words: int, window: JudgeWindow | None) -> None:
+    def _ask_the_judge(self, words: int, window: JudgeWindow) -> None:
         generation = self._floor.generation
         self._barge_seq += 1
         task = asyncio.create_task(
-            self._judge_the_barge_in(text, words, window, generation, self._barge_seq)
+            self._judge_the_barge_in(words, window, generation, self._barge_seq)
         )
         self._judge_tasks.add(task)
         task.add_done_callback(self._judge_tasks.discard)
 
     async def _judge_the_barge_in(
-        self, text: str, words: int, window: JudgeWindow | None, generation: int, sequence: int
+        self, words: int, window: JudgeWindow, generation: int, sequence: int
     ) -> None:
         judging = self._judging
         if judging is None:
             return
-        session = self._session
-        if window is None:
-            window = judging.windows.for_interim(
-                text, twin_speaking=session is not None and session.is_speaking, purpose="barge_in"
-            )
         judgement, _ = await capture_error(partial(judging.cache.judgement, window))
         if generation != self._floor.generation:
             self._journal.record(
@@ -1347,11 +1346,14 @@ class FloorActor:
             await session.stop_playback()
         await cancel_speech(self._floor, self._journal, reason="final")
 
-    async def _prefetch(self, text: str) -> JudgeWindow | None:
+    async def _prefetch(self, text: str, history_seq: int | None) -> JudgeWindow | None:
         judging = self._judging
         window = (
             judging.windows.for_interim(
-                text, twin_speaking=self.speaker.is_speaking, purpose="interim"
+                text,
+                twin_speaking=self.speaker.is_speaking,
+                purpose="interim",
+                history_seq=history_seq,
             )
             if judging is not None
             else None

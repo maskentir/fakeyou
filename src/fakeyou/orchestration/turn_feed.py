@@ -111,8 +111,8 @@ class TurnFeed:
         match signal:
             case HeardVoice(active=active):
                 self._voice.put(partial(self._voice_edge, active=active))
-            case HeardInterim(text=text):
-                self._voice.put(partial(self._interim, text))
+            case HeardInterim(text=text, history_seq=history_seq):
+                self._voice.put(partial(self._interim, text, history_seq))
             case HeardFinal(event=event):
                 self._voice.put(partial(self._settle, event))
             case HeardChat(event=event):
@@ -139,10 +139,10 @@ class TurnFeed:
     async def _turn_end(self, *, probability: float) -> None:
         self._ingress.note_turn_end(probability=probability)
 
-    async def _interim(self, text: str) -> None:
-        await self._ingress.handle_interim(text)
+    async def _interim(self, text: str, history_seq: int) -> None:
+        await self._ingress.handle_interim(text, history_seq=history_seq)
         if self._early:
-            await self._ingress.note_interim(text)
+            await self._ingress.note_interim(text, history_seq=history_seq)
 
     async def _settle(self, event: TranscriptEvent) -> None:
         swallowed = self._early and await self._ingress.settle_early(event)

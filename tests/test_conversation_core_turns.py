@@ -213,7 +213,7 @@ async def test_interim_cancels_pre_pcm_child_without_answering(journal: Recordin
     loop.actor.bind(audio)
     await loop.actor.receive_final(event("t1", "first"))
     assert await asyncio.wait_for(responder.started.wait(), 2)
-    await loop.actor.handle_interim("one moment")
+    await loop.actor.handle_interim("one moment", history_seq=None)
     assert responder.cancelled.is_set()
     assert len(responder.calls) == 1
     assert audio.spoken == []
@@ -241,9 +241,9 @@ async def test_duplicate_final_and_interim_do_not_reschedule(journal: RecordingJ
     await loop.actor.receive_final(event("t1", "first"))
     assert not responder.cancelled.is_set()
     assert len(responder.calls) == 1
-    await loop.actor.handle_interim("please hold on a moment")
+    await loop.actor.handle_interim("please hold on a moment", history_seq=None)
     assert responder.cancelled.is_set()
-    await loop.actor.handle_interim("please hold on a moment")
+    await loop.actor.handle_interim("please hold on a moment", history_seq=None)
     [requested] = journal.events("agent_cancel_requested")
     assert requested["reason"] == "interim"
     assert len(responder.calls) == 1
@@ -373,7 +373,7 @@ async def test_interim_judgement_answers_the_final_without_blocking(
         diagnostics=Diagnostics(journal=journal),
     )
     loop.actor.bind(audio)
-    await loop.actor.handle_interim("what is next")
+    await loop.actor.handle_interim("what is next", history_seq=None)
     judging = loop.actor.judging
     assert judging is not None
     await asyncio.wait_for(judging.cache.wait_idle(), 2)

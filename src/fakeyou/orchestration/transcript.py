@@ -181,7 +181,7 @@ class TranscriptDrain:
 
     async def on_interim(self, update: TranscriptUpdate) -> None:
         if self._sinks.kernel is not None:
-            self._sinks.kernel.interim(update.text)
+            self._sinks.kernel.interim(update.text, history_seq=self._sinks.record.last_seq)
 
     async def on_vad(self, *, active: bool) -> None:
         if self._sinks.kernel is not None:

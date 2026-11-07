@@ -130,7 +130,7 @@ async def test_the_judge_stops_the_twin_when_the_line_is_for_it() -> None:
     ingress, lifecycle, session, journal = build(judge)
     speech = await hold_the_floor(lifecycle)
 
-    await ingress.handle_interim("twin, can you hear me")
+    await ingress.handle_interim("twin, can you hear me", history_seq=None)
     await settle(lifecycle, ingress)
 
     assert speech.done()
@@ -145,7 +145,7 @@ async def test_the_twin_keeps_the_floor_when_the_line_is_for_someone_else() -> N
     ingress, lifecycle, session, journal = build(judge)
     speech = await hold_the_floor(lifecycle)
 
-    await ingress.handle_interim("ayu, can you hear me")
+    await ingress.handle_interim("ayu, can you hear me", history_seq=None)
     await settle(lifecycle, ingress)
 
     assert not speech.done()
@@ -160,7 +160,7 @@ async def test_a_backchannel_does_not_take_the_floor() -> None:
     ingress, lifecycle, session, journal = build(judge)
     speech = await hold_the_floor(lifecycle)
 
-    await ingress.handle_interim("twin, yes exactly right")
+    await ingress.handle_interim("twin, yes exactly right", history_seq=None)
     await settle(lifecycle, ingress)
 
     assert not speech.done()
@@ -175,7 +175,7 @@ async def test_a_line_the_judge_is_not_sure_about_keeps_the_floor() -> None:
     ingress, lifecycle, session, journal = build(judge)
     speech = await hold_the_floor(lifecycle)
 
-    await ingress.handle_interim("twin, can you hear me")
+    await ingress.handle_interim("twin, can you hear me", history_seq=None)
     await settle(lifecycle, ingress)
 
     assert not speech.done()
@@ -190,7 +190,7 @@ async def test_a_silent_judge_still_yields_the_floor() -> None:
     ingress, lifecycle, session, journal = build(judge)
     speech = await hold_the_floor(lifecycle)
 
-    await ingress.handle_interim("twin, can you hear me")
+    await ingress.handle_interim("twin, can you hear me", history_seq=None)
     await settle(lifecycle, ingress)
 
     assert speech.done()
@@ -205,7 +205,7 @@ async def test_a_short_line_is_judged_like_any_other() -> None:
     ingress, lifecycle, session, journal = build(judge)
     speech = await hold_the_floor(lifecycle)
 
-    await ingress.handle_interim("twin hello")
+    await ingress.handle_interim("twin hello", history_seq=None)
     await settle(lifecycle, ingress)
 
     assert journal.of("barge_in_detected") == [
@@ -324,7 +324,7 @@ async def test_a_rejected_barge_in_thaws_a_freeze() -> None:
     ingress.note_speech(active=True)
     await asyncio.sleep(0.08)
     assert session.freezes == 1
-    await ingress.handle_interim("ayu, can you hear me")
+    await ingress.handle_interim("ayu, can you hear me", history_seq=None)
     await settle(lifecycle, ingress)
 
     assert session.thaws == 1
@@ -360,7 +360,7 @@ async def test_a_rejected_barge_in_lifts_the_duck() -> None:
     speech = await hold_the_floor(lifecycle)
 
     ingress.note_speech(active=True)
-    await ingress.handle_interim("ayu, can you hear me")
+    await ingress.handle_interim("ayu, can you hear me", history_seq=None)
     await settle(lifecycle, ingress)
 
     assert session.ducks == 1
@@ -401,8 +401,8 @@ async def test_a_slow_rejection_does_not_lift_a_newer_duck() -> None:
     speech = await hold_the_floor(lifecycle)
 
     ingress.note_speech(active=True)
-    await ingress.handle_interim("ayu, can you hear me")
-    await ingress.handle_interim("twin, can you hear me")
+    await ingress.handle_interim("ayu, can you hear me", history_seq=None)
+    await ingress.handle_interim("twin, can you hear me", history_seq=None)
     first.set()
     await asyncio.sleep(0.05)
 
@@ -468,7 +468,7 @@ async def test_the_word_count_barge_in_ignores_the_judge() -> None:
     ingress, lifecycle, session, journal = build(judge, barge_in_judge_enabled=False)
     speech = await hold_the_floor(lifecycle)
 
-    await ingress.handle_interim("ayu, can you hear me")
+    await ingress.handle_interim("ayu, can you hear me", history_seq=None)
     await settle(lifecycle, ingress)
 
     assert speech.done()
@@ -483,7 +483,7 @@ async def test_one_interim_is_judged_once() -> None:
     ingress, lifecycle, _, _ = build(judge)
     speech = await hold_the_floor(lifecycle)
 
-    await ingress.handle_interim("twin, can you hear me")
+    await ingress.handle_interim("twin, can you hear me", history_seq=None)
     await settle(lifecycle, ingress)
 
     assert [window.latest.text for window in judge.windows] == ["twin, can you hear me"]

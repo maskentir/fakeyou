@@ -150,7 +150,7 @@ class JudgeLine:
     twin: bool = False
 
 
-type JudgePurpose = Literal["interim", "early_hold", "barge_in", "final", "chat"]
+type JudgePurpose = Literal["interim", "early_hold", "final", "chat"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,15 +192,20 @@ def _line(entry: TranscriptEntry | TwinSpeechEntry) -> JudgeLine:
     return JudgeLine(speaker=spoken_by(entry), text=entry.text)
 
 
-def _spoken_lines(history: MeetingHistory, *, skip: str | None) -> list[JudgeLine]:
+def _spoken_lines(
+    history: MeetingHistory, *, skip: str | None, history_seq: int | None = None
+) -> list[JudgeLine]:
     return [
         _line(entry)
         for entry in history.entries()
-        if (isinstance(entry, TwinSpeechEntry) and entry.text.strip())
-        or (
-            isinstance(entry, TranscriptEntry)
-            and entry.source == "meeting_audio"
-            and entry.id != skip
+        if (history_seq is None or entry.seq <= history_seq)
+        and (
+            (isinstance(entry, TwinSpeechEntry) and entry.text.strip())
+            or (
+                isinstance(entry, TranscriptEntry)
+                and entry.source == "meeting_audio"
+                and entry.id != skip
+            )
         )
     ]
 
@@ -233,8 +238,11 @@ class WindowSource:
             purpose=purpose,
         )
 
-    def for_interim(self, text: str, *, twin_speaking: bool, purpose: JudgePurpose) -> JudgeWindow:
-        earlier = _spoken_lines(self.history, skip=None)[-self.window_lines :]
+    def for_interim(
+        self, text: str, *, twin_speaking: bool, purpose: JudgePurpose, history_seq: int | None
+    ) -> JudgeWindow:
+        earlier = _spoken_lines(self.history, skip=None, history_seq=history_seq)
+        earlier = earlier[-self.window_lines :]
         return JudgeWindow(
             tuple(earlier),
             JudgeLine(SPEAKING_NOW, text),

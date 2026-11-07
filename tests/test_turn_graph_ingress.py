@@ -156,7 +156,7 @@ async def test_interim_never_replies_and_journals_nothing() -> None:
     journal = FakeJournal()
     ingress, lifecycle, session = bound_ingress(journal)
 
-    await ingress.handle_interim("twin, are you there")
+    await ingress.handle_interim("twin, are you there", history_seq=None)
 
     assert lifecycle.floor.generation == 0
     assert session.spoken == []

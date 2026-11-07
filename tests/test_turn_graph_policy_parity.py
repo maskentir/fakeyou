@@ -185,7 +185,7 @@ async def test_barge_in_off_ignores_an_interim_during_speech() -> None:
     ingress, lifecycle, audio = make_ingress(journal, addressing_names=(), barge_in=False)
     speech = await start_speaking(lifecycle)
 
-    await ingress.handle_interim("please stop talking now")
+    await ingress.handle_interim("please stop talking now", history_seq=None)
 
     assert not speech.done()
     assert [name for name in journal.names if name in BARGE_NAMES] == []
