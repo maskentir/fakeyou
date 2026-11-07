@@ -110,6 +110,18 @@ def test_vocative_matches_name_at_utterance_start() -> None:
     assert not is_vocative("Rani Twin, hello", ["", "  "])
 
 
+def test_vocative_matches_a_name_right_after_one_opening_word() -> None:
+    assert is_vocative("Hi Rani, can you hear me?", ["Rani"])
+    assert is_vocative("Okay Rani, stop.", ["Rani"])
+    assert is_vocative("Hey Rani Twin: one question", ["Rani Twin"])
+    assert not is_vocative("Ask Rani about it", ["Rani"])
+    assert not is_vocative("I told Rani, and she agreed", ["Rani"])
+
+
+def test_a_name_closing_the_line_is_not_a_vocative() -> None:
+    assert not is_vocative("Can you hear me, Rani?", ["Rani"])
+
+
 def test_vocative_tries_every_alias() -> None:
     assert is_vocative("Twin, hello", ["Rani Twin", "Twin"])
     assert is_vocative("Rani Twin, hello", ["Rani Twin", "Twin"])

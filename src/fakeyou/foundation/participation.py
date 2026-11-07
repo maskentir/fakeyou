@@ -10,17 +10,19 @@ class ParticipationContext:
     vocative: bool | None = None
 
 
-_VOCATIVE_BOUNDARY = frozenset({" ", ",", ".", "!", "?", ";", ":"})
+def _vocative_patterns(name: str) -> tuple[re.Pattern[str], ...]:
+    escaped = re.escape(name)
+    return (
+        re.compile(rf"^{escaped}(?=$|[\s,.!?;:])"),
+        re.compile(rf"^\S+\s+{escaped}(?=$|[,.!?;:])"),
+    )
 
 
 def is_vocative(text: str, aliases: Sequence[str]) -> bool:
     folded = text.strip().casefold()
     for alias in aliases:
         name = alias.strip().casefold()
-        if not name or not folded.startswith(name):
-            continue
-        rest = folded[len(name) :]
-        if not rest or rest[0] in _VOCATIVE_BOUNDARY:
+        if name and any(pattern.search(folded) for pattern in _vocative_patterns(name)):
             return True
     return False
 
