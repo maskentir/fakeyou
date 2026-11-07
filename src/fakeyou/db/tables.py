@@ -7,12 +7,14 @@ from sqlalchemy import (
     Boolean,
     Column,
     DateTime,
+    Index,
     Integer,
     LargeBinary,
     MetaData,
     SmallInteger,
     Table,
     Text,
+    UniqueConstraint,
     false,
 )
 
@@ -48,6 +50,31 @@ meeting_sessions = Table(
     Column("lease_owner", Text, nullable=True),
     Column("lease_expires_at", DateTime(timezone=True), nullable=True),
     Column("attempts", Integer, nullable=False, server_default="0"),
+)
+
+
+owner_model_revisions = Table(
+    "owner_model_revisions",
+    metadata,
+    Column("revision_id", Text, primary_key=True),
+    Column("item_id", Text, nullable=False),
+    Column("revision", Integer, nullable=False),
+    Column("owner_id", Text, nullable=False),
+    Column("twin_id", Text, nullable=False),
+    Column("kind", Text, nullable=False),
+    Column("topic", Text, nullable=False),
+    Column("statement", Text, nullable=False),
+    Column("reason", Text, nullable=True),
+    Column("confidence", Text, nullable=False),
+    Column("disclosure", Text, nullable=False),
+    Column("source", Text, nullable=False),
+    Column("status", Text, nullable=False),
+    Column("model_version", Integer, nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("decided_at", DateTime(timezone=True), nullable=True),
+    UniqueConstraint("item_id", "revision", name="owner_model_item_revision"),
+    UniqueConstraint("owner_id", "twin_id", "model_version", name="owner_model_version"),
+    Index("owner_model_scope", "owner_id", "twin_id"),
 )
 
 

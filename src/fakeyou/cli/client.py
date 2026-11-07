@@ -103,6 +103,10 @@ class ApiClient:
         document: dict[str, Any] = (await self._send(method, path, **kwargs)).json()
         return document
 
+    async def _json_list(self, method: str, path: str) -> list[dict[str, Any]]:
+        documents: list[dict[str, Any]] = (await self._send(method, path)).json()
+        return documents
+
     async def health(self) -> dict[str, Any]:
         return await self._json("GET", "/v1/health")
 
@@ -143,6 +147,35 @@ class ApiClient:
 
     async def submit_reembed(self, twin_id: str) -> dict[str, Any]:
         return await self._json("POST", f"/v1/twins/{twin_id}/reembeddings")
+
+    async def owner_model(self, twin_id: str, *, version: int | None) -> dict[str, Any]:
+        params = {"version": version} if version is not None else {}
+        return await self._json("GET", f"/v1/twins/{twin_id}/owner-model", params=params)
+
+    async def add_owner_model_item(self, twin_id: str, item: Mapping[str, Any]) -> dict[str, Any]:
+        return await self._json("POST", f"/v1/twins/{twin_id}/owner-model", json=item)
+
+    async def revise_owner_model_item(
+        self, twin_id: str, item_id: str, item: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        path = f"/v1/twins/{twin_id}/owner-model/items/{item_id}/revisions"
+        return await self._json("POST", path, json=item)
+
+    async def retire_owner_model_item(self, twin_id: str, item_id: str) -> dict[str, Any]:
+        return await self._json("DELETE", f"/v1/twins/{twin_id}/owner-model/items/{item_id}")
+
+    async def owner_model_history(self, twin_id: str, item_id: str) -> list[dict[str, Any]]:
+        return await self._json_list("GET", f"/v1/twins/{twin_id}/owner-model/items/{item_id}")
+
+    async def owner_model_proposals(self, twin_id: str) -> list[dict[str, Any]]:
+        return await self._json_list("GET", f"/v1/twins/{twin_id}/owner-model/proposals")
+
+    async def decide_owner_model_proposal(
+        self, twin_id: str, revision_id: str, *, approve: bool
+    ) -> dict[str, Any]:
+        decision = "approve" if approve else "reject"
+        path = f"/v1/twins/{twin_id}/owner-model/proposals/{revision_id}/{decision}"
+        return await self._json("POST", path)
 
     async def get_job(self, job_id: str) -> dict[str, Any]:
         return await self._json("GET", f"/v1/jobs/{job_id}")
