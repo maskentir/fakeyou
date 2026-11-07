@@ -124,8 +124,8 @@
     },
   };
   if (window.__fakeyouTestHooks === true) {
-    window.__fakeyouRtc.emitTestTrack = (track, streams) =>
-      noteTrack({ track, streams, receiver: null, target: null });
+    window.__fakeyouRtc.emitTestTrack = (track, streams, receiver = null) =>
+      noteTrack({ track, streams, receiver, target: null });
     window.__fakeyouRtc.emitTestChannel = (channel) => noteChannel(channel);
   }
 })();
