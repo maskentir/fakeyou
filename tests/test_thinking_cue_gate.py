@@ -1,10 +1,10 @@
 import asyncio
 from dataclasses import dataclass, field
 from functools import partial
-from types import SimpleNamespace
 
 from fakeyou.conversation.thinking_cue import CueState, CueTurn, ThinkingCue
-from fakeyou.conversation.turn_graph import _cue_blocker, _speak_gated_opener
+from fakeyou.conversation.turn_graph import TurnSink, _cue_blocker, _speak_gated_opener
+from tests._audio_fakes import SilentSpeaker
 from tests._persistence_fakes import RecordingJournal
 from tests._turn_context import TurnTestContext
 
@@ -26,7 +26,7 @@ class CueSpeaker:
 
 
 def opener_turn(runtime: TurnTestContext, gate: Gate, state: CueState) -> CueTurn:
-    sink = SimpleNamespace(started=False)
+    sink = TurnSink(runtime, None, "t1", (0, 4), streamed=False)
     blocked = partial(_cue_blocker, runtime, sink, (0, 4), state, gate)
     return CueTurn("t1", blocked, state=state)
 
@@ -35,7 +35,7 @@ async def test_the_opener_waits_for_the_early_turn_to_settle() -> None:
     gate = Gate()
     speaker = CueSpeaker()
     state = CueState()
-    runtime = TurnTestContext(speaker=speaker, journal=RecordingJournal())
+    runtime = TurnTestContext(speaker=SilentSpeaker(), journal=RecordingJournal())
     cue = ThinkingCue(lines=("Hmm.",), after_seconds=30.0)
     task = asyncio.create_task(
         _speak_gated_opener(cue, speaker, runtime.journal, opener_turn(runtime, gate, state), gate)
@@ -56,7 +56,7 @@ async def test_a_withdrawn_early_turn_never_speaks_its_opener() -> None:
     speaker = CueSpeaker()
     journal = RecordingJournal()
     state = CueState()
-    runtime = TurnTestContext(speaker=speaker, journal=journal)
+    runtime = TurnTestContext(speaker=SilentSpeaker(), journal=journal)
     cue = ThinkingCue(lines=("Hmm.",), after_seconds=30.0)
     task = asyncio.create_task(
         _speak_gated_opener(cue, speaker, journal, opener_turn(runtime, gate, state), gate)
