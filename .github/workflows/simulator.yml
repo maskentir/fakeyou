@@ -31,7 +31,7 @@ jobs:
             -v "$PWD/src:/workspace/src:ro" \
             -v "$PWD/conftest.py:/workspace/conftest.py:ro" \
             -v "$PWD/pyproject.toml:/workspace/pyproject.toml:ro" \
-            fakeyou-test:local uv run --no-sync pytest -m simulator evals/ -q
+            fakeyou-test:local uv run --no-sync pytest -m simulator evals/test_meeting_simulator_eval.py -q -p no:cacheprovider
       - name: Show the twin's journals when a scenario fails
         if: failure()
         run: |

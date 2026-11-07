@@ -265,7 +265,7 @@ docker build -f docker/audio/Dockerfile --target test -t fakeyou-test:local .
 docker run --rm -v "$PWD/tests:/workspace/tests:ro" -v "$PWD/evals:/workspace/evals:ro" \
   -v "$PWD/src:/workspace/src:ro" -v "$PWD/conftest.py:/workspace/conftest.py:ro" \
   -v "$PWD/pyproject.toml:/workspace/pyproject.toml:ro" -v "$PWD/.env:/workspace/.env:ro" \
-  fakeyou-test:local uv run --no-sync pytest -m simulator evals/
+  fakeyou-test:local uv run --no-sync pytest -m simulator evals/test_meeting_simulator_eval.py
 ```
 
 `SIMULATOR_PROVIDERS` picks where the providers come from. `live` (the default) calls
@@ -281,7 +281,7 @@ folder mounted writable:
 ```sh
 docker run --rm -e SIMULATOR_PROVIDERS=record \
   -v "$PWD/evals/fixtures/simulator/cassettes:/workspace/evals/fixtures/simulator/cassettes" \
-  ...same mounts as above... fakeyou-test:local uv run --no-sync pytest -m simulator evals/
+  ...same mounts as above... fakeyou-test:local uv run --no-sync pytest -m simulator evals/test_meeting_simulator_eval.pytest_meeting_simulator_eval.py
 ```
 
 Meta-tests enforce the conventions mechanically rather than by review: no comments
