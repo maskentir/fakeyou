@@ -169,6 +169,23 @@ regresi pertama di katalog.
   method; dataclass `slots` gagal), menunggu harus memantau task sesi
   agar alasan kegagalan sesi muncul, dan pemutaran audio dibatasi waktu.
 - **S2:** chat masuk/keluar dan aksi DOM dengan verifikasi efek.
+  S2, implementasi (2026-11-07): tampilan in-call dibangun lewat JS saat
+  admit (tombol tangan, panel chat dengan echo, Leave call yang
+  melaporkan kliknya ke route `/__sim/left` agar tercatat walau page
+  ditutup), data channel `collections` untuk chat masuk, dan brief dengan
+  izin `meet_act`/`meet_chat`/`meet_leave`. Lulus 3 dari 3: chat yang
+  diketik dijawab di chat, angkat dan turun tangan, kirim tanggal ke chat
+  atas permintaan suara, dan keluar atas permintaan (`left_by_participant`).
+  Atribusi pembicara meniru Meet: setiap peserta punya trek audio sejak
+  join (`MediaStreamDestination` → `emitTestTrack` dengan receiver tiruan
+  ber-CSRC, lewat parameter `receiver` baru di hook uji `rtc_bridge.js`),
+  dan stream itu diputar lewat `createMediaStreamSource` seperti Meet —
+  `voice_activity.js` mengukur level per slot dari situ, sehingga
+  transkrip menjadi `speaker-a`/`dominant_slot`. Suara yang didengar STT
+  tetap diputar lewat `<audio>` data URL: pemutaran lewat keluaran
+  WebAudio di container merusak transkripsi ("One test"). Temuan untuk B4:
+  sebagian final masih `no_speech` di atribusinya; aksinya tetap
+  teratribusi lewat early commit.
 - **S3:** layar dan kamera lewat track canvas, vision live atau
   `FakeVisionModel`.
 - **S4:** rekaman suara twin dan metrik waktu (latensi, berhenti saat

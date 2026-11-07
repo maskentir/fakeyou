@@ -1,11 +1,19 @@
 import asyncio
+import json
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from evals._meeting_simulator import FIXTURES, MeetingSimulator, journal_rows, wait_for_event
+from evals._meeting_simulator import (
+    FIXTURES,
+    MeetingSimulator,
+    journal_rows,
+    running_session,
+    wait_for_event,
+)
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import PathSettings, Settings
 from fakeyou.memory.persona import OperatorIdentity
@@ -17,20 +25,44 @@ from fakeyou.persistence.record import TwinSpeechEntry, load_meeting_record, mee
 
 MEETING_AUDIO_MONITOR = "meeting_audio.monitor"
 LINK = "https://meet.google.com/sim-ulat-edm"
+HARUN = "spaces/simulated/devices/harun"
 
 
 def _settings(tmp_path: Path) -> Settings:
     settings = Settings()
+    artifacts = os.environ.get("SIMULATOR_ARTIFACT_DIR")
+    base = Path(artifacts) if artifacts else tmp_path
     paths = PathSettings(
-        journal_dir=tmp_path / "journals",
-        record_dir=tmp_path / "meetings",
+        journal_dir=base / "journals",
+        record_dir=base / "meetings",
         browser_profile_dir=tmp_path / "profiles",
         browser_output_dir=tmp_path / "browser",
     )
     return settings.model_copy(update={"paths": paths})
 
 
-def _request(settings: Settings, meeting_id: str, duration: float) -> JoinRequest:
+def _brief(directory: Path, meeting_id: str) -> Path:
+    brief = {
+        "schema_version": "meeting_brief/v2",
+        "owner_id": "sim_owner",
+        "twin_id": "sim_twin",
+        "meeting_id": meeting_id,
+        "agenda": ["Orchid weekly sync"],
+        "approved_facts": [
+            {"id": "beta-date", "text": "The Orchid beta launch is planned for 14 October 2026."},
+            {"id": "checklist-owner", "text": "Rani owns the Orchid launch checklist."},
+        ],
+        "permissions": ["explain_facts", "meet_act", "meet_chat", "meet_leave"],
+        "knowledge_scope": "brief_only",
+    }
+    path = directory / f"{meeting_id}-brief.json"
+    path.write_text(json.dumps(brief), encoding="utf-8")
+    return path
+
+
+def _request(
+    settings: Settings, meeting_id: str, duration: float, brief: Path | None = None
+) -> JoinRequest:
     return JoinRequest(
         link=LINK,
         settings=settings,
@@ -45,16 +77,33 @@ def _request(settings: Settings, meeting_id: str, duration: float) -> JoinReques
         headless=True,
         conversation_enabled=True,
         barge_in=True,
+        brief_path=brief,
     )
 
 
-@pytest.mark.simulator
-@pytest.mark.browser
-@pytest.mark.live
-@pytest.mark.skipif(
-    sys.platform != "linux" or os.getenv("PULSE_SOURCE") != MEETING_AUDIO_MONITOR,
-    reason="the meeting simulator runs in the audio test image",
-)
+pytestmark = [
+    pytest.mark.simulator,
+    pytest.mark.browser,
+    pytest.mark.live,
+    pytest.mark.skipif(
+        sys.platform != "linux" or os.getenv("PULSE_SOURCE") != MEETING_AUDIO_MONITOR,
+        reason="the meeting simulator runs in the audio test image",
+    ),
+]
+
+
+def _ports(simulator: MeetingSimulator) -> JoinPorts:
+    return JoinPorts(run_session=simulator.run_session, open_memory=open_persona_memory)
+
+
+async def _admitted(simulator: MeetingSimulator, session: asyncio.Task[Any], journal: Path) -> None:
+    await simulator.wait_for_lobby(session)
+    await simulator.join(HARUN, "Harun")
+    await simulator.admit()
+    await wait_for_event(journal, "conversation_bound", within=30)
+    await asyncio.sleep(2)
+
+
 async def test_the_twin_joins_a_simulated_meeting_and_answers_a_spoken_question(
     tmp_path: Path,
 ) -> None:
@@ -62,25 +111,17 @@ async def test_the_twin_joins_a_simulated_meeting_and_answers_a_spoken_question(
     meeting_id = "sim-s1"
     simulator = MeetingSimulator(twin_name="Rani Twin")
     journal = journal_path(settings.paths.journal_dir, SessionId(meeting_id))
-    session = asyncio.create_task(
-        run_join_session(
-            _request(settings, meeting_id, duration=75),
-            JoinPorts(run_session=simulator.run_session, open_memory=open_persona_memory),
-        )
-    )
 
-    await simulator.wait_for_lobby(session)
-    simulator.join("spaces/simulated/devices/harun", "Harun")
-    await simulator.admit()
-    await wait_for_event(journal, "join_finished", within=30)
-    await wait_for_event(journal, "conversation_bound", within=30)
-    await asyncio.sleep(2)
-    await simulator.say("beta-question.wav")
-    decision = await wait_for_event(
-        journal, "policy_decided", matching=lambda row: row.get("action") == "reply", within=30
-    )
-    await wait_for_event(journal, "playback_finished", within=45)
-    outcome = await asyncio.wait_for(session, timeout=120)
+    async with running_session(
+        run_join_session(_request(settings, meeting_id, duration=75), _ports(simulator))
+    ) as session:
+        await _admitted(simulator, session, journal)
+        await simulator.say("beta-question.wav", speaker=HARUN)
+        decision = await wait_for_event(
+            journal, "policy_decided", matching=lambda row: row.get("action") == "reply", within=30
+        )
+        await wait_for_event(journal, "playback_finished", within=45)
+        outcome = await asyncio.wait_for(session, timeout=120)
 
     record = load_meeting_record(
         meeting_record_path(settings.paths.record_dir, SessionId(meeting_id))
@@ -91,3 +132,41 @@ async def test_the_twin_joins_a_simulated_meeting_and_answers_a_spoken_question(
     assert "14 october" in spoken.casefold()
     assert outcome.session.terminal_reason == "duration_limit_reached"
     assert "turn_failed" not in events
+
+
+async def test_the_twin_answers_chat_and_acts_on_the_meeting_when_asked(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    meeting_id = "sim-s2"
+    simulator = MeetingSimulator(twin_name="Rani Twin")
+    journal = journal_path(settings.paths.journal_dir, SessionId(meeting_id))
+    request = _request(settings, meeting_id, duration=300, brief=_brief(tmp_path, meeting_id))
+
+    async with running_session(run_join_session(request, _ports(simulator))) as session:
+        await _admitted(simulator, session, journal)
+        await simulator.chat(HARUN, "Rani, who owns the Orchid launch checklist?")
+        answered = await simulator.wait_for_state(
+            lambda state: any("rani" in line.casefold() for line in state["sent"]), within=60
+        )
+        await simulator.say("raise-hand.wav", speaker=HARUN)
+        raised = await simulator.wait_for_state(
+            lambda state: str(state["hand"]).startswith("Lower hand"), within=45
+        )
+        await simulator.say("lower-hand.wav", speaker=HARUN)
+        lowered = await simulator.wait_for_state(
+            lambda state: str(state["hand"]).startswith("Raise hand"), within=45
+        )
+        await simulator.say("send-date-in-chat.wav", speaker=HARUN)
+        dated = await simulator.wait_for_state(
+            lambda state: any("14 october" in line.casefold() for line in state["sent"]),
+            within=60,
+        )
+        await simulator.say("leave.wav", speaker=HARUN)
+        outcome = await asyncio.wait_for(session, timeout=90)
+
+    assert answered["sent"]
+    assert raised["hand"].startswith("Lower hand")
+    assert lowered["hand"].startswith("Raise hand")
+    assert any("14 october" in line.casefold() for line in dated["sent"])
+    assert simulator.left
+    assert outcome.session.phase == "ended"
+    assert "turn_failed" not in {row["event"] for row in journal_rows(journal)}
