@@ -200,7 +200,9 @@ async def test_a_chat_turn_gets_the_same_typed_plan_as_speech() -> None:
         speaker_evidence_id=None,
     )
 
-    reading = await _chat_reading(runtime(judge=judge), event)
+    reading, owner_claim = await _chat_reading(runtime(judge=judge), event)
+
+    assert owner_claim is False
 
     assert reading.meet_action == "react"
     assert reading.evidence == ("screen",)

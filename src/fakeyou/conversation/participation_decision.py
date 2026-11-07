@@ -27,6 +27,7 @@ class ParticipationDecision(BaseModel):
     action_only: bool = False
     state_question: str = "none"
     language: str | None = None
+    owner_claim: bool = False
 
 
 def to_participation_action(decision: ParticipationDecision) -> ParticipationAction:

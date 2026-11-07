@@ -107,6 +107,7 @@ def decision_of(
         action_only=judgement.action_only,
         state_question=judgement.state_question,
         language=judgement.language,
+        owner_claim=judgement.owner_claim,
     )
 
 
@@ -139,6 +140,7 @@ def _record(
             "action_only": judgement.action_only,
             "logistics_check": judgement.logistics_check,
             "state_question": judgement.state_question,
+            "owner_claim": judgement.owner_claim,
         }
     journal.record(
         "policy_decided",

@@ -28,6 +28,7 @@ def judgement(**changes: object) -> TurnJudgement:
         "addressee": "twin",
         "action": "reply",
         "confidence": 0.9,
+        "owner_claim": False,
     }
     return TurnJudgement.model_validate(values | changes)
 

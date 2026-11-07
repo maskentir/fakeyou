@@ -185,13 +185,16 @@ class EvidenceRoutingMiddleware(AgentMiddleware[Any, Any, Any]):
 
     def _strong_trigger(self, request: ModelRequest[Any]) -> str | None:
         messages = request.messages
+        _, trigger = current_trigger(messages)
+        event = meeting_event_of(trigger[-1]) if trigger else None
+        if event is not None and event.get("owner_claim") is True:
+            return "owner_claim"
         for message in reversed(messages):
             if not isinstance(message, ToolMessage):
                 break
             found = self._evidence_trigger(message)
             if found is not None:
                 return found
-        _, trigger = current_trigger(messages)
         if trigger and trigger[-1].id:
             expected = f"{trigger[-1].id}-memory"
             for message in messages:

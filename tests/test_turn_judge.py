@@ -182,6 +182,7 @@ async def test_the_model_judge_reads_its_structured_output() -> None:
         "addressee": "twin",
         "action": "reply",
         "confidence": 0.8,
+        "owner_claim": False,
     }
     model = ToolCallingFakeModel(
         responses=[
@@ -229,6 +230,7 @@ async def test_the_judge_payload_carries_presence_certainty() -> None:
         "addressee": "twin",
         "action": "reply",
         "confidence": 0.9,
+        "owner_claim": False,
     }
 
     def respond() -> AIMessage:
@@ -278,6 +280,7 @@ async def test_the_judge_reports_own_action_questions_and_language() -> None:
         "addressee": "twin",
         "action": "reply",
         "confidence": 0.9,
+        "owner_claim": False,
         "state_question": "own_action_status",
         "language": "id",
     }
@@ -307,6 +310,7 @@ async def test_each_judge_call_records_who_asked_and_the_window_key() -> None:
         "addressee": "twin",
         "action": "reply",
         "confidence": 0.8,
+        "owner_claim": False,
     }
     model = ToolCallingFakeModel(
         responses=[

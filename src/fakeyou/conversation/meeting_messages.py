@@ -70,6 +70,8 @@ def request_messages(events: Sequence[TranscriptEvent]) -> list[HumanMessage]:
         ).meeting_event()
         if event.evidence_needs:
             spoken["evidence_needs"] = list(event.evidence_needs)
+        if event.owner_claim:
+            spoken["owner_claim"] = True
         if event.evidence:
             spoken["evidence"] = dict(event.evidence)
         if event.attention is not None:
