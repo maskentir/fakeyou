@@ -69,6 +69,23 @@ ke Meet asli. Simulator memainkan peran semua peserta manusia:
   `agent_mic`), jadi skenario bisa menilai *kapan* twin mulai dan
   berhenti bersuara, tidak hanya teksnya.
 
+Seam injeksi (diverifikasi 2026-11-07, tanpa perubahan kode produksi):
+`run_join_session(request, ports)` menerima `JoinPorts.run_session`;
+simulator memberi `run_meeting_session` dengan `SessionWiring.open_page`
+yang membungkus `open_direct_page`, me-route `https://meet.google.com/**`
+ke halaman Fake Meet, dan menyimpan objek `Page` milik worker. Dengan
+`Page` itu simulator memanggil hook `__fakeyouRtc` (aktif lewat
+`window.__fakeyouTestHooks`), memutar audio, dan membaca DOM. Jalur
+produksi penuh — `prepare_join`, kernel, memory, STT, TTS, percakapan,
+perception, `CommandRunner` — tetap berjalan apa adanya.
+
+Lingkungan (diverifikasi): stage `test` di `docker/audio/Dockerfile`
+(runtime + dependency dev) menjalankan
+`tests/test_audio_pulse.py::…native_transport…` lulus dengan `tests/`,
+`src/`, dan `conftest.py` di-mount ke `/workspace`; jadi browser
+CloakBrowser dan PulseAudio sudah tersedia untuk simulator tanpa image
+baru.
+
 Skenario ditulis sebagai data (JSON di `evals/fixtures/`, teks Indonesia
 boleh di sana): langkah bertimestamp (`say`, `chat`, `share`,
 `camera`, `join`, `leave`, `kick`, `wait_for`), dan ekspektasi:
