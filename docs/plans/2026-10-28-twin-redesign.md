@@ -2271,6 +2271,25 @@ Desain: pisahkan **mulai generasi** dari **izin bicara**.
 - Satu spekulasi per ucapan; ucapan berikutnya membatalkan yang lama.
   Tidak ada spekulasi saat twin sedang bicara (jalur barge-in tetap).
 
+Revisi desain B6-4 (2026-11-07, sebelum implementasi): di turn graph
+generasi jawaban baru dimulai **sesudah** keputusan partisipasi, jadi
+"mulai generasi, judge memberi izin bicara" berarti membongkar urutan
+inti turn graph. Bentuk yang dipilih: **reply prefetch**, pola yang
+sama dengan `JudgeCache`. Saat VAD stop pada baris vocative, responder
+memulai stream jawaban di latar dan menampung chunk-nya; ketika giliran
+yang sebenarnya sampai di `_speak_reply`, stream itu dipakai hanya bila
+kuncinya sama persis — teks yang dinormalisasi, `evidence_needs`, dan
+catatan plan (`owner_claim`, refusal, keluar) — selain itu panggilan
+segar seperti sekarang. Turn graph dan partisipasi tidak disentuh;
+izin bicara tetap sepenuhnya milik judge karena giliran hanya sampai di
+`_speak_reply` sesudah di-admit. Evidence untuk prefetch diambil dari
+judgement interim yang sudah selesai bila ada, selain itu `memory`
+(sebab `memory_planned` hanya memanggil memory bila diminta). Prefetch
+dibuang (journal `reply_prefetch_dropped` dengan alasan) bila judge
+diam, kuncinya tidak cocok, ucapan baru dimulai, atau sesi berhenti.
+Spekulasi tidak pernah memanggil tool yang mengubah dunia: hanya prefetch
+memory (read-only) dan panggilan model.
+
 Gate: (1) VAD stop → audio jawaban p50 ≤ 3,2 dtk di sesi live (dari
 ±4,8); (2) nol jawaban terdengar untuk baris yang judge-nya `silent`;
 (3) spekulasi terbuang ≤ 30% dari spekulasi yang dimulai, diukur per
