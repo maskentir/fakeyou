@@ -40,7 +40,10 @@ NO_ENV_FILE: dict[str, Any] = {"_env_file": None}
 
 
 def _offline_settings() -> Settings:
-    return Settings(**NO_ENV_FILE)
+    settings = Settings(**NO_ENV_FILE)
+    attention = settings.perception.attention.model_copy(update={"enabled": False})
+    perception = settings.perception.model_copy(update={"attention": attention})
+    return settings.model_copy(update={"perception": perception})
 
 
 def _judge_answers_unless_for(other: str) -> ScriptedJudge:
