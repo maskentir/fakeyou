@@ -28,6 +28,7 @@
     "per_stream_enabled": false,
     "response_timeout_seconds": 60.0,
     "sentence_streaming": true,
+    "speculative_replies": true,
     "thinking_cue_after_seconds": 2.0,
     "thinking_cue_enabled": true,
     "voice_labels_enabled": true

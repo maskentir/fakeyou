@@ -12,6 +12,7 @@ from fakeyou.conversation.conversation import (
 )
 from fakeyou.conversation.meeting_messages import NoHistory
 from fakeyou.conversation.meeting_turns import TurnGeneration, build_meeting_turns
+from fakeyou.conversation.reply_draft import HeldEffects
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.foundation.transcript import (
     CaptureContext,
@@ -160,9 +161,11 @@ class _StreamOnlyResponder:
         on_tool_start: Callable[[], None],
         *,
         request_id: str,
+        effects: HeldEffects | None = None,
     ) -> AsyncIterator[SpokenChunk]:
         del events
         del on_tool_start
+        del effects
         del request_id
         return self._generate()
 

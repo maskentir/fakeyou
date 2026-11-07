@@ -221,6 +221,13 @@ fallback instead. When the main provider runs out of credit or rejects the key, 
 the session speaks through the fallback; any other fault is tried on the main provider again
 at the next sentence. Leave it empty to have no fallback.
 
+The answer to a line that names the twin starts as soon as the final transcript
+arrives, while the turn judge is still deciding (`FAKEYOU_CONVERSATION__SPECULATIVE_REPLIES`,
+on by default). Nothing is spoken and no reply effect (louder, shorter, language) applies
+until the judge admits the turn; a turn the judge silences, or plans differently (a look at
+the screen or a camera, a Meet action, a chat reply, leaving, an owner claim), drops the
+draft and answers as before. Set it to `false` to start every answer after the judge.
+
 When `reply_strong` is set, the response budget
 (`FAKEYOU_CONVERSATION__RESPONSE_TIMEOUT_SECONDS`) is checked against it instead of
 `reply`.

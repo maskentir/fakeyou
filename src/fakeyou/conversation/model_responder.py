@@ -1,6 +1,7 @@
 from collections.abc import AsyncIterator, Callable, Sequence
 from typing import Protocol
 
+from fakeyou.conversation.reply_draft import HeldEffects
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.foundation.transcript import TranscriptEvent
 
@@ -33,6 +34,7 @@ class SentenceSource(Protocol):
         on_tool_start: Callable[[], None],
         *,
         request_id: str,
+        effects: HeldEffects | None = None,
     ) -> AsyncIterator[SpokenChunk]: ...
 
 
@@ -43,11 +45,15 @@ class ReplierStreamResponder:
         events: tuple[TranscriptEvent, ...],
         on_tool_start: Callable[[], None],
         request_id: str,
+        effects: HeldEffects | None = None,
     ) -> None:
         self._source = source
         self._events = events
         self._on_tool_start = on_tool_start
         self._request_id = request_id
+        self._effects = effects
 
     def stream_reply(self, _transcript: str) -> AsyncIterator[SpokenChunk]:
-        return self._source(self._events, self._on_tool_start, request_id=self._request_id)
+        return self._source(
+            self._events, self._on_tool_start, request_id=self._request_id, effects=self._effects
+        )

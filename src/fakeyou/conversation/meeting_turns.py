@@ -23,6 +23,7 @@ from fakeyou.conversation.conversation import (
 from fakeyou.conversation.meeting_messages import MeetingHistory, NoHistory
 from fakeyou.conversation.model_responder import ReplierStreamResponder, ReplierWholeResponder
 from fakeyou.conversation.participation_graph import JudgeThresholds, TurnJudging
+from fakeyou.conversation.reply_draft import HeldEffects
 from fakeyou.conversation.reply_planner import TurnLanguage
 from fakeyou.conversation.session import MeetingAudio
 from fakeyou.conversation.thinking_cue import thinking_cue_for
@@ -92,6 +93,7 @@ class TurnGeneration:
     max_spoken_sentences: int = DEFAULTS.conversation.max_spoken_sentences
     language: str = DEFAULTS.speech.language
     sentence_streaming: bool = DEFAULTS.conversation.sentence_streaming
+    speculative_replies: bool = DEFAULTS.conversation.speculative_replies
     turn_language: TurnLanguage | None = None
 
 
@@ -145,9 +147,13 @@ def _whole_turn(replier: ConversationResponder) -> WholeTurnFactory:
 
 def _stream_turn(replier: StreamingConversationResponder) -> StreamTurnFactory:
     def stream_turn(
-        events: tuple[TranscriptEvent, ...], hook: ToolStartHook, request_id: str
+        events: tuple[TranscriptEvent, ...],
+        hook: ToolStartHook,
+        request_id: str,
+        *,
+        effects: HeldEffects | None = None,
     ) -> Responder:
-        return ReplierStreamResponder(replier.stream_sentences, events, hook, request_id)
+        return ReplierStreamResponder(replier.stream_sentences, events, hook, request_id, effects)
 
     return stream_turn
 
@@ -213,6 +219,7 @@ def build_meeting_turns(
         ActorWiring(
             journal=_SilentJournal() if diagnostics.journal is None else diagnostics.journal,
             judging=_judging(interaction),
+            speculative_replies=generation.speculative_replies,
             clock=timing.clock,
             ingress=IngressOptions(
                 addressing_names=wake_phrases or addressing_phrases(interaction.twin_names),

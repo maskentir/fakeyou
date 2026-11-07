@@ -2702,7 +2702,24 @@ sebelumnya tetap dibawa untuk pertanyaan lanjutan. `memory_planned`
 dihapus. Eval trust/persona/brief dibandingkan dengan `main`:
 `trust_replay` lulus di keduanya, `brief_replay` gagal identik di keduanya
 (kegagalan lama, tidak terkait), persona lulus. Tersisa untuk B9b-3:
-spekulasi saat final dengan pemeriksaan veto. Untuk
+spekulasi saat final dengan pemeriksaan veto.
+
+B9b-3 (2026-11-08): jawaban untuk baris yang menyebut twin mulai saat final
+tiba, paralel dengan judge, memakai mesin draft yang sudah direview di B6-4
+(efek `louder`/`shorter`/bahasa ditahan, draft dibuang di setiap jalan
+keluar giliran, kunci memuat riwayat). Plan spekulatif dibangun dari bacaan
+default; draft hanya diterima bila request jawaban giliran sebenarnya
+identik — teks dengan semua catatan (bahasa, refusal, `owner_claim`, chat,
+keluar, klarifikasi), tanpa look (`memory` netral), batch dan riwayat sama.
+Kill switch `FAKEYOU_CONVERSATION__SPECULATIVE_REPLIES` (default menyala);
+replay V0 mematikannya karena mereproduksi rekaman yang dibuat tanpa
+spekulasi. Hasil simulator dengan model live, VAD stop → kalimat jawaban
+pertama: p50 **2,29 dtk** (sebelumnya 3,53; B6-4 3,34), di bawah kill
+criteria Track B 2,5 dtk walau di jaringan Docker-di-Mac. Draft terbuang di
+simulator 4/6 (skenario padat perintah); di sesi live 74% baris yang
+menyebut twin berakhir sebagai jawaban bersuara tanpa look, jadi perkiraan
+terbuang ±26%, di bawah gate 30%; giliran yang didiamkan (13,8%) tidak
+pernah bersuara. Untuk
 giliran memory, spekulasi B9b tetap menurunkan rantai dari ±0,6 + 1,1 +
 2,7 ≈ 4,4 dtk menjadi ±0,6 + 2,7 ≈ 3,3 dtk; gate p50 ≤ 2,0 dtk berlaku
 untuk giliran tanpa memory relevan.
