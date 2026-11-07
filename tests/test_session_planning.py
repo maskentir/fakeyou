@@ -133,6 +133,18 @@ def test_an_unknown_browser_refuses_every_side_effect() -> None:
     }
 
 
+def test_a_meeting_without_permission_says_so_even_with_no_browser() -> None:
+    grant = Grant(frozenset(), browser_available=False)
+
+    action = authorize(MeetAction("raise_hand"), actor=AYU, channel="speech", grant=grant)
+    chat = authorize(ChatRequest(), actor=AYU, channel="speech", grant=grant)
+
+    assert [refusal.reason for refusal in (*action.refusals, *chat.refusals)] == [
+        "not_permitted",
+        "chat_not_permitted",
+    ]
+
+
 intents = st.sampled_from(
     [
         NoResponse("x"),
