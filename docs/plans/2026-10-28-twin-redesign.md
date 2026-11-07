@@ -2670,7 +2670,23 @@ persona lulus; `acc-0930-replay` model kecil gagal juga di `main`
 (`must_mention_any` 0,50/0,42), dan selisih di branch (0,25) berasal dari
 cek kata yang tidak menerima "mengonfirmasi" — jawaban "harga lisensi" 4/4
 jujur ("tidak ada di catatan saya, Rani perlu mengonfirmasi") — serta dari
-"itu sudah disetujui Rani." yang di produksi dirutekan ke strong. Untuk
+"itu sudah disetujui Rani." yang di produksi dirutekan ke strong.
+
+Penyempurnaan B9 (2026-11-08): look sebagai tool **dibatalkan**. Look
+hanya muncul di 5 dari 13 giliran bersuara, vision sendiri 1–3 dtk, dan
+memindahkannya ke tool menambah satu putaran model (±1 dtk) tanpa manfaat
+sebelum B9b. Look tetap direncanakan judge; verdict yang meminta look
+membuang spekulasi dan giliran berjalan seperti biasa. B9a menjadi:
+memory diambil untuk setiap baris jawaban, tidak lagi menunggu
+`evidence_needs` judge (recall p50 75 ms, maks 347 ms di graph dev),
+dengan aturan: memory yang diminta judge berperilaku seperti dulu
+(hasil kosong dinyatakan eksplisit); memory yang tidak diminta hanya
+disisipkan bila gate relevansi menemukan fakta; selain itu request ke
+model, listener, dan retensi identik dengan sebelumnya — supaya basa-basi
+tidak dijawab "tidak ada di catatan saya". B9b memulai spekulasi tepat saat
+final tiba, tanpa menunggu judgement apa pun, karena rencananya tidak lagi
+bergantung pada judge; verdict yang meminta look, aksi, chat, keluar,
+`owner_claim`, atau memory yang tidak ditemukan spekulasi membuangnya. Untuk
 giliran memory, spekulasi B9b tetap menurunkan rantai dari ±0,6 + 1,1 +
 2,7 ≈ 4,4 dtk menjadi ±0,6 + 2,7 ≈ 3,3 dtk; gate p50 ≤ 2,0 dtk berlaku
 untuk giliran tanpa memory relevan.

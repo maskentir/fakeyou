@@ -656,3 +656,55 @@ async def test_plan_notes_on_the_line_do_not_make_memory_relevant(
     [evidence] = evidence_messages(model_calls(model)[0])
     assert evidence.additional_kwargs["memory_prefetch"]["outcome"] == "empty"
     assert "System" not in evidence.additional_kwargs["memory_prefetch"]["query"]
+
+
+def unplanned(text: str, message_id: str) -> HumanMessage:
+    return HumanMessage(
+        content=text,
+        id=message_id,
+        additional_kwargs={"meeting_event": {"participant_id": "unknown", "evidence_needs": []}},
+    )
+
+
+async def test_relevant_memory_reaches_a_line_the_judge_did_not_plan_memory_for(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    facts = ["The Orchid beta launch moved to 14 October 2026"]
+    memory = stored_memory(monkeypatch, facts=facts, episodes={facts[0]: ["e1"]})
+    agent, model = prefetch_agent(memory, [AIMessage(content="14 October.")])
+
+    await turn(agent, unplanned("When is the Orchid beta launch?", "t1"))
+
+    [evidence] = evidence_messages(model_calls(model)[0])
+    assert evidence.additional_kwargs["memory_prefetch"]["outcome"] == "found"
+
+
+async def test_a_line_without_planned_or_relevant_memory_reaches_the_model_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    facts = ["Project Zebra was rescheduled to 14 November 2026"]
+    memory = stored_memory(monkeypatch, facts=facts, episodes={facts[0]: ["e1"]})
+    outcomes: list[str] = []
+    model = ToolCallingFakeModel(
+        responses=[AIMessage(content="Good, thanks."), AIMessage(content="14 November.")]
+    )
+    agent = create_meeting_agent(
+        model,
+        persona="PERSONA",
+        middleware=[
+            create_memory_prefetch_middleware(
+                memory,
+                scope=RecallScope(GROUP),
+                on_prefetch=lambda outcome, _refs: outcomes.append(outcome),
+            )
+        ],
+    )
+
+    await turn(agent, unplanned("Hi, how is your day going?", "t1"))
+    await turn(agent, participant("When was Project Zebra rescheduled?", "t2"))
+
+    first, second = model_calls(model)
+    assert evidence_messages(first) == []
+    assert [item.id for item in evidence_messages(second)] == ["t2-memory"]
+    assert outcomes == ["found"]
+    assert len(memory.searched) == 4
