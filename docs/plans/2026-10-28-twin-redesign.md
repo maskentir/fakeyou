@@ -2534,6 +2534,80 @@ yang subjeknya bukan policy memilih opt-out secara eksplisit.
   kosong. Catatan samping sesi ini: latensi final→audio pertama p50
   5,3 dtk adalah urusan tahap lain.
 
+### B9: Judge memberi izin, responder merencanakan
+
+Status: desain (2026-11-08), belum diimplementasi. Pemicu: kill criteria
+Track B ("orang selesai → twin bersuara p50 di atas 2,5 dtk"). Rantai yang
+terukur sesudah B6 adalah teks lengkap dari STT ±0,6 dtk sesudah VAD stop,
+judge ±1,1 dtk (lantai panggilan model; lihat pengukuran B6-4), lalu
+kalimat pertama ±1,0 dtk: ±2,7 dtk di jaringan biasa dan 3,3–3,5 dtk di
+simulator. Lantainya ada di bentuk arsitektur, bukan di prompt atau skema:
+setiap giliran menunggu satu panggilan judge **sebelum** jawaban boleh
+dimulai, karena judge juga menentukan rencana jawaban (`evidence_needs`
+memory/screen/participant, bahasa, `owner_claim`). B6-4 membuktikan
+spekulasi tidak bisa menembus urutan itu: draft tanpa verdict tidak dapat
+menebak rencana (dari 13 giliran bersuara: 6 `memory`, 4 `participant`,
+1 `screen`, 2 tanpa evidence).
+
+Riset: sistem produksi memulai LLM jawaban sebelum giliran dikonfirmasi
+dan menahan keluarannya sampai konfirmasi — LiveKit Agents (*preemptive
+generation*, menyala default, hanya LLM yang mulai lebih awal, TTS
+menunggu), Jambonz (*early generation*, token ditahan lalu dilepas bila
+cocok), Deepgram Flux (*eager end of turn*, 100–200 ms dengan 50–70%
+panggilan LLM tambahan), dan Voice-Light (arXiv 2609.20995: spekulasi teks
+dan audio privat sampai lolos cek transkrip dan giliran; perubahan leksikal
+membatalkan, perubahan tanda baca tidak; median VAD final → audio pertama
+667 ms bila dipromosikan vs 1.513 ms tanpa). Bedanya dengan fakeyou: di
+sana LLM jawaban sendiri yang merencanakan (tool, sumber), tidak ada
+penilai terpisah yang harus selesai dulu. Untuk akhir giliran, detektor
+lokal tersedia (Pipecat Smart Turn v3, audio, ±12–65 ms CPU; LiveKit turn
+detector, teks, Qwen2.5-0.5B, 50–160 ms), tetapi akhir giliran bukan
+masalah fakeyou — Muse sudah mengirim teks lengkap ±0,6 dtk sesudah
+berhenti bicara; yang mahal adalah keputusan *apakah* twin bicara.
+
+Desain: pisahkan dua tugas judge.
+
+- **Izin (judge, paralel).** Judge tetap satu-satunya yang memutuskan
+  `reply`/`clarify`/`stay_silent`, aksi Meet, chat, keluar, dan
+  `owner_claim`. Ia tidak lagi menentukan evidence untuk jawaban.
+- **Rencana (responder).** Jawaban dibangun dari baris itu sendiri:
+  memory dari recall set C5 (listener latar, tidak menunggu giliran;
+  sampai C5 ada, prefetch memory dijalankan untuk setiap baris yang
+  menyebut twin — read-only), view perception yang sudah ada di prompt,
+  dan look layar/kamera sebagai **tool** yang dipanggil responder bila
+  perlu, bukan evidence yang dikumpulkan sebelum model jalan. Bahasa
+  dideklarasikan responder (`reply_planner` sudah melakukannya).
+- **Spekulasi.** Pada baris yang menyebut twin, jawaban dimulai di interim
+  pertama yang sudah memuat teks final (biasanya ±0,6 dtk sesudah VAD
+  stop) dengan efek tertahan seperti draft B6-4 (`louder`/`shorter`/bahasa
+  hanya berlaku sesudah izin). Teks interim yang berubah secara leksikal
+  membatalkan spekulasi; tanda baca tidak. Verdict `reply` melepas
+  kalimat; verdict lain membuangnya tanpa audio; `owner_claim` membuangnya
+  dan memulai ulang di model strong (kasus jarang, keselamatan tetap).
+- Mekanisme penahanan, pembuangan di setiap jalan keluar, dan kunci
+  riwayat dari implementasi B6-4 dipakai ulang; yang berubah hanya kunci:
+  teks yang dinormalisasi tanpa tanda baca + riwayat, tidak lagi rencana
+  dari verdict.
+
+Yang dihapus: `memory_planned` dan evidence look yang dikumpulkan sebelum
+model (`with_evidence`) di jalur jawaban bersuara; field `evidence` judge
+hanya dipakai untuk chat dan jawaban state sampai C5.
+
+Risiko: (1) look sebagai tool menambah satu putaran model untuk
+pertanyaan layar/kamera (±1 dtk) — dapat diterima karena vision sendiri
+1–3 dtk dan pertanyaan itu jarang; (2) biaya model untuk baris yang
+menyebut twin tetapi didiamkan judge — diukur sebagai rasio spekulasi
+terbuang; (3) prefetch memory untuk setiap baris bernama twin menambah
+beban recall — dibatasi laju dan digantikan listener C5.
+
+Gate (simulator dengan model live, lalu live): VAD stop → audio jawaban
+p50 ≤ 2,0 dtk dan p90 ≤ 2,5 dtk; nol audio untuk giliran yang diamkan
+judge; spekulasi terbuang ≤ 30%; `conversation_replay`, trust eval
+(`acc-0930-replay`), dan skenario simulator S1–S5 tidak turun. Irisan:
+B9a responder memanggil look sebagai tool dan memory tidak lagi bergantung
+`evidence_needs` (tanpa spekulasi, diukur sendiri); B9b spekulasi di
+interim dengan kunci leksikal.
+
 ## Track C: otak
 
 ### C1: Owner model
