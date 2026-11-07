@@ -231,6 +231,46 @@ regresi pertama di katalog.
   mengaku sebagai owner; `IDENTITY_RULE` sekarang mewajibkan orang ketiga
   untuk apa yang dimiliki, dilakukan atau diputuskan owner.
 - **S5:** mode `recorded` untuk CI; katalog lengkap.
+  S5, desain (2026-11-07): **pengganti provider sebagai server loopback,
+  dipilih lewat setting URL yang sudah ada**, bukan seam baru di kode
+  produksi. Alasannya: semua role Gemini mengikuti `base_url` (dibuktikan
+  dengan probe: `generateContent` dan SSE `streamGenerateContent` sampai ke
+  server lokal), Cartesia memakai `tts.base_url`, Muse memakai `stt.url`,
+  dan validator URL mengizinkan `http/ws` untuk loopback. Jadi client asli
+  (parsing, streaming, retry, klasifikasi fault) tetap teruji, dan tidak
+  ada cabang "mode tes" di produksi. Satu app Starlette di
+  `127.0.0.1:<port acak>` dijalankan in-process oleh simulator.
+  Mode per run lewat `SIMULATOR_PROVIDERS`: `live` (default, provider
+  asli), `record` (Gemini diteruskan ke Google dan tiap pasangan
+  permintaan/jawaban disimpan), `replay` (tanpa jaringan ke provider
+  model). Kaset per skenario di `evals/fixtures/simulator/cassettes/`
+  (JSONL; tanpa header, jadi API key tidak pernah tersimpan; gambar diganti
+  penanda). Pencocokan replay: permintaan dinormalisasi (waktu ISO, id
+  heksadesimal, `seconds_ago`, durasi ms diganti penanda), lalu dipilih
+  entri belum terpakai di path yang sama dengan kemiripan teks tertinggi
+  (`difflib`), minimal 0,8; di bawah itu server menjawab 500 dan mencatat
+  *miss*, dan tes gagal dengan daftar miss — tanda kaset harus direkam
+  ulang, bukan dilewati diam-diam. Latensi dan jeda antar-event SSE ikut
+  direkam dan diputar ulang supaya perilaku waktu tetap realistis.
+  TTS: server Cartesia tiruan di semua mode non-live, menghasilkan nada
+  sintetis dengan durasi sebanding panjang teks (tidak direkam: isi audio
+  tidak memengaruhi perilaku, dan rekaman PCM akan membengkakkan repo).
+  Irisan: **S5a** server + Gemini record/replay + TTS tiruan (STT masih
+  asli, mode campuran); **S5b** Muse tiruan yang memutar transkrip
+  rekaman per klip (deterministik penuh, tanpa secret); **S5c** job CI
+  yang membangun image tes dan menjalankan `replay`.
+  S5a, implementasi (2026-11-07): `evals/_provider_doubles.py`. Record 6/6,
+  76 interaksi model, ~600 KB kaset, tanpa key. Replay pertama 2/6: kaset
+  memberi jawaban dari pertanyaan lain tanpa satu pun *miss*, karena
+  kemiripan dihitung atas seluruh body (8.400 karakter, ~90% system prompt
+  judge yang sama: "react with a thumbs up" vs "send a message in the chat"
+  99% mirip) dan entri belum terpakai diutamakan di atas yang paling cocok.
+  Perbaikan: system instruction hanya memisahkan jenis panggilan (≥ 0,8),
+  skor utama dari 40 kata terakhir giliran terakhir (tempat ucapan
+  terbaru dalam jendela judge), kemiripan keseluruhan sebagai pemecah seri,
+  dan "belum terpakai" hanya memenangkan skor yang praktis seri.
+  Perbandingan per kata, bukan per karakter (`SequenceMatcher` tanpa
+  autojunk: 15 s vs 0,06 s untuk 20 entri). Hasil: replay 6/6.
 - **S6:** L2 smoke di Meet asli.
 
 Gate L1: setiap skenario katalog lulus ≥ 2 dari 3 run live dan 3 dari 3
