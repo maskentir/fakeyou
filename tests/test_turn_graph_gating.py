@@ -55,6 +55,7 @@ POLICY_FIELDS = {
     "action_only",
     "logistics_check",
     "state_question",
+    "owner_claim",
 }
 
 

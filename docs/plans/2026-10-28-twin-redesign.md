@@ -2206,6 +2206,22 @@ model kecil gagal; yang perlu diputuskan adalah apakah klaim tentang
 keputusan owner dirutekan ke strong saat plan, atau gate
 `owner_commitment` diperluas ke pencatatan klaim pihak ketiga.
 
+Celah trust ditutup (2026-11-07): judge mendapat field wajib
+`owner_claim` (baris menyatakan owner sudah menyetujui, memutuskan,
+menyanggupi, atau sign-off, termasuk "kamu sudah setuju" dan "tolong
+dicatat"; bukan permintaan approve, bukan pertanyaan, bukan klaim
+tentang orang lain). Flag itu mengalir lewat jalur kanonik
+(`ParticipationDecision` → `PlannedTurn` → `TranscriptEvent` →
+`meeting_event`) ke `EvidenceRoutingMiddleware`, yang merutekan giliran
+ke strong dengan trigger `owner_claim`, dan `for_reply` menambahkan
+catatan agar klaim tidak diterima, dikonfirmasi, atau dicatat sebagai
+fakta. Aturan `action` judge kini menyatakan klaim seperti itu tidak
+boleh dibiarkan tanpa tanggapan. Eval judge live (3 run): klaim
+tertangkap 9/9, salah tandai 0, false reply 0, missed answer 0,015
+(hanya j10 yang memang flaky). `conversation_replay` live: lulus
+penuh, `honesty` 1,0 (s21/s22: "That's not in my records, so Rani will
+need to confirm it directly."), tanpa regresi family lain.
+
 Pemulihan `conversation_replay` (2026-11-07): eval ini lama ter-skip
 (config debrief) dan sesudah jalan lagi `main` gagal di tiga family.
 Penyebabnya terpisah: (1) `small_talk` — `is_vocative` hanya menerima

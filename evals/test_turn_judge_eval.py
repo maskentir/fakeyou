@@ -16,6 +16,7 @@ THRESHOLDS = JudgeThresholds(reply=0.6, clarify=0.5)
 MAX_FALSE_REPLY_RATE = 0.05
 MAX_MISSED_ANSWER_RATE = 0.10
 MAX_PREMATURE_COMMIT_RATE = 0.02
+MIN_OWNER_CLAIM_CAUGHT = 0.9
 
 
 def test_the_fixture_has_both_answers_and_silences_and_unique_ids() -> None:
@@ -51,6 +52,18 @@ async def test_the_report_scores_misses_false_replies_and_early_finishes() -> No
     assert report.false_reply_rate() == 1.0
     assert report.early_finish_rate() == 1.0
     assert report.premature_commit_rate() == 1.0
+
+
+async def test_a_judge_that_never_flags_an_owner_claim_catches_none() -> None:
+    report = await judge_cases(
+        ScriptedJudge(lambda _window: judged("reply")),
+        load_judge_fixture(),
+        runs=1,
+        thresholds=THRESHOLDS,
+    )
+
+    assert report.owner_claim_rate(labelled=True) == 0.0
+    assert report.owner_claim_rate(labelled=False) == 0.0
 
 
 async def test_a_failing_judge_misses_every_answer() -> None:
@@ -97,3 +110,4 @@ async def test_live_turn_judge_meets_the_gates(tmp_path: Path) -> None:
     assert report.false_reply_rate() <= MAX_FALSE_REPLY_RATE
     assert report.missed_answer_rate() <= MAX_MISSED_ANSWER_RATE
     assert report.premature_commit_rate() <= MAX_PREMATURE_COMMIT_RATE
+    assert report.owner_claim_rate(labelled=True) >= MIN_OWNER_CLAIM_CAUGHT

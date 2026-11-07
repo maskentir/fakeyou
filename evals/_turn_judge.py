@@ -32,6 +32,7 @@ class JudgeCase(BaseModel):
     answer: bool
     finished: bool
     participants: tuple[str, ...] | None = None
+    owner_claim: bool | None = None
 
 
 class JudgeFixture(BaseModel):
@@ -142,6 +143,12 @@ class JudgeReport:
         cut_off = sum(o.answered and o.judgement.finished for o in unfinished if o.judgement)
         return _share(cut_off, len(unfinished))
 
+    def owner_claim_rate(self, *, labelled: bool) -> float:
+        cases = [
+            o for o in self.outcomes if o.case.owner_claim is labelled and o.judgement is not None
+        ]
+        return _share(sum(o.judgement.owner_claim for o in cases if o.judgement), len(cases))
+
     def failures(self) -> list[str]:
         return [f"{o.case.id}/r{o.run}:{o.error}" for o in self.outcomes if o.error is not None]
 
@@ -158,6 +165,8 @@ class JudgeReport:
             "false_reply_rate": self.false_reply_rate(),
             "early_finish_rate": self.early_finish_rate(),
             "premature_commit_rate": self.premature_commit_rate(),
+            "owner_claim_caught": self.owner_claim_rate(labelled=True),
+            "owner_claim_false_flags": self.owner_claim_rate(labelled=False),
             "failures": self.failures(),
             "latency": self.latency(),
             "outcomes": [
@@ -172,6 +181,8 @@ class JudgeReport:
                     "addressee": outcome.judgement.addressee if outcome.judgement else None,
                     "action": outcome.judgement.action if outcome.judgement else None,
                     "confidence": outcome.judgement.confidence if outcome.judgement else None,
+                    "expected_owner_claim": outcome.case.owner_claim,
+                    "owner_claim": outcome.judgement.owner_claim if outcome.judgement else None,
                     "latency_ms": round(outcome.latency_ms, 1),
                     "error": outcome.error,
                 }

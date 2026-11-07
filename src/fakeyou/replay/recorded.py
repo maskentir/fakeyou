@@ -197,6 +197,7 @@ def _unfinished(text: str) -> TurnJudgement:
         addressee="unclear",
         action="stay_silent",
         confidence=0.0,
+        owner_claim=False,
     )
 
 
@@ -209,6 +210,7 @@ def _judgement(verdict: JudgeVerdict | None) -> TurnJudgement:
             addressee="unclear",
             action="stay_silent",
             confidence=0.0,
+            owner_claim=False,
         )
     fields = verdict.fields
     return TurnJudgement.model_validate(
@@ -226,6 +228,7 @@ def _judgement(verdict: JudgeVerdict | None) -> TurnJudgement:
             "evidence": tuple(fields.get("evidence_needs", ())),
             "state_question": fields.get("state_question", "none"),
             "reaction_emoji": fields.get("reaction_emoji"),
+            "owner_claim": bool(fields.get("owner_claim", False)),
         }
     )
 

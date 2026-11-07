@@ -125,7 +125,9 @@ def expected_outcome(scenario: Scenario) -> object:
 @pytest.mark.parametrize("scenario", executable("participation"), ids=lambda item: item.id)
 def test_participation_reaches_the_kernel_outcome(scenario: Scenario) -> None:
     given = scenario.given
-    judgement = TurnJudgement.model_validate(given["judgement"])
+    judgement = TurnJudgement.model_validate(
+        {"owner_claim": False} | cast(dict[str, object], given["judgement"])
+    )
     presence_complete = bool(given.get("target_presence_complete", True))
     decision = decision_of(
         judgement,

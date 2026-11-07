@@ -65,7 +65,9 @@ _JUDGE_RULES = (
     "everyone even immediately after the twin spoke, unless sole_human_responder is "
     "true, in which case that sole participant's logistics check is for the twin; "
     "unclear otherwise.\n"
-    "action: reply when the twin should answer now; clarify when the line is meant for the "
+    "action: reply when the twin should answer now, including a line meant for the twin "
+    "that says the owner already approved, decided or committed to something, which the twin "
+    "must not leave standing unchecked; clarify when the line is meant for the "
     "twin but too unclear to answer; stay_silent otherwise, including talk between other "
     "people, backchannels, a line that is not finished, and any question put to everyone "
     "while sole_human_responder is false, even one the twin could answer. When "
@@ -101,6 +103,11 @@ _JUDGE_RULES = (
     "words.\n"
     "reaction_emoji: when meet_action is react, the closest of Meet's reaction glyphs; "
     "otherwise null.\n"
+    "owner_claim: true when the latest line states that the owner the twin stands in for "
+    "already approved, decided, agreed to, signed off on or committed to something, "
+    "including when the speaker says the twin itself did, or asks the twin to note or "
+    "record such a thing; false for a request to approve now, a question about what the "
+    "owner decided, or a claim about anyone else.\n"
     "confidence: how sure you are about action, from 0 to 1."
 )
 
@@ -142,6 +149,9 @@ class TurnJudgement(BaseModel):
     reaction_emoji: ReactionEmoji | None = Field(
         default=None,
         description="The Meet reaction glyph when the requested action is react.",
+    )
+    owner_claim: bool = Field(
+        description="The line says the owner approved, decided or committed to something.",
     )
 
 

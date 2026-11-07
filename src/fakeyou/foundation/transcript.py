@@ -51,6 +51,7 @@ class TranscriptEvent:
     attention: AttentionContext | None = None
     evidence_needs: tuple[str, ...] = ()
     evidence: Mapping[str, object] = field(default_factory=dict)
+    owner_claim: bool = False
 
 
 @dataclass(frozen=True, slots=True)

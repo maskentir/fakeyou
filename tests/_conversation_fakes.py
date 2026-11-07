@@ -162,6 +162,7 @@ def judged(action: str = "reply", **changes: object) -> TurnJudgement:
         "addressee": "twin" if action != "stay_silent" else "someone_else",
         "action": action,
         "confidence": 0.9,
+        "owner_claim": False,
     }
     return TurnJudgement.model_validate(values | changes)
 
