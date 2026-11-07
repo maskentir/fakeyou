@@ -57,9 +57,10 @@ from fakeyou.conversation.turn_recovery import (
     turn_request_id,
     within_sentence_budget,
 )
+from fakeyou.foundation.language import spoken_language
 from fakeyou.foundation.participation import ParticipationContext
 from fakeyou.foundation.protocols import SupportsAclose
-from fakeyou.foundation.transcript import TranscriptEvent, with_system_notes
+from fakeyou.foundation.transcript import TranscriptEvent, spoken_part, with_system_notes
 from fakeyou.foundation.triggers import ReplyChannel
 from fakeyou.observability.cleanup import close_safely
 from fakeyou.observability.faults import FaultReporter, capture_error
@@ -781,16 +782,15 @@ def plan_for(
     *,
     owner_claim: bool,
 ) -> PlannedTurn:
+    language = spoken_language(spoken_part(event.text)) or reading.language
     if runtime.planning is not None:
         planned = runtime.planning(event, reading, channel)
-        return replace(
-            planned, plan=with_language(planned.plan, reading.language), owner_claim=owner_claim
-        )
+        return replace(planned, plan=with_language(planned.plan, language), owner_claim=owner_claim)
     authorization = authorize(
         intent_of(reading), actor=UNATTRIBUTED, channel=channel, grant=_NO_GRANT
     )
     plan = plan_turn(authorization, channel=channel, plan_id=f"plan-{event.id}")
-    return PlannedTurn(with_language(plan, reading.language), owner_claim=owner_claim)
+    return PlannedTurn(with_language(plan, language), owner_claim=owner_claim)
 
 
 _OUTCOME_NOTES: dict[str, str] = {

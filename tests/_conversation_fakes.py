@@ -14,7 +14,7 @@ from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.session import ConversationError, MeetingAudio
 from fakeyou.conversation.turn_judge import JudgeWindow, TurnJudgement
-from fakeyou.foundation.transcript import TranscriptEvent
+from fakeyou.foundation.transcript import TranscriptEvent, spoken_part
 from fakeyou.foundation.triggers import ReplyChannel
 
 
@@ -145,7 +145,8 @@ class FakeResponder:
             if self.gate is not None and len(self.calls) == 1:
                 await self.gate.wait()
             return SpokenChunk(
-                text="/".join(item.text for item in events), language=DEFAULTS.speech.language
+                text="/".join(spoken_part(item.text) for item in events),
+                language=DEFAULTS.speech.language,
             )
         except asyncio.CancelledError:
             self.cancelled.set()

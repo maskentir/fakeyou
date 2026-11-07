@@ -37,7 +37,7 @@ from fakeyou.conversation.turn_queue import (
 )
 from fakeyou.foundation.participation import ParticipationContext
 from fakeyou.foundation.speakers import UNIDENTIFIED_PARTICIPANT
-from fakeyou.foundation.transcript import TranscriptEvent
+from fakeyou.foundation.transcript import TranscriptEvent, spoken_part
 from fakeyou.memory.persona import PersonaLanguage
 from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.orchestration.persona_prompt import build_persona_prompt
@@ -303,7 +303,7 @@ async def test_policy_answers_to_the_twin_name_without_wake_phrases(
     await loop.actor.receive_final(event("t2", "Budi, when is the demo?"))
     await asyncio.wait_for(loop.actor.wait_idle(), 2)
 
-    assert [call[0].text for call in responder.calls] == ["Rani, when is the demo?"]
+    assert [spoken_part(call[0].text) for call in responder.calls] == ["Rani, when is the demo?"]
     await loop.actor.close()
 
 
@@ -382,7 +382,9 @@ async def test_policy_keeps_barge_in_on_speech_onset(journal: RecordingJournal) 
     assert audio.stops == 1
     await loop.actor.receive_final(event("t1", "Budi, when is the demo?"))
     await asyncio.wait_for(loop.actor.wait_idle(), 2)
-    assert [call[0].text for call in responder.calls] == ["Rani Twin, when is the demo?"]
+    assert [spoken_part(call[0].text) for call in responder.calls] == [
+        "Rani Twin, when is the demo?"
+    ]
     await loop.actor.close()
 
 
@@ -400,7 +402,9 @@ async def test_policy_answers_vocative_and_ignores_quote_mention(journal: Record
         event("t2", "He said Rani Twin agrees", participant_id="spaces/x/devices/9")
     )
     await asyncio.wait_for(loop.actor.wait_idle(), 2)
-    assert [call[0].text for call in responder.calls] == ["Rani Twin, when is the demo?"]
+    assert [spoken_part(call[0].text) for call in responder.calls] == [
+        "Rani Twin, when is the demo?"
+    ]
     assert audio.spoken == ["Rani Twin, when is the demo?"]
     actions = [row["action"] for row in journal.events("policy_decided")]
     assert actions == ["reply", "silent"]

@@ -247,10 +247,18 @@ async def test_the_state_answer_follows_the_language_of_the_turn() -> None:
     assert speaker.spoken == ["Besides me, there are 2 people here."]
 
 
-def test_the_plan_carries_the_declared_language() -> None:
+def test_the_plan_answers_in_the_language_the_line_was_spoken_in() -> None:
     reading = Reading("speak", "judge_reply", language="id")
 
     planned = plan_for(runtime(), event("How many are here?"), reading, "speech", owner_claim=False)
+
+    assert planned.plan.language == "en"
+
+
+def test_the_judge_s_language_decides_when_the_line_does_not() -> None:
+    reading = Reading("speak", "judge_reply", language="id")
+
+    planned = plan_for(runtime(), event("Harun!"), reading, "speech", owner_claim=False)
 
     assert planned.plan.language == "id"
 

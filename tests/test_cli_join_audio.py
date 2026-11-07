@@ -19,7 +19,7 @@ from fakeyou.conversation.conversation import (
 from fakeyou.conversation.meeting_turns import MeetingTurns
 from fakeyou.conversation.middleware import SpeakerAttributionMiddleware
 from fakeyou.conversation.session import SessionResult
-from fakeyou.foundation.transcript import TranscriptUpdate
+from fakeyou.foundation.transcript import TranscriptUpdate, spoken_part
 from fakeyou.perception.context import PERCEPTION_GUIDANCE, PerceptionContextMiddleware
 from fakeyou.persistence.record import (
     MeetingRecord,
@@ -128,7 +128,9 @@ async def test_join_audio_transcript_reaches_conversation(
         "Settings Twin, hello."
     ]
     request, config = agent_calls[0]
-    assert [message.text for message in request["messages"]] == ["Settings Twin, hello."]
+    assert [spoken_part(message.text) for message in request["messages"]] == [
+        "Settings Twin, hello."
+    ]
     assert "configurable" not in config
     rows = [
         json.loads(line) for line in capsys.readouterr().err.splitlines() if line.startswith('{"')

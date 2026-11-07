@@ -240,7 +240,7 @@ def test_a_recorded_state_question_is_answered_from_the_kernel_without_the_model
         for entry in load_meeting_record(tmp_path / "record.jsonl")
         if isinstance(entry, TwinSpeechEntry)
     ]
-    assert spoken == [render(Unknown("participant_count", "stale_source"), "id")]
+    assert spoken == [render(Unknown("participant_count", "stale_source"), "en")]
 
 
 @pytest.mark.skipif(not (RUNTIME / "journals/live-oue-4.jsonl").exists(), reason="no oue-4 data")
