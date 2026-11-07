@@ -1,0 +1,10 @@
+{
+  "cross_language": {
+    "question": "kapan beta launch Orchid?",
+    "fact": "The Orchid beta launch is planned for 14 October 2026"
+  },
+  "function_words_only": {
+    "question": "kamu bisa dengar saya?",
+    "fact": "Rani can hear the room"
+  }
+}

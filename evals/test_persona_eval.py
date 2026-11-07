@@ -16,7 +16,7 @@ from evals._replay import session_memory
 from evals._trust import case_storage
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.agent import create_meeting_agent
-from fakeyou.memory.memory import create_memory_prefetch_middleware
+from fakeyou.memory.memory import RecallScope, create_memory_prefetch_middleware
 from fakeyou.memory.persona import PersonaProfile
 from fakeyou.orchestration.persona_prompt import build_persona_prompt
 from fakeyou.orchestration.providers import create_chat_model
@@ -50,7 +50,10 @@ async def answer_with_memory(
         model,
         persona=build_persona_prompt(EXAMPLE_PROFILE),
         middleware=[
-            create_memory_prefetch_middleware(memory, group_id=EXAMPLE_PROFILE.memory_group)
+            create_memory_prefetch_middleware(
+                memory,
+                scope=RecallScope(EXAMPLE_PROFILE.memory_group, (EXAMPLE_PROFILE.display_name,)),
+            )
         ],
         checkpointer=InMemorySaver(),
     )

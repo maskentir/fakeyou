@@ -17,6 +17,7 @@ from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import RecallSettings
 from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.conversation.session import SessionConfig
+from fakeyou.foundation.transcript import with_system_notes
 from fakeyou.memory.evidence import (
     CURRENT_FACTS_FILTER,
     PREFETCH_EMPTY_EVIDENCE,
@@ -25,6 +26,7 @@ from fakeyou.memory.evidence import (
 from fakeyou.memory.memory import (
     PREFETCH_EVIDENCE_PREFIX,
     PREFETCH_RETAINED_MAX_CHARS,
+    RecallScope,
     create_memory_prefetch_middleware,
     create_memory_tools,
 )
@@ -97,7 +99,10 @@ def prefetch_agent(
         persona="PERSONA",
         middleware=[
             create_memory_prefetch_middleware(
-                memory, group_id=GROUP, recall=settings, diag=Diagnostics(faults=cast(Any, faults))
+                memory,
+                scope=RecallScope(GROUP),
+                recall=settings,
+                diag=Diagnostics(faults=cast(Any, faults)),
             )
         ],
     )
@@ -235,8 +240,8 @@ async def test_retained_follow_up_evidence_is_trimmed_to_size_budget(
     memory = stored_memory(monkeypatch, facts=facts, episodes={fact: ["e1"] for fact in facts})
     agent, model = prefetch_agent(memory, [AIMessage(content="One."), AIMessage(content="Two.")])
 
-    await turn(agent, participant("First?", "t1"))
-    await turn(agent, participant("Second?", "t2"))
+    await turn(agent, participant("What is the Orchid schedule?", "t1"))
+    await turn(agent, participant("And the Orchid schedule after that?", "t2"))
 
     kept, fresh = evidence_messages(model_calls(model)[1])
     assert len(fresh.text) > PREFETCH_RETAINED_MAX_CHARS
@@ -447,7 +452,9 @@ async def test_fallback_retry_reuses_the_prefetched_evidence_of_the_turn(
         persona="PERSONA",
         middleware=[
             ModelFallbackMiddleware(fallback),
-            create_memory_prefetch_middleware(memory, group_id=GROUP, recall=RecallSettings()),
+            create_memory_prefetch_middleware(
+                memory, scope=RecallScope(GROUP), recall=RecallSettings()
+            ),
         ],
     )
 
@@ -547,7 +554,7 @@ async def test_prefetch_journal_rows_carry_transcript_and_outcome(
         persona="PERSONA",
         middleware=[
             create_memory_prefetch_middleware(
-                memory, group_id=GROUP, diag=Diagnostics(journal=journal)
+                memory, scope=RecallScope(GROUP), diag=Diagnostics(journal=journal)
             )
         ],
     )
@@ -574,7 +581,9 @@ async def test_cancelled_prefetch_closes_its_journal_request_without_a_fault(
         persona="PERSONA",
         middleware=[
             create_memory_prefetch_middleware(
-                memory, group_id=GROUP, diag=Diagnostics(faults=cast(Any, faults), journal=journal)
+                memory,
+                scope=RecallScope(GROUP),
+                diag=Diagnostics(faults=cast(Any, faults), journal=journal),
             )
         ],
     )
@@ -614,3 +623,36 @@ async def test_prefetch_bounds_hanging_episode_lookup_with_single_timeout(
     [evidence] = evidence_messages(model_calls(model)[0])
     assert evidence.content == PREFETCH_UNAVAILABLE_EVIDENCE
     assert evidence.additional_kwargs["memory_prefetch"]["outcome"] == "unavailable"
+
+
+async def test_prefetch_keeps_only_memory_that_shares_the_question_s_subject(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    facts = ["Project Zebra was rescheduled to 14 November 2026"]
+    memory = stored_memory(monkeypatch, facts=facts, episodes={facts[0]: ["e1"]})
+    agent, model = prefetch_agent(memory, [AIMessage(content="Good."), AIMessage(content="Yes.")])
+
+    await turn(agent, participant("Hi, how is your day going?", "t1"))
+    await turn(agent, participant("When was Project Zebra rescheduled?", "t2"))
+
+    first, second = model_calls(model)
+    [unrelated] = evidence_messages(first)
+    assert unrelated.content == PREFETCH_EMPTY_EVIDENCE
+    assert unrelated.additional_kwargs["memory_prefetch"]["outcome"] == "empty"
+    [related] = [item for item in evidence_messages(second) if item.id == "t2-memory"]
+    assert related.additional_kwargs["memory_prefetch"]["outcome"] == "found"
+
+
+async def test_plan_notes_on_the_line_do_not_make_memory_relevant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    facts = ["Unidentified participant said the English answer was ready"]
+    memory = stored_memory(monkeypatch, facts=facts, episodes={facts[0]: ["e1"]})
+    agent, model = prefetch_agent(memory, [AIMessage(content="Hi.")])
+    noted = with_system_notes("Hi there!", ["The participant spoke English; answer in English."])
+
+    await turn(agent, participant(noted, "t1"))
+
+    [evidence] = evidence_messages(model_calls(model)[0])
+    assert evidence.additional_kwargs["memory_prefetch"]["outcome"] == "empty"
+    assert "System" not in evidence.additional_kwargs["memory_prefetch"]["query"]
