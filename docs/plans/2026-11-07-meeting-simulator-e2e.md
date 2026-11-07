@@ -155,6 +155,19 @@ regresi pertama di katalog.
 - **S1:** Fake Meet minimal — join, admitted, roster dua peserta, satu
   ucapan WAV → twin menjawab; penilai deterministik membaca jurnal. Bukti
   bahwa worker utuh berjalan tanpa Meet asli.
+  S1, implementasi (2026-11-07): `evals/_meeting_simulator.py`
+  (`MeetingSimulator`, halaman Fake Meet, route sync, `say`) dan
+  `evals/test_meeting_simulator_eval.py` (marker `simulator`). Twin join →
+  lobby → di-admit lewat sync protokol (status 3 → 1) → mendengar
+  "Rani Twin, when does the Orchid beta launch?" sebagai WAV di
+  `meeting_audio` → Muse STT → judge → model → TTS → menjawab
+  "14 October 2026" → keluar `duration_limit_reached`. 3 dari 3 run lulus
+  di image `test` (±105 dtk per run). Jebakan yang ditemukan dan
+  ditangani: route Playwright dicocokkan dari yang terakhir didaftarkan
+  (route sync harus didaftarkan sesudah route halaman), handler route
+  harus closure biasa (Playwright memasang atribut pada pemilik bound
+  method; dataclass `slots` gagal), menunggu harus memantau task sesi
+  agar alasan kegagalan sesi muncul, dan pemutaran audio dibatasi waktu.
 - **S2:** chat masuk/keluar dan aksi DOM dengan verifikasi efek.
 - **S3:** layar dan kamera lewat track canvas, vision live atau
   `FakeVisionModel`.

@@ -158,6 +158,7 @@ markers = [
     "live: uses external model APIs or a running graph database",
     "container: runs the built meeting worker image through Docker Compose",
     "postgres: uses the real Postgres named by TEST_DATABASE_URL",
+    "simulator: runs the whole worker against the fake Meet page in the audio test image",
 ]
 
 [tool.deptry]

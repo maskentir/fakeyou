@@ -255,6 +255,19 @@ uv run --no-sync lint-imports                 # layer contracts
 uv run --no-sync deptry .                    # dependency sanity
 ```
 
+The meeting simulator runs the whole worker — browser, PulseAudio, speech to text, the
+judge, the reply model, text to speech — against a fake Meet page instead of a live
+meeting. It plays each participant through the same boundaries a real call uses, then
+checks the twin's journal. It needs the audio test image and the API keys in `.env`:
+
+```sh
+docker build -f docker/audio/Dockerfile --target test -t fakeyou-test:local .
+docker run --rm -v "$PWD/tests:/workspace/tests:ro" -v "$PWD/evals:/workspace/evals:ro" \
+  -v "$PWD/src:/workspace/src:ro" -v "$PWD/conftest.py:/workspace/conftest.py:ro" \
+  -v "$PWD/pyproject.toml:/workspace/pyproject.toml:ro" -v "$PWD/.env:/workspace/.env:ro" \
+  fakeyou-test:local uv run --no-sync pytest -m simulator evals/
+```
+
 Meta-tests enforce the conventions mechanically rather than by review: no comments
 or docstrings in source, no Indonesian in source files, every test file named after
 the module it covers, every error code constructed somewhere, `print` confined to
