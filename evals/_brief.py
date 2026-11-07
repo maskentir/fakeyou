@@ -139,7 +139,9 @@ class BriefScore(TrustScore):
         return sum(int(turn.get("model_calls", 0)) for turn in self.turns)
 
     def recall_calls(self) -> int:
-        return sum(1 for turn in self.turns if turn.get("memory_prefetch"))
+        return sum(
+            1 for turn in self.turns if turn.get("memory_searches") or turn.get("memory_prefetch")
+        )
 
 
 def load_brief_fixture(path: Path = FIXTURE) -> dict[str, Any]:
@@ -232,6 +234,7 @@ async def replay_briefs(
                     for index, turn in enumerate(case["turns"]):
                         seen_tools = len(trajectory)
                         seen_prefetch = len(counter.prefetch)
+                        seen_searches = len(memory.searched) if memory is not None else 0
                         seen_usage = len(counter.usage)
                         seen_calls = counter.calls
                         event = TranscriptEvent(
@@ -274,6 +277,11 @@ async def replay_briefs(
                                 ),
                                 "tool_trajectory": calls,
                                 "memory_prefetch": counter.prefetch[seen_prefetch:],
+                                "memory_searches": [
+                                    entry["query"] for entry in memory.searched[seen_searches:]
+                                ]
+                                if memory is not None
+                                else [],
                                 "token_usage": counter.usage[seen_usage:],
                                 "model_calls": counter.calls - seen_calls,
                                 "latency_seconds": latency,

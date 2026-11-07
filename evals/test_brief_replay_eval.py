@@ -123,7 +123,8 @@ async def test_contract_brief_replay_captures_36_rated_pairs_and_writes_artifact
         assert turn["spoken"] == turn["reply"]
         assert turn["tool_trajectory"] == []
         if case["needs_recall"]:
-            assert turn["memory_prefetch"][-1]["outcome"] == "empty"
+            assert turn["memory_searches"]
+            assert turn["memory_prefetch"] == []
     for turn in score.rated_turns():
         case = by_id[turn["case_id"]]
         assert turn["reply"] == case["turns"][-1]["contract_reply"]
@@ -284,7 +285,7 @@ async def test_contract_brief_prefetch_follows_scope() -> None:
             case["memory_requested"]
         )
         assert turn["model_calls"] == 1
-        assert bool(turn["memory_prefetch"]) is memory
+        assert bool(turn["memory_searches"]) is memory
         assert turn["tool_trajectory"] == []
     for turn in score.rated_turns():
         assert all(turn["aids"][name] for name in AID_CHECKS)

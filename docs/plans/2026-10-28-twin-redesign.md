@@ -2686,7 +2686,23 @@ model, listener, dan retensi identik dengan sebelumnya — supaya basa-basi
 tidak dijawab "tidak ada di catatan saya". B9b memulai spekulasi tepat saat
 final tiba, tanpa menunggu judgement apa pun, karena rencananya tidak lagi
 bergantung pada judge; verdict yang meminta look, aksi, chat, keluar,
-`owner_claim`, atau memory yang tidak ditemukan spekulasi membuangnya. Untuk
+`owner_claim`, atau memory yang tidak ditemukan spekulasi membuangnya.
+
+B9b-1 dan B9b-2 (2026-11-08): request jawaban kini tidak bergantung pada
+verdict. (1) Bahasa plan dideteksi dari baris itu sendiri lewat hitungan
+kata fungsi EN/ID (`foundation/language.py`); bahasa judge hanya dipakai
+bila baris tidak jelas (sapaan pendek). Di 275 baris live detektor
+memutuskan 96%, dan pada 10 baris yang ia sebut Inggris sementara twin
+menjawab Indonesia, detektornya yang benar (bug #131). `conversation_replay`
+live lulus penuh. (2) Satu aturan memory untuk semua giliran: fakta relevan
+disisipkan; catatan "memory unavailable" selalu disisipkan bila recall
+gagal (fakta tentang recall, bukan rencana judge, dan aman untuk basa-basi);
+catatan "kosong" tidak pernah disisipkan, kecuali evidence dari giliran
+sebelumnya tetap dibawa untuk pertanyaan lanjutan. `memory_planned`
+dihapus. Eval trust/persona/brief dibandingkan dengan `main`:
+`trust_replay` lulus di keduanya, `brief_replay` gagal identik di keduanya
+(kegagalan lama, tidak terkait), persona lulus. Tersisa untuk B9b-3:
+spekulasi saat final dengan pemeriksaan veto. Untuk
 giliran memory, spekulasi B9b tetap menurunkan rantai dari ±0,6 + 1,1 +
 2,7 ≈ 4,4 dtk menjadi ±0,6 + 2,7 ≈ 3,3 dtk; gate p50 ≤ 2,0 dtk berlaku
 untuk giliran tanpa memory relevan.

@@ -326,6 +326,7 @@ async def replay_trust(
                     for index, turn in enumerate(case["turns"]):
                         seen_tools = len(trajectory)
                         seen_prefetch = len(counter.prefetch)
+                        seen_searches = len(memory.searched)
                         seen_usage = len(counter.usage)
                         seen_calls = counter.calls
                         event = TranscriptEvent(
@@ -352,6 +353,8 @@ async def replay_trust(
                         evidence = [
                             call for call in calls if call["name"] == "recall_meeting_context"
                         ]
+                        searches = [entry["query"] for entry in memory.searched[seen_searches:]]
+                        recalled = bool(evidence or searches or counter.prefetch[seen_prefetch:])
                         score.latencies.append(latency)
                         score.replies.append(reply)
                         rated = index == len(case["turns"]) - 1
@@ -371,16 +374,17 @@ async def replay_trust(
                                 ),
                                 "tool_trajectory": calls,
                                 "memory_prefetch": counter.prefetch[seen_prefetch:],
+                                "memory_searches": searches,
                                 "token_usage": counter.usage[seen_usage:],
                                 "model_calls": counter.calls - seen_calls,
-                                "recall_called": bool(evidence or counter.prefetch[seen_prefetch:]),
+                                "recall_called": recalled,
                                 "recall_evidence": evidence,
                                 "latency_seconds": latency,
                                 "exception": error,
                                 "aids": score_aids(
                                     case,
                                     reply,
-                                    recalled=bool(evidence or counter.prefetch[seen_prefetch:]),
+                                    recalled=recalled,
                                 )
                                 if rated
                                 else {},
