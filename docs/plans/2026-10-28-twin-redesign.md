@@ -2001,6 +2001,48 @@ model strong-nya tetap lambat. Audio pertama yang diharapkan:
 partisipasi + plan + sintesis opener (±1,6 dtk pola live-12),
 diukur pada validasi live berikutnya.
 
+B6-1, fix (2026-11-07, #115): opener giliran early commit menunggu
+early turn itu settle (diverifikasi final atau ditarik); giliran yang
+ditarik tidak mengucapkan opener maupun cue (`early_withdrawn`).
+
+Temuan B6-1 live (2026-11-07, jurnal `b6-live-1`, 6 giliran dengan
+playback): final → `policy_decided` p50 0,90 dtk, final → playback
+jawaban p50 3,98 dtk; opener berbunyi ±10 mdtk sesudah
+`policy_decided`, jadi audio pertama yang didengar user kini ≈ final +
+0,9 dtk + sintesis opener. Sisa terbesar tetap satu panggilan `strong`
+p50 2,85 dtk dengan prompt 14,9–17,7 ribu karakter yang **tumbuh
+sepanjang sesi**, dipakai untuk semua giliran (route `strong` 10/10).
+
+**Premis B6-3 gugur.** Di 4 dari 5 giliran yang tidak berebut,
+`policy_decided` jatuh tepat ketika task judge interim terakhir selesai
+(mis. interim mulai −0,54, durasi 1,26 → +0,72; keputusan +0,72),
+artinya `_participate` sudah memakai ulang judgement interim lewat
+`JudgeCache` (kunci window mengabaikan label pembicara). Sisa
+final → keputusan 0,7–1,0 dtk adalah ekor judge interim yang baru
+dimulai saat revisi interim terakhir, bukan panggilan baru. Yang
+ditemukan justru **satu panggilan judge ekstra per final** (9/9 final,
+1,1–1,5 dtk, prompt judge yang sama, +136–175 karakter terhadap
+interim terakhir) yang dimulai ±2 mdtk sesudah `early_turn_declined
+final_first` dan hasilnya tidak dipakai keputusan. Probe lokal dengan
+`TurnFeed` + early commit + history nyata hanya menghasilkan satu
+panggilan, jadi pemicunya kondisi live yang belum direproduksi
+(presence, prosodi, atau kernel). Jurnal belum bisa membedakan
+konsumen judge.
+
+B6-0b, implementasi (2026-11-07): setiap `JudgeWindow` membawa
+`purpose` (`interim`, `early_hold`, `barge_in`, `final`, `chat`), wajib
+diisi pemanggil `WindowSource`; `ModelTurnJudge` meneruskan
+`judge_purpose`, `judge_key` (digest kunci cache) dan `transcript_id`
+sebagai metadata LangChain sehingga `model_input_recorded` mencatat
+siapa yang memulai panggilan dan apakah kuncinya sama dengan panggilan
+lain. `purpose` tidak ikut kunci cache, jadi deduplikasi tidak berubah.
+
+Urutan B6 direvisi: (1) sesi live berikutnya mengidentifikasi panggilan
+ekstra dari `judge_purpose`/`judge_key` lalu menghapus sumbernya;
+(2) **B6-2** (tier model saat plan) menjadi irisan latensi utama karena
+`strong` 2,85 dtk adalah ±70% dari final → jawaban; (3) B6-3 dihapus
+dari urutan.
+
 ### B7: Perception layar yang murah
 
 - Frame dibaca setelah layar settle. OCR lokal dan hash teks menentukan

@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from fakeyou.conversation.meeting_messages import MeetingHistory, spoken_by
 from fakeyou.foundation.participation import mentions_whole_phrase
 from fakeyou.foundation.transcript import TranscriptEvent
+from fakeyou.observability.model_inputs import digest
 from fakeyou.persistence.record import TranscriptEntry, TwinSpeechEntry
 from fakeyou.session.identity import PresenceFact
 
@@ -149,6 +150,9 @@ class JudgeLine:
     twin: bool = False
 
 
+type JudgePurpose = Literal["interim", "early_hold", "barge_in", "final", "chat"]
+
+
 @dataclass(frozen=True, slots=True)
 class JudgeWindow:
     earlier: tuple[JudgeLine, ...]
@@ -157,6 +161,7 @@ class JudgeWindow:
     names_twin: bool = False
     presence: PresenceFact | None = None
     transcript_id: str | None = None
+    purpose: JudgePurpose = "interim"
 
     @property
     def sole_human_responder(self) -> bool:
@@ -213,7 +218,9 @@ class WindowSource:
     def _presence(self) -> PresenceFact | None:
         return self.presence() if self.presence is not None else None
 
-    def for_final(self, event: TranscriptEvent, *, twin_speaking: bool) -> JudgeWindow:
+    def for_final(
+        self, event: TranscriptEvent, *, twin_speaking: bool, purpose: JudgePurpose
+    ) -> JudgeWindow:
         earlier = _spoken_lines(self.history, skip=event.id)[-self.window_lines :]
         latest = JudgeLine(speaker=spoken_by(event), text=event.text)
         return JudgeWindow(
@@ -223,9 +230,10 @@ class WindowSource:
             names_twin=self._names_twin(event.text),
             presence=self._presence(),
             transcript_id=event.id,
+            purpose=purpose,
         )
 
-    def for_interim(self, text: str, *, twin_speaking: bool) -> JudgeWindow:
+    def for_interim(self, text: str, *, twin_speaking: bool, purpose: JudgePurpose) -> JudgeWindow:
         earlier = _spoken_lines(self.history, skip=None)[-self.window_lines :]
         return JudgeWindow(
             tuple(earlier),
@@ -233,6 +241,7 @@ class WindowSource:
             twin_speaking,
             names_twin=self._names_twin(text),
             presence=self._presence(),
+            purpose=purpose,
         )
 
 
@@ -310,9 +319,17 @@ class ModelTurnJudge:
         ]
         async with self._slots:
             result = await asyncio.wait_for(
-                self._structured.ainvoke(messages), timeout=self._timeout_seconds
+                self._structured.ainvoke(messages, config={"metadata": _call_metadata(window)}),
+                timeout=self._timeout_seconds,
             )
         return TurnJudgement.model_validate(result)
+
+
+def _call_metadata(window: JudgeWindow) -> dict[str, str]:
+    metadata = {"judge_purpose": window.purpose, "judge_key": digest(repr(window.key))}
+    if window.transcript_id is not None:
+        metadata["transcript_id"] = window.transcript_id
+    return metadata
 
 
 class JudgeCache:

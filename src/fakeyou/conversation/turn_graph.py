@@ -477,7 +477,9 @@ def _prefetch_judgement(state: TurnGraphState, runtime: TurnContext) -> None:
         return
     window = state.get("judge_window")
     if window is None:
-        window = judging.windows.for_interim(text, twin_speaking=runtime.speaker.is_speaking)
+        window = judging.windows.for_interim(
+            text, twin_speaking=runtime.speaker.is_speaking, purpose="interim"
+        )
     judging.cache.prefetch(window)
 
 
@@ -495,7 +497,7 @@ async def _participate(
         raise ValueError("a final turn carries its transcript event")
     judging = runtime.judging
     window = (
-        judging.windows.for_final(event, twin_speaking=runtime.speaker.is_speaking)
+        judging.windows.for_final(event, twin_speaking=runtime.speaker.is_speaking, purpose="final")
         if judging is not None
         else None
     )
@@ -1165,7 +1167,9 @@ async def _chat_reading(runtime: TurnContext, event: TranscriptEvent) -> Reading
     judging = runtime.judging
     if judging is None:
         return Reading("speak", "chat_named")
-    window = judging.windows.for_final(event, twin_speaking=runtime.speaker.is_speaking)
+    window = judging.windows.for_final(
+        event, twin_speaking=runtime.speaker.is_speaking, purpose="chat"
+    )
     judgement, _error = await capture_error(partial(judging.cache.judgement, window))
     if judgement is None:
         return Reading("speak", "chat_named")
