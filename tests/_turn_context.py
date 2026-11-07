@@ -76,6 +76,10 @@ class TurnTestContext:
         assert self._recovery is not None
         return self._recovery
 
+    def early_gate(self, transcript_id: str) -> None:
+        del transcript_id
+        return None
+
     @property
     def note_spoken(self) -> Callable[[str], None]:
         return self.notes.append

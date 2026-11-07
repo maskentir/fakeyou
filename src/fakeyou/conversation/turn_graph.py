@@ -195,6 +195,14 @@ class SentenceLimits:
     language: str
 
 
+class EarlyGate(Protocol):
+    @property
+    def settled(self) -> asyncio.Event: ...
+
+    @property
+    def resumed(self) -> bool: ...
+
+
 class TurnContext(Protocol):
     @property
     def journal(self) -> JournalSink: ...
@@ -255,6 +263,8 @@ class TurnContext(Protocol):
 
     @property
     def cue(self) -> ThinkingCue | None: ...
+
+    def early_gate(self, transcript_id: str) -> EarlyGate | None: ...
 
     @property
     def faults(self) -> FaultReporter | None: ...
@@ -969,13 +979,14 @@ async def _speak_reply(
     streamed = runtime.whole_turn is None and runtime.whole is None
     sink = TurnSink(runtime, scope, final.id, generations, streamed=streamed)
     cue_state = CueState()
+    gate = runtime.early_gate(final.id)
     cue_turn = CueTurn(
         final.id,
-        partial(_cue_blocker, runtime, sink, generations, cue_state),
+        partial(_cue_blocker, runtime, sink, generations, cue_state, gate),
         state=cue_state,
         source=final.source,
     )
-    opener = _start_opener(runtime, cue_turn) if reply_event.evidence_needs else None
+    opener = _start_opener(runtime, cue_turn, gate) if reply_event.evidence_needs else None
     cue = _start_cue(runtime, cue_turn)
     try:
         reply_batch = (*batch[:-1], await with_evidence(runtime, final.text, reply_event))
@@ -1016,11 +1027,25 @@ def _start_cue(runtime: TurnContext, turn: CueTurn) -> asyncio.Task[None] | None
     return asyncio.create_task(cue_when_slow(cue, speaker, runtime.journal, turn))
 
 
-def _start_opener(runtime: TurnContext, turn: CueTurn) -> asyncio.Task[None] | None:
+def _start_opener(
+    runtime: TurnContext, turn: CueTurn, gate: EarlyGate | None
+) -> asyncio.Task[None] | None:
     cue, speaker = runtime.cue, runtime.speaker
     if cue is None or runtime.shadow or not isinstance(speaker, CueSpeaker):
         return None
-    return asyncio.create_task(speak_opener(cue, speaker, runtime.journal, turn))
+    return asyncio.create_task(_speak_gated_opener(cue, speaker, runtime.journal, turn, gate))
+
+
+async def _speak_gated_opener(
+    cue: ThinkingCue,
+    speaker: CueSpeaker,
+    journal: JournalSink,
+    turn: CueTurn,
+    gate: EarlyGate | None,
+) -> None:
+    if gate is not None:
+        await gate.settled.wait()
+    await speak_opener(cue, speaker, journal, turn)
 
 
 async def _settle_cue(task: asyncio.Task[None] | None) -> None:
@@ -1031,13 +1056,19 @@ async def _settle_cue(task: asyncio.Task[None] | None) -> None:
 
 
 def _cue_blocker(
-    runtime: TurnContext, sink: TurnSink, generations: tuple[int, int], state: CueState
+    runtime: TurnContext,
+    sink: TurnSink,
+    generations: tuple[int, int],
+    state: CueState,
+    gate: EarlyGate | None,
 ) -> str | None:
     generation, floor_generation = generations
     if sink.started:
         return "answered"
     if state.played:
         return "opener_played"
+    if gate is not None and gate.resumed:
+        return "early_withdrawn"
     if _paused(runtime) or not _bound(runtime):
         return "paused"
     if not _turn_current(runtime, generation, floor_generation):

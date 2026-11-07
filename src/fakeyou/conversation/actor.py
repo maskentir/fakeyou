@@ -2,7 +2,7 @@ import asyncio
 import json
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from functools import partial
 from typing import Any, Literal, Self
@@ -192,6 +192,7 @@ class _EarlyCommit:
     event: TranscriptEvent
     text: str
     resumed: bool = False
+    settled: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -289,6 +290,7 @@ class FloorActor:
         self._early_timer: asyncio.Task[None] | None = None
         self._early_starting: asyncio.Task[None] | None = None
         self._early_commit: _EarlyCommit | None = None
+        self._early_gates: dict[str, _EarlyCommit] = {}
         self._early_withdrawn: set[str] = set()
         self._early_declined: tuple[int, tuple[str, ...]] | None = None
         self._interim_window: JudgeWindow | None = None
@@ -737,6 +739,7 @@ class FloorActor:
             if task is not None
         ]
         self._early_timer = self._early_starting = None
+        self._early_gates.clear()
         self._duck_timer = None
         self._freeze_timer = None
         for early_task in early_tasks:
@@ -1021,24 +1024,27 @@ class FloorActor:
         self._cancel_early_hold(declined="final_first", words=words)
         if commit is None:
             return False
-        if (
-            not commit.resumed
-            and says_more(final.text, commit.text)
-            and (len(_early_words(final.text)) - len(_early_words(commit.text)))
-            >= _EXTRA_WORDS_FOR_MORE
-        ):
-            await self._cancel_early(commit, reason="final_says_more")
-        if commit.resumed:
-            return False
-        self._journal.record(
-            "early_turn_verified",
-            source="agent",
-            transcript_id=final.id,
-            early_transcript_id=commit.event.id,
-            early_words=len(_early_words(commit.text)),
-            final_words=len(_early_words(final.text)),
-        )
-        return True
+        try:
+            if (
+                not commit.resumed
+                and says_more(final.text, commit.text)
+                and (len(_early_words(final.text)) - len(_early_words(commit.text)))
+                >= _EXTRA_WORDS_FOR_MORE
+            ):
+                await self._cancel_early(commit, reason="final_says_more")
+            if commit.resumed:
+                return False
+            self._journal.record(
+                "early_turn_verified",
+                source="agent",
+                transcript_id=final.id,
+                early_transcript_id=commit.event.id,
+                early_words=len(_early_words(commit.text)),
+                final_words=len(_early_words(final.text)),
+            )
+            return True
+        finally:
+            commit.settled.set()
 
     def _cancel_early_hold(self, *, declined: str | None = None, words: int | None = None) -> None:
         self._early_version += 1
@@ -1081,7 +1087,9 @@ class FloorActor:
         if version != self._early_version or self._early_commit is not None:
             return
         event = options.build_event(text)
-        self._early_commit = _EarlyCommit(event, text)
+        commit = _EarlyCommit(event, text)
+        self._early_commit = commit
+        self._early_gates[event.id] = commit
         self._early_starting, self._early_timer = self._early_timer, None
         self._journal.record(
             "early_turn_started",
@@ -1095,8 +1103,16 @@ class FloorActor:
         else:
             await self.receive_final(event)
 
+    @property
+    def early_commit(self) -> _EarlyCommit | None:
+        return self._early_commit
+
+    def early_gate(self, transcript_id: str) -> _EarlyCommit | None:
+        return self._early_gates.pop(transcript_id, None)
+
     async def _cancel_early(self, commit: _EarlyCommit, *, reason: str) -> None:
         commit.resumed = True
+        commit.settled.set()
         self._journal.record(
             "early_turn_cancelled",
             source="agent",
