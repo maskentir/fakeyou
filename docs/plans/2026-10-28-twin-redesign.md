@@ -2298,6 +2298,73 @@ Risiko: biaya model untuk baris vocative yang ternyata tidak dijawab,
 dan tool call (memory) yang sudah jalan untuk giliran yang dibatalkan —
 keduanya read-only, jadi pembatalan aman.
 
+Revisi 2 desain B6-4 (2026-11-08, sebelum implementasi): **draft di
+final, dilepas saat di-admit**, menggantikan prefetch di VAD stop.
+Dasarnya pengukuran dari journal simulator dengan model live (reply
+`gemini-3.1-flash-lite`, 9 giliran dari S1, S3, S4): final STT tiba
+0,74–1,13 dtk sesudah VAD stop; keputusan judge 1,6–2,7 dtk, yaitu
+±1,2 dtk **sesudah** final; audio jawaban 3,0–3,7 dtk. Judge harus
+dipanggil ulang karena pada VAD stop interim STT belum lengkap: kunci
+judge S1 berturut-turut "…the Orchid", "…the Orchid beta" (dinilai saat
+VAD stop) lalu "…the Orchid beta launch?" yang baru datang bersama
+final. Akibatnya prefetch jawaban di VAD stop (desain sebelumnya) akan
+menjawab pertanyaan yang belum lengkap: ia hampir selalu dibuang, dan
+aturan rekonsiliasi `says_more` yang menoleransi tambahan kecil justru
+bisa memakai jawaban untuk pertanyaan yang berbeda ("beta" vs "beta
+launch?"). Pemetaan kode juga menunjukkan request jawaban bergantung pada
+hal yang baru ada sesudah final (id transcript sebagai id pesan dan
+pengecualian riwayat, `view()` perception, evidence live), jadi kunci
+"identik" di VAD stop tidak pernah terpenuhi.
+
+Desain: saat final tiba pada baris yang memanggil twin (`names_twin`) dan
+judgement interim terakhir untuk ucapan itu sudah selesai dengan
+`action=reply`, turn graph memulai **draft**: jalur jawaban biasa
+(`plan_for` dari bacaan interim → `for_reply` → evidence → responder),
+paralel dengan judge final, dengan kalimat ditampung dan tidak
+disintesis. Saat verdict final tiba: bila giliran di-admit dan kunci plan
+sama (`evidence_needs`, bahasa, `owner_claim`, refusal, aksi, output),
+kalimat tampungan dilepas ke sintesis dan stream dilanjutkan; selain itu
+draft dibatalkan (journal `reply_draft_dropped` dengan alasan) dan
+giliran berjalan seperti sekarang. Izin bicara tetap sepenuhnya milik
+judge; draft hanya memakai jalur read-only (memory, look, model) dan tidak
+pernah menjalankan aksi Meet — giliran dengan aksi atau keluar tidak
+di-draft. Perkiraan: VAD stop → audio jawaban ≈ final 0,9 + model 1,2 ≈
+2,1–2,3 dtk (dari 3,0–3,7). Gate tetap: p50 ≤ 3,2 dtk di simulator dan
+live, nol audio untuk giliran yang diamkan judge, draft terbuang ≤ 30%,
+eval replay tidak turun.
+
+Hasil B6-4 revisi 2 (2026-11-08): **ditolak berdasarkan bukti, tidak
+di-merge.** Draft diimplementasikan lengkap (efek jawaban seperti
+`louder`/`shorter`/bahasa ditahan sampai giliran di-admit, draft dibuang di
+setiap jalan keluar giliran, kunci memuat ukuran riwayat; review
+independen menemukan sembilan cacat yang semuanya diperbaiki) dan diukur di
+simulator dengan model live. VAD stop → kalimat jawaban pertama: p50
+3,53 dtk tanpa draft, 3,34 dtk dengan draft — di dalam noise; S1 yang
+draft-nya diterima malah 3,17 dtk (dari 3,03). Penyebabnya terlihat di
+timeline: Muse mengirim interim yang sudah lengkap ±0,6 dtk sesudah VAD
+stop, judge langsung dimulai untuk teks itu, dan final yang tiba sesudahnya
+memakai kunci yang sama — jadi "judgement pertama yang selesai untuk ucapan
+ini" hampir selalu judgement final itu sendiri (selesai 2,1 dtk). Draft
+tanpa judgement juga tidak layak: verdict menentukan plan, dan dari 13
+giliran bersuara 6 meminta `memory`, 4 `participant`, 1 `screen`, hanya 2
+tanpa evidence, di luar giliran aksi dan chat. Kesimpulan: jalur kritis
+adalah **latensi judge** (±1,3–1,7 dtk per panggilan pada teks lengkap),
+bukan urutan judge → model. Kode draft disimpan di luar `main`.
+
+Pengukuran panggilan judge (2026-11-08, probe langsung ke
+`gemini-3.1-flash-lite`, jendela pertanyaan S1): p50 1,05–1,10 dtk dengan
+1.204 token input dan 142 token output (JSON lengkap yang di-pretty-print).
+Skema yang dipangkas menjadi satu field `action` (11 token output) tetap
+0,78 dtk — itu lantai panggilan (token pertama, jaringan, input), jadi
+panjang output hanya menyumbang ±0,27 dtk dan membuang `heard` hanya
+0,03 dtk. Tiga panggilan bersamaan tidak saling memperlambat (1,10 vs
+1,09 dtk); angka 1,3–1,7 dtk di simulator berasal dari jaringan container
+Docker di Mac. Rantai di jaringan biasa: teks lengkap dari STT ±0,6 dtk
+sesudah VAD stop + judge ±1,1 + kalimat pertama ±1,0 ≈ 2,7 dtk, sudah di
+bawah gate B6 (3,2 dtk). Menurunkannya lagi butuh keputusan arsitektur —
+misalnya penilaian lokal yang cepat untuk sapaan yang jelas, dengan judge
+model hanya untuk kasus ambigu — bukan pemangkasan prompt atau skema.
+
 Sesi live `b6-live-4` (2026-11-07, semua kemampuan, brief dengan izin
 `meet_act`/`meet_chat`/`meet_leave`, `knowledge_scope=persona_memory`,
 evidence partisipan aktif; 17 langkah): lulus — sapaan "Hai Rani, bisa
@@ -2466,6 +2533,80 @@ yang subjeknya bukan policy memilih opt-out secara eksplisit.
   terjadwal sebelum final pertama — presence di replay tidak lagi
   kosong. Catatan samping sesi ini: latensi final→audio pertama p50
   5,3 dtk adalah urusan tahap lain.
+
+### B9: Judge memberi izin, responder merencanakan
+
+Status: desain (2026-11-08), belum diimplementasi. Pemicu: kill criteria
+Track B ("orang selesai → twin bersuara p50 di atas 2,5 dtk"). Rantai yang
+terukur sesudah B6 adalah teks lengkap dari STT ±0,6 dtk sesudah VAD stop,
+judge ±1,1 dtk (lantai panggilan model; lihat pengukuran B6-4), lalu
+kalimat pertama ±1,0 dtk: ±2,7 dtk di jaringan biasa dan 3,3–3,5 dtk di
+simulator. Lantainya ada di bentuk arsitektur, bukan di prompt atau skema:
+setiap giliran menunggu satu panggilan judge **sebelum** jawaban boleh
+dimulai, karena judge juga menentukan rencana jawaban (`evidence_needs`
+memory/screen/participant, bahasa, `owner_claim`). B6-4 membuktikan
+spekulasi tidak bisa menembus urutan itu: draft tanpa verdict tidak dapat
+menebak rencana (dari 13 giliran bersuara: 6 `memory`, 4 `participant`,
+1 `screen`, 2 tanpa evidence).
+
+Riset: sistem produksi memulai LLM jawaban sebelum giliran dikonfirmasi
+dan menahan keluarannya sampai konfirmasi — LiveKit Agents (*preemptive
+generation*, menyala default, hanya LLM yang mulai lebih awal, TTS
+menunggu), Jambonz (*early generation*, token ditahan lalu dilepas bila
+cocok), Deepgram Flux (*eager end of turn*, 100–200 ms dengan 50–70%
+panggilan LLM tambahan), dan Voice-Light (arXiv 2609.20995: spekulasi teks
+dan audio privat sampai lolos cek transkrip dan giliran; perubahan leksikal
+membatalkan, perubahan tanda baca tidak; median VAD final → audio pertama
+667 ms bila dipromosikan vs 1.513 ms tanpa). Bedanya dengan fakeyou: di
+sana LLM jawaban sendiri yang merencanakan (tool, sumber), tidak ada
+penilai terpisah yang harus selesai dulu. Untuk akhir giliran, detektor
+lokal tersedia (Pipecat Smart Turn v3, audio, ±12–65 ms CPU; LiveKit turn
+detector, teks, Qwen2.5-0.5B, 50–160 ms), tetapi akhir giliran bukan
+masalah fakeyou — Muse sudah mengirim teks lengkap ±0,6 dtk sesudah
+berhenti bicara; yang mahal adalah keputusan *apakah* twin bicara.
+
+Desain: pisahkan dua tugas judge.
+
+- **Izin (judge, paralel).** Judge tetap satu-satunya yang memutuskan
+  `reply`/`clarify`/`stay_silent`, aksi Meet, chat, keluar, dan
+  `owner_claim`. Ia tidak lagi menentukan evidence untuk jawaban.
+- **Rencana (responder).** Jawaban dibangun dari baris itu sendiri:
+  memory dari recall set C5 (listener latar, tidak menunggu giliran;
+  sampai C5 ada, prefetch memory dijalankan untuk setiap baris yang
+  menyebut twin — read-only), view perception yang sudah ada di prompt,
+  dan look layar/kamera sebagai **tool** yang dipanggil responder bila
+  perlu, bukan evidence yang dikumpulkan sebelum model jalan. Bahasa
+  dideklarasikan responder (`reply_planner` sudah melakukannya).
+- **Spekulasi.** Pada baris yang menyebut twin, jawaban dimulai di interim
+  pertama yang sudah memuat teks final (biasanya ±0,6 dtk sesudah VAD
+  stop) dengan efek tertahan seperti draft B6-4 (`louder`/`shorter`/bahasa
+  hanya berlaku sesudah izin). Teks interim yang berubah secara leksikal
+  membatalkan spekulasi; tanda baca tidak. Verdict `reply` melepas
+  kalimat; verdict lain membuangnya tanpa audio; `owner_claim` membuangnya
+  dan memulai ulang di model strong (kasus jarang, keselamatan tetap).
+- Mekanisme penahanan, pembuangan di setiap jalan keluar, dan kunci
+  riwayat dari implementasi B6-4 dipakai ulang; yang berubah hanya kunci:
+  teks yang dinormalisasi tanpa tanda baca + riwayat, tidak lagi rencana
+  dari verdict.
+
+Yang dihapus: `memory_planned` dan evidence look yang dikumpulkan sebelum
+model (`with_evidence`) di jalur jawaban bersuara; field `evidence` judge
+hanya dipakai untuk chat dan jawaban state sampai C5.
+
+Risiko: (1) look sebagai tool menambah satu putaran model untuk
+pertanyaan layar/kamera (±1 dtk) — dapat diterima karena vision sendiri
+1–3 dtk dan pertanyaan itu jarang; (2) biaya model untuk baris yang
+menyebut twin tetapi didiamkan judge — diukur sebagai rasio spekulasi
+terbuang; (3) prefetch memory untuk setiap baris bernama twin menambah
+beban recall — dibatasi laju dan digantikan listener C5.
+
+Gate (simulator dengan model live, lalu live): VAD stop → audio jawaban
+p50 ≤ 2,0 dtk dan p90 ≤ 2,5 dtk; nol audio untuk giliran yang diamkan
+judge; spekulasi terbuang ≤ 30%; `conversation_replay`, trust eval
+(`acc-0930-replay`), dan skenario simulator S1–S5 tidak turun. Irisan:
+B9a responder memanggil look sebagai tool dan memory tidak lagi bergantung
+`evidence_needs` (tanpa spekulasi, diukur sendiri); B9b spekulasi di
+interim dengan kunci leksikal.
 
 ## Track C: otak
 
