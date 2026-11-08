@@ -25,6 +25,7 @@ from fakeyou.memory.persona import PersonaProfile
 from fakeyou.observability.faults import capture_error
 from fakeyou.orchestration.assembly import build_source_registry
 from fakeyou.orchestration.persona_prompt import build_persona_prompt
+from fakeyou.persistence.owner_model import FrozenOwnerModel
 from fakeyou.persistence.record import MeetingRecord
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -143,6 +144,7 @@ class _SessionRun:
     run: int
     streaming: bool
     prompt_builder: Callable[[PersonaProfile], str]
+    owner_model: FrozenOwnerModel | None = None
 
 
 async def _replay_session(
@@ -164,7 +166,7 @@ async def _replay_session(
             ],
         )
         record = MeetingRecord(Path(folder) / "record.jsonl")
-        book_source = BookSource(registry=build_source_registry(profile, None))
+        book_source = BookSource(registry=build_source_registry(profile, None, context.owner_model))
         responder = (
             MeetingResponder(
                 agent,
@@ -222,12 +224,18 @@ async def replay(
     runs: int,
     *,
     streaming: bool = False,
-    prompt_builder: Callable[[PersonaProfile], str] = build_persona_prompt,
+    prompt_builder: Callable[[PersonaProfile], str] | None = None,
 ) -> ReplayScore:
     profile = PersonaProfile.model_validate_json((ROOT / fixture["persona"]).read_bytes())
+    owner_model = (
+        FrozenOwnerModel.model_validate(fixture["owner_model"])
+        if "owner_model" in fixture
+        else None
+    )
+    builder = prompt_builder or partial(build_persona_prompt, owner_model=owner_model)
     score = ReplayScore()
     for run in range(runs):
-        context = _SessionRun(profile, score, run, streaming, prompt_builder)
+        context = _SessionRun(profile, score, run, streaming, builder, owner_model)
         for session in fixture["sessions"]:
             await _replay_session(model_factory(), session, context)
     return score

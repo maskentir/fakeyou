@@ -27,6 +27,7 @@ from fakeyou.persistence.brief import (
     write_meeting_context,
 )
 from fakeyou.persistence.layout import MeetingDir, meeting_profile_dir
+from fakeyou.persistence.owner_model import FrozenOwnerModel, owner_model_digest
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +38,7 @@ class PreparedJoin:
     profile: PersonaProfile | None
     brief: MeetingBrief | None
     meeting_context: MeetingContext | None
+    owner_model: FrozenOwnerModel | None = None
 
 
 async def prepare_join(request: JoinRequest) -> PreparedJoin:
@@ -50,6 +52,7 @@ async def prepare_join(request: JoinRequest) -> PreparedJoin:
         profile=profile,
         brief=brief,
         meeting_context=meeting_context,
+        owner_model=request.owner_model,
     )
 
 
@@ -131,11 +134,16 @@ async def _load_join_context(
                     brief.permissions & {"meet_act", "meet_chat", "meet_leave"}
                 ),
             )
+            owner_model = request.owner_model
             meeting_context = MeetingContext(
                 schema_version="meeting_context/v1",
                 brief=brief,
                 brief_sha256=brief_digest(brief),
                 persona_sha256=persona_digest(profile),
+                owner_model_version=owner_model.version if owner_model is not None else None,
+                owner_model_sha256=(
+                    owner_model_digest(owner_model) if owner_model is not None else None
+                ),
             )
         if not request.twin_name:
             config = replace(config, twin_name=profile.display_name)

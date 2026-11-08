@@ -319,6 +319,7 @@ async def _open_join_conversation(
             agent=AgentWiring(
                 profile=prepared.profile,
                 brief=prepared.brief,
+                owner_model=prepared.owner_model,
                 graphiti=run.graphiti,
                 perception=run.perception.context if run.perception is not None else None,
                 history=run.record,
@@ -355,7 +356,7 @@ async def _open_moment_detector(prepared: PreparedJoin, run: _JoinRun) -> None:
         return await embedder.aembed_documents(list(texts))
 
     detector = MomentDetector(
-        registry=build_source_registry(prepared.profile, prepared.brief),
+        registry=build_source_registry(prepared.profile, prepared.brief, prepared.owner_model),
         judge=ModelMomentJudge(
             journal_model_inputs(create_turn_judge_model(settings), run.journal, "judge"),
             timeout_seconds=settings.turn_judge.timeout_seconds,
@@ -625,6 +626,8 @@ def _brief_metadata(context: MeetingContext, *, reused: bool) -> dict[str, Any]:
     return {
         "brief_sha256": context.brief_sha256,
         "persona_sha256": context.persona_sha256,
+        "owner_model_version": context.owner_model_version,
+        "owner_model_sha256": context.owner_model_sha256,
         "knowledge_scope": brief.knowledge_scope,
         "permissions": sorted(brief.permissions),
         "agenda_count": len(brief.agenda),

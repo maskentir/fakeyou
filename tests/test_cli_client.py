@@ -6,6 +6,7 @@ import pytest
 from pydantic import SecretStr
 
 from fakeyou.api.app import ApiDeps, create_app
+from fakeyou.api.owner_model import owner_model
 from fakeyou.api.sessions import SessionStore
 from fakeyou.api.status import session_status
 from fakeyou.catalog.errors import ErrorCode
@@ -25,7 +26,7 @@ from fakeyou.cli.client import (
 from fakeyou.cli.diagnostics import check_api
 from fakeyou.cli.sessions import SessionOptions, session_body
 from fakeyou.config.settings import Settings
-from tests._session_status_fakes import MemorySessionStatus
+from tests._session_status_fakes import MemoryOwnerModel, MemorySessionStatus
 
 Handler = Callable[[httpx2.Request], httpx2.Response]
 
@@ -276,6 +277,7 @@ async def test_the_cli_session_commands_are_accepted_by_the_real_api(settings: S
         ),
     )
     app.dependency_overrides[session_status] = lambda: repository
+    app.dependency_overrides[owner_model] = lambda: MemoryOwnerModel()
     body = session_body(
         SessionOptions(
             link="https://meet.google.com/abc-defg-hij",

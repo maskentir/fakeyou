@@ -1,4 +1,5 @@
 import json
+from typing import cast
 
 import pytest
 
@@ -9,6 +10,7 @@ from fakeyou.memory.persona import (
     GOALS_RULE,
     KNOWN_FACT_RULES,
     NATURAL_SPEECH_RULE,
+    OWNER_MODEL_RULE,
     PROVENANCE_RULE,
     RECALL_RULE,
     SOURCE_RULES,
@@ -16,8 +18,9 @@ from fakeyou.memory.persona import (
     number_keywords,
     speech_keywords,
 )
-from fakeyou.orchestration.persona_prompt import build_persona_prompt
+from fakeyou.orchestration.persona_prompt import MAX_OWNER_MODEL_ITEMS, build_persona_prompt
 from fakeyou.persistence.brief import KnowledgeScope, MeetingBrief
+from fakeyou.persistence.owner_model import FrozenOwnerModel, FrozenOwnerModelItem
 from tests._persona_support import EXAMPLE_BRIEF, PERSONA_FACT, PERSONA_GOAL, profile, revised
 
 SCOPES = [None, "brief_only", "persona_memory"]
@@ -467,3 +470,92 @@ def test_prompt_states_every_required_delegation_clause(
     assert [clause for clause in REQUIRED_EVERY_PROMPT_CLAUSES if clause not in prompt] == []
     missing_brief_clauses = [clause for clause in REQUIRED_BRIEF_CLAUSES if clause not in prompt]
     assert missing_brief_clauses == ([] if scoped is not None else list(REQUIRED_BRIEF_CLAUSES))
+
+
+def owner_item(item_id: str, statement: str, **fields: str) -> FrozenOwnerModelItem:
+    return FrozenOwnerModelItem.model_validate(
+        {
+            "item_id": item_id,
+            "kind": "position",
+            "topic": "release",
+            "statement": statement,
+            "confidence": "firm",
+            "disclosure": "room_speakable",
+            **fields,
+        }
+    )
+
+
+OWNER_MODEL = FrozenOwnerModel(
+    version=3,
+    items=(
+        owner_item("ship", "Ship after the load test passes."),
+        owner_item("hire", "Hire a second SRE before launch.", confidence="leaning"),
+        owner_item("salary", "My salary floor is 90k.", disclosure="owner_only"),
+    ),
+)
+
+
+def owner_model_block(prompt: str) -> list[dict[str, str]]:
+    [block] = [part for part in prompt.split("\n\n") if part.startswith("Owner model JSON:")]
+    return cast(list[dict[str, str]], json.loads(block.removeprefix("Owner model JSON:\n")))
+
+
+def test_owner_model_lists_only_room_speakable_items_with_their_ids() -> None:
+    prompt = build_persona_prompt(profile(), owner_model=OWNER_MODEL)
+
+    assert owner_model_block(prompt) == [
+        {
+            "id": "om-ship",
+            "kind": "position",
+            "topic": "release",
+            "statement": "Ship after the load test passes.",
+            "confidence": "firm",
+        },
+        {
+            "id": "om-hire",
+            "kind": "position",
+            "topic": "release",
+            "statement": "Hire a second SRE before launch.",
+            "confidence": "leaning",
+        },
+    ]
+    assert OWNER_MODEL_RULE in prompt
+    assert "salary" not in prompt
+    assert "90k" not in prompt
+
+
+@pytest.mark.parametrize(
+    "owner_model",
+    [None, FrozenOwnerModel(version=1, items=(OWNER_MODEL.items[2],))],
+    ids=["absent", "owner_only"],
+)
+def test_owner_model_block_is_omitted_without_speakable_items(
+    owner_model: FrozenOwnerModel | None,
+) -> None:
+    prompt = build_persona_prompt(profile(), owner_model=owner_model)
+
+    assert prompt == build_persona_prompt(profile())
+    assert "Owner model JSON" not in prompt
+    assert OWNER_MODEL_RULE not in prompt
+
+
+def test_owner_model_is_dropped_in_a_brief_only_meeting(brief: MeetingBrief) -> None:
+    meeting = revised(brief, knowledge_scope="brief_only")
+
+    prompt = build_persona_prompt(profile(), brief=meeting, owner_model=OWNER_MODEL)
+
+    assert prompt == build_persona_prompt(profile(), brief=meeting)
+
+
+def test_owner_model_keeps_the_most_recent_items_in_a_stable_order() -> None:
+    many = FrozenOwnerModel(
+        version=50,
+        items=tuple(owner_item(f"item-{index}", f"Position {index}.") for index in range(50)),
+    )
+
+    block = owner_model_block(build_persona_prompt(profile(), owner_model=many))
+
+    assert [item["id"] for item in block] == [
+        f"om-item-{index}" for index in range(50 - MAX_OWNER_MODEL_ITEMS, 50)
+    ]

@@ -77,9 +77,10 @@ class ReplyPlan(BaseModel):
     cites: list[str] = Field(
         default_factory=list,
         description=(
-            "The id of every brief item, profile fact (fact-<n>) or recalled memory fact that "
-            "your text states or relies on. Empty when the text states no such fact. A "
-            "contribution must cite at least one id, and a question must cite a brief question."
+            "The id of every brief item, profile fact (fact-<n>), owner model item (om-<id>) or "
+            "recalled memory fact that your text states or relies on. Empty when the text states "
+            "no such fact. A contribution must cite at least one id, and a question must cite a "
+            "brief question."
         ),
     )
     commits_owner: bool = Field(

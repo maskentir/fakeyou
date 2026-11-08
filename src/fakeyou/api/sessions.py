@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, Request, Response
 
 from fakeyou.api.auth import Principal, require_owner
 from fakeyou.api.overrides import overrides_from_headers, stage_overrides
+from fakeyou.api.owner_model import owner_model
 from fakeyou.api.schemas import (
     SessionCreate,
     SessionSnapshot,
@@ -23,10 +24,12 @@ from fakeyou.api.transport import shared_stream_transport
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import parse_session_id
 from fakeyou.config.settings import Settings
+from fakeyou.db.owner_model import OwnerModelRepository, TwinScope
 from fakeyou.db.session_status import DesiredState, SessionStatus, SessionStatusRepository
 from fakeyou.foundation.digest import canonical_json_digest
 from fakeyou.persistence.files import write_atomically
 from fakeyou.persistence.layout import MeetingDir
+from fakeyou.persistence.owner_model import FrozenOwnerModel
 
 if TYPE_CHECKING:
     from fakeyou.api.app import ApiDeps
@@ -182,6 +185,7 @@ router = APIRouter(prefix="/v1/sessions", tags=["sessions"])
 
 _Owner = Annotated[Principal, Depends(require_owner)]
 _Repository = Annotated[SessionStatusRepository, Depends(session_status)]
+_OwnerModel = Annotated[OwnerModelRepository, Depends(owner_model)]
 
 
 @router.post("", status_code=201, response_model=SessionView)
@@ -190,18 +194,24 @@ async def start_session(
     principal: _Owner,
     request: Request,
     repository: _Repository,
+    owner_models: _OwnerModel,
 ) -> SessionView:
-    _verify_identity(payload, _owner_id(principal))
+    owner_id = _owner_id(principal)
+    _verify_identity(payload, owner_id)
     meeting_id = (
         uuid4().hex
         if payload.meeting_id is None
         else parse_session_id(payload.meeting_id, field="meeting_id")
     )
     overrides = overrides_from_headers(request.headers)
+    frozen = await owner_models.snapshot(TwinScope(owner_id, payload.twin_id))
     snapshot = build_snapshot(
-        payload, meeting_id=meeting_id, at=_now(request), keys_supplied=bool(overrides)
+        payload,
+        meeting_id=meeting_id,
+        at=_now(request),
+        keys_supplied=bool(overrides),
+        owner_model=FrozenOwnerModel.of(frozen),
     )
-    owner_id = _owner_id(principal)
     status = await repository.create(meeting_id, owner_id, status_now())
     if status is None:
         raise _refuse_existing(await repository.get(meeting_id), meeting_id)

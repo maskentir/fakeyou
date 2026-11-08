@@ -1,9 +1,10 @@
 import json
 from collections.abc import Mapping
 
-from fakeyou.conversation.contribution import source_registry
+from fakeyou.conversation.contribution import OwnerModelSource, source_registry
 from fakeyou.conversation.reply_planner import SpeechGate, planned_reply
 from fakeyou.conversation.speech_book import BookSource, TurnEvidence, fact_book
+from fakeyou.session.speech import SpeechAct, check_act
 
 TRIGGER = "The shared screen changed to Launch Timeline: beta slips to 20 October"
 REGISTRY = source_registry(
@@ -11,6 +12,10 @@ REGISTRY = source_registry(
     brief_facts={"demo-date": "The synthetic Orchid demo is booked for Friday the 9th."},
     brief_questions={"vendor-needs": "Which synthetic vendor input is missing?"},
     brief_objectives={"blockers": "Find out which synthetic kickoff blocker the vendor hides"},
+    owner_model={
+        "om-ship": OwnerModelSource("Ship after the load test passes.", "room_speakable"),
+        "om-salary": OwnerModelSource("My salary floor is 90 thousand.", "owner_only"),
+    },
 )
 EVERYTHING = frozenset({"explain_facts", "ask_brief_questions"})
 
@@ -68,6 +73,36 @@ def test_a_brief_only_meeting_cannot_speak_profile_facts() -> None:
     assert say(
         "The beta launches on 14 October.", gate(persona_knowledge=False), cites=["fact-0"]
     ) == ("I'm not sure about that, so I'd rather not guess.")
+
+
+def test_a_room_speakable_owner_model_item_can_be_cited() -> None:
+    text = "Rani wants to ship after the load test passes."
+
+    assert say(text, gate(), cites=["om-ship"]) == text
+
+
+def test_an_owner_only_owner_model_item_is_never_spoken() -> None:
+    text = "Rani's salary floor is 90 thousand."
+    book = fact_book(BookSource(REGISTRY, EVERYTHING), heard="", observed="", memory={})
+
+    assert check_act(SpeechAct(cites=("om-salary",)), book) == "not_speakable"
+    assert check_act(SpeechAct(cites=("om-ship",)), book) == "pass"
+    assert say(text, gate(), cites=["om-salary"]) == (
+        "I'm not sure about that, so I'd rather not guess."
+    )
+
+
+def test_a_brief_only_meeting_cannot_speak_owner_model_items() -> None:
+    assert say(
+        "Rani wants to ship after the load test passes.",
+        gate(persona_knowledge=False),
+        cites=["om-ship"],
+    ) == ("I'm not sure about that, so I'd rather not guess.")
+
+
+def test_only_room_speakable_owner_model_items_are_contribution_sources() -> None:
+    assert ("owner_model", "om-ship", "Ship after the load test passes.") in REGISTRY.items()
+    assert all(ref != "om-salary" for _source, ref, _text in REGISTRY.items())
 
 
 def test_an_owner_commitment_becomes_a_deterministic_decline() -> None:

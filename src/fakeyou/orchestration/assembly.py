@@ -19,7 +19,7 @@ from fakeyou.audio.graph import TurnAudioTap
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.agent import CONTRIBUTION_GUIDANCE, create_meeting_agent
-from fakeyou.conversation.contribution import SourceRegistry, source_registry
+from fakeyou.conversation.contribution import OwnerModelSource, SourceRegistry, source_registry
 from fakeyou.conversation.control import ReplyControl
 from fakeyou.conversation.conversation import (
     MeetingAgent,
@@ -79,6 +79,7 @@ from fakeyou.perception.context import (
     create_perception_middleware,
 )
 from fakeyou.persistence.brief import MeetingBrief
+from fakeyou.persistence.owner_model import FrozenOwnerModel
 from fakeyou.session.commands import CommandOutcome
 from fakeyou.session.facts import StateQuestion, state_fact
 from fakeyou.session.identity import PresenceFact
@@ -213,6 +214,7 @@ class AgentWiring:
     graphiti: Graphiti | None = None
     perception: PerceptionContext | None = None
     history: MeetingHistory = field(default_factory=NoHistory)
+    owner_model: FrozenOwnerModel | None = None
 
 
 DEFAULT_AGENT_WIRING = AgentWiring()
@@ -268,13 +270,22 @@ def build_turn_judge(
 
 
 def build_source_registry(
-    profile: PersonaProfile | None, brief: MeetingBrief | None
+    profile: PersonaProfile | None,
+    brief: MeetingBrief | None,
+    owner_model: FrozenOwnerModel | None = None,
 ) -> SourceRegistry:
+    persona_knowledge = brief is None or brief.knowledge_scope != "brief_only"
+    if not persona_knowledge:
+        profile, owner_model = None, None
     return source_registry(
         profile_facts=tuple(profile.verified_facts) if profile is not None else (),
         brief_facts={item.id: item.text for item in brief.approved_facts} if brief else None,
         brief_questions={item.id: item.text for item in brief.questions} if brief else None,
         brief_objectives={item.id: item.text for item in brief.objectives} if brief else None,
+        owner_model={
+            item.ref: OwnerModelSource(item.statement, item.disclosure)
+            for item in (owner_model.items if owner_model is not None else ())
+        },
     )
 
 
@@ -321,6 +332,7 @@ class _ConversationBuilder:
         self._persona = build_persona_prompt(
             profile,
             brief=self._agent.brief,
+            owner_model=self._agent.owner_model,
             language=self._settings.speech.language,
             perception=self._agent.perception is not None,
         )
@@ -462,7 +474,7 @@ class _ConversationBuilder:
     def _book_source(self) -> BookSource:
         brief = self._agent.brief
         return BookSource(
-            registry=build_source_registry(self._agent.profile, brief),
+            registry=build_source_registry(self._agent.profile, brief, self._agent.owner_model),
             permissions=frozenset(brief.permissions) if brief is not None else frozenset(),
             persona_knowledge=brief is None or brief.knowledge_scope != "brief_only",
         )

@@ -30,6 +30,7 @@ from fakeyou.orchestration.runtime import SessionWiring, run_meeting_session
 from fakeyou.persistence.brief import MeetingBrief
 from fakeyou.persistence.ingestion_status import IngestionStatus, read_status, write_status
 from fakeyou.persistence.layout import MeetingDir, meeting_profile_dir
+from fakeyou.persistence.owner_model import FrozenOwnerModel
 from fakeyou.transport.schemas import (
     DEBRIEF_STREAM,
     INGESTION_STREAM,
@@ -589,6 +590,17 @@ async def test_join_request_for_writes_persona_and_brief_server_side(settings: S
     assert PersonaProfile.model_validate_json(persona_path.read_bytes()) == persona
     assert request.brief_path is not None
     assert MeetingBrief.model_validate_json(request.brief_path.read_bytes()) == snapshot.brief
+
+
+async def test_join_request_for_carries_the_frozen_owner_model(settings: Settings) -> None:
+    owner_model = FrozenOwnerModel(version=2)
+    create = SessionCreate(link=LINK, owner_id="owner-1", twin_id="twin-1")
+
+    frozen = build_snapshot(create, meeting_id="m-3", at=AT, owner_model=owner_model)
+    plain = build_snapshot(create, meeting_id="m-3", at=AT)
+
+    assert join_request_for(frozen, settings, resume=False).owner_model == owner_model
+    assert join_request_for(plain, settings, resume=False).owner_model is None
 
 
 async def test_join_request_for_applies_the_worker_audio_default(settings: Settings) -> None:

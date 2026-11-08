@@ -49,6 +49,62 @@ async def test_replay_scoring_counts_each_check_offline() -> None:
     assert score.summary()["turns"] == 2
 
 
+async def test_replay_speaks_an_owner_position_and_never_an_owner_only_item() -> None:
+    position = "Ship after the load test passes."
+    private = "My salary floor is 90 thousand."
+    fixture = {
+        "persona": "examples/persona.example.json",
+        "owner_model": {
+            "version": 2,
+            "items": [
+                {
+                    "item_id": "ship",
+                    "kind": "position",
+                    "topic": "release",
+                    "statement": position,
+                    "confidence": "firm",
+                    "disclosure": "room_speakable",
+                },
+                {
+                    "item_id": "salary",
+                    "kind": "fact",
+                    "topic": "compensation",
+                    "statement": private,
+                    "confidence": "firm",
+                    "disclosure": "owner_only",
+                },
+            ],
+        },
+        "sessions": [
+            {
+                "meeting_id": "m1",
+                "memory": [],
+                "turns": [
+                    {"say": "When should we ship?", "must_mention": ["load test"]},
+                    {"say": "What is the salary floor?", "must_not_mention": ["90"]},
+                ],
+            }
+        ],
+    }
+    model = ToolCallingFakeModel(
+        responses=[
+            AIMessage(content=cited_reply("Rani wants to ship after the load test.", "om-ship")),
+            AIMessage(content=cited_reply("Rani's salary floor is 90 thousand.", "om-salary")),
+        ]
+    )
+
+    score = await replay(lambda: model, fixture, runs=1)
+
+    prompt = str(model.seen[0][0].content)
+    assert '"id": "om-ship"' in prompt
+    assert position in prompt
+    assert private not in prompt
+    assert "om-salary" not in prompt
+    assert score.replies[0] == "Rani wants to ship after the load test."
+    assert score.rate("must_mention") == 1.0
+    assert score.rate("must_not_mention") == 1.0
+
+
 async def test_streaming_replay_scores_ordered_sentences_offline() -> None:
     fixture = {
         "persona": "examples/persona.example.json",

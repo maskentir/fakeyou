@@ -26,6 +26,7 @@ from fakeyou.persistence.brief import (
     MeetingBrief,
 )
 from fakeyou.persistence.ingestion_status import IngestionState
+from fakeyou.persistence.owner_model import FrozenOwnerModel
 
 
 def _profile_name_is_path(value: str) -> bool:
@@ -140,18 +141,27 @@ class SessionSnapshot(BaseModel):
     participant_policy_enabled: bool = True
     participant_evidence_enabled: bool = False
     keys_supplied: bool = False
+    owner_model: FrozenOwnerModel | None = None
     created_at: str
     snapshot_sha256: str
 
 
 def build_snapshot(
-    create: SessionCreate, *, meeting_id: str, at: str, keys_supplied: bool = False
+    create: SessionCreate,
+    *,
+    meeting_id: str,
+    at: str,
+    keys_supplied: bool = False,
+    owner_model: FrozenOwnerModel | None = None,
 ) -> SessionSnapshot:
     brief = create.brief.to_brief(meeting_id) if create.brief is not None else None
     payload = create.model_dump(mode="json")
     payload["meeting_id"] = meeting_id
     payload["keys_supplied"] = keys_supplied
     payload["brief"] = brief.model_dump(mode="json") if brief is not None else None
+    payload["owner_model"] = (
+        owner_model.model_dump(mode="json") if owner_model is not None else None
+    )
     payload["created_at"] = at
     digest = canonical_json_digest(payload)
     return SessionSnapshot.model_validate({**payload, "snapshot_sha256": digest})

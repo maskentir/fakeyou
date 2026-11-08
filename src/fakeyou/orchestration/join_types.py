@@ -14,6 +14,7 @@ from fakeyou.conversation.session import SessionConfig, SessionResult
 from fakeyou.foundation.taxonomy import PublicPhase
 from fakeyou.memory.persona import OperatorIdentity
 from fakeyou.orchestration.runtime import SessionWiring
+from fakeyou.persistence.owner_model import FrozenOwnerModel
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +37,7 @@ class JoinRequest:
     participant_policy_enabled: bool = True
     participant_evidence_enabled: bool = False
     brief_path: Path | None = None
+    owner_model: FrozenOwnerModel | None = None
     resume: bool = False
     on_phase: Callable[[PublicPhase], None] | None = None
     attempt_id: str = field(default_factory=lambda: uuid4().hex)
