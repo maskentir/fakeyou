@@ -23,8 +23,10 @@ from fakeyou.db.owner_model import (
 )
 
 _IDENTIFIER = rf"^{IDENTIFIER_BODY}$"
-_ImportedStatement = Annotated[str, Field(min_length=1, max_length=2000)]
-_ImportedStatements = Annotated[tuple[_ImportedStatement, ...], Field(max_length=200)]
+_PLAIN_TEXT = r"^[^\x00]*$"
+_Topic = Annotated[str, Field(min_length=1, max_length=120, pattern=_PLAIN_TEXT)]
+_Statement = Annotated[str, Field(min_length=1, max_length=2000, pattern=_PLAIN_TEXT)]
+_ImportedStatements = Annotated[tuple[_Statement, ...], Field(max_length=200)]
 
 
 class OwnerModelItemBody(BaseModel):
@@ -33,9 +35,9 @@ class OwnerModelItemBody(BaseModel):
     )
 
     kind: OwnerModelKind
-    topic: str = Field(min_length=1, max_length=120)
-    statement: str = Field(min_length=1, max_length=2000)
-    reason: str | None = Field(default=None, min_length=1, max_length=2000)
+    topic: _Topic
+    statement: _Statement
+    reason: _Statement | None = None
     confidence: Confidence = "firm"
     disclosure: ItemDisclosure = "room_speakable"
     valid_at: AwareDatetime | None = None

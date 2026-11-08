@@ -8,6 +8,7 @@ from fakeyou.conversation.agent import (
     SPOKEN_LANGUAGE_GUIDANCE,
 )
 from fakeyou.memory.persona import (
+    AFTER_MEETING_RULE,
     ATTENTION_RULE,
     BRIEF_PROMPT_FIELDS,
     BRIEF_RULES,
@@ -105,6 +106,7 @@ def _prompt_parts(
                 CONFIDENTIALITY_RULE,
                 ATTENTION_RULE,
                 TOOL_ECONOMY_RULE,
+                AFTER_MEETING_RULE,
                 KNOWN_FACT_RULES[scope],
                 SOURCE_RULES,
             )

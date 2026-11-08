@@ -5,6 +5,7 @@ import pytest
 
 from fakeyou.conversation.agent import DEFAULT_PERSONA, ENDING_RULE
 from fakeyou.memory.persona import (
+    AFTER_MEETING_RULE,
     BRIEF_RULES,
     CONFIDENCE_RULE,
     KNOWN_FACT_RULES,
@@ -84,6 +85,7 @@ def test_build_persona_separates_owner_facts_participant_claims_and_inference() 
     prompt = build_persona_prompt(profile())
 
     assert KNOWN_FACT_RULES[None] in prompt
+    assert AFTER_MEETING_RULE in prompt
     assert "participant" in prompt.casefold()
     assert "inference" in prompt.casefold()
     assert "commit" in prompt.casefold()

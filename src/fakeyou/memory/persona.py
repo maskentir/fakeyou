@@ -183,6 +183,10 @@ ATTENTION_RULE = (
     "stay silent."
 )
 
+AFTER_MEETING_RULE = (
+    "Your work ends with the meeting: you cannot collect, store, or deliver anything for the "
+    "owner afterwards, even when an owner preference sounds like a task."
+)
 TOOL_ECONOMY_RULE = (
     "Answer from what was said whenever you can. Questions about who is here, how many people "
     "are here, who is presenting, what is shared, or whether your own meeting action went "

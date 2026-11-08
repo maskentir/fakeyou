@@ -183,6 +183,8 @@ async def test_valid_at_round_trips_and_may_not_be_in_the_future(
         {**POSITION, "source": "debrief"},
         {**POSITION, "valid_at": "2026-03-01T00:00:00"},
         {**POSITION, "valid_at": "not a time"},
+        {**POSITION, "statement": "Ship\u0000 now."},
+        {**POSITION, "topic": "release\u0000"},
     ],
 )
 async def test_invalid_items_are_rejected(client: httpx2.AsyncClient, body: object) -> None:
@@ -237,6 +239,7 @@ async def test_an_import_adds_facts_and_preferences_once(client: httpx2.AsyncCli
         {"facts": "The beta launches on 14 October."},
         {"decision_rules": ["Hire slow."]},
         {"facts": ["x" * 2001]},
+        {"preferences": ["Keep\u0000 it short."]},
     ],
 )
 async def test_invalid_imports_are_rejected(client: httpx2.AsyncClient, body: object) -> None:
