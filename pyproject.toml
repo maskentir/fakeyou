@@ -43,6 +43,7 @@ dependencies = [
     "num2words>=0.5.14",
     "tenacity>=9.1",
     "pasimple==0.0.3",
+    "pysastrawi>=1.2.1,<2",
 ]
 
 [project.optional-dependencies]

@@ -459,6 +459,7 @@ dependencies = [
     { name = "psycopg-pool" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "pysastrawi" },
     { name = "python-dotenv" },
     { name = "redis" },
     { name = "sentencex" },
@@ -522,6 +523,7 @@ requires-dist = [
     { name = "psycopg-pool", specifier = ">=3.2,<4" },
     { name = "pydantic", specifier = ">=2.13,<3" },
     { name = "pydantic-settings", specifier = ">=2.10,<3" },
+    { name = "pysastrawi", specifier = ">=1.2.1,<2" },
     { name = "python-dotenv", specifier = ">=1.2,<2" },
     { name = "redis", specifier = ">=6.2,<7" },
     { name = "sentencex", specifier = "==1.0.31" },
@@ -2085,6 +2087,15 @@ wheels = [
 [package.optional-dependencies]
 crypto = [
     { name = "cryptography" },
+]
+
+[[package]]
+name = "pysastrawi"
+version = "1.2.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/4c/25/caf2775adac97432e0fb74c3df3d83627ac1a1bced7b7f997356cf0d3af7/pysastrawi-1.2.1.tar.gz", hash = "sha256:55112f8c92811a7f7c622bbce608b42d3390faf3b96abf1d06f52b13f989710e", size = 191180, upload-time = "2026-05-21T04:59:06.903Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f4/df/668d3b19c6215bd7224eeaa88ad3cb8d20a22657b0ac0526258421f4807a/pysastrawi-1.2.1-py2.py3-none-any.whl", hash = "sha256:312ab1519fd76bc9e7ec46a40e750043e088b1409d9e8c5fd63e20d24cd2724f", size = 211176, upload-time = "2026-05-21T04:59:04.847Z" },
 ]
 
 [[package]]
