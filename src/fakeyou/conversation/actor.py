@@ -62,6 +62,7 @@ from fakeyou.foundation.participation import (
     mentions_whole_phrase,
 )
 from fakeyou.foundation.resources import read_package_text
+from fakeyou.foundation.speakers import UNIDENTIFIED_PARTICIPANT
 from fakeyou.foundation.transcript import TranscriptEvent, transcript_stamp
 from fakeyou.foundation.triggers import ReplyChannel
 from fakeyou.observability.faults import ConsumerSink, FaultReporter, capture_error, guard_observer
@@ -291,6 +292,7 @@ class FloorActor:
         self._early_options: EarlyOptions | None = None
         self._early_answer: Callable[[TranscriptEvent], Awaitable[None]] | None = None
         self._early_text = ""
+        self._interim_speaker = UNIDENTIFIED_PARTICIPANT
         self._early_history_seq: int | None = None
         self._early_version = 0
         self._early_timer: asyncio.Task[None] | None = None
@@ -851,6 +853,7 @@ class FloorActor:
                 twin_speaking=session is not None and session.is_speaking,
                 purpose="early_hold",
                 history_seq=self._early_history_seq,
+                speaker=self._interim_speaker,
             )
         judgement, _ = await capture_error(partial(judging.cache.judgement, window))
         return judgement
@@ -1001,6 +1004,7 @@ class FloorActor:
                 twin_speaking=session is not None and session.is_speaking,
                 purpose="early_hold",
                 history_seq=self._early_history_seq,
+                speaker=self._interim_speaker,
             )
             judging.cache.prefetch(window)
             self._early_window = window
@@ -1145,7 +1149,10 @@ class FloorActor:
         if active is not None and active.transcript_id == commit.event.id:
             await cancel_speech(self._floor, self._journal, reason=reason)
 
-    async def handle_interim(self, text: str, *, history_seq: int | None) -> None:
+    async def handle_interim(
+        self, text: str, *, history_seq: int | None, speaker: str = UNIDENTIFIED_PARTICIPANT
+    ) -> None:
+        self._interim_speaker = speaker
         if text.strip():
             self.note_activity()
         window: JudgeWindow | None = None
@@ -1366,6 +1373,7 @@ class FloorActor:
                 twin_speaking=self.speaker.is_speaking,
                 purpose="interim",
                 history_seq=history_seq,
+                speaker=self._interim_speaker,
             )
             if judging is not None
             else None

@@ -260,13 +260,19 @@ class WindowSource:
         )
 
     def for_interim(
-        self, text: str, *, twin_speaking: bool, purpose: JudgePurpose, history_seq: int | None
+        self,
+        text: str,
+        *,
+        twin_speaking: bool,
+        purpose: JudgePurpose,
+        history_seq: int | None,
+        speaker: str = UNIDENTIFIED_PARTICIPANT,
     ) -> JudgeWindow:
         earlier = _spoken_lines(self.history, skip=None, history_seq=history_seq)
         earlier = earlier[-self.window_lines :]
         return JudgeWindow(
             tuple(earlier),
-            JudgeLine(UNIDENTIFIED_PARTICIPANT, text),
+            JudgeLine(speaker, text),
             twin_speaking,
             names_twin=self._names_twin(text),
             presence=self._presence(),

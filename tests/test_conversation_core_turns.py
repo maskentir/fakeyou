@@ -5,6 +5,7 @@ import pytest
 
 from fakeyou.conversation.conversation import cap_spoken_reply
 from fakeyou.conversation.floor import SpeechFloor
+from fakeyou.conversation.meeting_messages import spoken_by
 from fakeyou.conversation.meeting_turns import TurnInteraction, build_meeting_turns
 from fakeyou.observability.diagnostics import Diagnostics
 from tests._audio_fakes import FakeReplyAudio
@@ -359,6 +360,31 @@ async def test_shadow_mode_decides_without_speaking(
     assert audio.spoken == []
     assert [row["reason"] for row in journal.events("policy_decided")] == ["fallback_named"]
     assert [row["reason"] for row in journal.events("transcript_suppressed")] == ["shadow"]
+    await loop.actor.close()
+
+
+async def test_an_interim_labelled_with_its_speaker_answers_the_final_with_one_judgement(
+    journal: RecordingJournal,
+) -> None:
+    judge = ScriptedJudge(lambda _window: judged("reply"))
+    responder, audio = FakeResponder(), FakeReplyAudio()
+    loop = build_meeting_turns(
+        responder,
+        interaction=TurnInteraction(twin_names=["harun"], judge=judge),
+        diagnostics=Diagnostics(journal=journal),
+    )
+    loop.actor.bind(audio)
+    final = event("t2", "Harun, what is next?", participant_id="b")
+    await loop.actor.handle_interim(final.text, history_seq=None, speaker=spoken_by(final))
+    judging = loop.actor.judging
+    assert judging is not None
+    await asyncio.wait_for(judging.cache.wait_idle(), 2)
+    await loop.actor.receive_final(final)
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
+
+    assert len(judge.windows) == 1
+    assert judge.windows[0].latest.speaker == spoken_by(final)
+    assert audio.spoken == ["Harun, what is next?"]
     await loop.actor.close()
 
 

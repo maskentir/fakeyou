@@ -11,6 +11,7 @@ from fakeyou.config.identifiers import SessionId
 from fakeyou.conversation.meeting_messages import NoHistory
 from fakeyou.conversation.meeting_turns import TurnInteraction, build_meeting_turns
 from fakeyou.conversation.turn_judge import JudgeWindow, TurnJudgement
+from fakeyou.foundation.speakers import UNIDENTIFIED_PARTICIPANT
 from fakeyou.foundation.transcript import TranscriptEvent, TranscriptUpdate
 from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.orchestration import kernel_port
@@ -27,6 +28,7 @@ from fakeyou.session.contracts import ChatObserved
 from fakeyou.session.kernel import SessionKernel
 from tests._audio_fakes import FakeReplyAudio
 from tests._conversation_fakes import FakeResponder, ScriptedJudge, judged
+from tests._conversation_support import event
 from tests._persistence_fakes import RecordingJournal
 
 QUESTION = "Rani, when is the beta?"
@@ -40,6 +42,7 @@ class Conversation:
         self.turn_ends: list[float] = []
         self.finals: list[TranscriptEvent] = []
         self.interims: list[str] = []
+        self.speakers: list[str] = []
         self.chats: list[TranscriptEvent] = []
         self.release = asyncio.Event()
         self.release.set()
@@ -52,9 +55,12 @@ class Conversation:
     def note_turn_end(self, *, probability: float) -> None:
         self.turn_ends.append(probability)
 
-    async def handle_interim(self, text: str, *, history_seq: int) -> None:
+    async def handle_interim(
+        self, text: str, *, history_seq: int, speaker: str = UNIDENTIFIED_PARTICIPANT
+    ) -> None:
         del history_seq
         self.interims.append(text)
+        self.speakers.append(speaker)
         self.interim_heard.set()
 
     async def receive_final(self, event: TranscriptEvent) -> None:
@@ -287,6 +293,7 @@ async def test_interims_keep_flowing_while_a_final_is_being_judged(tmp_path: Pat
     await asyncio.wait_for(conversation.interim_heard.wait(), timeout=2)
 
     assert (conversation.interims, conversation.finals) == (["Wait, stop"], [])
+    assert conversation.speakers == [UNIDENTIFIED_PARTICIPANT]
     conversation.release.set()
     await setup.kernel.settled()
     assert [event.text for event in conversation.finals] == [QUESTION]
@@ -332,10 +339,12 @@ async def test_a_chat_line_reaches_the_conversation_through_the_kernel(tmp_path:
 async def test_a_failing_consumer_is_recorded_and_the_lane_keeps_going(tmp_path: Path) -> None:
     class Broken(Conversation):
         @override
-        async def handle_interim(self, text: str, *, history_seq: int) -> None:
+        async def handle_interim(
+            self, text: str, *, history_seq: int, speaker: str = UNIDENTIFIED_PARTICIPANT
+        ) -> None:
             if text == "boom":
                 raise RuntimeError("broken")
-            await super().handle_interim(text, history_seq=history_seq)
+            await super().handle_interim(text, history_seq=history_seq, speaker=speaker)
 
     setup = Setup(tmp_path, Broken(), hold=None)
 
@@ -434,10 +443,12 @@ async def test_a_chat_after_a_final_reaches_the_turns_after_it(tmp_path: Path) -
 async def test_a_lane_survives_work_that_was_cancelled_under_it(tmp_path: Path) -> None:
     class Cancelling(Conversation):
         @override
-        async def handle_interim(self, text: str, *, history_seq: int) -> None:
+        async def handle_interim(
+            self, text: str, *, history_seq: int, speaker: str = UNIDENTIFIED_PARTICIPANT
+        ) -> None:
             if text == "cancelled":
                 raise asyncio.CancelledError
-            await super().handle_interim(text, history_seq=history_seq)
+            await super().handle_interim(text, history_seq=history_seq, speaker=speaker)
 
     setup = Setup(tmp_path, Cancelling(), hold=None)
 
@@ -500,7 +511,7 @@ async def test_payloads_the_kernel_never_reached_are_journaled_when_dropped(
     kernel.on_turn(cast(Any, SimpleNamespace(accept=lambda _signal: None)))
 
     for text in ("one", "two", "three"):
-        kernel.interim(text, history_seq=0)
+        kernel.interim(event("i", text, finalized=False), history_seq=0)
 
     [evicted] = journal.events("turn_payload_dropped")
     assert evicted["kind"] == "HeardInterim"
@@ -516,7 +527,7 @@ async def test_a_dead_kernel_is_recorded_as_a_fault() -> None:
 
     async def run() -> None:
         async with kernel.running():
-            kernel.interim("anything", history_seq=0)
+            kernel.interim(event("i", "anything", finalized=False), history_seq=0)
             await asyncio.sleep(0.01)
 
     session.subscribe(explode)
