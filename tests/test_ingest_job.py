@@ -16,13 +16,15 @@ from fakeyou.memory.ingest_job import (
     pending_ingestion_meetings,
 )
 from fakeyou.memory.ingest_service import IngestPorts
-from fakeyou.memory.ingest_status import IngestSummary
+from fakeyou.memory.ingest_status import IngestSummary, settle_correction
 from fakeyou.memory.ingestion import correction_episode_name
 from fakeyou.memory.operator_access import OperatorAccess
 from fakeyou.memory.persona import OperatorIdentity, PersonaProfile
+from fakeyou.observability.faults import FaultReporter
 from fakeyou.observability.journal import Journal
 from fakeyou.persistence.ingestion_status import (
     IngestionStatus,
+    SettledJob,
     read_status,
     status_path,
     write_status,
@@ -83,7 +85,7 @@ async def test_ingest_job_acks_only_after_persisted_status(
         acked.append(status is not None and status.status == "completed")
 
     summary = await handle_ingestion_job(
-        parse_ingestion_job(JOB_FIELDS),
+        parse_ingestion_job(JOB_FIELDS, job_id="1-0"),
         access=_access(settings, tmp_path, make_graphiti()),
         ports=_ports(),
         ack=ack,
@@ -97,7 +99,7 @@ async def test_duplicate_job_adds_no_second_episode(settings: Settings, tmp_path
     write_record(settings, "meeting-9")
     memory = make_graphiti()
     access = _access(settings, tmp_path, memory)
-    job = IngestionJob(meeting_id="meeting-9", kind="ingest")
+    job = IngestionJob(meeting_id="meeting-9", kind="ingest", job_id="1-0")
 
     await handle_ingestion_job(job, access=access, ports=_ports(), ack=_noop_ack)
     await handle_ingestion_job(job, access=access, ports=_ports(), ack=_noop_ack)
@@ -112,7 +114,7 @@ async def test_handler_forwards_exactly_the_published_summary(
     published: list[IngestSummary] = []
 
     summary = await handle_ingestion_job(
-        IngestionJob(meeting_id="meeting-9", kind="ingest"),
+        IngestionJob(meeting_id="meeting-9", kind="ingest", job_id="1-0"),
         access=_access(settings, tmp_path, make_graphiti()),
         ports=_ports(published),
         ack=_noop_ack,
@@ -134,7 +136,7 @@ async def test_incomplete_ingest_with_a_persisted_status_is_acked_but_not_succee
         acks.append("ack")
 
     summary = await handle_ingestion_job(
-        IngestionJob(meeting_id="meeting-9", kind="ingest"),
+        IngestionJob(meeting_id="meeting-9", kind="ingest", job_id="1-0"),
         access=_access(settings, tmp_path, memory),
         ports=_ports(),
         ack=ack,
@@ -154,10 +156,16 @@ async def test_correct_job_writes_only_corrected_episodes(
     memory = make_graphiti(episode_prefix="uuid-", edges=[])
     access = _access(settings, tmp_path, memory)
     await handle_ingestion_job(
-        IngestionJob(meeting_id="meeting-1", kind="ingest"),
+        IngestionJob(meeting_id="meeting-1", kind="ingest", job_id="1-0"),
         access=access,
         ports=_ports(),
         ack=_noop_ack,
+    )
+    ingested = read_status(_status_file(settings, "meeting-1"))
+    assert ingested is not None
+    assert (ingested.status, ingested.settled_job) == (
+        "completed",
+        SettledJob(id="1-0", outcome="completed"),
     )
     before = [episode["name"] for episode in memory.added]
     acks: list[str] = []
@@ -166,7 +174,7 @@ async def test_correct_job_writes_only_corrected_episodes(
         acks.append("ack")
 
     summary = await handle_ingestion_job(
-        IngestionJob(meeting_id="meeting-1", kind="correct"),
+        IngestionJob(meeting_id="meeting-1", kind="correct", job_id="2-0"),
         access=access,
         ports=_ports(),
         ack=ack,
@@ -181,6 +189,73 @@ async def test_correct_job_writes_only_corrected_episodes(
     status = read_status(_status_file(settings, "meeting-1"))
     assert status is not None
     assert status.corrected_at == CORRECTED_AT.isoformat()
+    assert (status.status, status.settled_job, status.episode_uuids) == (
+        "completed",
+        SettledJob(id="2-0", outcome="completed"),
+        ingested.episode_uuids,
+    )
+
+
+def _correction_summary(*, succeeded: bool, stored: bool) -> IngestSummary:
+    return IngestSummary(
+        meeting_id="meeting-1",
+        state="completed",
+        windows=1,
+        resumed_from=0,
+        ingested=0,
+        facts=0,
+        completed=succeeded,
+        succeeded=succeeded,
+        stored=stored,
+    )
+
+
+def _ingested_status(status_file: Path) -> IngestionStatus:
+    status = IngestionStatus(
+        meeting_id="meeting-1",
+        group_id="g",
+        status="completed",
+        episode_uuids={0: "uuid-a"},
+        settled_job=SettledJob(id="1-0", outcome="completed"),
+    )
+    write_status(status_file, status)
+    return status
+
+
+def test_settled_failed_correction_fails_its_job_and_keeps_the_meeting_state(
+    tmp_path: Path,
+) -> None:
+    status_file = tmp_path / "ingestion.json"
+    _ingested_status(status_file)
+
+    summary = settle_correction(
+        status_file,
+        _correction_summary(succeeded=False, stored=True),
+        job_id="2-0",
+        group_id="g",
+        faults=FaultReporter(journal=Journal("meeting-1")),
+    )
+
+    status = read_status(status_file)
+    assert status is not None
+    assert status.settled_job == SettledJob(id="2-0", outcome="failed")
+    assert (status.status, status.episode_uuids) == ("completed", {0: "uuid-a"})
+    assert (summary.state, summary.succeeded, summary.stored) == ("completed", False, True)
+
+
+def test_unstored_correction_leaves_its_job_pending_for_the_retry(tmp_path: Path) -> None:
+    status_file = tmp_path / "ingestion.json"
+    before = _ingested_status(status_file)
+
+    settle_correction(
+        status_file,
+        _correction_summary(succeeded=False, stored=False),
+        job_id="2-0",
+        group_id="g",
+        faults=FaultReporter(journal=Journal("meeting-1")),
+    )
+
+    assert read_status(status_file) == before
 
 
 async def test_correct_job_without_a_bundle_is_recorded_as_nothing_to_do(
@@ -194,7 +269,7 @@ async def test_correct_job_without_a_bundle_is_recorded_as_nothing_to_do(
         acks.append("ack")
 
     summary = await handle_ingestion_job(
-        IngestionJob(meeting_id="meeting-9", kind="correct"),
+        IngestionJob(meeting_id="meeting-9", kind="correct", job_id="1-0"),
         access=_access(settings, tmp_path, memory),
         ports=_ports(),
         ack=ack,
@@ -203,7 +278,11 @@ async def test_correct_job_without_a_bundle_is_recorded_as_nothing_to_do(
     assert memory.added == []
     assert acks == ["ack"]
     assert (summary.windows, summary.ingested, summary.stored) == (0, 0, True)
-    assert summary.state == "pending"
+    assert summary.state == "not_requested"
+    status = read_status(_status_file(settings, "meeting-9"))
+    assert status is not None
+    assert status.status == "not_requested"
+    assert status.settled_job == SettledJob(id="1-0", outcome="completed")
 
 
 async def test_corrupt_status_is_a_failed_summary_without_ack(
@@ -220,8 +299,8 @@ async def test_corrupt_status_is_a_failed_summary_without_ack(
         acks.append("ack")
 
     for job in (
-        IngestionJob(meeting_id="meeting-9", kind="ingest"),
-        IngestionJob(meeting_id="meeting-9", kind="correct"),
+        IngestionJob(meeting_id="meeting-9", kind="ingest", job_id="1-0"),
+        IngestionJob(meeting_id="meeting-9", kind="correct", job_id="1-0"),
     ):
         summary = await handle_ingestion_job(
             job,
@@ -258,7 +337,7 @@ async def test_handler_raises_and_never_acks_when_no_summary_is_published(
 
     with pytest.raises(RuntimeError, match="ingestion job published no summary"):
         await handle_ingestion_job(
-            IngestionJob(meeting_id="meeting-9", kind="ingest"),
+            IngestionJob(meeting_id="meeting-9", kind="ingest", job_id="1-0"),
             access=_access(settings, tmp_path, make_graphiti()),
             ports=_ports(),
             ack=ack,
@@ -268,8 +347,10 @@ async def test_handler_raises_and_never_acks_when_no_summary_is_published(
 
 
 def test_parse_ingestion_job_accepts_the_contract_payload() -> None:
-    assert parse_ingestion_job(JOB_FIELDS) == IngestionJob(meeting_id="meeting-9", kind="ingest")
-    assert parse_ingestion_job(JOB_FIELDS | {"kind": "correct"}).kind == "correct"
+    assert parse_ingestion_job(JOB_FIELDS, job_id="1-0") == IngestionJob(
+        meeting_id="meeting-9", kind="ingest", job_id="1-0"
+    )
+    assert parse_ingestion_job(JOB_FIELDS | {"kind": "correct"}, job_id="1-0").kind == "correct"
 
 
 @pytest.mark.parametrize(
@@ -285,14 +366,14 @@ def test_parse_ingestion_job_accepts_the_contract_payload() -> None:
 )
 def test_parse_ingestion_job_rejects_fields_by_name(change: dict[str, str], field: str) -> None:
     with pytest.raises(ValueError, match=field):
-        parse_ingestion_job(JOB_FIELDS | change)
+        parse_ingestion_job(JOB_FIELDS | change, job_id="1-0")
 
 
 def test_parse_ingestion_job_rejects_a_missing_field_by_name() -> None:
     fields = {key: value for key, value in JOB_FIELDS.items() if key != "meeting_id"}
 
     with pytest.raises(ValueError, match="meeting_id"):
-        parse_ingestion_job(fields)
+        parse_ingestion_job(fields, job_id="1-0")
 
 
 def _pending_status(meeting_id: str, status: str) -> IngestionStatus:
@@ -352,11 +433,11 @@ async def test_redis_job_is_acked_once_and_a_redelivered_payload_adds_nothing(
             await client.xack(stream, group, read_id)
 
         summary = await handle_ingestion_job(
-            parse_ingestion_job(fields), access=access, ports=_ports(), ack=ack
+            parse_ingestion_job(fields, job_id="1-0"), access=access, ports=_ports(), ack=ack
         )
         pending = await client.xpending(stream, group)
         again = await handle_ingestion_job(
-            parse_ingestion_job(fields), access=access, ports=_ports(), ack=_noop_ack
+            parse_ingestion_job(fields, job_id="1-0"), access=access, ports=_ports(), ack=_noop_ack
         )
 
         assert read_id == entry_id

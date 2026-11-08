@@ -139,7 +139,8 @@ All routes are token-authenticated: `Authorization: Bearer <token>`, owner or ad
 | `GET` | `/v1/sessions/{id}/events` | Live event stream |
 | `GET` | `/v1/sessions/{id}/report` | Session report |
 | `POST` | `/v1/sessions/{id}/ingestions` | Queue memory ingestion |
-| `GET` | `/v1/sessions/{id}/ingestion` | Ingestion status |
+| `GET` | `/v1/sessions/{id}/ingestion` | The meeting's latest ingestion outcome |
+| `GET` | `/v1/jobs/{id}` | One ingestion job's outcome, `pending` until that job settles |
 | `POST` | `/v1/sessions/{id}/debriefs` | Queue a debrief |
 | `GET` | `/v1/sessions/{id}/debrief` | Debrief status and report |
 | `POST` | `/v1/twins/{id}/reembeddings` | Queue an embedding refresh |

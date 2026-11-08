@@ -5,7 +5,6 @@ from contextlib import AbstractAsyncContextManager, AbstractContextManager, null
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
-from pathlib import Path
 from typing import Protocol, TypeGuard
 
 from graphiti_core import Graphiti
@@ -25,7 +24,14 @@ from fakeyou.memory.operator_access import OperatorAccess
 from fakeyou.memory.persona import OperatorIdentity, memory_group_for
 from fakeyou.observability.faults import capture_error
 from fakeyou.observability.journal import Journal
-from fakeyou.persistence.ingestion_status import IngestionStatus, write_status
+from fakeyou.persistence.ingestion_status import (
+    IngestionStatus,
+    RecordLockError,
+    SettledJob,
+    read_status,
+    record_lock,
+    write_status,
+)
 from fakeyou.persistence.layout import MeetingDir
 from fakeyou.transport.schemas import INGESTION_STREAM, encode_ingestion_job
 from fakeyou.transport.streams import CONNECTION_ERRORS, PendingDelivery, StreamTransport
@@ -57,11 +63,6 @@ class IngestionHandler(Protocol):
 
 def _missing_job_keys(error: BaseException) -> TypeGuard[FakeYouError]:
     return isinstance(error, FakeYouError) and error.code == ErrorCode.WORKER_JOB_KEYS_MISSING
-
-
-def _ingestion_status_path(settings: Settings, meeting_id: str) -> Path:
-    session_id = parse_session_id(meeting_id, field="meeting_id")
-    return MeetingDir(settings.paths.record_dir, session_id).ingestion
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,60 +190,87 @@ class IngestionConsumer:
 
     async def _dead_letter(self, item: PendingDelivery) -> None:
         fields = await self._transport.read_entry(INGESTION_STREAM, item.entry_id) or {}
+        if not self._record_failure(fields, item.entry_id, DEAD_LETTER_DETAIL):
+            return
         await self._fault(fields, DEAD_LETTER_DETAIL, deliveries=str(item.deliveries))
         await self._transport.ack(INGESTION_STREAM, INGESTION_GROUP, item.entry_id)
 
     async def _process(self, delivery: _Delivery) -> IngestSummary | None:
         try:
-            job = parse_ingestion_job(delivery.fields)
+            job = parse_ingestion_job(delivery.fields, job_id=delivery.entry_id)
         except ValueError:
+            self._record_failure(delivery.fields, delivery.entry_id, INVALID_JOB_DETAIL)
             await self._fault(delivery.fields, INVALID_JOB_DETAIL)
             return None
         reported: list[FakeYouError] = []
         async with asyncio.TaskGroup() as group:
             heartbeat = group.create_task(self._keep_claimed(delivery.entry_id))
             try:
-                summary, error = await capture_error(
-                    partial(self._handle, job, delivery.entry_id, reported)
-                )
+                summary, error = await capture_error(partial(self._handle, job, reported))
             finally:
                 heartbeat.cancel()
         fields = delivery.fields
         for item in reported:
             await self._fault(fields, str(item.code))
         if error is not None:
-            if _missing_job_keys(error):
-                await self._record_missing_keys(job, delivery.entry_id, error)
+            if _missing_job_keys(error) and self._record_failure(
+                fields, job.job_id, str(error.code)
+            ):
+                await self._transport.ack(INGESTION_STREAM, INGESTION_GROUP, job.job_id)
             await self._fault(fields, FAILED_JOB_DETAIL, error_type=type(error).__name__)
             return None
         return summary
 
-    async def _record_missing_keys(
-        self, job: IngestionJob, entry_id: str, error: FakeYouError
-    ) -> None:
-        snapshot = self._deps.store.load(job.meeting_id)
-        if snapshot is not None:
-            write_status(
-                _ingestion_status_path(self._deps.settings, job.meeting_id),
-                IngestionStatus(
-                    meeting_id=job.meeting_id,
-                    group_id=memory_group_for(snapshot.owner_id, snapshot.twin_id),
-                    status="failed",
-                    reason=str(error.code),
-                ),
-            )
-        await self._transport.ack(INGESTION_STREAM, INGESTION_GROUP, entry_id)
+    def _record_failure(self, fields: Mapping[str, str], job_id: str, reason: str) -> bool:
+        meeting_id = _readable_meeting(fields)
+        if meeting_id is None:
+            return True
+        meeting = MeetingDir(
+            self._deps.settings.paths.record_dir, parse_session_id(meeting_id, field="meeting_id")
+        )
+        if not meeting.ingestion.exists() and self._deps.store.load(meeting_id) is None:
+            return True
+        try:
+            with record_lock(meeting.record, purpose="ingestion"):
+                previous = read_status(meeting.ingestion) or self._fresh_status(meeting_id)
+                if previous is not None:
+                    write_status(
+                        meeting.ingestion,
+                        previous.model_copy(
+                            update={
+                                "status": "failed",
+                                "reason": reason,
+                                "settled_job": SettledJob(id=job_id, outcome="failed"),
+                                "updated_at": datetime.now(UTC),
+                            }
+                        ),
+                    )
+        except RecordLockError as error:
+            if error.code is ErrorCode.RECORD_LOCKED:
+                return False
+            logger.warning("ingestion status for %s not recorded: %s", meeting_id, error.code)
+        except (FakeYouError, OSError) as error:
+            logger.warning("ingestion status for %s not recorded: %s", meeting_id, error)
+        return True
 
-    async def _handle(
-        self, job: IngestionJob, entry_id: str, reported: list[FakeYouError]
-    ) -> IngestSummary:
+    def _fresh_status(self, meeting_id: str) -> IngestionStatus | None:
+        snapshot = self._deps.store.load(meeting_id)
+        if snapshot is None:
+            return None
+        return IngestionStatus(
+            meeting_id=meeting_id,
+            group_id=memory_group_for(snapshot.owner_id, snapshot.twin_id),
+            status="failed",
+        )
+
+    async def _handle(self, job: IngestionJob, reported: list[FakeYouError]) -> IngestSummary:
         return await self._deps.handler(
             job,
             access=await self._access(job.meeting_id),
             ports=IngestPorts(
                 stop_signals=_without_stop_signals, publish=_log_summary, report=reported.append
             ),
-            ack=self._transport.create_entry_ack(INGESTION_STREAM, INGESTION_GROUP, entry_id),
+            ack=self._transport.create_entry_ack(INGESTION_STREAM, INGESTION_GROUP, job.job_id),
         )
 
     async def _access(self, meeting_id: str) -> OperatorAccess:

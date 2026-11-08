@@ -34,6 +34,7 @@ def test_ingestion_status_old_schema_json_defaults_new_correction_fields() -> No
 
     assert status.correction_windows == {}
     assert status.correction_run is None
+    assert status.settled_job is None
 
 
 async def test_ingest_corrections_refuses_a_corrupt_status_and_journals_it(tmp_path: Path) -> None:

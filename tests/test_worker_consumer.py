@@ -28,7 +28,13 @@ from fakeyou.memory.persona import PersonaProfile
 from fakeyou.orchestration.join_types import JoinOutcome, JoinPorts, JoinRequest
 from fakeyou.orchestration.runtime import SessionWiring, run_meeting_session
 from fakeyou.persistence.brief import MeetingBrief
-from fakeyou.persistence.ingestion_status import IngestionStatus, read_status, write_status
+from fakeyou.persistence.ingestion_status import (
+    IngestionStatus,
+    SettledJob,
+    read_status,
+    record_lock,
+    write_status,
+)
 from fakeyou.persistence.layout import MeetingDir, meeting_profile_dir
 from fakeyou.persistence.owner_model import FrozenOwnerModel
 from fakeyou.transport.schemas import (
@@ -749,7 +755,13 @@ class IngestionHandlerDouble:
             return _summary(job.meeting_id, state="failed", completed=False, stored=False)
         path = MeetingDir(self.record_dir, SessionId(job.meeting_id)).ingestion
         write_status(
-            path, IngestionStatus(meeting_id=job.meeting_id, group_id="g", status="completed")
+            path,
+            IngestionStatus(
+                meeting_id=job.meeting_id,
+                group_id="g",
+                status="completed",
+                settled_job=SettledJob(id=job.job_id, outcome="completed"),
+            ),
         )
         self.log.append("status")
         summary = _summary(job.meeting_id, state="completed", completed=True, stored=True)
@@ -809,6 +821,11 @@ class IngestionHarness:
     def pending(self) -> list[PendingEntry]:
         return self.client.pending_for(INGESTION_STREAM, INGESTION_GROUP)
 
+    def recorded(self, meeting_id: str) -> tuple[str, str | None, SettledJob | None] | None:
+        path = MeetingDir(self.settings.paths.record_dir, SessionId(meeting_id)).ingestion
+        status = read_status(path)
+        return None if status is None else (status.status, status.reason, status.settled_job)
+
     def jobs(self) -> list[dict[str, str]]:
         return [fields for _entry_id, fields in self.client.streams.get(INGESTION_STREAM, [])]
 
@@ -831,7 +848,7 @@ async def test_ingestion_job_is_acked_only_by_the_handler_after_its_status(
     assert ingestion.client.log == ["status", f"ack:{entry_id}"]
     assert ingestion.pending() == []
     [(job, access)] = ingestion.handler.calls
-    assert job == IngestionJob(meeting_id="m-1", kind="ingest")
+    assert job == IngestionJob(meeting_id="m-1", kind="ingest", job_id=entry_id)
     assert access.identity.owner_id == "owner-1"
     assert access.identity.twin_id == "twin-1"
     assert access.identity.persona_path is not None
@@ -898,6 +915,11 @@ async def test_invalid_entry_is_not_acked_and_faults_its_meeting(
     assert fault["meeting_id"] == "m-1"
     assert fault["source"] == "ingestion"
     assert fault["detail"] == INVALID_JOB_DETAIL
+    assert ingestion.recorded("m-1") == (
+        "failed",
+        INVALID_JOB_DETAIL,
+        SettledJob(id=entry_id, outcome="failed"),
+    )
 
 
 async def test_invalid_entry_without_a_readable_meeting_publishes_no_event(
@@ -931,6 +953,82 @@ async def test_redelivery_is_capped_then_acked_with_a_terminal_fault(
     assert ingestion.client.events[0]["error_type"] == "RuntimeError"
     assert "exploded" not in str(ingestion.client.events)
     assert ingestion.client.events[-1]["deliveries"] == str(INGESTION_DELIVERY_LIMIT)
+    assert ingestion.recorded("m-1") == (
+        "failed",
+        DEAD_LETTER_DETAIL,
+        SettledJob(id=entry_id, outcome="failed"),
+    )
+
+
+async def test_failed_delivery_awaiting_a_retry_leaves_its_job_pending_then_completes(
+    ingestion: IngestionHarness,
+) -> None:
+    ingestion.seed("m-1")
+    path = MeetingDir(ingestion.settings.paths.record_dir, SessionId("m-1")).ingestion
+    before = IngestionStatus(
+        meeting_id="m-1",
+        group_id="g",
+        status="failed",
+        episode_uuids={0: "uuid-a"},
+        settled_job=SettledJob(id="0-1", outcome="failed"),
+    )
+    write_status(path, before)
+    entry_id = await ingestion.submit("m-1")
+    ingestion.handler.failure = RuntimeError("extraction exploded")
+
+    assert await ingestion.consumer.run_once() is None
+
+    assert read_status(path) == before
+    assert ingestion.client.acks == []
+
+    ingestion.handler.failure = None
+    ingestion.client.age(30_000)
+    summary = await ingestion.consumer.run_once()
+
+    assert summary is not None
+    assert summary.succeeded is True
+    assert ingestion.recorded("m-1") == (
+        "completed",
+        None,
+        SettledJob(id=entry_id, outcome="completed"),
+    )
+
+
+async def test_dead_letter_waits_for_a_running_job_to_release_the_record(
+    ingestion: IngestionHarness,
+) -> None:
+    ingestion.seed("m-1")
+    entry_id = await ingestion.submit("m-1")
+    ingestion.handler.failure = RuntimeError("extraction exploded")
+    for _ in range(INGESTION_DELIVERY_LIMIT):
+        await ingestion.consumer.run_once()
+        ingestion.client.age(30_000)
+    record = MeetingDir(ingestion.settings.paths.record_dir, SessionId("m-1")).record
+
+    with record_lock(record, purpose="ingestion"):
+        await ingestion.consumer.run_once()
+        assert ingestion.recorded("m-1") is None
+        assert [entry.entry_id for entry in ingestion.pending()] == [entry_id]
+
+    ingestion.client.age(30_000)
+    await ingestion.consumer.run_once()
+
+    assert ingestion.pending() == []
+    assert ingestion.recorded("m-1") == (
+        "failed",
+        DEAD_LETTER_DETAIL,
+        SettledJob(id=entry_id, outcome="failed"),
+    )
+
+
+async def test_failure_of_a_meeting_without_status_or_session_writes_nothing(
+    ingestion: IngestionHarness,
+) -> None:
+    await ingestion.submit("m-1", kind="reembed")
+
+    assert await ingestion.consumer.run_once() is None
+
+    assert ingestion.recorded("m-1") is None
 
 
 async def test_reported_errors_become_named_fault_events(ingestion: IngestionHarness) -> None:
@@ -1035,7 +1133,7 @@ async def test_ingestion_job_for_a_session_started_with_keys_fails_without_them(
     create = SessionCreate(link=LINK, owner_id="owner-1", twin_id="twin-1")
     ingestion.store.save_new(build_snapshot(create, meeting_id="m-2", at=AT, keys_supplied=True))
     consumer = ingestion.build()
-    await ingestion.submit("m-2")
+    entry_id = await ingestion.submit("m-2")
 
     await consumer.run_once()
 
@@ -1045,6 +1143,7 @@ async def test_ingestion_job_for_a_session_started_with_keys_fails_without_them(
     assert recorded is not None
     assert recorded.status == "failed"
     assert recorded.reason == "worker.job_keys_missing"
+    assert recorded.settled_job == SettledJob(id=entry_id, outcome="failed")
 
 
 class _Forever:

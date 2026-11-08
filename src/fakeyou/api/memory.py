@@ -27,7 +27,7 @@ from fakeyou.memory.forget import ForgottenFiles, run_forget
 from fakeyou.memory.operator_access import OperatorAccess
 from fakeyou.memory.persona import OperatorIdentity, PersonaProfile
 from fakeyou.orchestration.providers import open_persona_memory
-from fakeyou.persistence.ingestion_status import IngestionState, read_status
+from fakeyou.persistence.ingestion_status import IngestionState, IngestionStatus, read_status
 from fakeyou.persistence.layout import MeetingDir
 from fakeyou.transport.schemas import (
     INGESTION_STREAM,
@@ -130,12 +130,22 @@ def _meeting_access(
     )
 
 
-def _persisted_state(request: Request, meeting_id: str) -> IngestionState:
+def _persisted_status(request: Request, meeting_id: str) -> IngestionStatus | None:
     path = MeetingDir(
         _settings(request).paths.record_dir, parse_session_id(meeting_id, field="meeting_id")
     ).ingestion
-    status = read_status(path)
+    return read_status(path)
+
+
+def _persisted_state(request: Request, meeting_id: str) -> IngestionState:
+    status = _persisted_status(request, meeting_id)
     return "pending" if status is None else status.status
+
+
+def _job_state(request: Request, meeting_id: str, job_id: str) -> IngestionState:
+    status = _persisted_status(request, meeting_id)
+    settled = status.settled_job if status is not None else None
+    return settled.outcome if settled is not None and settled.id == job_id else "pending"
 
 
 def _ingestion_view(state: IngestionState) -> IngestionView:
@@ -168,13 +178,12 @@ async def submit_ingestion(
     request: Request,
 ) -> JobView:
     _owned_snapshot(request, meeting_id, principal)
-    state = _persisted_state(request, meeting_id)
     await stage_overrides(_job_transport(request), meeting_id, request.headers)
     job_id = await _job_transport(request).publish_job(
         INGESTION_STREAM,
         encode_ingestion_job(meeting_id=meeting_id, kind=payload.kind, at=_now(request)),
     )
-    return _job_view(job_id, kind=payload.kind, meeting_id=meeting_id, state=state)
+    return _job_view(job_id, kind=payload.kind, meeting_id=meeting_id, state="pending")
 
 
 @router.get("/v1/sessions/{meeting_id}/ingestion", response_model=IngestionView)
@@ -206,7 +215,7 @@ async def read_job(
         job_id,
         kind=fields["kind"],
         meeting_id=meeting_id,
-        state=_persisted_state(request, meeting_id),
+        state=_job_state(request, meeting_id, job_id),
     )
 
 

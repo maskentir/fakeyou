@@ -125,9 +125,6 @@ class ApiClient:
             "POST", f"/v1/sessions/{meeting_id}/ingestions", json={"kind": kind}
         )
 
-    async def ingestion_status(self, meeting_id: str) -> dict[str, Any]:
-        return await self._json("GET", f"/v1/sessions/{meeting_id}/ingestion")
-
     async def submit_reembed(self, twin_id: str) -> dict[str, Any]:
         return await self._json("POST", f"/v1/twins/{twin_id}/reembeddings")
 

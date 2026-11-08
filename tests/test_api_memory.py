@@ -7,7 +7,13 @@ from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.db.session_status import PhaseUpdate
 from fakeyou.memory.persona import PersonaProfile
-from fakeyou.persistence.ingestion_status import IngestionState, IngestionStatus, write_status
+from fakeyou.persistence.ingestion_status import (
+    IngestionState,
+    IngestionStatus,
+    JobOutcome,
+    SettledJob,
+    write_status,
+)
 from fakeyou.persistence.layout import MeetingDir
 from fakeyou.transport.schemas import INGESTION_STREAM, REEMBED_STREAM
 from tests.test_api_sessions import (
@@ -86,9 +92,16 @@ class MemoryHarness(ApiHarness):
         )
         self.store.save_new(build_snapshot(create, meeting_id=meeting_id, at=AT))
 
-    def persist_ingestion(self, meeting_id: str, state: IngestionState) -> None:
+    def persist_ingestion(
+        self, meeting_id: str, state: IngestionState, *, settled_job: SettledJob | None = None
+    ) -> None:
         path = MeetingDir(self.settings.paths.record_dir, SessionId(meeting_id)).ingestion
-        write_status(path, IngestionStatus(meeting_id=meeting_id, group_id="group", status=state))
+        write_status(
+            path,
+            IngestionStatus(
+                meeting_id=meeting_id, group_id="group", status=state, settled_job=settled_job
+            ),
+        )
 
 
 @pytest.fixture
@@ -155,10 +168,10 @@ async def test_ingestion_view_reads_the_persisted_status(
     assert body == {"status": state, "completed": completed, "succeeded": succeeded}
 
 
-async def test_job_route_answers_from_the_owner_meeting_status(api: MemoryHarness) -> None:
+async def test_job_route_answers_from_the_status_its_own_job_wrote(api: MemoryHarness) -> None:
     api.seed_session("m-1")
     await api.post("/v1/sessions/m-1/ingestions", json={"kind": "ingest"})
-    api.persist_ingestion("m-1", "completed")
+    api.persist_ingestion("m-1", "completed", settled_job=SettledJob(id="1-0", outcome="completed"))
     response = await api.get("/v1/jobs/1-0")
     assert response.status_code == 200
     assert response.json() == {
@@ -169,6 +182,57 @@ async def test_job_route_answers_from_the_owner_meeting_status(api: MemoryHarnes
         "completed": True,
         "succeeded": True,
     }
+
+
+@pytest.mark.parametrize("previous", ["failed", "completed"])
+async def test_submitted_job_is_pending_whatever_the_previous_run_left(
+    api: MemoryHarness, previous: JobOutcome
+) -> None:
+    api.seed_session("m-1")
+    api.persist_ingestion("m-1", previous, settled_job=SettledJob(id="0-1", outcome=previous))
+    submitted = (await api.post("/v1/sessions/m-1/ingestions", json={"kind": "ingest"})).json()
+    polled = (await api.get("/v1/jobs/1-0")).json()
+    assert (submitted["status"], submitted["completed"], submitted["succeeded"]) == (
+        "pending",
+        False,
+        False,
+    )
+    assert (polled["status"], polled["completed"], polled["succeeded"]) == (
+        "pending",
+        False,
+        False,
+    )
+
+
+async def test_job_settles_once_the_status_carries_its_id(api: MemoryHarness) -> None:
+    api.seed_session("m-1")
+    api.persist_ingestion("m-1", "failed")
+    await api.post("/v1/sessions/m-1/ingestions", json={"kind": "ingest"})
+    assert (await api.get("/v1/jobs/1-0")).json()["status"] == "pending"
+    api.persist_ingestion("m-1", "completed", settled_job=SettledJob(id="1-0", outcome="completed"))
+    body = (await api.get("/v1/jobs/1-0")).json()
+    assert (body["status"], body["completed"], body["succeeded"]) == ("completed", True, True)
+
+
+async def test_status_of_another_job_never_leaks_into_this_job(api: MemoryHarness) -> None:
+    api.seed_session("m-1")
+    await api.post("/v1/sessions/m-1/ingestions", json={"kind": "ingest"})
+    await api.post("/v1/sessions/m-1/ingestions", json={"kind": "ingest"})
+    api.persist_ingestion("m-1", "failed", settled_job=SettledJob(id="2-0", outcome="failed"))
+    first = (await api.get("/v1/jobs/1-0")).json()
+    second = (await api.get("/v1/jobs/2-0")).json()
+    assert (first["status"], first["completed"]) == ("pending", False)
+    assert (second["status"], second["completed"], second["succeeded"]) == ("failed", True, False)
+
+
+async def test_job_outcome_is_read_apart_from_the_meeting_state(api: MemoryHarness) -> None:
+    api.seed_session("m-1")
+    await api.post("/v1/sessions/m-1/ingestions", json={"kind": "correct"})
+    api.persist_ingestion("m-1", "pending", settled_job=SettledJob(id="1-0", outcome="completed"))
+    job = (await api.get("/v1/jobs/1-0")).json()
+    meeting = (await api.get("/v1/sessions/m-1/ingestion")).json()
+    assert (job["status"], job["completed"], job["succeeded"]) == ("completed", True, True)
+    assert meeting == {"status": "pending", "completed": False, "succeeded": False}
 
 
 async def test_persisted_status_survives_a_trimmed_job_entry(api: MemoryHarness) -> None:
