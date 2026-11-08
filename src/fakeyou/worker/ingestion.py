@@ -25,6 +25,7 @@ from fakeyou.memory.persona import OperatorIdentity, memory_group_for
 from fakeyou.observability.faults import capture_error
 from fakeyou.observability.journal import Journal
 from fakeyou.persistence.ingestion_status import (
+    IngestionState,
     IngestionStatus,
     RecordLockError,
     SettledJob,
@@ -232,19 +233,18 @@ class IngestionConsumer:
             return True
         try:
             with record_lock(meeting.record, purpose="ingestion"):
-                previous = read_status(meeting.ingestion) or self._fresh_status(meeting_id)
+                correction = fields.get("kind") == "correct"
+                previous = read_status(meeting.ingestion) or self._fresh_status(
+                    meeting_id, "not_requested" if correction else "failed"
+                )
                 if previous is not None:
-                    write_status(
-                        meeting.ingestion,
-                        previous.model_copy(
-                            update={
-                                "status": "failed",
-                                "reason": reason,
-                                "settled_job": SettledJob(id=job_id, outcome="failed"),
-                                "updated_at": datetime.now(UTC),
-                            }
-                        ),
-                    )
+                    settled: dict[str, object] = {
+                        "settled_job": SettledJob(id=job_id, outcome="failed"),
+                        "updated_at": datetime.now(UTC),
+                    }
+                    if not correction:
+                        settled |= {"status": "failed", "reason": reason}
+                    write_status(meeting.ingestion, previous.model_copy(update=settled))
         except RecordLockError as error:
             if error.code is ErrorCode.RECORD_LOCKED:
                 return False
@@ -253,14 +253,14 @@ class IngestionConsumer:
             logger.warning("ingestion status for %s not recorded: %s", meeting_id, error)
         return True
 
-    def _fresh_status(self, meeting_id: str) -> IngestionStatus | None:
+    def _fresh_status(self, meeting_id: str, status: IngestionState) -> IngestionStatus | None:
         snapshot = self._deps.store.load(meeting_id)
         if snapshot is None:
             return None
         return IngestionStatus(
             meeting_id=meeting_id,
             group_id=memory_group_for(snapshot.owner_id, snapshot.twin_id),
-            status="failed",
+            status=status,
         )
 
     async def _handle(self, job: IngestionJob, reported: list[FakeYouError]) -> IngestSummary:

@@ -1403,3 +1403,27 @@ async def test_an_active_session_starts_a_fresh_attempt_budget(harness: Harness)
     status = await harness.status.get("m-1")
     assert status is not None
     assert (status.phase, status.attempts) == ("ended", 0)
+
+
+async def test_a_dead_lettered_correction_fails_its_job_but_keeps_the_meeting_ingested(
+    ingestion: IngestionHarness,
+) -> None:
+    ingestion.seed("m-1")
+    path = MeetingDir(ingestion.settings.paths.record_dir, SessionId("m-1")).ingestion
+    write_status(
+        path,
+        IngestionStatus(
+            meeting_id="m-1", group_id="g", status="completed", episode_uuids={0: "uuid-a"}
+        ),
+    )
+    entry_id = await ingestion.submit("m-1", kind="correct")
+    ingestion.handler.failure = RuntimeError("correction exploded")
+    for _ in range(INGESTION_DELIVERY_LIMIT + 1):
+        await ingestion.consumer.run_once()
+        ingestion.client.age(30_000)
+
+    recorded = read_status(path)
+
+    assert recorded is not None
+    assert (recorded.status, recorded.episode_uuids) == ("completed", {0: "uuid-a"})
+    assert recorded.settled_job == SettledJob(id=entry_id, outcome="failed")
