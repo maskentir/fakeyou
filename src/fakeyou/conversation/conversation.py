@@ -14,7 +14,13 @@ from langchain_core.runnables import Runnable, RunnableConfig
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.control import ReplyControl
-from fakeyou.conversation.grounding import GroundingVerifier
+from fakeyou.conversation.critic import (
+    REVIEWED_ACTS,
+    ContributionCritic,
+    CriticClaim,
+    CriticVerdict,
+    refusal_reason,
+)
 from fakeyou.conversation.meeting_messages import (
     MeetingHistory,
     history_messages,
@@ -34,7 +40,6 @@ from fakeyou.conversation.reply_planner import (
     SpeechPiece,
     SpokenChunk,
     TurnLanguage,
-    planned_reply,
 )
 from fakeyou.conversation.sentence_stream import SentenceStream
 from fakeyou.conversation.speech_book import BookSource, TurnEvidence, fact_book
@@ -45,7 +50,7 @@ from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.observability.faults import ConsumerSink, capture_error, guard_consumer
 from fakeyou.observability.journal import Journal, JournalTiming
 from fakeyou.observability.provider_faults import ProviderFault, classify_exception
-from fakeyou.session.speech import ClaimHeader, FactBook, SpeechVerdict
+from fakeyou.session.speech import BookEntry, ClaimHeader, FactBook, SpeechVerdict
 
 
 @runtime_checkable
@@ -311,6 +316,68 @@ def _ignore_tool_start() -> None:
 
 
 @dataclass(frozen=True, slots=True)
+class CriticOutcome:
+    verdict: CriticVerdict | None
+    reason: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimReview:
+    critic: ContributionCritic
+    gate: SpeechGate
+    threshold: float
+    proactive: bool
+    trigger_text: str
+    recent_lines: tuple[str, ...]
+    journal: Journal | None
+    request_id: str
+    transcript_id: str | None
+
+    async def judge(self, header: ClaimHeader, say: str) -> bool:
+        outcome = await self.judge_plan([CriticClaim(header, say)])
+        return outcome.reason is None
+
+    async def judge_plan(self, claims: Sequence[CriticClaim]) -> CriticOutcome:
+        checked, _error = await capture_error(
+            partial(
+                self.critic.judge,
+                claims=claims,
+                sources=self._sources(claims),
+                trigger_text=self.trigger_text,
+                recent_lines=self.recent_lines,
+            )
+        )
+        if checked is None:
+            return self._outcome(claims, None, "critic_failed")
+        reason = refusal_reason(checked, proactive=self.proactive, threshold=self.threshold)
+        return self._outcome(claims, checked, reason)
+
+    def _sources(self, claims: Sequence[CriticClaim]) -> list[BookEntry]:
+        entries = self.gate.book.entries
+        refs = list(dict.fromkeys(ref for claim in claims for ref in claim.header.refs))
+        return [entries[ref] for ref in refs if ref in entries]
+
+    def _outcome(
+        self, claims: Sequence[CriticClaim], verdict: CriticVerdict | None, reason: str | None
+    ) -> CriticOutcome:
+        if self.journal is not None:
+            self.journal.record(
+                "critic_verdict",
+                source="agent",
+                request_id=self.request_id,
+                transcript_id=self.transcript_id,
+                claims=[
+                    {**claim.header.model_dump(mode="json"), "say": claim.say}
+                    for claim in claims
+                ],
+                refused=reason is not None,
+                reason=reason,
+                verdict=verdict.model_dump(mode="json") if verdict is not None else None,
+            )
+        return CriticOutcome(verdict=verdict, reason=reason)
+
+
+@dataclass(frozen=True, slots=True)
 class StreamTrace:
     language: str = DEFAULTS.speech.language
     journal: Journal | None = None
@@ -320,6 +387,7 @@ class StreamTrace:
     on_intent: IntentHandler | None = None
     on_language: Callable[[str], None] | None = None
     speech_gate: SpeechGate | None = None
+    review: ClaimReview | None = None
 
 
 REPLY_STREAM_ATTEMPTS = 2
@@ -366,27 +434,57 @@ async def invoke_reply(
     return output[-1].text.strip()
 
 
-def _close_segment(state: _SentenceStream, planner: ReplyPlanner) -> list[str]:
+def _hold_reviews(planner: ReplyPlanner) -> None:
+    for index, header in enumerate(planner.claims):
+        if header.act in REVIEWED_ACTS:
+            planner.hold_for_review(index)
+
+
+def _plan_claims(planner: ReplyPlanner) -> list[CriticClaim]:
+    return [
+        CriticClaim(header, planner.claim_say(index)) for index, header in enumerate(planner.claims)
+    ]
+
+
+async def _close_segment(
+    state: _SentenceStream, planner: ReplyPlanner, review: ClaimReview | None
+) -> list[str]:
     spoken: list[str] = []
     tail = state.flush_segment()
     if tail is not None:
         spoken.extend(planner.take_sentence(tail, state.claim))
     if not state.buffer.strip():
-        spoken.extend(planner.end_claim(state.claim))
+        spoken.extend(await _settle_claim(state.claim, planner, review))
     return spoken
 
 
-def _planned_pieces(
-    state: _SentenceStream, planner: ReplyPlanner, pieces: Sequence[SpeechPiece]
+async def _settle_claim(
+    claim: int, planner: ReplyPlanner, review: ClaimReview | None
+) -> list[str]:
+    if review is None or claim not in planner.review_claims():
+        return planner.end_claim(claim)
+    header = planner.claim_header(claim)
+    if header is None:
+        return planner.end_claim(claim)
+    accepted = await review.judge(header, planner.claim_say(claim))
+    return planner.settle_claim(claim, accepted=accepted)
+
+
+async def _planned_pieces(
+    state: _SentenceStream,
+    planner: ReplyPlanner,
+    pieces: Sequence[SpeechPiece],
+    review: ClaimReview | None,
 ) -> list[SpokenChunk] | None:
     if planner.silent:
         return None
     state.max_sentences = planner.max_sentences
     state.language = planner.language
     spoken: list[str] = []
+    _hold_reviews(planner)
     for claim, content in pieces:
         if claim != state.claim:
-            spoken.extend(_close_segment(state, planner))
+            spoken.extend(await _close_segment(state, planner, review))
             state.claim = claim
         if not content:
             continue
@@ -401,13 +499,14 @@ async def _pump_stream(
     state: _SentenceStream,
     phase: _StreamPhase,
     planner: ReplyPlanner,
+    review: ClaimReview | None,
 ) -> AsyncIterator[SpokenChunk]:
     snapshot = phase.boundary
     async for message, metadata in stream:
         piece, snapshot, consumable = _filter_piece(message, metadata, state, phase, snapshot)
         if not consumable:
             continue
-        sentences = _planned_pieces(state, planner, planner.feed(piece))
+        sentences = await _planned_pieces(state, planner, planner.feed(piece), review)
         if sentences is None:
             break
         for sentence in sentences:
@@ -415,9 +514,9 @@ async def _pump_stream(
         if state.check_cap():
             break
     else:
-        for sentence in _planned_pieces(state, planner, planner.finish()) or ():
+        for sentence in await _planned_pieces(state, planner, planner.finish(), review) or ():
             yield sentence
-        for line in _close_segment(state, planner):
+        for line in await _close_segment(state, planner, review):
             yield SpokenChunk(text=line, language=planner.language)
     for line in planner.finish_sentences():
         yield SpokenChunk(text=line, language=planner.language)
@@ -554,7 +653,7 @@ async def stream_sentences(
                 stream_mode="messages",
             )
             try:
-                async for sentence in _pump_stream(stream, state, phase, planner):
+                async for sentence in _pump_stream(stream, state, phase, planner, trace.review):
                     mark.started = True
                     yield sentence
             except (TimeoutError, FakeYouError):
@@ -586,8 +685,8 @@ class MeetingResponder:
     contributor: MeetingAgent | None = None
     book_source: BookSource = field(default_factory=BookSource)
     evidence: TurnEvidence = field(default_factory=TurnEvidence)
-    verifier: GroundingVerifier | None = None
-    grounding_threshold: float = 0.7
+    critic: ContributionCritic | None = None
+    critic_threshold: float = 0.7
 
     def __post_init__(self) -> None:
         if self.max_sentences <= 0:
@@ -662,6 +761,11 @@ class MeetingResponder:
         if effects is not None:
             effects.bind(on_intent, on_language)
             on_intent, on_language = effects.intent, effects.language
+        gate = SpeechGate(
+            partial(self._book, tuple(events)),
+            proactive=self._is_attention(events),
+            verify=self.book_source.verify,
+        )
         return StreamTrace(
             language=self.language,
             journal=self.journal,
@@ -670,11 +774,29 @@ class MeetingResponder:
             on_tool_start=on_tool_start,
             on_intent=on_intent,
             on_language=on_language,
-            speech_gate=SpeechGate(
-                partial(self._book, tuple(events)),
-                proactive=self._is_attention(events),
-                verify=self.book_source.verify,
-            ),
+            speech_gate=gate,
+            review=self._review(gate, events, request_id),
+        )
+
+    def _review(
+        self, gate: SpeechGate, events: Sequence[TranscriptEvent], request_id: str
+    ) -> ClaimReview | None:
+        if self.critic is None:
+            return None
+        last = events[-1] if events else None
+        trigger = ""
+        if last is not None:
+            trigger = last.attention.trigger_text if last.attention else last.text
+        return ClaimReview(
+            critic=self.critic,
+            gate=gate,
+            threshold=self.critic_threshold,
+            proactive=self._is_attention(events),
+            trigger_text=trigger,
+            recent_lines=tuple(recent_room_lines(self.history.entries())),
+            journal=self.journal,
+            request_id=request_id,
+            transcript_id=events[-1].id if events else None,
         )
 
     async def respond(
@@ -688,18 +810,27 @@ class MeetingResponder:
             trace=trace,
         )
         if not self._is_attention(events):
-            return planned_reply(
-                reply,
-                max_sentences=self.limit,
-                language=self.language,
-                handlers=_handlers(trace),
-                speech_gate=trace.speech_gate,
-            )
-        return await self._respond_gated(reply, trace, events)
+            return await self._respond_direct(reply, trace)
+        return await self._respond_gated(reply, trace)
 
-    async def _respond_gated(
-        self, reply: str, trace: StreamTrace, events: Sequence[TranscriptEvent]
-    ) -> SpokenChunk:
+    async def _respond_direct(self, reply: str, trace: StreamTrace) -> SpokenChunk:
+        planner = _reply_planner(self.limit, trace)
+        pieces = [*planner.feed(reply), *planner.finish()]
+        review = trace.review
+        if review is not None:
+            _hold_reviews(planner)
+            claims = [claim for claim in _plan_claims(planner) if claim.header.act in REVIEWED_ACTS]
+            if claims:
+                outcome = await review.judge_plan(claims)
+                if outcome.reason is not None:
+                    planner.refuse(planner.review_claims()[0])
+                    return SpokenChunk(
+                        text=" ".join(planner.finish_sentences()), language=planner.language
+                    )
+        spoken = planner.speak_pieces(pieces)
+        return SpokenChunk(text=" ".join(spoken), language=planner.language)
+
+    async def _respond_gated(self, reply: str, trace: StreamTrace) -> SpokenChunk:
         planner = ReplyPlanner(
             max_sentences=1,
             language=self.language,
@@ -707,60 +838,26 @@ class MeetingResponder:
             speech_gate=trace.speech_gate,
         )
         chunk = SpokenChunk(text=" ".join(planner.speak(reply)), language=planner.language)
+        empty = SpokenChunk(text="", language=planner.language)
         if not chunk.text or planner.blocked is not None:
-            return SpokenChunk(text="", language=planner.language)
-        if await self._verified(chunk, planner.claims, trace, events):
-            return chunk
-        return SpokenChunk(text="", language=planner.language)
-
-    async def _verified(
-        self,
-        chunk: SpokenChunk,
-        claims: Sequence[ClaimHeader],
-        trace: StreamTrace,
-        events: Sequence[TranscriptEvent],
-    ) -> bool:
-        empty = SpokenChunk(text="", language=chunk.language)
-
-        def drop(reason: str) -> bool:
-            self._dropped(empty, trace, reason)
-            return False
-
-        gate = trace.speech_gate
-        refs = list(dict.fromkeys(ref for claim in claims for ref in claim.refs))
-        if gate is None or self.verifier is None:
-            return drop("verifier_unavailable")
-        last = events[-1]
-        checked, _error = await capture_error(
-            partial(
-                self.verifier.verify,
-                text=chunk.text,
-                source_text=" ".join(gate.book.entries[fact_id].text for fact_id in refs),
-                trigger_text=last.attention.trigger_text if last.attention else last.text,
-                kind=", ".join(dict.fromkeys(claim.act for claim in claims)),
-                recent_lines=recent_room_lines(self.history.entries()),
-            )
-        )
-        if checked is None:
-            return drop("verifier_failed")
-        if not checked.grounded:
-            return drop("not_grounded")
-        if not checked.adds_information:
-            return drop("adds_nothing")
-        if not checked.on_topic:
-            return drop("off_topic")
-        if checked.confidence < self.grounding_threshold:
-            return drop("low_confidence")
+            return empty
+        review = trace.review
+        if review is None:
+            return self._dropped(empty, trace, "critic_unavailable")
+        claims = _plan_claims(planner)
+        outcome = await review.judge_plan(claims)
+        if outcome.reason is not None:
+            return self._dropped(empty, trace, outcome.reason)
         if self.journal is not None:
             self.journal.record(
                 "contribution_verified",
                 source="agent",
                 request_id=trace.request_id,
                 transcript_id=trace.transcript_id,
-                claims=[claim.model_dump(mode="json") for claim in claims],
-                confidence=checked.confidence,
+                claims=[claim.header.model_dump(mode="json") for claim in claims],
+                confidence=outcome.verdict.confidence if outcome.verdict is not None else None,
             )
-        return True
+        return chunk
 
     def _dropped(self, empty: SpokenChunk, trace: StreamTrace, reason: str) -> SpokenChunk:
         if self.journal is not None:

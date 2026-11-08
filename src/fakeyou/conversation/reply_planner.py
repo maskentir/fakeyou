@@ -196,6 +196,10 @@ class ReplyPlanner:
         self._on_gate = resolved.on_gate
         self._gate = speech_gate
         self._claims: list[ClaimHeader] = []
+        self._says: list[str] = []
+        self._review: set[int] = set()
+        self._verdicts: dict[int, bool] = {}
+        self._review_pieces: dict[int, list[SpeechPiece]] = {}
         self._commits_owner = False
         self._blocked: SpeechVerdict | None = None
         self._raw = ""
@@ -214,6 +218,25 @@ class ReplyPlanner:
     @property
     def claims(self) -> tuple[ClaimHeader, ...]:
         return tuple(self._claims)
+
+    def claim_header(self, claim: int) -> ClaimHeader | None:
+        return self._claims[claim] if claim < len(self._claims) else None
+
+    def claim_say(self, claim: int) -> str:
+        return self._says[claim] if claim < len(self._says) else ""
+
+    def hold_for_review(self, claim: int) -> None:
+        self._review.add(claim)
+
+    def review_claims(self) -> tuple[int, ...]:
+        return tuple(sorted(self._review))
+
+    def settle_claim(self, claim: int, *, accepted: bool) -> list[str]:
+        self._verdicts[claim] = accepted
+        return self._release_review(claim)
+
+    def refuse(self, claim: int) -> None:
+        self._block("critic_refused", self.claim_header(claim))
 
     @property
     def blocked(self) -> SpeechVerdict | None:
@@ -247,7 +270,9 @@ class ReplyPlanner:
         return self._release(final=True)
 
     def speak(self, reply: str) -> list[str]:
-        pieces = [*self.feed(reply), *self.finish()]
+        return self.speak_pieces([*self.feed(reply), *self.finish()])
+
+    def speak_pieces(self, pieces: Sequence[SpeechPiece]) -> list[str]:
         spoken: list[str] = []
         if not self.silent:
             for claim, group in groupby(pieces, key=lambda piece: piece.claim):
@@ -263,8 +288,11 @@ class ReplyPlanner:
         if self._gate is not None:
             verdict = self._judge(self._gate, sentence, claim)
             if verdict != "pass":
-                self._block(verdict, self._header(claim))
+                self._block(verdict, self.claim_header(claim))
                 return []
+        if claim in self._review:
+            self._review_pieces.setdefault(claim, []).append(SpeechPiece(claim, sentence))
+            return []
         if self._lead is None:
             self._lead = claim
         if claim == self._lead:
@@ -274,13 +302,28 @@ class ReplyPlanner:
         return []
 
     def end_claim(self, claim: int) -> list[str]:
+        if claim in self._review:
+            return self._release_review(claim)
         ended = [piece.text for piece in self._waiting if piece.claim == claim]
         self._waiting = [piece for piece in self._waiting if piece.claim != claim]
         return [line for sentence in ended for line in self._admit(sentence)]
 
+    def _release_review(self, claim: int) -> list[str]:
+        verdict = self._verdicts.get(claim)
+        if verdict is None:
+            return []
+        pieces = self._review_pieces.pop(claim, [])
+        if not verdict:
+            self.refuse(claim)
+            return []
+        return [line for piece in pieces for line in self._admit(piece.text)]
+
     def finish_sentences(self) -> list[str]:
         waiting, self._waiting = self._waiting, []
-        spoken = [line for piece in waiting for line in self._admit(piece.text)]
+        spoken: list[str] = []
+        for claim in sorted(self._review_pieces):
+            spoken.extend(self._release_review(claim))
+        spoken.extend(line for piece in waiting for line in self._admit(piece.text))
         if self._held is not None:
             held, self._held = self._held, None
             if not (self.intent == "answer" and self._spoken):
@@ -289,9 +332,6 @@ class ReplyPlanner:
         spoken.extend(self._fallback())
         self._report()
         return spoken
-
-    def _header(self, claim: int) -> ClaimHeader | None:
-        return self._claims[claim] if claim < len(self._claims) else None
 
     def _admit(self, sentence: str) -> list[str]:
         if self.intent in SHORT_INTENTS:
@@ -317,7 +357,7 @@ class ReplyPlanner:
         verdict = check_plan(
             self._claims, commits_owner=self._commits_owner, proactive=gate.proactive
         )
-        header = self._header(claim)
+        header = self.claim_header(claim)
         if verdict == "pass" and header is not None:
             verdict = check_claim(header, gate.book)
         if verdict != "pass":
@@ -389,6 +429,9 @@ class ReplyPlanner:
                 except ValidationError:
                     self._block("unparsed_plan", None)
                     return pieces
+                self._says.append(claim["say"])
+            else:
+                self._says[index] = claim["say"]
             pieces.extend(self._fresh(index, claim["say"]))
         return pieces
 

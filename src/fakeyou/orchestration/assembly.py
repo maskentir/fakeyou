@@ -30,7 +30,7 @@ from fakeyou.conversation.conversation import (
     MeetingAgent,
     MeetingResponder,
 )
-from fakeyou.conversation.grounding import GroundingVerifier, ModelGroundingVerifier
+from fakeyou.conversation.critic import ContributionCritic, ModelContributionCritic
 from fakeyou.conversation.meeting_messages import MeetingHistory, NoHistory
 from fakeyou.conversation.meeting_turns import (
     MeetingTurns,
@@ -231,7 +231,7 @@ DEFAULT_AGENT_WIRING = AgentWiring()
 class ModelWiring:
     reply: Callable[[], BaseChatModel] | None = None
     judge: Callable[[Sequence[str]], TurnJudge | None] | None = None
-    verifier: Callable[[], GroundingVerifier] | None = None
+    critic: Callable[[], ContributionCritic] | None = None
 
 
 DEFAULT_MODEL_WIRING = ModelWiring()
@@ -299,10 +299,10 @@ def build_source_registry(
     )
 
 
-def build_grounding_verifier(
+def build_contribution_critic(
     settings: Settings, journal: Journal | None = None
-) -> GroundingVerifier:
-    return ModelGroundingVerifier(
+) -> ContributionCritic:
+    return ModelContributionCritic(
         journal_model_inputs(create_turn_judge_model(settings), journal, "judge"),
         timeout_seconds=settings.turn_judge.timeout_seconds,
     )
@@ -459,11 +459,11 @@ class _ConversationBuilder:
             return factory()
         return create_chat_model(self._settings)
 
-    def build_verifier(self) -> GroundingVerifier:
-        factory = self._models.verifier
+    def build_critic(self) -> ContributionCritic:
+        factory = self._models.critic
         if factory is not None:
             return factory()
-        return build_grounding_verifier(self._settings, self._diagnostics.journal)
+        return build_contribution_critic(self._settings, self._diagnostics.journal)
 
     def _judge(self, names: Sequence[str]) -> TurnJudge | None:
         factory = self._models.judge
@@ -494,7 +494,7 @@ class _ConversationBuilder:
         self,
         agent: MeetingAgent,
         contributor: Any | None = None,
-        verifier: GroundingVerifier | None = None,
+        critic: ContributionCritic | None = None,
     ) -> MeetingResponder:
         return MeetingResponder(
             agent,
@@ -508,8 +508,8 @@ class _ConversationBuilder:
             contributor=contributor,
             book_source=self._book_source(),
             evidence=self._evidence,
-            verifier=verifier,
-            grounding_threshold=self._settings.perception.attention.grounding_confidence,
+            critic=critic,
+            critic_threshold=self._settings.perception.attention.critic_confidence,
         )
 
     def build_turns(
@@ -590,7 +590,7 @@ async def open_conversation(
         responder = builder.build_responder(
             builder.build_agent(model),
             builder.build_contributor(model) if config.attention_enabled else None,
-            builder.build_verifier() if config.attention_enabled else None,
+            builder.build_critic(),
         )
         turns = builder.build_turns(
             responder, participant_policy_enabled=config.participant_policy_enabled

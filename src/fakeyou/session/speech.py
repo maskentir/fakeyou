@@ -24,6 +24,7 @@ SpeechVerdict = Literal[
     "question_without_basis",
     "guess_as_fact",
     "speaks_as_mismatch",
+    "critic_refused",
 ]
 ClaimAct = Literal["fact", "opinion", "proposal", "question", "meta"]
 ClaimBasis = Literal[
