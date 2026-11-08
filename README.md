@@ -261,6 +261,13 @@ The turn judge reads the recent conversation from the meeting record, the twin's
 lines included, and starts judging on the live transcript while the speaker is still
 talking. When it cannot answer in time the twin replies only to a line that names it.
 
+A critic reads every contribution nobody asked for and every opinion or proposal in an
+answer, and asks whether the owner would say it, whether it is worth interrupting for,
+whether a guess is spoken as a guess, whether it rests on the sources it cites, whether it
+adds anything and whether it is on topic. It runs on the `turn_judge.model` role and
+waits for its verdict before the words are spoken, so a plain factual answer pays
+nothing for it. Its confidence floor is `FAKEYOU_PERCEPTION__ATTENTION__CRITIC_CONFIDENCE`.
+
 The twin's voice can have a fallback too: `FAKEYOU_TTS_FALLBACK__*` takes the same keys as
 `FAKEYOU_TTS__*`. A sentence the main provider fails before any audio is spoken by the
 fallback instead. When the main provider runs out of credit or rejects the key, the rest of

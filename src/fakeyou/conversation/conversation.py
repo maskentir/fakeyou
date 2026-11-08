@@ -343,6 +343,7 @@ class ClaimReview:
         return outcome.reason is None
 
     async def judge_plan(self, claims: Sequence[CriticClaim]) -> CriticOutcome:
+        started = monotonic()
         checked, _error = await capture_error(
             partial(
                 self.critic.judge,
@@ -352,10 +353,11 @@ class ClaimReview:
                 recent_lines=self.recent_lines,
             )
         )
+        elapsed_ms = (monotonic() - started) * 1000
         if checked is None:
-            return self._outcome(claims, None, "critic_failed")
+            return self._outcome(claims, None, "critic_failed", elapsed_ms)
         reason = refusal_reason(checked, proactive=self.proactive, threshold=self.threshold)
-        return self._outcome(claims, checked, reason)
+        return self._outcome(claims, checked, reason, elapsed_ms)
 
     def _sources(self, claims: Sequence[CriticClaim]) -> list[BookEntry]:
         entries = self.gate.book.entries
@@ -363,7 +365,11 @@ class ClaimReview:
         return [entries[ref] for ref in refs if ref in entries]
 
     def _outcome(
-        self, claims: Sequence[CriticClaim], verdict: CriticVerdict | None, reason: str | None
+        self,
+        claims: Sequence[CriticClaim],
+        verdict: CriticVerdict | None,
+        reason: str | None,
+        elapsed_ms: float,
     ) -> CriticOutcome:
         if self.journal is not None:
             self.journal.record(
@@ -372,11 +378,11 @@ class ClaimReview:
                 request_id=self.request_id,
                 transcript_id=self.transcript_id,
                 claims=[
-                    {**claim.header.model_dump(mode="json"), "say": claim.say}
-                    for claim in claims
+                    {**claim.header.model_dump(mode="json"), "say": claim.say} for claim in claims
                 ],
                 refused=reason is not None,
                 reason=reason,
+                duration_ms=elapsed_ms,
                 verdict=verdict.model_dump(mode="json") if verdict is not None else None,
             )
         return CriticOutcome(verdict=verdict, reason=reason)
@@ -463,9 +469,7 @@ async def _close_segment(
     return spoken
 
 
-async def _settle_claim(
-    claim: int, planner: ReplyPlanner, review: ClaimReview | None
-) -> list[str]:
+async def _settle_claim(claim: int, planner: ReplyPlanner, review: ClaimReview | None) -> list[str]:
     if review is None or claim not in planner.review_claims():
         return planner.end_claim(claim)
     header = planner.claim_header(claim)

@@ -46,3 +46,22 @@ def judge_config() -> JudgeConfig | None:
 
 def grades_itself(config: JudgeConfig, settings: Settings) -> bool:
     return config.model == settings.reply.model
+
+
+def model_family(model: str) -> str:
+    name = model.casefold().strip()
+    for prefix, family in (
+        ("gemini", "gemini"),
+        ("gpt", "openai"),
+        ("o1", "openai"),
+        ("o3", "openai"),
+        ("o4", "openai"),
+        ("claude", "anthropic"),
+    ):
+        if name.startswith(prefix):
+            return family
+    return name.split("/")[0].split("-")[0]
+
+
+def same_family(config: JudgeConfig, settings: Settings) -> bool:
+    return model_family(config.model) == model_family(settings.reply.model)
