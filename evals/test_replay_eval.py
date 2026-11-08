@@ -15,12 +15,12 @@ from evals._replay import (
     source_commit,
     write_replay_artifacts,
 )
-from evals._shared import cited_reply
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import Settings
 from fakeyou.orchestration.providers import create_chat_model
 from fakeyou.persistence.owner_model import FrozenOwnerModel
 from tests._conversation_fakes import ToolCallingFakeModel
+from tests._conversation_support import claim, plan_reply
 
 BETA_OWNER_MODEL = {
     "version": 1,
@@ -53,7 +53,7 @@ async def test_replay_scoring_counts_each_check_offline() -> None:
         ],
     }
     replies: list[BaseMessage] = [
-        AIMessage(content=cited_reply("The beta launch is on 14 October 2026.", "om-beta")),
+        AIMessage(content=plan_reply(claim("The beta launch is on 14 October 2026.", "om-beta"))),
         AIMessage(content="Five million?"),
     ]
 
@@ -104,8 +104,12 @@ async def test_replay_speaks_an_owner_position_and_never_an_owner_only_item() ->
     }
     model = ToolCallingFakeModel(
         responses=[
-            AIMessage(content=cited_reply("Rani wants to ship after the load test.", "om-ship")),
-            AIMessage(content=cited_reply("Rani's salary floor is 90 thousand.", "om-salary")),
+            AIMessage(
+                content=plan_reply(claim("Rani wants to ship after the load test.", "om-ship"))
+            ),
+            AIMessage(
+                content=plan_reply(claim("Rani's salary floor is 90 thousand.", "om-salary"))
+            ),
         ]
     )
 
@@ -137,7 +141,9 @@ async def test_streaming_replay_scores_ordered_sentences_offline() -> None:
     }
     replies: list[BaseMessage] = [
         AIMessage(
-            content=cited_reply("The beta launch is on 14 October 2026. See you there.", "om-beta")
+            content=plan_reply(
+                claim("The beta launch is on 14 October 2026. See you there.", "om-beta")
+            )
         )
     ]
 

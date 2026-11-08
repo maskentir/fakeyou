@@ -153,8 +153,7 @@ def baseline_metrics(rows: Sequence[Row]) -> dict[str, Any]:
     contributed = {
         str(row.get("transcript_id"))
         for _, row in timed
-        if row.get("event") == "reply_plan_observed"
-        and row.get("contribution") not in (None, "none")
+        if row.get("event") == "reply_plan_observed" and row.get("proactive") and row.get("claims")
     }
     events = Counter(str(row.get("event")) for row in rows)
     finals = [row for row in rows if row.get("event") == "transcript_finalized"]

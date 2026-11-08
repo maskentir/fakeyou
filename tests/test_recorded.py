@@ -27,6 +27,7 @@ from fakeyou.replay.fixture import (
 from fakeyou.replay.pacer import BYTES_PER_SECOND, PacedWriter
 from fakeyou.replay.recorded import RecordedJudge, RecordedModel, RecordedSynthesizer
 from fakeyou.replay.virtual_time import VirtualTimeLoop
+from fakeyou.session.speech import ClaimHeader
 
 CHUNKS = ((b"\x00" * 4800, 0.1), (b"\x00" * 4800, 0.1))
 
@@ -217,7 +218,7 @@ def replies() -> dict[str, ReplyTiming]:
             1500.0,
             (
                 ReplySentence(500.0, 0, 26, "Yes, I can see it clearly."),
-                ReplySentence(900.0, 1, 12, None),
+                ReplySentence(900.0, 1, 12, None, claim=1),
             ),
             ("Yes, I can see it clearly.",),
         )
@@ -229,8 +230,18 @@ def plans() -> dict[str, RecordedPlan]:
         "t1": RecordedPlan(
             language="en",
             intent="answer",
-            contribution="none",
-            cites=(),
+            claims=(
+                ClaimHeader(
+                    act="meta", basis="none", refs=(), certainty="stated", speaks_as="twin"
+                ),
+                ClaimHeader(
+                    act="fact",
+                    basis="screen",
+                    refs=(),
+                    certainty="stated",
+                    speaks_as="reporting",
+                ),
+            ),
             structured=True,
             replaced=False,
         )
@@ -270,14 +281,14 @@ def test_the_model_writes_a_plan_the_planner_reads() -> None:
 
     assert "".join(pieces).startswith("{")
     planner = ReplyPlanner(max_sentences=4, language="en")
-    released: list[str] = []
-    for piece in pieces:
-        content = planner.feed(piece)
-        if content:
-            released.append(content)
-    released.extend(planner.finish_sentences())
+    released = [part for piece in pieces for part in planner.feed(piece)] + planner.finish()
 
-    assert released[0].startswith("Yes, I can see it clearly.")
+    assert planner.blocked is None
+    assert "".join(part.text for part in released if part.claim == 0) == (
+        "Yes, I can see it clearly."
+    )
+    assert "".join(part.text for part in released if part.claim == 1) == "x" * 12
+    assert [claim.basis for claim in planner.claims] == ["none", "screen"]
     assert planner.language == "en"
     assert planner.intent == "answer"
 
@@ -293,6 +304,7 @@ def test_the_model_says_nothing_for_a_turn_without_a_recorded_reply() -> None:
     raw = run_virtual(main)
 
     assert '"intent": "silent"' in raw
+    assert ReplyPlanner(max_sentences=2, language="en").speak(raw) == []
 
 
 async def play_through(writer: PacedWriter, chunks: AsyncIterator[bytes]) -> None:

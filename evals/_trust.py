@@ -22,7 +22,7 @@ from evals._shared import (
     REPLAY_EVIDENCE,
     ArtifactMeta,
     ReplayOptions,
-    cited_reply,
+    contract_reply,
     sanitized_role,
     token_present,
 )
@@ -46,6 +46,7 @@ from fakeyou.observability.faults import capture_error
 from fakeyou.orchestration.persona_prompt import build_persona_prompt
 from fakeyou.persistence.owner_model import FrozenOwnerModel, FrozenOwnerModelItem
 from tests._conversation_fakes import ToolCallingFakeModel
+from tests._conversation_support import plan_reply
 from tests._memory_fakes import make_graphiti
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -269,11 +270,10 @@ def score_aids(case: dict[str, Any], reply: str, *, recalled: bool) -> dict[str,
 
 
 def _contract_content(turn: dict[str, Any]) -> str:
-    reply = str(turn["contract_reply"])
-    cites = turn.get("contract_cites")
-    if cites is None:
-        return reply
-    return cited_reply(reply, *map(str, cites), language="id")
+    claims = turn.get("contract_claims")
+    if claims is None:
+        return contract_reply(turn)
+    return plan_reply(*claims, language="id")
 
 
 def contract_model(case: dict[str, Any]) -> ToolCallingFakeModel:

@@ -16,6 +16,7 @@ from fakeyou.persistence.record import (
     TwinSpeechEntry,
     load_meeting_record,
 )
+from fakeyou.session.speech import ClaimHeader
 
 
 class _Row(BaseModel):
@@ -65,6 +66,7 @@ class _Request(_Row):
 class _Sentence(_Row):
     transcript_id: str
     sentence_index: int
+    claim_index: int = 0
     chars: int
 
 
@@ -84,7 +86,7 @@ class _Plan(_Row):
     transcript_id: str
     language: str = "en"
     intent: str = "answer"
-    contribution: str = "none"
+    claims: tuple[ClaimHeader, ...] = ()
     structured: bool = True
     replaced: bool = False
 
@@ -137,6 +139,7 @@ class ReplySentence:
     index: int
     chars: int
     text: str | None = None
+    claim: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,8 +167,7 @@ class SynthesisFault:
 class RecordedPlan:
     language: str
     intent: str
-    contribution: str
-    cites: tuple[str, ...]
+    claims: tuple[ClaimHeader, ...]
     structured: bool
     replaced: bool
 
@@ -321,7 +323,9 @@ def _replies(
         replies[transcript_id] = ReplyTiming(
             durations.get(transcript_id),
             tuple(
-                ReplySentence(part.offset_ms, part.index, part.chars, texts.get(part.index))
+                ReplySentence(
+                    part.offset_ms, part.index, part.chars, texts.get(part.index), part.claim
+                )
                 for part in reachable
             ),
             tuple(spoken.get(transcript_id, ())),
@@ -356,7 +360,12 @@ def _reply_requests(
             if began is not None:
                 elapsed = (sentence.at - began).total_seconds() * 1000
                 sentences[sentence.transcript_id].append(
-                    ReplySentence(elapsed, sentence.sentence_index, sentence.chars)
+                    ReplySentence(
+                        elapsed,
+                        sentence.sentence_index,
+                        sentence.chars,
+                        claim=sentence.claim_index,
+                    )
                 )
     return started, durations, dict(sentences)
 
@@ -452,12 +461,10 @@ def _plans(rows: Iterable[dict[str, Any]]) -> dict[str, RecordedPlan]:
         plan = _Plan.model_validate(row)
         if plan.transcript_id in plans:
             continue
-        cites = row.get("cites")
         plans[plan.transcript_id] = RecordedPlan(
             language=plan.language,
             intent=plan.intent,
-            contribution=plan.contribution,
-            cites=tuple(cites) if isinstance(cites, list) else (),
+            claims=plan.claims,
             structured=plan.structured,
             replaced=plan.replaced,
         )

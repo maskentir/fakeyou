@@ -154,6 +154,31 @@ def test_replies_keep_request_timing_sentences_and_spoken_text() -> None:
     assert (cancelled.duration_ms, cancelled.sentences, cancelled.spoken) == (None, (), ())
 
 
+def test_the_recorded_plan_keeps_its_claims_and_each_sentence_its_claim() -> None:
+    rows, entries = session()
+    claim = {
+        "act": "fact",
+        "basis": "owner_model",
+        "refs": ["om-beta"],
+        "certainty": "stated",
+        "speaks_as": "owner_proxy",
+    }
+    rows.insert(7, row("reply_plan_observed", 2.9, transcript_id="t1", claims=[claim]))
+    rows[8] = row(
+        "answer_sentence_emitted",
+        3.0,
+        transcript_id="t1",
+        sentence_index=0,
+        claim_index=1,
+        chars=11,
+    )
+
+    fixture = build_fixture(rows, entries)
+
+    assert [header.refs for header in fixture.plans["t1"].claims] == [("om-beta",)]
+    assert [sentence.claim for sentence in fixture.replies["t1"].sentences] == [1]
+
+
 def test_only_keyed_syntheses_are_kept() -> None:
     fixture = build_fixture(*session())
 

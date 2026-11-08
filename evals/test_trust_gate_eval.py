@@ -3,6 +3,7 @@ from typing import Any, cast
 
 import pytest
 
+from evals._shared import contract_reply
 from evals._trust import (
     case_owner_model,
     load_trust_fixture,
@@ -118,8 +119,8 @@ def test_trust_corpus_defines_29_rated_cases() -> None:
         assert case["turns"]
         for turn in case["turns"]:
             assert turn["say"].strip()
-            assert turn["contract_reply"].strip()
-            assert cap_spoken_reply(turn["contract_reply"]) == turn["contract_reply"].strip()
+            assert contract_reply(turn).strip()
+            assert cap_spoken_reply(contract_reply(turn)) == contract_reply(turn).strip()
     assert families == {"sumber_waktu": 11, "koreksi_gagal": 8, "otoritas_guna": 10}
 
 
@@ -143,7 +144,7 @@ def test_trust_owner_model_cases_hold_approved_facts_and_cite_them() -> None:
             assert item["kind"] == "fact"
             assert item["valid_at"]
         for turn in case["turns"]:
-            cited = {str(ref) for ref in turn.get("contract_cites", [])}
+            cited = {str(ref) for claim in turn.get("contract_claims", []) for ref in claim["refs"]}
             assert {ref for ref in cited if ref.startswith(OWNER_MODEL_REF_PREFIX)} <= refs
 
 

@@ -11,8 +11,9 @@ import fakeyou.orchestration.providers as providers
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.middleware import HistoryTrimMiddleware, OrphanToolCallMiddleware
-from fakeyou.conversation.reply_planner import ReplyPlan
+from fakeyou.conversation.reply_planner import SpeechPlan
 from fakeyou.memory.persona import memory_group_for
+from tests._conversation_support import claim, plan_reply
 from tests._error_support import message_pattern
 from tests._memory_fakes import make_graphiti
 
@@ -240,11 +241,12 @@ async def test_chat_returns_the_agent_reply_for_the_caller_to_print(
 async def test_chat_returns_the_spoken_text_of_a_structured_reply(
     settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    plan = ReplyPlan(
-        understood="When is the launch?",
-        language="en",
-        intent="answer",
-        text="The launch is on 14 October.",
+    plan = SpeechPlan.model_validate_json(
+        plan_reply(
+            claim("The launch is on 14 October.", "launch-date"),
+            claim("It moved after the load test.", "launch-moved"),
+            understood="When is the launch?",
+        )
     )
 
     class FakeAgent:
@@ -261,4 +263,4 @@ async def test_chat_returns_the_spoken_text_of_a_structured_reply(
         "hello", "thread", use_browser=False, use_memory=False, settings=settings
     )
 
-    assert reply == "The launch is on 14 October."
+    assert reply == "The launch is on 14 October. It moved after the load test."

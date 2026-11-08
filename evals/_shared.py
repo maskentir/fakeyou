@@ -1,7 +1,6 @@
 import gc
-import json
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -128,14 +127,8 @@ def token_present(token: str, text: str) -> bool:
     return re.search(r"\b" + re.escape(token) + r"\b", text, re.IGNORECASE) is not None
 
 
-def cited_reply(text: str, *cites: str, language: str = "en", contribution: str = "none") -> str:
-    return json.dumps(
-        {
-            "understood": "",
-            "language": language,
-            "intent": "answer",
-            "contribution": contribution,
-            "cites": list(cites),
-            "text": text,
-        }
-    )
+def contract_reply(turn: Mapping[str, Any]) -> str:
+    claims = turn.get("contract_claims")
+    if claims is None:
+        return str(turn["contract_reply"])
+    return " ".join(str(claim["say"]) for claim in claims)

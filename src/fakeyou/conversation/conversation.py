@@ -26,12 +26,12 @@ from fakeyou.conversation.middleware import SPEECH_MARK, SpeechMark
 from fakeyou.conversation.reply_draft import HeldEffects
 from fakeyou.conversation.reply_planner import (
     IntentHandler,
-    PlanHandler,
     PlanRead,
     ReplyHandlers,
     ReplyIntent,
     ReplyPlanner,
     SpeechGate,
+    SpeechPiece,
     SpokenChunk,
     TurnLanguage,
     planned_reply,
@@ -45,7 +45,7 @@ from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.observability.faults import ConsumerSink, capture_error, guard_consumer
 from fakeyou.observability.journal import Journal, JournalTiming
 from fakeyou.observability.provider_faults import ProviderFault, classify_exception
-from fakeyou.session.speech import FactBook, SpeechAct, SpeechVerdict
+from fakeyou.session.speech import ClaimHeader, FactBook, SpeechVerdict
 
 
 @runtime_checkable
@@ -223,6 +223,7 @@ class _SentenceStream(SentenceStream):
         self.spoken_chars = 0
         self.observed_chars = 0
         self.first_text = False
+        self.claim = 0
 
     def note_text(self, piece: str) -> None:
         self.observed_chars += len(piece)
@@ -236,14 +237,16 @@ class _SentenceStream(SentenceStream):
                     transcript_id=self.transcript_id,
                 )
 
-    def record_sentence(self, sentence: str, index: int | None = None) -> None:
+    def _count(self, sentence: str, index: int) -> None:
+        self.spoken_chars += len(sentence) + (1 if self.spoken_chars else 0)
         if self.journal is not None:
             self.journal.record(
                 "answer_sentence_emitted",
                 source="agent",
                 request_id=self.request_id,
                 transcript_id=self.transcript_id,
-                sentence_index=self.yielded if index is None else index,
+                sentence_index=index,
+                claim_index=self.claim,
                 chars=len(sentence),
             )
 
@@ -252,9 +255,15 @@ class _SentenceStream(SentenceStream):
         start = self.yielded
         sentences = super().take(piece)
         for offset, sentence in enumerate(sentences):
-            self.record_sentence(sentence, start + offset)
-            self.spoken_chars += len(sentence) + (1 if self.spoken_chars else 0)
+            self._count(sentence, start + offset)
         return sentences
+
+    @override
+    def flush_segment(self) -> str | None:
+        tail = super().flush_segment()
+        if tail is not None:
+            self._count(tail, self.yielded - 1)
+        return tail
 
     @override
     def check_cap(self) -> bool:
@@ -357,20 +366,33 @@ async def invoke_reply(
     return output[-1].text.strip()
 
 
-def _planned_piece(
-    state: _SentenceStream, planner: ReplyPlanner, piece: str
+def _close_segment(state: _SentenceStream, planner: ReplyPlanner) -> list[str]:
+    spoken: list[str] = []
+    tail = state.flush_segment()
+    if tail is not None:
+        spoken.extend(planner.take_sentence(tail, state.claim))
+    if not state.buffer.strip():
+        spoken.extend(planner.end_claim(state.claim))
+    return spoken
+
+
+def _planned_pieces(
+    state: _SentenceStream, planner: ReplyPlanner, pieces: Sequence[SpeechPiece]
 ) -> list[SpokenChunk] | None:
-    content = planner.feed(piece)
     if planner.silent:
         return None
-    if not content:
-        return []
-    state.note_text(content)
     state.max_sentences = planner.max_sentences
     state.language = planner.language
     spoken: list[str] = []
-    for sentence in state.take(content):
-        spoken.extend(planner.take_sentence(sentence))
+    for claim, content in pieces:
+        if claim != state.claim:
+            spoken.extend(_close_segment(state, planner))
+            state.claim = claim
+        if not content:
+            continue
+        state.note_text(content)
+        for sentence in state.take(content):
+            spoken.extend(planner.take_sentence(sentence, claim))
     return [SpokenChunk(text=sentence, language=planner.language) for sentence in spoken]
 
 
@@ -385,19 +407,17 @@ async def _pump_stream(
         piece, snapshot, consumable = _filter_piece(message, metadata, state, phase, snapshot)
         if not consumable:
             continue
-        sentences = _planned_piece(state, planner, piece)
+        sentences = _planned_pieces(state, planner, planner.feed(piece))
         if sentences is None:
-            return
+            break
         for sentence in sentences:
             yield sentence
         if state.check_cap():
-            for line in planner.finish_sentences():
-                yield SpokenChunk(text=line, language=planner.language)
-            return
-    tail = state.flush()
-    if tail is not None:
-        state.record_sentence(tail)
-        for line in planner.take_sentence(tail):
+            break
+    else:
+        for sentence in _planned_pieces(state, planner, planner.finish()) or ():
+            yield sentence
+        for line in _close_segment(state, planner):
             yield SpokenChunk(text=line, language=planner.language)
     for line in planner.finish_sentences():
         yield SpokenChunk(text=line, language=planner.language)
@@ -417,8 +437,8 @@ def _record_reply_plan(
         intent=plan.intent,
         language=plan.language,
         replaced=plan.replaced,
-        contribution=plan.contribution,
-        cites=list(plan.cites),
+        proactive=plan.proactive,
+        claims=[claim.model_dump(mode="json") for claim in plan.claims],
     )
 
 
@@ -427,7 +447,7 @@ def _record_speech_rejected(
     request_id: str,
     transcript_id: str | None,
     verdict: SpeechVerdict,
-    act: SpeechAct,
+    claim: ClaimHeader | None,
 ) -> None:
     if journal is None:
         return
@@ -437,8 +457,7 @@ def _record_speech_rejected(
         request_id=request_id,
         transcript_id=transcript_id,
         reason=verdict,
-        contribution=act.contribution,
-        cites=list(act.cites),
+        claim=claim.model_dump(mode="json") if claim is not None else None,
     )
 
 
@@ -476,11 +495,10 @@ def _record_stream_failure(state: _SentenceStream, started: float) -> None:
         )
 
 
-def _handlers(trace: StreamTrace, on_plan: PlanHandler | None = None) -> ReplyHandlers:
+def _handlers(trace: StreamTrace) -> ReplyHandlers:
     return ReplyHandlers(
         on_intent=trace.on_intent,
-        on_plan=on_plan
-        or partial(_record_reply_plan, trace.journal, trace.request_id, trace.transcript_id),
+        on_plan=partial(_record_reply_plan, trace.journal, trace.request_id, trace.transcript_id),
         on_language=trace.on_language,
         on_gate=partial(
             _record_speech_rejected, trace.journal, trace.request_id, trace.transcript_id
@@ -680,34 +698,23 @@ class MeetingResponder:
     async def _respond_gated(
         self, reply: str, trace: StreamTrace, events: Sequence[TranscriptEvent]
     ) -> SpokenChunk:
-        reads: list[PlanRead] = []
         planner = ReplyPlanner(
             max_sentences=1,
             language=self.language,
-            handlers=_handlers(trace, on_plan=reads.append),
+            handlers=_handlers(trace),
             speech_gate=trace.speech_gate,
         )
-        content = planner.feed(reply) + planner.finish()
-        for read in reads:
-            _record_reply_plan(self.journal, trace.request_id, trace.transcript_id, read)
-        empty = SpokenChunk(text="", language=planner.language)
-        if planner.silent or not content.strip():
-            return empty
-        spoken: list[str] = []
-        for sentence in split_sentences(content, language=planner.language):
-            spoken.extend(planner.take_sentence(sentence))
-        spoken.extend(planner.finish_sentences())
-        chunk = SpokenChunk(text=" ".join(spoken), language=planner.language)
-        if not chunk.text or planner.blocked is not None or planner.act is None:
-            return empty
-        if await self._verified(chunk, planner.act, trace, events):
+        chunk = SpokenChunk(text=" ".join(planner.speak(reply)), language=planner.language)
+        if not chunk.text or planner.blocked is not None:
+            return SpokenChunk(text="", language=planner.language)
+        if await self._verified(chunk, planner.claims, trace, events):
             return chunk
-        return empty
+        return SpokenChunk(text="", language=planner.language)
 
     async def _verified(
         self,
         chunk: SpokenChunk,
-        act: SpeechAct,
+        claims: Sequence[ClaimHeader],
         trace: StreamTrace,
         events: Sequence[TranscriptEvent],
     ) -> bool:
@@ -718,7 +725,8 @@ class MeetingResponder:
             return False
 
         gate = trace.speech_gate
-        if gate is None or not act.cites:
+        refs = list(dict.fromkeys(ref for claim in claims for ref in claim.refs))
+        if gate is None or not refs:
             return drop("missing_citation")
         if self.verifier is None:
             return drop("verifier_unavailable")
@@ -727,9 +735,9 @@ class MeetingResponder:
             partial(
                 self.verifier.verify,
                 text=chunk.text,
-                source_text=" ".join(gate.book.entries[fact_id].text for fact_id in act.cites),
+                source_text=" ".join(gate.book.entries[fact_id].text for fact_id in refs),
                 trigger_text=last.attention.trigger_text if last.attention else last.text,
-                kind=act.contribution,
+                kind=", ".join(dict.fromkeys(claim.act for claim in claims)),
                 recent_lines=recent_room_lines(self.history.entries()),
             )
         )
@@ -749,8 +757,7 @@ class MeetingResponder:
                 source="agent",
                 request_id=trace.request_id,
                 transcript_id=trace.transcript_id,
-                kind=act.contribution,
-                cites=list(act.cites),
+                claims=[claim.model_dump(mode="json") for claim in claims],
                 confidence=checked.confidence,
             )
         return True

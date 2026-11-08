@@ -10,6 +10,7 @@ from fakeyou.conversation.reply_planner import ReplyHandlers, ReplyPlanner, plan
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.persistence.record import TwinSpeechEntry
 from tests._conversation_fakes import ToolCallingFakeModel
+from tests._conversation_support import plan_reply
 
 RECORD_ORDER = count(1)
 
@@ -48,7 +49,7 @@ def test_the_planner_hands_the_intent_to_the_handler() -> None:
         language="en",
         handlers=ReplyHandlers(on_intent=lambda _intent: seen.append(_intent)),
     )
-    planner.feed('{"language": "en", "intent": "shorter", "text": "Okay, shorter."}')
+    planner.feed(plan_reply("Okay, shorter.", intent="shorter"))
 
     assert seen == ["shorter"]
     assert planner.intent == "shorter"
@@ -61,10 +62,9 @@ def test_the_planner_keeps_the_words_the_handler_returns() -> None:
         handlers=ReplyHandlers(on_intent=lambda _intent: "Earlier sentence."),
     )
 
-    assert (
-        planner.feed('{"language": "en", "intent": "repeat", "text": "Let me say that again."}')
-        == "Earlier sentence."
-    )
+    assert planner.speak(plan_reply("Let me say that again.", intent="repeat")) == [
+        "Earlier sentence."
+    ]
 
 
 def test_a_shorter_plan_lowers_the_sentence_budget() -> None:
@@ -125,7 +125,7 @@ def test_a_louder_plan_asks_the_session_for_more_volume() -> None:
 def test_the_control_intents_are_spoken_as_one_short_sentence() -> None:
     assert (
         planned_reply(
-            '{"language": "en", "intent": "shorter", "text": "Okay, shorter. Anything else?"}',
+            plan_reply("Okay, shorter. Anything else?", intent="shorter"),
             max_sentences=2,
             language="en",
         ).text
@@ -136,7 +136,7 @@ def test_the_control_intents_are_spoken_as_one_short_sentence() -> None:
 def test_a_stop_plan_keeps_the_acknowledgement_short() -> None:
     assert (
         planned_reply(
-            '{"language": "en", "intent": "stop", "text": "Okay, stopping. Anything else?"}',
+            plan_reply("Okay, stopping. Anything else?", intent="stop"),
             max_sentences=2,
             language="en",
         ).text

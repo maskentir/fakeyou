@@ -24,7 +24,7 @@ from fakeyou.session.identity import PresenceFact, presence
 from fakeyou.session.intent import Answer, Compound, Intent, MeetAction, Reading, intent_of
 from fakeyou.session.planner import TurnPlan, plan_turn
 from fakeyou.session.policy import UNATTRIBUTED, Actor, Grant, Permission, authorize
-from fakeyou.session.speech import ContributionKind, SpeechAct, check_act, check_sentence
+from fakeyou.session.speech import ClaimHeader, check_claim, check_plan, check_sentence
 from fakeyou.session.world import SessionState, reduce
 
 FIXTURE = Path(__file__).resolve().parent.parent / "evals" / "fixtures" / "kernel-scenarios.json"
@@ -231,6 +231,9 @@ def _optional_string(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
+CONTRIBUTION_ACTS = {"fact": "fact", "correction": "fact", "question": "question"}
+
+
 @pytest.mark.parametrize("scenario", executable("contribution_gate"), ids=lambda item: item.id)
 def test_contributions_pass_the_speech_gate_as_the_target_says(scenario: Scenario) -> None:
     registry_data = scenario.given["registry"]
@@ -254,13 +257,20 @@ def test_contributions_pass_the_speech_gate_as_the_target_says(scenario: Scenari
     )
     claim = scenario.given["claim"]
     assert isinstance(claim, dict)
-    act = SpeechAct(
-        cites=tuple(ref for ref in (_optional_string(claim.get("source_ref")),) if ref),
-        contribution=cast(ContributionKind, claim["kind"]),
+    header = ClaimHeader.model_validate(
+        {
+            "act": CONTRIBUTION_ACTS[str(claim["kind"])],
+            "basis": claim["source"],
+            "refs": [ref for ref in (_optional_string(claim.get("source_ref")),) if ref],
+            "certainty": "stated",
+            "speaks_as": "reporting",
+        }
     )
-    verdict = check_act(act, book)
+    verdict = check_plan([header], commits_owner=False, proactive=True)
     if verdict == "pass":
-        verdict = check_sentence(str(claim["text"]), act, book)
+        verdict = check_claim(header, book, proactive=True)
+    if verdict == "pass":
+        verdict = check_sentence(str(claim["text"]), header.refs, book)
 
     assert ("pass" if verdict == "pass" else "drop") == scenario.target["outcome"]
 

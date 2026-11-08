@@ -1,4 +1,3 @@
-import json
 from collections.abc import Sequence
 from typing import Any
 
@@ -17,6 +16,7 @@ from fakeyou.conversation.contribution import OwnerModelSource, source_registry
 from fakeyou.conversation.grounding import GroundingVerdict
 from fakeyou.conversation.moments import MomentCandidate, MomentDetector, MomentJudgement
 from tests._conversation_fakes import ScriptedJudge, ToolCallingFakeModel, judged
+from tests._conversation_support import claim, plan_reply
 
 NO_ENV_FILE: dict[str, Any] = {"_env_file": None}
 FACT = "The Orchid beta launch is planned for 14 October 2026"
@@ -69,15 +69,8 @@ def test_the_proactive_fixture_covers_positive_and_control_scenarios() -> None:
 async def test_the_replay_runs_detector_to_speech_offline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    plan = json.dumps(
-        {
-            "understood": "question",
-            "language": "en",
-            "intent": "answer",
-            "contribution": "fact",
-            "cites": ["om-orchid-beta-launch"],
-            "text": "The beta launches on 14 October.",
-        }
+    plan = plan_reply(
+        claim("The beta launches on 14 October.", "om-orchid-beta-launch"), understood="question"
     )
     model = ToolCallingFakeModel(responses=[AIMessage(content=plan)])
     monkeypatch.setattr(assembly, "create_chat_model", lambda _settings: model)
