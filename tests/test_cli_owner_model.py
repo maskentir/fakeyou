@@ -1,6 +1,7 @@
 import json
 import sys
 from datetime import UTC, datetime
+from pathlib import Path
 
 import httpx2
 import pytest
@@ -17,6 +18,7 @@ from fakeyou.cli.owner_model import OwnerModelItem, OwnerModelTarget
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.db.owner_model import OwnerModelEntry, OwnerModelStore, TwinScope
+from tests._persona_support import profile_data
 
 SETTINGS = ClientSettings(base_url="http://api.test", owner_token="owner-secret", admin_token=None)
 ITEM = OwnerModelItem("decision_rule", "hiring", "Hire for ownership.", "firm", "owner_only")
@@ -207,3 +209,87 @@ def test_retire_and_forget_commands_reach_their_own_routes(
 
     assert exited.value.code == 0
     assert called == ["item-1"]
+
+
+def _old_persona(tmp_path: Path) -> Path:
+    path = tmp_path / "persona.json"
+    persona = {
+        **profile_data(owner_id="demo_owner", twin_id="demo_twin"),
+        "goals": ["Keep the weekly sync short."],
+        "verified_facts": ["The beta launches on 14 October.", "Rani owns the checklist."],
+    }
+    path.write_text(json.dumps(persona), encoding="utf-8")
+    return path
+
+
+async def test_the_cli_imports_an_old_persona_once(
+    target: OwnerModelTarget,
+    store: OwnerModelStore,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    persona = _old_persona(tmp_path)
+
+    await cli.import_persona_knowledge(target.settings, persona, transport=target.transport)
+    first = _printed(capsys)
+    await cli.import_persona_knowledge(target.settings, persona, transport=target.transport)
+    second = _printed(capsys)
+
+    assert isinstance(first, dict)
+    assert [(item["kind"], item["statement"], item["source"]) for item in first["added"]] == [
+        ("fact", "The beta launches on 14 October.", "import"),
+        ("fact", "Rani owns the checklist.", "import"),
+        ("preference", "Keep the weekly sync short.", "import"),
+    ]
+    assert isinstance(second, dict)
+    assert (second["added"], len(second["skipped"])) == ([], 3)
+    snapshot = await store.snapshot(TwinScope("demo_owner", "demo_twin"))
+    assert snapshot.version == 3
+
+
+async def test_the_twin_id_option_overrides_the_persona_twin(
+    target: OwnerModelTarget,
+    store: OwnerModelStore,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    await cli.import_persona_knowledge(
+        target.settings, _old_persona(tmp_path), twin_id="other_twin", transport=target.transport
+    )
+    capsys.readouterr()
+
+    assert (await store.snapshot(TwinScope("demo_owner", "demo_twin"))).items == ()
+    assert len((await store.snapshot(TwinScope("demo_owner", "other_twin"))).items) == 3
+
+
+def test_the_import_command_reads_the_persona_and_twin_options(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    called: list[tuple[Path, str | None]] = []
+
+    async def record(_settings: ClientSettings, path: Path, *, twin_id: str | None) -> None:
+        called.append((path, twin_id))
+
+    monkeypatch.setattr(cli_main, "import_persona_knowledge", record)
+    persona = _old_persona(tmp_path)
+    argv = ["fakeyou", "owner-model", "import", "--persona", str(persona), "--twin-id", "t"]
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(SystemExit) as exited:
+        cli_main.main()
+
+    assert exited.value.code == 0
+    assert called == [(persona, "t")]
+
+
+def test_an_old_persona_is_refused_elsewhere_with_the_import_hint(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    argv = ["fakeyou", "owner-model", "show", "--persona", str(_old_persona(tmp_path))]
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(SystemExit) as exited:
+        cli_main.main()
+
+    assert exited.value.code == ExitCode.INPUT_REJECTED
+    error = capsys.readouterr().err
+    assert "persona fields verified_facts, goals now live in the owner model" in error
+    assert "fakeyou owner-model import --persona PATH" in error

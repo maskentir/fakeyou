@@ -64,7 +64,6 @@ PERSONA_DATA = {
     "twin_id": "twin-1",
     "display_name": "Demo Twin",
     "role": "Synthetic project lead",
-    "verified_facts": ["The synthetic demo is booked"],
     "allowed_tools": ["recall_meeting_context"],
 }
 BRIEF_DATA = {
@@ -590,6 +589,24 @@ async def test_join_request_for_writes_persona_and_brief_server_side(settings: S
     assert PersonaProfile.model_validate_json(persona_path.read_bytes()) == persona
     assert request.brief_path is not None
     assert MeetingBrief.model_validate_json(request.brief_path.read_bytes()) == snapshot.brief
+
+
+def test_a_stored_snapshot_whose_persona_holds_owner_knowledge_is_refused() -> None:
+    create = SessionCreate(
+        link=LINK,
+        owner_id="owner-1",
+        twin_id="twin-1",
+        audio=True,
+        conversation=True,
+        persona=PersonaProfile.model_validate(PERSONA_DATA),
+    )
+    stored = build_snapshot(create, meeting_id="m-4", at=AT).model_dump(mode="json")
+    stored["persona"]["goals"] = ["Keep the weekly sync short"]
+
+    with pytest.raises(FakeYouError, match="persona fields goals") as raised:
+        SessionSnapshot.model_validate(stored)
+
+    assert raised.value.code is ErrorCode.PERSONA_KNOWLEDGE_MOVED
 
 
 async def test_join_request_for_carries_the_frozen_owner_model(settings: Settings) -> None:

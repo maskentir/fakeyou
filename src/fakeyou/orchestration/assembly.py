@@ -275,15 +275,11 @@ def build_turn_judge(
 
 
 def build_source_registry(
-    profile: PersonaProfile | None,
-    brief: MeetingBrief | None,
-    owner_model: FrozenOwnerModel | None = None,
+    brief: MeetingBrief | None, owner_model: FrozenOwnerModel | None = None
 ) -> SourceRegistry:
-    persona_knowledge = brief is None or brief.knowledge_scope != "brief_only"
-    if not persona_knowledge:
-        profile, owner_model = None, None
+    if brief is not None and brief.knowledge_scope == "brief_only":
+        owner_model = None
     return source_registry(
-        profile_facts=tuple(profile.verified_facts) if profile is not None else (),
         brief_facts={item.id: item.text for item in brief.approved_facts} if brief else None,
         brief_questions={item.id: item.text for item in brief.questions} if brief else None,
         brief_objectives={item.id: item.text for item in brief.objectives} if brief else None,
@@ -479,7 +475,7 @@ class _ConversationBuilder:
     def _book_source(self) -> BookSource:
         brief = self._agent.brief
         return BookSource(
-            registry=build_source_registry(self._agent.profile, brief, self._agent.owner_model),
+            registry=build_source_registry(brief, self._agent.owner_model),
             permissions=frozenset(brief.permissions) if brief is not None else frozenset(),
             persona_knowledge=brief is None or brief.knowledge_scope != "brief_only",
         )

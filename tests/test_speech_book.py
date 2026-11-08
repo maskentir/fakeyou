@@ -9,11 +9,13 @@ from fakeyou.session.speech import SpeechAct, check_act
 
 TRIGGER = "The shared screen changed to Launch Timeline: beta slips to 20 October"
 REGISTRY = source_registry(
-    profile_facts=["The Orchid beta launch is planned for 14 October 2026"],
     brief_facts={"demo-date": "The synthetic Orchid demo is booked for Friday the 9th."},
     brief_questions={"vendor-needs": "Which synthetic vendor input is missing?"},
     brief_objectives={"blockers": "Find out which synthetic kickoff blocker the vendor hides"},
     owner_model={
+        "om-beta": OwnerModelSource(
+            "The Orchid beta launch is planned for 14 October 2026", "room_speakable"
+        ),
         "om-ship": OwnerModelSource("Ship after the load test passes.", "room_speakable"),
         "om-salary": OwnerModelSource("My salary floor is 90 thousand.", "owner_only"),
     },
@@ -47,10 +49,10 @@ def say(text: str, speech_gate: SpeechGate, **fields: object) -> str:
     ).text
 
 
-def test_a_cited_profile_fact_is_spoken() -> None:
+def test_a_cited_owner_fact_is_spoken() -> None:
     text = "The beta actually launches on 14 October."
 
-    assert say(text, gate(), cites=["fact-0"]) == text
+    assert say(text, gate(), cites=["om-beta"]) == text
 
 
 def test_an_uncited_number_is_replaced_by_an_honest_unknown() -> None:
@@ -72,9 +74,9 @@ def test_brief_facts_need_the_explain_permission() -> None:
     )
 
 
-def test_a_brief_only_meeting_cannot_speak_profile_facts() -> None:
+def test_a_brief_only_meeting_cannot_speak_owner_facts() -> None:
     assert say(
-        "The beta launches on 14 October.", gate(persona_knowledge=False), cites=["fact-0"]
+        "The beta launches on 14 October.", gate(persona_knowledge=False), cites=["om-beta"]
     ) == ("I'm not sure about that, so I'd rather not guess.")
 
 
@@ -129,7 +131,7 @@ def test_a_proactive_line_must_cite_and_stays_silent_when_it_fails() -> None:
             "The beta actually launches on 14 October.",
             proactive,
             contribution="correction",
-            cites=["fact-0"],
+            cites=["om-beta"],
         )
         == "The beta actually launches on 14 October."
     )
@@ -144,7 +146,7 @@ def test_a_proactive_question_must_come_from_the_brief() -> None:
         contribution="question",
         cites=["vendor-needs"],
     ) == ("Which vendor input is missing?")
-    assert say("Is the beta on track?", proactive, contribution="question", cites=["fact-0"]) == ""
+    assert say("Is the beta on track?", proactive, contribution="question", cites=["om-beta"]) == ""
 
 
 def test_recalled_memory_can_be_cited_after_it_was_prefetched() -> None:

@@ -7,6 +7,7 @@ import pytest
 from langchain_core.messages import AIMessage
 
 from fakeyou.conversation.contribution import (
+    OwnerModelSource,
     RecalledFact,
     memory_refs_from_evidence,
     source_registry,
@@ -24,7 +25,7 @@ PLAN = json.dumps(
         "language": "en",
         "intent": "answer",
         "contribution": "correction",
-        "cites": ["fact-0"],
+        "cites": ["om-beta"],
         "text": "The beta actually launches on 14 October.",
     }
 )
@@ -92,7 +93,11 @@ def _responder(verifier: _Verifier | None, journal: RecordingJournal) -> Meeting
         language="en",
         book_source=BookSource(
             registry=source_registry(
-                profile_facts=["The Orchid beta launch is planned for 14 October 2026"]
+                owner_model={
+                    "om-beta": OwnerModelSource(
+                        "The Orchid beta launch is planned for 14 October 2026", "room_speakable"
+                    )
+                }
             )
         ),
         verifier=verifier,
@@ -110,7 +115,7 @@ async def test_a_grounded_contribution_is_spoken() -> None:
     assert verifier.calls[0]["source_text"].endswith("14 October 2026")
     assert journal.events("contribution_verified")
     observed = journal.events("reply_plan_observed")[0]
-    assert (observed["contribution"], observed["cites"]) == ("correction", ["fact-0"])
+    assert (observed["contribution"], observed["cites"]) == ("correction", ["om-beta"])
 
 
 @pytest.mark.parametrize(

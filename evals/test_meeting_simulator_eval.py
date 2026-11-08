@@ -26,6 +26,7 @@ from fakeyou.observability.journal import journal_path
 from fakeyou.orchestration.join import run_join_session
 from fakeyou.orchestration.join_types import JoinPorts, JoinRequest
 from fakeyou.orchestration.providers import open_persona_memory
+from fakeyou.persistence.owner_model import FrozenOwnerModel
 from fakeyou.persistence.record import TwinSpeechEntry, load_meeting_record, meeting_record_path
 
 MEETING_AUDIO_MONITOR = "meeting_audio.monitor"
@@ -87,6 +88,9 @@ def _request(
         conversation_enabled=True,
         barge_in=True,
         brief_path=brief,
+        owner_model=FrozenOwnerModel.model_validate_json(
+            (FIXTURES / "owner-model.json").read_bytes()
+        ),
     )
 
 

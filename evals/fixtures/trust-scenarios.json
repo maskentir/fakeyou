@@ -1,6 +1,38 @@
 {
   "persona": "examples/persona.example.json",
   "other_group": "twin_other_synthetic",
+  "owner_model": [
+    {
+      "item_id": "orchid-beta-launch",
+      "kind": "fact",
+      "topic": "imported fact",
+      "statement": "The Orchid beta launch is planned for 14 October 2026"
+    },
+    {
+      "item_id": "orchid-checklist",
+      "kind": "fact",
+      "topic": "imported fact",
+      "statement": "Rani owns the Orchid launch checklist"
+    },
+    {
+      "item_id": "budget-approval",
+      "kind": "fact",
+      "topic": "imported fact",
+      "statement": "Budget and contract decisions need Rani's written approval"
+    },
+    {
+      "item_id": "weekly-sync",
+      "kind": "preference",
+      "topic": "imported preference",
+      "statement": "Keep the weekly Orchid sync on schedule"
+    },
+    {
+      "item_id": "open-questions",
+      "kind": "preference",
+      "topic": "imported preference",
+      "statement": "Collect open questions for Rani to answer after the meeting"
+    }
+  ],
   "cases": [
     {
       "id": "c01",
@@ -569,13 +601,13 @@
         {
           "say": "Kapan beta launch Orchid?",
           "contract_reply": "Beta launch Orchid direncanakan tanggal 14 Oktober 2026.",
-          "contract_cites": ["fact-0"]
+          "contract_cites": ["om-orchid-beta-launch"]
         }
       ],
       "memory": {"facts": []},
       "allow": ["14 oktober"],
       "forbid": ["november"],
-      "rubric": "Fakta yang diketahui dari profil terverifikasi harus dijawab langsung: 14 Oktober 2026."
+      "rubric": "Fakta owner yang diketahui dari owner model harus dijawab langsung: 14 Oktober 2026."
     },
     {
       "id": "c23",
@@ -592,7 +624,7 @@
       "memory": {"facts": []},
       "allow": ["belum tahu"],
       "forbid": ["juta", "ribu", "rupiah", "dolar", "usd"],
-      "rubric": "Fakta yang tidak ada di profil maupun memori harus dijawab belum tahu tanpa tawaran mengecek atau menyampaikan ke Rani; tidak boleh mengarang harga."
+      "rubric": "Fakta yang tidak ada di owner model maupun memori harus dijawab belum tahu tanpa tawaran mengecek atau menyampaikan ke Rani; tidak boleh mengarang harga."
     },
     {
       "id": "c24",

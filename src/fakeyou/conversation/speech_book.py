@@ -58,7 +58,6 @@ def _entries(source: BookSource, memory: Mapping[str, RecalledFact]) -> Iterator
     for fact_id, fact in memory.items():
         yield BookEntry(fact_id, fact.text, "memory", persona, times=fact.times)
     namespaces: tuple[tuple[Mapping[str, str], Namespace, Disclosure, bool], ...] = (
-        (registry.profile, "persona", persona, False),
         (registry.questions, "brief", questions, True),
         (registry.facts, "brief", facts, False),
     )

@@ -34,6 +34,7 @@ from fakeyou.cli.owner_model import (
     add_owner_model_item,
     decide_owner_model_proposal,
     forget_owner_model_item,
+    import_persona_knowledge,
     retire_owner_model_item,
     revise_owner_model_item,
     show_owner_model,
@@ -337,6 +338,7 @@ def brief_command(
             persona_path=persona,
             out_path=out or default_brief_path(settings, meeting_id),
             settings=settings,
+            api=client_settings_from_env(),
         )
     )
 
@@ -857,3 +859,15 @@ def owner_model_reject_command(
 ) -> None:
     target = _owner_model_target(persona_path, twin_id)
     asyncio.run(decide_owner_model_proposal(target, revision_id, approve=False))
+
+
+@owner_model_app.command(
+    "import", help="Import a persona's verified_facts and goals once as approved items"
+)
+@_guard_interrupts
+def owner_model_import_command(
+    *,
+    persona_path: Annotated[Path, typer.Option("--persona")],
+    twin_id: _TwinOption = None,
+) -> None:
+    asyncio.run(import_persona_knowledge(client_settings_from_env(), persona_path, twin_id=twin_id))

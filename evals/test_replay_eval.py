@@ -22,10 +22,25 @@ from fakeyou.orchestration.providers import create_chat_model
 from fakeyou.persistence.owner_model import FrozenOwnerModel
 from tests._conversation_fakes import ToolCallingFakeModel
 
+BETA_OWNER_MODEL = {
+    "version": 1,
+    "items": [
+        {
+            "item_id": "beta",
+            "kind": "fact",
+            "topic": "imported fact",
+            "statement": "The Orchid beta launch is planned for 14 October 2026",
+            "confidence": "firm",
+            "disclosure": "room_speakable",
+        }
+    ],
+}
+
 
 async def test_replay_scoring_counts_each_check_offline() -> None:
     fixture = {
         "persona": "examples/persona.example.json",
+        "owner_model": BETA_OWNER_MODEL,
         "sessions": [
             {
                 "meeting_id": "m1",
@@ -38,7 +53,7 @@ async def test_replay_scoring_counts_each_check_offline() -> None:
         ],
     }
     replies: list[BaseMessage] = [
-        AIMessage(content=cited_reply("The beta launch is on 14 October 2026.", "fact-0")),
+        AIMessage(content=cited_reply("The beta launch is on 14 October 2026.", "om-beta")),
         AIMessage(content="Five million?"),
     ]
 
@@ -109,6 +124,7 @@ async def test_replay_speaks_an_owner_position_and_never_an_owner_only_item() ->
 async def test_streaming_replay_scores_ordered_sentences_offline() -> None:
     fixture = {
         "persona": "examples/persona.example.json",
+        "owner_model": BETA_OWNER_MODEL,
         "sessions": [
             {
                 "meeting_id": "m1",
@@ -121,7 +137,7 @@ async def test_streaming_replay_scores_ordered_sentences_offline() -> None:
     }
     replies: list[BaseMessage] = [
         AIMessage(
-            content=cited_reply("The beta launch is on 14 October 2026. See you there.", "fact-0")
+            content=cited_reply("The beta launch is on 14 October 2026. See you there.", "om-beta")
         )
     ]
 
@@ -146,7 +162,14 @@ def test_replay_fixture_uses_real_session_transcripts() -> None:
     ]
     assert sum(len(session["turns"]) for session in fixture["sessions"]) == 8
     owner_model = FrozenOwnerModel.model_validate(fixture["owner_model"])
-    assert [item.ref for item in owner_model.items] == ["om-orchid-demo"]
+    assert [item.ref for item in owner_model.items] == [
+        "om-orchid-beta-launch",
+        "om-orchid-checklist",
+        "om-budget-approval",
+        "om-weekly-sync",
+        "om-open-questions",
+        "om-orchid-demo",
+    ]
     for session in fixture["sessions"]:
         assert all(fact.startswith("From Google Meet ") for fact in session["memory"])
 

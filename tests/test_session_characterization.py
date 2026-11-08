@@ -6,7 +6,7 @@ from typing import Literal, cast, get_args
 import pytest
 from pydantic import BaseModel, ConfigDict, Field
 
-from fakeyou.conversation.contribution import SourceRegistry
+from fakeyou.conversation.contribution import OwnerModelSource, SourceRegistry
 from fakeyou.conversation.participation_graph import JudgeThresholds, decision_of
 from fakeyou.conversation.speech_book import BookSource, fact_book
 from fakeyou.conversation.turn_judge import TurnJudgement
@@ -241,7 +241,10 @@ def test_contributions_pass_the_speech_gate_as_the_target_says(scenario: Scenari
     registry = SourceRegistry(
         facts={ref: text for ref, text in brief.items() if ref not in questions},
         questions={ref: text for ref, text in brief.items() if ref in questions},
-        profile=_string_map(registry_data.get("profile", {})),
+        owner_model={
+            ref: OwnerModelSource(text, "room_speakable")
+            for ref, text in _string_map(registry_data.get("owner_model", {})).items()
+        },
     )
     book = fact_book(
         BookSource(registry, frozenset({"explain_facts", "ask_brief_questions"})),

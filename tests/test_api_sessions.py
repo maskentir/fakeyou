@@ -264,6 +264,19 @@ async def test_document_identity_mismatches_are_named_catalog_errors(api: ApiHar
     assert response.json()["error"]["code"] == "meeting.brief_scope_mismatch"
 
 
+async def test_a_persona_with_owner_knowledge_points_to_the_owner_model_import(
+    api: ApiHarness,
+) -> None:
+    persona, _brief = _example_documents()
+    old_persona = {**persona, "verified_facts": ["The Orchid beta launch is planned."]}
+
+    response = await api.post("/v1/sessions", json={**SESSION_PAYLOAD, "persona": old_persona})
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "persona.knowledge_moved"
+    assert "fakeyou owner-model import --persona PATH" in response.json()["error"]["message"]
+
+
 async def test_resume_on_created_session_is_a_conflict(api: ApiHarness) -> None:
     body = (await api.post("/v1/sessions", json=SESSION_PAYLOAD)).json()
     response = await api.post(f"/v1/sessions/{body['meeting_id']}/resume")

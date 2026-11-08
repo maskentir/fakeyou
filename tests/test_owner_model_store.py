@@ -2,10 +2,16 @@ import asyncio
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.db.owner_model import OwnerModelEntry, OwnerModelStore, TwinScope
+from fakeyou.db.owner_model import (
+    OwnerModelEntry,
+    OwnerModelSnapshot,
+    OwnerModelStore,
+    TwinScope,
+)
 
 NOW = datetime(2026, 11, 8, 9, 0, tzinfo=UTC)
 LATER = NOW + timedelta(minutes=5)
@@ -13,6 +19,10 @@ SCOPE = TwinScope("owner-1", "twin-1")
 OTHER = TwinScope("owner-1", "twin-2")
 POSITION = OwnerModelEntry("position", "release", "Ship the beta after the load test passes.")
 STYLE = OwnerModelEntry("style_example", "tone", "Short answers, numbers first.")
+IMPORTED = (
+    OwnerModelEntry("fact", "imported fact", "The beta launches on 14 October."),
+    OwnerModelEntry("preference", "imported preference", "Keep the weekly sync short."),
+)
 
 
 async def test_owner_authored_items_are_active_at_once_and_each_bumps_the_version(
@@ -290,3 +300,75 @@ async def test_forget_of_an_unknown_or_foreign_item_is_unknown(
             await store.forget(scope, item_id, LATER)
         assert raised.value.code is ErrorCode.OWNER_MODEL_ITEM_UNKNOWN
     assert [item.entry for item in (await store.snapshot(SCOPE)).items] == [POSITION]
+
+
+async def test_an_import_approves_every_statement_under_its_own_version(
+    migrated_async_engine: AsyncEngine,
+) -> None:
+    store = OwnerModelStore(migrated_async_engine)
+    await store.add(SCOPE, POSITION, "owner", NOW)
+
+    imported = await store.import_entries(SCOPE, IMPORTED, LATER)
+
+    assert [
+        (revision.entry, revision.source, revision.status, revision.model_version)
+        for revision in imported.added
+    ] == [(IMPORTED[0], "import", "approved", 2), (IMPORTED[1], "import", "approved", 3)]
+    assert {revision.decided_at for revision in imported.added} == {LATER}
+    assert imported.skipped == ()
+    assert [item.entry for item in (await store.snapshot(SCOPE)).items] == [POSITION, *IMPORTED]
+
+
+async def test_an_import_skips_statements_already_held_with_the_same_kind(
+    migrated_async_engine: AsyncEngine,
+) -> None:
+    store = OwnerModelStore(migrated_async_engine)
+    await store.import_entries(SCOPE, IMPORTED, NOW)
+    respaced = OwnerModelEntry("fact", "imported fact", "The beta  launches on\n14 October.")
+    as_preference = OwnerModelEntry("preference", "imported preference", IMPORTED[0].statement)
+
+    again = await store.import_entries(
+        SCOPE, (*IMPORTED, respaced, as_preference, as_preference), LATER
+    )
+
+    assert [revision.entry for revision in again.added] == [as_preference]
+    assert again.skipped == (*IMPORTED, respaced, as_preference)
+    assert (await store.snapshot(SCOPE)).version == 3
+
+
+async def test_a_retired_statement_is_imported_again(
+    migrated_async_engine: AsyncEngine,
+) -> None:
+    store = OwnerModelStore(migrated_async_engine)
+    [fact, _preference] = (await store.import_entries(SCOPE, IMPORTED, NOW)).added
+    await store.retire(SCOPE, fact.item_id, NOW)
+
+    again = await store.import_entries(SCOPE, IMPORTED, LATER)
+
+    assert [revision.entry for revision in again.added] == [IMPORTED[0]]
+    assert again.added[0].item_id != fact.item_id
+    assert again.skipped == (IMPORTED[1],)
+
+
+async def test_an_import_that_fails_midway_writes_nothing(
+    migrated_async_engine: AsyncEngine,
+) -> None:
+    store = OwnerModelStore(migrated_async_engine)
+    unstorable = OwnerModelEntry("fact", "imported fact", "A NUL \x00 byte.")
+
+    with pytest.raises(DBAPIError):
+        await store.import_entries(SCOPE, (IMPORTED[0], unstorable), NOW)
+
+    assert await store.snapshot(SCOPE) == OwnerModelSnapshot(version=0, items=())
+
+
+async def test_concurrent_imports_of_one_persona_add_it_once(
+    migrated_async_engine: AsyncEngine,
+) -> None:
+    store = OwnerModelStore(migrated_async_engine)
+
+    results = await asyncio.gather(*(store.import_entries(SCOPE, IMPORTED, NOW) for _ in range(4)))
+
+    assert sorted(len(result.added) for result in results) == [0, 0, 0, 2]
+    assert sorted(len(result.skipped) for result in results) == [0, 2, 2, 2]
+    assert (await store.snapshot(SCOPE)).version == 2

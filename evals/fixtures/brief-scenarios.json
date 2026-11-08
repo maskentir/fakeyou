@@ -6,20 +6,56 @@
     "role": "Product lead for the synthetic Orchid project",
     "language": "id",
     "speaking_style": "Singkat, ramah, dan langsung ke inti",
-    "goals": [
-      "Close the Kestrel-77 partnership renewal before December",
-      "Move the Quartz Lantern analytics pilot into production"
-    ],
-    "verified_facts": [
-      "The Kestrel-77 retainer is 480 million rupiah per year",
-      "Rani's private review code is ZEPHYR-9",
-      "Budget and contract decisions need Rani's written approval"
-    ],
     "vocabulary": ["Orchid", "Rani", "kickoff", "PIC", "vendor"],
     "allowed_tools": ["recall_meeting_context"],
     "ingest_transcripts": false
   },
-  "persona_markers": ["Kestrel-77", "Quartz Lantern", "ZEPHYR-9", "480 million"],
+  "owner_model": {
+    "version": 5,
+    "items": [
+      {
+        "item_id": "kestrel-retainer",
+        "kind": "fact",
+        "topic": "imported fact",
+        "statement": "The Kestrel-77 retainer is 480 million rupiah per year",
+        "confidence": "firm",
+        "disclosure": "room_speakable"
+      },
+      {
+        "item_id": "review-code",
+        "kind": "fact",
+        "topic": "imported fact",
+        "statement": "Rani's private review code is ZEPHYR-9",
+        "confidence": "firm",
+        "disclosure": "room_speakable"
+      },
+      {
+        "item_id": "budget-approval",
+        "kind": "fact",
+        "topic": "imported fact",
+        "statement": "Budget and contract decisions need Rani's written approval",
+        "confidence": "firm",
+        "disclosure": "room_speakable"
+      },
+      {
+        "item_id": "kestrel-renewal",
+        "kind": "preference",
+        "topic": "imported preference",
+        "statement": "Close the Kestrel-77 partnership renewal before December",
+        "confidence": "firm",
+        "disclosure": "room_speakable"
+      },
+      {
+        "item_id": "quartz-pilot",
+        "kind": "preference",
+        "topic": "imported preference",
+        "statement": "Move the Quartz Lantern analytics pilot into production",
+        "confidence": "firm",
+        "disclosure": "room_speakable"
+      }
+    ]
+  },
+  "owner_markers": ["Kestrel-77", "Quartz Lantern", "ZEPHYR-9", "480 million"],
   "brief": {
     "schema_version": "meeting_brief/v1",
     "owner_id": "demo_owner",

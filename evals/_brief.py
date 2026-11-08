@@ -45,6 +45,7 @@ from fakeyou.memory.persona import PersonaProfile, meeting_tool_names, persona_d
 from fakeyou.observability.faults import capture_error
 from fakeyou.orchestration.persona_prompt import build_persona_prompt
 from fakeyou.persistence.brief import MeetingBrief, brief_digest
+from fakeyou.persistence.owner_model import FrozenOwnerModel
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "brief-scenarios.json"
 
@@ -152,6 +153,10 @@ def fixture_profile(fixture: dict[str, Any]) -> PersonaProfile:
     return PersonaProfile.model_validate_json(json.dumps(fixture["persona"]))
 
 
+def fixture_owner_model(fixture: dict[str, Any]) -> FrozenOwnerModel:
+    return FrozenOwnerModel.model_validate(fixture["owner_model"])
+
+
 def case_brief(fixture: dict[str, Any], case: dict[str, Any]) -> MeetingBrief:
     return MeetingBrief.model_validate_json(json.dumps({**fixture["brief"], **case["brief"]}))
 
@@ -192,6 +197,7 @@ async def replay_briefs(
         case["id"]: brief_digest(case_brief(fixture, case)) for case in fixture["cases"]
     }
     candidate["fixture_payload_sha256"] = canonical_json_digest(fixture, compact=True)
+    owner_model = fixture_owner_model(fixture)
     group_id = profile.memory_group
     score = BriefScore(runtime=runtime_metadata(settings))
     for case in fixture["cases"]:
@@ -199,7 +205,9 @@ async def replay_briefs(
         names = meeting_tool_names(profile, brief, memory_requested=case["memory_requested"])
         prefetch = "recall_meeting_context" in names
         persona = build_persona_prompt(
-            profile.model_copy(update={"allowed_tools": names}), brief=brief
+            profile.model_copy(update={"allowed_tools": names}),
+            brief=brief,
+            owner_model=owner_model,
         )
         with ExitStack() as storage:
             memory = None
@@ -229,6 +237,7 @@ async def replay_briefs(
                         counter=counter,
                         trajectory=trajectory,
                         meeting_id=f"brief-eval-{case['id']}-{run}",
+                        owner_model=owner_model,
                     ),
                 ) as responder:
                     for index, turn in enumerate(case["turns"]):

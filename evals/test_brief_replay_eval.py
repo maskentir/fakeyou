@@ -16,6 +16,7 @@ from evals._brief import (
     USEFULNESS_THRESHOLD,
     brief_artifact_dir,
     case_brief,
+    fixture_owner_model,
     fixture_profile,
     load_brief_fixture,
     replay_briefs,
@@ -44,10 +45,10 @@ def test_brief_corpus_defines_12_categories() -> None:
     assert [case["id"] for case in cases] == sorted(EXPECTED_CASE_IDS)
     assert [case["family"] for case in cases] == list(EXPECTED_FAMILIES)
     assert len(set(EXPECTED_FAMILIES)) == 12
-    markers = [str(marker) for marker in fixture["persona_markers"]]
-    persona_text = " ".join([*profile.goals, *profile.verified_facts])
+    markers = [str(marker) for marker in fixture["owner_markers"]]
+    owner_text = " ".join(item.statement for item in fixture_owner_model(fixture).items)
     assert markers
-    assert all(marker in persona_text for marker in markers)
+    assert all(marker in owner_text for marker in markers)
     for case in cases:
         brief = case_brief(fixture, case)
         assert (brief.owner_id, brief.twin_id) == (profile.owner_id, profile.twin_id)
@@ -130,7 +131,7 @@ async def test_contract_brief_replay_captures_36_rated_pairs_and_writes_artifact
         assert turn["reply"] == case["turns"][-1]["contract_reply"]
         assert turn["aids"] == score_brief_aids(case, turn["reply"], turn["tool_trajectory"])
         assert all(turn["aids"][name] for name in AID_CHECKS)
-    markers = [str(marker).lower() for marker in fixture["persona_markers"]]
+    markers = [str(marker).lower() for marker in fixture["owner_markers"]]
     prompts = json.loads((target / "prompts.json").read_text(encoding="utf-8"))
     assert set(prompts) == set(EXPECTED_CASE_IDS)
     for case_id, entry in prompts.items():

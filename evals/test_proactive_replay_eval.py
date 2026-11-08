@@ -13,7 +13,7 @@ from evals._proactive_replay import (
     run_proactive_scenario,
 )
 from fakeyou.config.settings import Settings
-from fakeyou.conversation.contribution import source_registry
+from fakeyou.conversation.contribution import OwnerModelSource, source_registry
 from fakeyou.conversation.grounding import GroundingVerdict
 from fakeyou.conversation.moments import MomentCandidate, MomentDetector, MomentJudgement
 from tests._conversation_fakes import ScriptedJudge, ToolCallingFakeModel, judged
@@ -75,7 +75,7 @@ async def test_the_replay_runs_detector_to_speech_offline(
             "language": "en",
             "intent": "answer",
             "contribution": "fact",
-            "cites": ["fact-0"],
+            "cites": ["om-orchid-beta-launch"],
             "text": "The beta launches on 14 October.",
         }
     )
@@ -90,7 +90,9 @@ async def test_the_replay_runs_detector_to_speech_offline(
     fixture = load_proactive_fixture()
     profile = proactive_profile(fixture)
     detector = MomentDetector(
-        registry=source_registry(profile_facts=[FACT]),
+        registry=source_registry(
+            owner_model={"om-orchid-beta-launch": OwnerModelSource(FACT, "room_speakable")}
+        ),
         judge=_MomentJudge(),
         embed=_embed,
         twin_names=("Rani",),

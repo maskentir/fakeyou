@@ -180,6 +180,7 @@ class ErrorCode(StrEnum):
     DEBRIEF_CITED_METADATA_ABSENT = "debrief.cited_metadata_absent"
     DEBRIEF_SOURCE_HASH_CHANGED = "debrief.source_hash_changed"
     PERSONA_IDENTITY_MISMATCH = "persona.identity_mismatch"
+    PERSONA_KNOWLEDGE_MOVED = "persona.knowledge_moved"
     PERCEPTION_PROVIDER_UNSUPPORTED = "perception.provider_unsupported"
     PERCEPTION_READING_UNPARSED = "perception.reading_unparsed"
     PERCEPTION_PROTOCOL_UNREADABLE = "perception.protocol_unreadable"
@@ -666,6 +667,11 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
     ErrorCode.DEBRIEF_SOURCE_HASH_CHANGED: ErrorSpec("debrief source or context hash changed"),
     ErrorCode.PERSONA_IDENTITY_MISMATCH: ErrorSpec(
         "persona owner_id and twin_id must match the session identity", ExitCode.INPUT_REJECTED
+    ),
+    ErrorCode.PERSONA_KNOWLEDGE_MOVED: ErrorSpec(
+        "persona fields {fields} now live in the owner model; move them with "
+        "`fakeyou owner-model import --persona PATH`, then remove them from the persona",
+        ExitCode.INPUT_REJECTED,
     ),
     ErrorCode.PERCEPTION_PROVIDER_UNSUPPORTED: ErrorSpec(
         "unsupported perception provider: {provider}", ExitCode.INPUT_REJECTED

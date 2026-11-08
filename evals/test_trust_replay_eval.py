@@ -196,6 +196,6 @@ async def test_contract_owner_fact_reaches_prompt_and_gate_but_not_recall() -> N
         options=ReplayOptions(settings=Settings()),
     )
     [ungrounded] = withheld.turns
-    assert "om-" not in withheld.prompts["c01"]["system_prompt"]
+    assert f"om-{item['item_id']}" not in withheld.prompts["c01"]["system_prompt"]
     assert ungrounded["reply"] != scripted["contract_reply"]
     assert not any(token_present(str(token), ungrounded["reply"]) for token in case["allow"])

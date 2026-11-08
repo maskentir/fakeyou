@@ -55,12 +55,12 @@ SPOKEN_LANGUAGE_GUIDANCE = {
 CONTRIBUTION_GUIDANCE = (
     "Nobody asked you anything. The room is carrying on without you, and the line you were "
     "given is information, not a question. You are not answering anyone. Add something only if "
-    "you have something the room does not have: a fact from the owner profile or the meeting "
+    "you have something the room does not have: a fact from the owner model or the meeting "
     "brief, something you know from an earlier meeting, or a question that unblocks the "
     "discussion. Never thank the room, never say that you see or notice what is on the screen, "
     "and never narrate the screen. When you do add something, set contribution to its kind "
-    "and cite the id of every brief item, profile fact or recalled memory fact it rests on, "
-    "so the claim can be checked against those sources, and use the answer intent for the "
+    "and cite the id of every brief item, owner model item or recalled memory fact it rests "
+    "on, so the claim can be checked against those sources, and use the answer intent for the "
     "contribution itself. "
     "If you have nothing to add, set the intent to silent and say nothing at all."
 )

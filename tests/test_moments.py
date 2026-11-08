@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from datetime import UTC, datetime
 
-from fakeyou.conversation.contribution import source_registry
+from fakeyou.conversation.contribution import OwnerModelSource, source_registry
 from fakeyou.conversation.moments import MomentCandidate, MomentDetector, MomentJudgement
 from fakeyou.foundation.transcript import TranscriptEvent
 
@@ -48,7 +48,7 @@ def _event(event_id: str, text: str, participant: str = "device-ayu") -> Transcr
 
 
 def _detector(judgement: MomentJudgement, judge: _Judge | None = None) -> MomentDetector:
-    registry = source_registry(profile_facts=[FACT])
+    registry = source_registry(owner_model={"om-beta": OwnerModelSource(FACT, "room_speakable")})
     embedder = _Embedder(
         {
             FACT: [1.0, 0.0],
@@ -69,7 +69,7 @@ def _detector(judgement: MomentJudgement, judge: _Judge | None = None) -> Moment
 
 async def test_an_unanswered_question_fires_only_after_the_wait() -> None:
     detector = _detector(
-        MomentJudgement(moment="unanswered_question", source_ref="fact-0", confidence=0.9)
+        MomentJudgement(moment="unanswered_question", source_ref="om-beta", confidence=0.9)
     )
     await detector.prepare()
 
@@ -79,12 +79,12 @@ async def test_an_unanswered_question_fires_only_after_the_wait() -> None:
 
     assert context is not None
     assert context.kind == "unanswered_question"
-    assert context.suggested_source_ref == "fact-0"
+    assert context.suggested_source_ref == "om-beta"
     assert detector.poll(now=200.0) is None
 
 
 async def test_a_line_naming_the_twin_is_left_to_the_normal_lane() -> None:
-    judgement = MomentJudgement(moment="unanswered_question", source_ref="fact-0", confidence=0.9)
+    judgement = MomentJudgement(moment="unanswered_question", source_ref="om-beta", confidence=0.9)
     judge = _Judge(judgement)
     detector = _detector(judgement, judge=judge)
     await detector.prepare()
@@ -98,7 +98,7 @@ async def test_a_line_naming_the_twin_is_left_to_the_normal_lane() -> None:
 
 async def test_a_line_naming_the_twin_cancels_a_pending_question() -> None:
     detector = _detector(
-        MomentJudgement(moment="unanswered_question", source_ref="fact-0", confidence=0.9)
+        MomentJudgement(moment="unanswered_question", source_ref="om-beta", confidence=0.9)
     )
     await detector.prepare()
     await detector.observe(_event("t1", QUESTION), now=100.0)
@@ -109,7 +109,7 @@ async def test_a_line_naming_the_twin_cancels_a_pending_question() -> None:
 
 async def test_an_answer_from_another_participant_cancels_the_question() -> None:
     detector = _detector(
-        MomentJudgement(moment="unanswered_question", source_ref="fact-0", confidence=0.9)
+        MomentJudgement(moment="unanswered_question", source_ref="om-beta", confidence=0.9)
     )
     await detector.prepare()
     await detector.observe(_event("t1", QUESTION), now=100.0)
@@ -120,7 +120,7 @@ async def test_an_answer_from_another_participant_cancels_the_question() -> None
 
 async def test_a_decision_against_the_brief_fires_immediately_once() -> None:
     detector = _detector(
-        MomentJudgement(moment="decision_vs_brief", source_ref="fact-0", confidence=0.9)
+        MomentJudgement(moment="decision_vs_brief", source_ref="om-beta", confidence=0.9)
     )
     await detector.prepare()
 
@@ -133,7 +133,7 @@ async def test_a_decision_against_the_brief_fires_immediately_once() -> None:
 
 
 async def test_an_unrelated_line_never_reaches_the_judge() -> None:
-    judgement = MomentJudgement(moment="fact_opportunity", source_ref="fact-0", confidence=0.9)
+    judgement = MomentJudgement(moment="fact_opportunity", source_ref="om-beta", confidence=0.9)
     judge = _Judge(judgement)
     detector = _detector(judgement, judge)
     await detector.prepare()
@@ -143,7 +143,9 @@ async def test_an_unrelated_line_never_reaches_the_judge() -> None:
 
 
 async def test_low_confidence_and_unknown_refs_do_not_fire() -> None:
-    low = _detector(MomentJudgement(moment="fact_opportunity", source_ref="fact-0", confidence=0.5))
+    low = _detector(
+        MomentJudgement(moment="fact_opportunity", source_ref="om-beta", confidence=0.5)
+    )
     await low.prepare()
     assert await low.observe(_event("t1", QUESTION), now=100.0) is None
 
@@ -156,7 +158,7 @@ async def test_low_confidence_and_unknown_refs_do_not_fire() -> None:
 
 async def test_without_an_embedder_no_moments_are_detected() -> None:
     detector = _detector(
-        MomentJudgement(moment="fact_opportunity", source_ref="fact-0", confidence=0.9)
+        MomentJudgement(moment="fact_opportunity", source_ref="om-beta", confidence=0.9)
     )
     detector.embed = None
     await detector.prepare()

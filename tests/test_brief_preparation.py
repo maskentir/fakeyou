@@ -8,6 +8,7 @@ from fakeyou.orchestration.brief_preparation import (
     build_brief,
     draft_brief,
 )
+from fakeyou.persistence.owner_model import FrozenOwnerModel, FrozenOwnerModelItem
 from tests._conversation_fakes import ToolCallingFakeModel
 
 PERSONA = {
@@ -16,9 +17,29 @@ PERSONA = {
     "display_name": "Rani",
     "role": "Test role",
     "language": "en",
-    "goals": ["Keep the weekly sync on schedule"],
     "vocabulary": ["Orchid"],
 }
+OWNER_MODEL = FrozenOwnerModel(
+    version=2,
+    items=(
+        FrozenOwnerModelItem(
+            item_id="weekly-sync",
+            kind="preference",
+            topic="imported preference",
+            statement="Keep the weekly sync on schedule",
+            confidence="firm",
+            disclosure="room_speakable",
+        ),
+        FrozenOwnerModelItem(
+            item_id="salary",
+            kind="fact",
+            topic="compensation",
+            statement="The salary floor is 90 thousand",
+            confidence="firm",
+            disclosure="owner_only",
+        ),
+    ),
+)
 
 
 def _profile() -> PersonaProfile:
@@ -73,13 +94,30 @@ async def test_the_draft_prompt_carries_the_owner_sources() -> None:
         model,
         _profile(),
         SessionId("meeting-1"),
-        BriefSources(notes=("the owner wants the date settled",), open_questions=("question:q1",)),
+        BriefSources(
+            notes=("the owner wants the date settled",),
+            open_questions=("question:q1",),
+            owner_model=OWNER_MODEL,
+        ),
     )
 
     prompt = model.seen[-1][-1].text
     assert "the owner wants the date settled" in prompt
     assert "question:q1" in prompt
+    assert '"id": "om-weekly-sync"' in prompt
     assert "Keep the weekly sync on schedule" in prompt
+
+
+async def test_the_drafter_never_sees_owner_only_items() -> None:
+    model = ToolCallingFakeModel(responses=[_draft_response()])
+
+    await draft_brief(
+        model, _profile(), SessionId("meeting-1"), BriefSources(owner_model=OWNER_MODEL)
+    )
+
+    prompt = model.seen[-1][-1].text
+    assert "salary" not in prompt
+    assert "90 thousand" not in prompt
 
 
 def test_an_empty_draft_yields_a_brief_without_claims() -> None:

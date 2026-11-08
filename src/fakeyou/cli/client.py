@@ -138,6 +138,11 @@ class ApiClient:
     async def add_owner_model_item(self, twin_id: str, item: Mapping[str, Any]) -> dict[str, Any]:
         return await self._json("POST", f"/v1/twins/{twin_id}/owner-model", json=item)
 
+    async def import_owner_model(
+        self, twin_id: str, statements: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        return await self._json("POST", f"/v1/twins/{twin_id}/owner-model/imports", json=statements)
+
     async def revise_owner_model_item(
         self, twin_id: str, item_id: str, item: Mapping[str, Any]
     ) -> dict[str, Any]:

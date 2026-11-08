@@ -67,6 +67,12 @@ class OwnerModelSnapshot:
     items: tuple[OwnerModelRevision, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class OwnerModelImport:
+    added: tuple[OwnerModelRevision, ...]
+    skipped: tuple[OwnerModelEntry, ...]
+
+
 class OwnerModelRepository(Protocol):
     async def add(
         self, scope: TwinScope, entry: OwnerModelEntry, source: RevisionSource, at: datetime
@@ -80,6 +86,10 @@ class OwnerModelRepository(Protocol):
         source: RevisionSource,
         at: datetime,
     ) -> OwnerModelRevision: ...
+
+    async def import_entries(
+        self, scope: TwinScope, entries: Sequence[OwnerModelEntry], at: datetime
+    ) -> OwnerModelImport: ...
 
     async def retire(self, scope: TwinScope, item_id: str, at: datetime) -> OwnerModelRevision: ...
 
@@ -176,6 +186,24 @@ class OwnerModelStore:
                 row = _Row(item_id, revisions[-1].revision + 1, entry, source)
                 return await _write(connection, scope, row, at)
 
+    async def import_entries(
+        self, scope: TwinScope, entries: Sequence[OwnerModelEntry], at: datetime
+    ) -> OwnerModelImport:
+        added: list[OwnerModelRevision] = []
+        skipped: list[OwnerModelEntry] = []
+        with _reachable():
+            async with self._engine.begin() as connection:
+                await _lock(connection, scope)
+                held = {_held_as(item.entry) for item in await _active(connection, scope)}
+                for entry in entries:
+                    if _held_as(entry) in held:
+                        skipped.append(entry)
+                        continue
+                    held.add(_held_as(entry))
+                    row = _Row(uuid4().hex, 1, entry, "import")
+                    added.append(await _write(connection, scope, row, at))
+        return OwnerModelImport(tuple(added), tuple(skipped))
+
     async def retire(self, scope: TwinScope, item_id: str, at: datetime) -> OwnerModelRevision:
         with _reachable():
             async with self._engine.begin() as connection:
@@ -258,24 +286,11 @@ class OwnerModelStore:
                 return _revision(updated)
 
     async def snapshot(self, scope: TwinScope, version: int | None = None) -> OwnerModelSnapshot:
-        table = owner_model_revisions
         with _reachable():
             async with self._engine.connect() as connection:
                 latest_version = await _next_version(connection, scope) - 1
                 bound = latest_version if version is None else min(version, latest_version)
-                latest = (
-                    _in_scope(scope)
-                    .where(table.c.status.in_(DECIDED), table.c.model_version <= bound)
-                    .order_by(table.c.item_id, table.c.model_version.desc())
-                    .ext(distinct_on(table.c.item_id))
-                )
-                rows = (await connection.execute(latest)).mappings().all()
-        items = tuple(
-            sorted(
-                (_revision(row) for row in rows if row["status"] == "approved"),
-                key=lambda item: item.model_version or 0,
-            )
-        )
+                items = await _active(connection, scope, bound)
         return OwnerModelSnapshot(version=bound, items=items)
 
     async def proposals(self, scope: TwinScope) -> list[OwnerModelRevision]:
@@ -330,6 +345,29 @@ async def _next_version(connection: AsyncConnection, scope: TwinScope) -> int:
         )
     ).scalar()
     return (current or 0) + 1
+
+
+async def _active(
+    connection: AsyncConnection, scope: TwinScope, bound: int | None = None
+) -> tuple[OwnerModelRevision, ...]:
+    table = owner_model_revisions
+    decided = _in_scope(scope).where(table.c.status.in_(DECIDED))
+    if bound is not None:
+        decided = decided.where(table.c.model_version <= bound)
+    latest = decided.order_by(table.c.item_id, table.c.model_version.desc()).ext(
+        distinct_on(table.c.item_id)
+    )
+    rows = (await connection.execute(latest)).mappings().all()
+    return tuple(
+        sorted(
+            (_revision(row) for row in rows if row["status"] == "approved"),
+            key=lambda item: item.model_version or 0,
+        )
+    )
+
+
+def _held_as(entry: OwnerModelEntry) -> tuple[OwnerModelKind, str]:
+    return entry.kind, " ".join(entry.statement.split())
 
 
 async def _item(

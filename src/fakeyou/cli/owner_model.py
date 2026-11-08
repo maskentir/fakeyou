@@ -1,11 +1,15 @@
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 
 import httpx2
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 
-from fakeyou.cli.client import ClientSettings, owner_client
+from fakeyou.catalog.errors import ErrorCode
+from fakeyou.cli.client import ClientSettings, api_failure, owner_client
 from fakeyou.cli.output import emit_json
+from fakeyou.config.identifiers import SessionIdField, parse_session_id
 from fakeyou.db.owner_model import Confidence, ItemDisclosure, OwnerModelKind
 
 
@@ -26,6 +30,12 @@ _ITEM = TypeAdapter(OwnerModelItem)
 def _body(item: OwnerModelItem) -> dict[str, object]:
     body: dict[str, object] = _ITEM.dump_python(item, mode="json")
     return body
+
+
+class PersonaKnowledge(BaseModel):
+    twin_id: SessionIdField
+    verified_facts: tuple[str, ...] = ()
+    goals: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,3 +90,21 @@ async def decide_owner_model_proposal(
         emit_json(
             await client.decide_owner_model_proposal(target.twin_id, revision_id, approve=approve)
         )
+
+
+async def import_persona_knowledge(
+    settings: ClientSettings,
+    persona_path: Path,
+    *,
+    twin_id: str | None = None,
+    transport: httpx2.AsyncBaseTransport | None = None,
+) -> None:
+    try:
+        raw = await asyncio.to_thread(persona_path.read_bytes)
+    except OSError as error:
+        raise api_failure(ErrorCode.MEMORY_PERSONA_UNREADABLE, reason=error.strerror) from None
+    knowledge = PersonaKnowledge.model_validate_json(raw)
+    twin = parse_session_id(twin_id, field="--twin-id") if twin_id else knowledge.twin_id
+    statements = {"facts": knowledge.verified_facts, "preferences": knowledge.goals}
+    async with owner_client(settings, transport=transport) as client:
+        emit_json(await client.import_owner_model(twin, statements))

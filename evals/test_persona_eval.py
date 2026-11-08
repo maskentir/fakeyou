@@ -33,13 +33,16 @@ PERSONA_FIXTURE = json.loads(
 )
 LIVE_SCENARIOS: dict[str, dict[str, str]] = PERSONA_FIXTURE["scenarios"]
 RECALLED_CONTEXT = PERSONA_FIXTURE["contexts"]["demo_moved_to_thursday"]
+EXAMPLE_OWNER_MODEL = FrozenOwnerModel.model_validate(PERSONA_FIXTURE["owner_model"])
 
 
-def scenario_owner_model(scenario: dict[str, str]) -> FrozenOwnerModel | None:
+def scenario_owner_model(scenario: dict[str, str]) -> FrozenOwnerModel:
     name = scenario.get("owner_model")
-    if name is None:
-        return None
-    return FrozenOwnerModel.model_validate(PERSONA_FIXTURE["owner_models"][name])
+    extra = PERSONA_FIXTURE["owner_models"][name] if name is not None else []
+    shared = PERSONA_FIXTURE["owner_model"]
+    return FrozenOwnerModel.model_validate(
+        {"version": shared["version"] + len(extra), "items": [*shared["items"], *extra]}
+    )
 
 
 def participant_asks(text: str) -> HumanMessage:
@@ -78,9 +81,8 @@ async def answer_with_memory(
 
 async def test_persona_prompt_reaches_model_as_system_message() -> None:
     model = ToolCallingFakeModel(responses=[AIMessage(content="The beta launch is on 14 October.")])
-    agent = create_meeting_agent(
-        model, persona=build_persona_prompt(EXAMPLE_PROFILE), checkpointer=InMemorySaver()
-    )
+    persona = build_persona_prompt(EXAMPLE_PROFILE, owner_model=EXAMPLE_OWNER_MODEL)
+    agent = create_meeting_agent(model, persona=persona, checkpointer=InMemorySaver())
 
     await agent.ainvoke(
         {"messages": [{"role": "user", "content": "When is the Orchid beta launch?"}]},
@@ -89,9 +91,9 @@ async def test_persona_prompt_reaches_model_as_system_message() -> None:
 
     system = model.seen[0][0]
     assert isinstance(system, SystemMessage)
-    assert system.content == build_persona_prompt(EXAMPLE_PROFILE)
-    for fact in EXAMPLE_PROFILE.verified_facts:
-        assert json.dumps(fact, ensure_ascii=False) in system.content
+    assert system.content == persona
+    for item in EXAMPLE_OWNER_MODEL.items:
+        assert json.dumps(item.statement, ensure_ascii=False) in system.content
 
 
 async def test_identity_change_transcript_cannot_move_the_memory_namespace() -> None:
@@ -115,8 +117,8 @@ async def test_identity_change_transcript_cannot_move_the_memory_namespace() -> 
 async def test_owner_fact_scenario_reaches_the_prompt_not_recall() -> None:
     scenario = LIVE_SCENARIOS["owner_fact_overrides_meeting_claim"]
     owner_model = scenario_owner_model(scenario)
-    assert owner_model is not None
-    [item] = owner_model.items
+    item = owner_model.items[-1]
+    assert item.ref == "om-orchid-demo"
     recalled_context = PERSONA_FIXTURE["contexts"][scenario["context"]]
     assert item.statement not in recalled_context
     memory, stored = session_memory([recalled_context], EXAMPLE_PROFILE.memory_group)
@@ -186,11 +188,10 @@ async def test_live_persona_quality(scenario: str) -> None:
     case = LLMTestCase(
         input=question,
         actual_output=reply,
-        context=[f"Owner verified fact: {fact}" for fact in EXAMPLE_PROFILE.verified_facts]
-        + [f"Recalled meeting context: {recalled_context}"]
+        context=[f"Recalled meeting context: {recalled_context}"]
         + [
-            f"Owner model fact {item.ref}, true since {item.valid_at}: {item.statement}"
-            for item in (owner_model.items if owner_model is not None else ())
+            f"Owner model {item.kind} {item.ref}, true since {item.valid_at}: {item.statement}"
+            for item in owner_model.items
         ],
     )
     assert_test(test_case=case, metrics=[metric], run_async=False)

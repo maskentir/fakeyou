@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 from langchain_core.language_models.chat_models import BaseChatModel
 
@@ -137,13 +137,23 @@ async def _collect_sentences(
     return bool(sentences)
 
 
+class PromptBuilder(Protocol):
+    def __call__(self, profile: PersonaProfile, *, owner_model: FrozenOwnerModel | None) -> str: ...
+
+
+def fixture_owner_model(fixture: dict[str, Any]) -> FrozenOwnerModel | None:
+    if "owner_model" not in fixture:
+        return None
+    return FrozenOwnerModel.model_validate(fixture["owner_model"])
+
+
 @dataclass(frozen=True, slots=True)
 class _SessionRun:
     profile: PersonaProfile
     score: ReplayScore
     run: int
     streaming: bool
-    prompt_builder: Callable[[PersonaProfile], str]
+    prompt_builder: PromptBuilder
     owner_model: FrozenOwnerModel | None = None
 
 
@@ -156,7 +166,7 @@ async def _replay_session(
     with case_storage(memory, stored), TemporaryDirectory() as folder:
         agent = create_meeting_agent(
             model,
-            persona=context.prompt_builder(profile),
+            persona=context.prompt_builder(profile, owner_model=context.owner_model),
             middleware=[
                 create_memory_prefetch_middleware(
                     memory,
@@ -166,7 +176,7 @@ async def _replay_session(
             ],
         )
         record = MeetingRecord(Path(folder) / "record.jsonl")
-        book_source = BookSource(registry=build_source_registry(profile, None, context.owner_model))
+        book_source = BookSource(registry=build_source_registry(None, context.owner_model))
         responder = (
             MeetingResponder(
                 agent,
@@ -224,18 +234,13 @@ async def replay(
     runs: int,
     *,
     streaming: bool = False,
-    prompt_builder: Callable[[PersonaProfile], str] | None = None,
+    prompt_builder: PromptBuilder = build_persona_prompt,
 ) -> ReplayScore:
     profile = PersonaProfile.model_validate_json((ROOT / fixture["persona"]).read_bytes())
-    owner_model = (
-        FrozenOwnerModel.model_validate(fixture["owner_model"])
-        if "owner_model" in fixture
-        else None
-    )
-    builder = prompt_builder or partial(build_persona_prompt, owner_model=owner_model)
+    owner_model = fixture_owner_model(fixture)
     score = ReplayScore()
     for run in range(runs):
-        context = _SessionRun(profile, score, run, streaming, builder, owner_model)
+        context = _SessionRun(profile, score, run, streaming, prompt_builder, owner_model)
         for session in fixture["sessions"]:
             await _replay_session(model_factory(), session, context)
     return score

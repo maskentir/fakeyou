@@ -57,6 +57,9 @@
       "get",
       "post"
     ],
+    "/v1/twins/{twin_id}/owner-model/imports": [
+      "post"
+    ],
     "/v1/twins/{twin_id}/owner-model/items/{item_id}": [
       "delete",
       "get"
@@ -96,12 +99,15 @@
     "IngestionView",
     "JobView",
     "MemoryInitView",
+    "OwnerModelImportBody",
+    "OwnerModelImportView",
     "OwnerModelItemBody",
     "OwnerModelRevisionView",
     "OwnerModelView",
     "PersonaProfile",
     "SessionCreate",
     "SessionView",
+    "SkippedImportView",
     "ValidationError"
   ]
 }
