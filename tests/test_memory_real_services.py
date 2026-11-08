@@ -7,7 +7,6 @@ import pytest
 from graphiti_core import Graphiti
 from graphiti_core.edges import EntityEdge
 from graphiti_core.nodes import EntityNode, EpisodeType, EpisodicNode
-from neo4j.exceptions import Neo4jError
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import RecallSettings
@@ -21,11 +20,6 @@ from fakeyou.memory.ingestion import (
     ingest_meeting,
 )
 from fakeyou.memory.memory import meeting_episodes, meeting_saga, open_graphiti_memory
-from fakeyou.memory.owner_notes import (
-    INTENT_CREATE_QUERY,
-    OWNER_NOTE_SOURCE,
-    ensure_note_indexes,
-)
 from fakeyou.persistence.ingestion_status import IngestionStatus, status_path, write_status
 from fakeyou.persistence.record import load_meeting_record
 from tests._error_support import message_pattern
@@ -121,23 +115,6 @@ async def test_real_recall_honours_the_temporal_filter(real_graphiti: Graphiti) 
 
 
 @pytest.mark.container
-async def test_real_owner_note_uuid_constraint_is_unique(real_graphiti: Graphiti) -> None:
-    await ensure_note_indexes(real_graphiti)
-    params = {
-        "uuid": f"c10-note-{uuid4().hex}",
-        "group_id": unique_group(),
-        "digest": "d" * 64,
-        "source_at": datetime(2026, 10, 16, 9, tzinfo=UTC),
-        "recorded_at": datetime(2026, 10, 16, 9, tzinfo=UTC),
-        "target_uuid": None,
-    }
-    await real_graphiti.driver.execute_query(INTENT_CREATE_QUERY, **params)
-
-    with pytest.raises(Neo4jError, match="already exists"):
-        await real_graphiti.driver.execute_query(INTENT_CREATE_QUERY, **params)
-
-
-@pytest.mark.container
 async def test_real_saga_resume_continues_after_the_last_window(
     real_graphiti: Graphiti, neo4j_endpoint: str
 ) -> None:
@@ -202,47 +179,6 @@ async def test_real_correction_invalidates_original_edges(
     assert edge.invalid_at is not None
     assert edge.expired_at is not None
     assert correction_episode_name("meeting-1", 1) in {episode.name for episode in episodes}
-
-
-@pytest.mark.container
-async def test_real_pending_owner_note_facts_are_invisible_to_recall(
-    real_graphiti: Graphiti,
-) -> None:
-    group = unique_group()
-    await ensure_note_indexes(real_graphiti)
-    note_uuid = str(uuid4())
-    await EpisodicNode(
-        uuid=note_uuid,
-        name=f"owner-note:{note_uuid}",
-        group_id=group,
-        labels=[],
-        source=EpisodeType.text,
-        content="The pending budget cap is forty million.",
-        source_description=OWNER_NOTE_SOURCE,
-        created_at=WINDOW_AT,
-        valid_at=WINDOW_AT,
-    ).save(real_graphiti.driver)
-    await real_graphiti.driver.execute_query(
-        INTENT_CREATE_QUERY,
-        uuid=note_uuid,
-        group_id=group,
-        digest="e" * 64,
-        source_at=WINDOW_AT,
-        recorded_at=WINDOW_AT,
-        target_uuid=None,
-    )
-    await add_fact_edge(
-        real_graphiti, group, note_uuid, "Pending budget cap is forty million", invalid_at=None
-    )
-
-    result = await search_evidence(
-        real_graphiti, "pending budget cap", group_id=group, recall=RecallSettings()
-    )
-    rendered = evidence_set(result, result_limit=5)
-
-    assert rendered["facts"] == []
-    assert rendered["outcome"] == "empty"
-    assert rendered["excluded"]["pending"] == 1
 
 
 @pytest.mark.container

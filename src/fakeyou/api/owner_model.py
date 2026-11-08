@@ -1,8 +1,8 @@
 from datetime import datetime
 from typing import Annotated, cast
 
-from fastapi import APIRouter, Depends, Path, Query, Request
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi import APIRouter, Depends, Path, Query, Request, Response
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from fakeyou.api.auth import Principal, require_owner
 from fakeyou.api.status import status_now
@@ -35,6 +35,7 @@ class OwnerModelItemBody(BaseModel):
     reason: str | None = Field(default=None, min_length=1, max_length=2000)
     confidence: Confidence = "firm"
     disclosure: ItemDisclosure = "room_speakable"
+    valid_at: AwareDatetime | None = None
 
     def entry(self) -> OwnerModelEntry:
         return OwnerModelEntry(
@@ -44,6 +45,7 @@ class OwnerModelItemBody(BaseModel):
             confidence=self.confidence,
             disclosure=self.disclosure,
             reason=self.reason,
+            valid_at=self.valid_at,
         )
 
 
@@ -59,6 +61,7 @@ class OwnerModelRevisionView(BaseModel):
     reason: str | None
     confidence: Confidence
     disclosure: ItemDisclosure
+    valid_at: datetime | None
     source: RevisionSource
     status: RevisionStatus
     model_version: int | None
@@ -78,6 +81,7 @@ class OwnerModelRevisionView(BaseModel):
             reason=entry.reason,
             confidence=entry.confidence,
             disclosure=entry.disclosure,
+            valid_at=entry.valid_at,
             source=revision.source,
             status=revision.status,
             model_version=revision.model_version,
@@ -189,9 +193,17 @@ async def revise_owner_model_item(
     return OwnerModelRevisionView.of(revised)
 
 
-@router.delete("/items/{item_id}", response_model=OwnerModelRevisionView)
+@router.post("/items/{item_id}/retire", response_model=OwnerModelRevisionView)
 async def retire_owner_model_item(
     twin_id: _TwinId, item_id: _ItemId, principal: _Owner, repository: _Repository
 ) -> OwnerModelRevisionView:
     retired = await repository.retire(_scope(principal, twin_id), item_id, status_now())
     return OwnerModelRevisionView.of(retired)
+
+
+@router.delete("/items/{item_id}", status_code=204)
+async def forget_owner_model_item(
+    twin_id: _TwinId, item_id: _ItemId, principal: _Owner, repository: _Repository
+) -> Response:
+    await repository.forget(_scope(principal, twin_id), item_id, status_now())
+    return Response(status_code=204)

@@ -71,26 +71,16 @@ class ErrorCode(StrEnum):
     INGESTION_STATUS_CORRUPT = "ingestion.status_corrupt"
     ACTION_LEDGER_LOCKED = "action_ledger.locked"
     MEMORY_PERSONA_UNREADABLE = "memory.persona_unreadable"
-    MEMORY_SOURCE_AT_NAIVE = "memory.source_at_naive"
-    MEMORY_SOURCE_AT_FUTURE = "memory.source_at_future"
-    MEMORY_SOURCE_AT_INVALID = "memory.source_at_invalid"
-    MEMORY_NOTE_TEXT_BLANK = "memory.note_text_blank"
-    MEMORY_EPISODE_NOT_UUID = "memory.episode_not_uuid"
     MEMORY_RECORD_MISSING = "memory.record_missing"
     MEMORY_INGESTION_GROUP_MISMATCH = "memory.ingestion_group_mismatch"
-    MEMORY_FORGET_TARGET_REQUIRED = "memory.forget_target_required"
-    MEMORY_KEEP_RECORD_REQUIRES_MEETING = "memory.keep_record_requires_meeting"
     MEMORY_FORGET_INCOMPLETE = "memory.forget_incomplete"
     MEMORY_FORGET_FILES_INCOMPLETE = "memory.forget_files_incomplete"
     MEMORY_FORGET_SESSION_LIVE = "memory.forget_session_live"
-    NOTE_CORRECTION_TARGET_INACTIVE = "note.correction_target_inactive"
-    NOTE_NOT_PENDING = "note.not_pending"
-    NOTE_CORRECTION_CONCURRENT = "note.correction_concurrent"
-    NOTE_ID_IN_USE = "note.id_in_use"
-    NOTE_ALREADY_SUPERSEDED = "note.already_superseded"
-    NOTE_PAYLOAD_MISMATCH = "note.payload_mismatch"
     OWNER_MODEL_ITEM_UNKNOWN = "owner_model.item_unknown"
     OWNER_MODEL_ITEM_RETIRED = "owner_model.item_retired"
+    OWNER_MODEL_ITEM_FORGOTTEN = "owner_model.item_forgotten"
+    OWNER_MODEL_VALID_AT_INVALID = "owner_model.valid_at_invalid"
+    OWNER_MODEL_VALID_AT_FUTURE = "owner_model.valid_at_future"
     OWNER_MODEL_NOT_PROPOSED = "owner_model.not_proposed"
     DEBRIEF_OWNERSHIP_UNVERIFIABLE = "debrief.ownership_unverifiable"
     DEBRIEF_SCOPE_MISMATCH = "debrief.scope_mismatch"
@@ -154,26 +144,7 @@ class ErrorCode(StrEnum):
     DATABASE_SCHEMA_EMPTY = "database.schema_empty"
     DATABASE_SCHEMA_HEADS_INVALID = "database.schema_heads_invalid"
     MEETING_BRIEF_REQUIRES_PROFILE = "meeting.brief_requires_profile"
-    NOTE_GROUP_ID_INVALID = "note.group_id_invalid"
-    NOTE_ID_NOT_UUID = "note.id_not_uuid"
-    NOTE_TIME_NOT_AWARE = "note.time_not_aware"
-    NOTE_STORED_FIELD_INVALID = "note.stored_field_invalid"
-    NOTE_STORED_STATUS_INVALID = "note.stored_status_invalid"
-    NOTE_STORED_IDENTITY_INVALID = "note.stored_identity_invalid"
-    NOTE_RECORD_MISSING = "note.record_missing"
-    NOTE_CORRECTION_TARGET_UNKNOWN = "note.correction_target_unknown"
-    NOTE_CORRECTION_TARGET_NOT_OWNER_NOTE = "note.correction_target_not_owner_note"
-    NOTE_CORRECTION_NOT_NEWER = "note.correction_not_newer"
-    NOTE_TARGET_SNAPSHOT_MISSING = "note.target_snapshot_missing"
-    NOTE_EPISODE_MISSING = "note.episode_missing"
-    NOTE_EPISODE_NOT_IN_MEMORY = "note.episode_not_in_memory"
-    NOTE_NO_READABLE_FACTS = "note.no_readable_facts"
-    NOTE_NO_USABLE_FACTS = "note.no_usable_facts"
-    NOTE_BODY_BLANK = "note.body_blank"
-    NOTE_SOURCE_AT_FUTURE = "note.source_at_future"
-    NOTE_EPISODE_UUID_BLANK = "note.episode_uuid_blank"
-    NOTE_HAS_PENDING_CORRECTION = "note.has_pending_correction"
-    NOTE_IN_CORRECTION_CHAIN = "note.in_correction_chain"
+    MEMORY_GROUP_ID_INVALID = "memory.group_id_invalid"
     DEBRIEF_SOURCE_TIME_NOT_AWARE = "debrief.source_time_not_aware"
     DEBRIEF_RECORD_UNREADABLE = "debrief.record_unreadable"
     DEBRIEF_RECORD_INVALID_LINE = "debrief.record_invalid_line"
@@ -435,32 +406,11 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
     ErrorCode.MEMORY_PERSONA_UNREADABLE: ErrorSpec(
         "--persona cannot be read: {reason}", ExitCode.INPUT_REJECTED
     ),
-    ErrorCode.MEMORY_SOURCE_AT_NAIVE: ErrorSpec(
-        "--source-at must carry a timezone", ExitCode.INPUT_REJECTED
-    ),
-    ErrorCode.MEMORY_SOURCE_AT_FUTURE: ErrorSpec(
-        "--source-at must not be in the future", ExitCode.INPUT_REJECTED
-    ),
-    ErrorCode.MEMORY_NOTE_TEXT_BLANK: ErrorSpec(
-        "note text must not be blank", ExitCode.INPUT_REJECTED
-    ),
-    ErrorCode.MEMORY_SOURCE_AT_INVALID: ErrorSpec(
-        "must be an ISO 8601 datetime with a timezone: {value}", ExitCode.INPUT_REJECTED
-    ),
-    ErrorCode.MEMORY_EPISODE_NOT_UUID: ErrorSpec(
-        "--episode must be a UUID", ExitCode.INPUT_REJECTED
-    ),
     ErrorCode.MEMORY_RECORD_MISSING: ErrorSpec(
         "no meeting record for {meeting_id} at {path}", ExitCode.INPUT_REJECTED
     ),
     ErrorCode.MEMORY_INGESTION_GROUP_MISMATCH: ErrorSpec(
         "persona group does not match the ingestion status group", ExitCode.INPUT_REJECTED
-    ),
-    ErrorCode.MEMORY_FORGET_TARGET_REQUIRED: ErrorSpec(
-        "memory-forget requires exactly one of --meeting-id or --episode", ExitCode.INPUT_REJECTED
-    ),
-    ErrorCode.MEMORY_KEEP_RECORD_REQUIRES_MEETING: ErrorSpec(
-        "--keep-record only applies to --meeting-id", ExitCode.INPUT_REJECTED
     ),
     ErrorCode.MEMORY_FORGET_INCOMPLETE: ErrorSpec("episode {uuid} survived removal during forget"),
     ErrorCode.MEMORY_FORGET_FILES_INCOMPLETE: ErrorSpec(
@@ -470,23 +420,25 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
         "meeting {meeting_id} is still running; stop it before forgetting it",
         ExitCode.INPUT_REJECTED,
     ),
-    ErrorCode.NOTE_CORRECTION_TARGET_INACTIVE: ErrorSpec("correction target is no longer active"),
-    ErrorCode.NOTE_NOT_PENDING: ErrorSpec("owner note is no longer pending"),
     ErrorCode.OWNER_MODEL_ITEM_UNKNOWN: ErrorSpec(
         "owner model item {item_id} does not exist for this twin", ExitCode.INPUT_REJECTED
     ),
     ErrorCode.OWNER_MODEL_ITEM_RETIRED: ErrorSpec(
         "owner model item {item_id} is retired; add a new item instead", ExitCode.INPUT_REJECTED
     ),
+    ErrorCode.OWNER_MODEL_ITEM_FORGOTTEN: ErrorSpec(
+        "owner model item {item_id} was forgotten; add a new item instead",
+        ExitCode.INPUT_REJECTED,
+    ),
+    ErrorCode.OWNER_MODEL_VALID_AT_INVALID: ErrorSpec(
+        "valid_at must be an ISO 8601 datetime with a timezone: {value}", ExitCode.INPUT_REJECTED
+    ),
+    ErrorCode.OWNER_MODEL_VALID_AT_FUTURE: ErrorSpec(
+        "valid_at must not be in the future: {value}", ExitCode.INPUT_REJECTED
+    ),
     ErrorCode.OWNER_MODEL_NOT_PROPOSED: ErrorSpec(
         "owner model revision {revision_id} is not awaiting a decision", ExitCode.INPUT_REJECTED
     ),
-    ErrorCode.NOTE_CORRECTION_CONCURRENT: ErrorSpec(
-        "concurrent correction already replaced this note"
-    ),
-    ErrorCode.NOTE_ID_IN_USE: ErrorSpec("note id already in use"),
-    ErrorCode.NOTE_ALREADY_SUPERSEDED: ErrorSpec("owner note was already superseded"),
-    ErrorCode.NOTE_PAYLOAD_MISMATCH: ErrorSpec("note id already in use with different payload"),
     ErrorCode.DEBRIEF_OWNERSHIP_UNVERIFIABLE: ErrorSpec(
         "record ownership cannot be verified without context or ingestion status"
     ),
@@ -644,46 +596,8 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
     ErrorCode.MEETING_BRIEF_REQUIRES_PROFILE: ErrorSpec(
         "a meeting brief requires a persona profile", ExitCode.INPUT_REJECTED
     ),
-    ErrorCode.NOTE_ID_NOT_UUID: ErrorSpec("must be a UUID: {value}", ExitCode.INPUT_REJECTED),
-    ErrorCode.NOTE_GROUP_ID_INVALID: ErrorSpec(
+    ErrorCode.MEMORY_GROUP_ID_INVALID: ErrorSpec(
         "group_id must be 1-128 characters using letters, numbers, '_' or '-'",
-        ExitCode.INPUT_REJECTED,
-    ),
-    ErrorCode.NOTE_TIME_NOT_AWARE: ErrorSpec("{name} must carry timezone", ExitCode.INPUT_REJECTED),
-    ErrorCode.NOTE_STORED_FIELD_INVALID: ErrorSpec("stored note holds invalid {key}"),
-    ErrorCode.NOTE_STORED_STATUS_INVALID: ErrorSpec("stored note holds invalid status"),
-    ErrorCode.NOTE_STORED_IDENTITY_INVALID: ErrorSpec("stored note holds invalid identity"),
-    ErrorCode.NOTE_RECORD_MISSING: ErrorSpec("published note record is missing"),
-    ErrorCode.NOTE_CORRECTION_TARGET_UNKNOWN: ErrorSpec(
-        "unknown correction target", ExitCode.INPUT_REJECTED
-    ),
-    ErrorCode.NOTE_CORRECTION_TARGET_NOT_OWNER_NOTE: ErrorSpec(
-        "correction target must be an owner note", ExitCode.INPUT_REJECTED
-    ),
-    ErrorCode.NOTE_CORRECTION_NOT_NEWER: ErrorSpec(
-        "correction source time must be newer than its target", ExitCode.INPUT_REJECTED
-    ),
-    ErrorCode.NOTE_TARGET_SNAPSHOT_MISSING: ErrorSpec("correction target snapshot is missing"),
-    ErrorCode.NOTE_EPISODE_MISSING: ErrorSpec("published note episode is missing"),
-    ErrorCode.NOTE_EPISODE_NOT_IN_MEMORY: ErrorSpec(
-        "episode is not in this persona's memory", ExitCode.INPUT_REJECTED
-    ),
-    ErrorCode.NOTE_NO_READABLE_FACTS: ErrorSpec("published note has no readable facts"),
-    ErrorCode.NOTE_NO_USABLE_FACTS: ErrorSpec("owner note extraction produced no usable facts"),
-    ErrorCode.NOTE_BODY_BLANK: ErrorSpec("owner note must not be blank", ExitCode.INPUT_REJECTED),
-    ErrorCode.NOTE_SOURCE_AT_FUTURE: ErrorSpec(
-        "source_at must not be in the future", ExitCode.INPUT_REJECTED
-    ),
-    ErrorCode.NOTE_EPISODE_UUID_BLANK: ErrorSpec(
-        "episode uuid must not be blank", ExitCode.INPUT_REJECTED
-    ),
-    ErrorCode.NOTE_HAS_PENDING_CORRECTION: ErrorSpec(
-        "owner note has a pending correction; forget the pending note first",
-        ExitCode.INPUT_REJECTED,
-    ),
-    ErrorCode.NOTE_IN_CORRECTION_CHAIN: ErrorSpec(
-        "owner note is part of a correction chain; "
-        "chain deletion needs a dedicated retention milestone",
         ExitCode.INPUT_REJECTED,
     ),
     ErrorCode.DEBRIEF_SOURCE_TIME_NOT_AWARE: ErrorSpec("source timestamp must be timezone aware"),

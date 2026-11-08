@@ -1,15 +1,12 @@
 import re
-from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from collections.abc import Mapping
 from functools import partial
 from typing import TYPE_CHECKING, Annotated, Literal, Protocol, cast
-from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict
 
 from fakeyou.api.auth import Principal, require_owner
-from fakeyou.api.errors import DomainConflict
 from fakeyou.api.overrides import stage_overrides
 from fakeyou.api.schemas import (
     ForgetMeeting,
@@ -17,32 +14,17 @@ from fakeyou.api.schemas import (
     ForgetView,
     IngestionView,
     JobView,
-    NoteCorrect,
-    NoteCreate,
-    NoteView,
     SessionSnapshot,
 )
 from fakeyou.api.sessions import SessionStore, now_iso
 from fakeyou.api.status import session_status
 from fakeyou.api.transport import shared_stream_transport
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.config.identifiers import SessionId, parse_session_id
+from fakeyou.config.identifiers import parse_session_id
 from fakeyou.config.settings import Settings
 from fakeyou.db.session_status import SessionStatusRepository
-from fakeyou.memory.forget import (
-    ForgetRequest,
-    ForgetSummary,
-    ForgottenFiles,
-    run_forget,
-)
+from fakeyou.memory.forget import ForgottenFiles, run_forget
 from fakeyou.memory.operator_access import OperatorAccess
-from fakeyou.memory.owner_note_service import (
-    NoteCommand,
-    apply_note_for,
-    forget_note_for,
-    note_conflict,
-)
-from fakeyou.memory.owner_notes import NoteConflictError, OwnerNoteResult
 from fakeyou.memory.persona import OperatorIdentity, PersonaProfile
 from fakeyou.orchestration.providers import open_persona_memory
 from fakeyou.persistence.ingestion_status import IngestionState, read_status
@@ -73,28 +55,6 @@ class JobTransport(Protocol):
     async def read_entry(self, stream: str, entry_id: str) -> dict[str, str] | None: ...
 
 
-async def forget_meeting_for(
-    access: OperatorAccess,
-    *,
-    meeting_id: SessionId,
-    keep_record: bool,
-    status: SessionStatusRepository,
-) -> ForgetSummary:
-    return await run_forget(
-        ForgetRequest(meeting_id, None, keep_record), access=access, status=status
-    )
-
-
-ForgetMeetings = Callable[..., Awaitable[ForgetSummary]]
-
-
-@dataclass(frozen=True, slots=True)
-class MemoryService:
-    apply_note: Callable[[OperatorAccess, NoteCommand], Awaitable[OwnerNoteResult]] = apply_note_for
-    forget_note: Callable[[OperatorAccess, str], Awaitable[None]] = forget_note_for
-    forget_meeting: ForgetMeetings = forget_meeting_for
-
-
 class IngestionSubmit(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
@@ -121,13 +81,6 @@ def _job_transport(request: Request) -> JobTransport:
     if factory is not None:
         return cast(JobTransport, factory())
     return cast(JobTransport, shared_stream_transport(request))
-
-
-def _memory_service(request: Request) -> MemoryService:
-    factory = _deps(request).memory_service
-    if factory is not None:
-        return cast(MemoryService, factory())
-    return MemoryService()
 
 
 def _now(request: Request) -> str:
@@ -161,18 +114,6 @@ def _twin_persona(request: Request, twin_id: str, owner_id: str) -> tuple[str, P
     return owned[-1]
 
 
-def _twin_access(request: Request, twin_id: str, principal: Principal) -> OperatorAccess:
-    owner_id = _owner_id(principal)
-    settings = _settings(request)
-    meeting_id, persona = _twin_persona(request, twin_id, owner_id)
-    persona_path = write_session_persona(settings.paths.record_dir, meeting_id, persona)
-    return OperatorAccess(
-        OperatorIdentity(persona_path, owner_id, twin_id),
-        settings,
-        partial(open_persona_memory, settings),
-    )
-
-
 def _meeting_access(
     request: Request, snapshot: SessionSnapshot, principal: Principal
 ) -> OperatorAccess:
@@ -187,35 +128,6 @@ def _meeting_access(
         settings,
         partial(open_persona_memory, settings),
     )
-
-
-def _correction_target(episode_uuid: str) -> UUID:
-    try:
-        return UUID(episode_uuid)
-    except ValueError:
-        raise FakeYouError(ErrorCode.MEMORY_EPISODE_NOT_UUID) from None
-
-
-def _note_view(result: OwnerNoteResult) -> NoteView:
-    return NoteView(
-        episode_uuid=result.episode_uuid,
-        facts=result.facts,
-        source_at=result.source_at.isoformat(),
-        recorded_at=result.recorded_at.isoformat(),
-        supersedes=result.supersedes,
-    )
-
-
-async def _apply_note(
-    request: Request, access: OperatorAccess, command: NoteCommand, *, episode_uuid: str
-) -> NoteView:
-    try:
-        result = await _memory_service(request).apply_note(access, command)
-    except NoteConflictError as error:
-        conflict = note_conflict(error, episode_uuid=episode_uuid)
-        details = {"episode_uuid": conflict.episode_uuid, "retryable": conflict.retryable}
-        raise DomainConflict(error, details) from error
-    return _note_view(result)
 
 
 def _persisted_state(request: Request, meeting_id: str) -> IngestionState:
@@ -298,49 +210,6 @@ async def read_job(
     )
 
 
-@router.post("/v1/twins/{twin_id}/notes", status_code=201, response_model=NoteView)
-async def add_note(
-    twin_id: str,
-    payload: NoteCreate,
-    principal: _Owner,
-    request: Request,
-) -> NoteView:
-    access = _twin_access(request, twin_id, principal)
-    command = NoteCommand(payload.text, payload.source_at, payload.note_id)
-    return await _apply_note(request, access, command, episode_uuid=str(payload.note_id))
-
-
-@router.post(
-    "/v1/twins/{twin_id}/notes/{episode_uuid}/corrections",
-    status_code=201,
-    response_model=NoteView,
-)
-async def correct_note(
-    twin_id: str,
-    episode_uuid: str,
-    payload: NoteCorrect,
-    principal: _Owner,
-    request: Request,
-) -> NoteView:
-    access = _twin_access(request, twin_id, principal)
-    command = NoteCommand(
-        payload.text, payload.source_at, payload.note_id, _correction_target(episode_uuid)
-    )
-    return await _apply_note(request, access, command, episode_uuid=episode_uuid)
-
-
-@router.delete("/v1/twins/{twin_id}/notes/{episode_uuid}", status_code=204)
-async def forget_note(
-    twin_id: str,
-    episode_uuid: str,
-    principal: _Owner,
-    request: Request,
-) -> Response:
-    access = _twin_access(request, twin_id, principal)
-    await _memory_service(request).forget_note(access, episode_uuid)
-    return Response(status_code=204)
-
-
 @router.post("/v1/sessions/{meeting_id}/forget", response_model=ForgetView)
 async def forget_meeting(
     meeting_id: str,
@@ -353,7 +222,7 @@ async def forget_meeting(
     status = await repository.get(meeting_id)
     if status is not None and not status.terminal:
         raise FakeYouError(ErrorCode.MEMORY_FORGET_SESSION_LIVE, meeting_id=meeting_id)
-    summary = await _memory_service(request).forget_meeting(
+    summary = await run_forget(
         _meeting_access(request, snapshot, principal),
         meeting_id=parse_session_id(meeting_id, field="meeting_id"),
         keep_record=payload.keep_record,

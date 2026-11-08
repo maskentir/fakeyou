@@ -204,8 +204,8 @@ async def replay_briefs(
         with ExitStack() as storage:
             memory = None
             if case["memory_requested"]:
-                memory, stored, states = build_case_memory(case, group_id)
-                storage.enter_context(case_storage(memory, stored, states))
+                memory, stored = build_case_memory(case, group_id)
+                storage.enter_context(case_storage(memory, stored))
             score.prompts[case["id"]] = {
                 "knowledge_scope": brief.knowledge_scope,
                 "permissions": sorted(brief.permissions),

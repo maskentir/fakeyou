@@ -18,7 +18,7 @@ from graphiti_core.driver.neo4j_driver import Neo4jDriver
 from graphiti_core.edges import EntityEdge, create_entity_edge_embeddings
 from graphiti_core.embedder.client import EMBEDDING_DIM
 from graphiti_core.embedder.openai import OpenAIEmbedder, OpenAIEmbedderConfig
-from graphiti_core.errors import GroupsEdgesNotFoundError, NodeNotFoundError
+from graphiti_core.errors import GroupsEdgesNotFoundError
 from graphiti_core.llm_client.anthropic_client import AnthropicClient
 from graphiti_core.llm_client.config import LLMConfig
 from graphiti_core.llm_client.openai_client import OpenAIClient
@@ -65,16 +65,6 @@ from fakeyou.memory.evidence import (
     RECALL_EMPTY_RESULT,
     collect_facts,
     search_edges,
-)
-from fakeyou.memory.owner_notes import (
-    OWNER_NOTE_SOURCE,
-    read_note_states,
-)
-from fakeyou.memory.owner_notes import (
-    ensure_note_indexes as ensure_note_indexes,
-)
-from fakeyou.memory.owner_notes import (
-    forget_owner_note as forget_owner_note,
 )
 from fakeyou.memory.relevance import relevant_edges
 from fakeyou.observability.cleanup import TeardownStack
@@ -277,7 +267,6 @@ async def open_graphiti_memory(config: MemorySettings) -> AsyncIterator[Graphiti
 
 async def ensure_indexes(memory: Graphiti) -> None:
     await memory.build_indices_and_constraints()
-    await ensure_note_indexes(memory)
 
 
 async def verify_memory_connection(memory: Graphiti) -> None:
@@ -565,7 +554,7 @@ async def describe_facts(
     result_limit: int,
     compact: bool = False,
 ) -> str:
-    result = await collect_facts(memory, edges, group_id=group_id, note_states=read_note_states)
+    result = await collect_facts(memory, edges, group_id=group_id)
     if result.outcome == "empty":
         return RECALL_EMPTY_RESULT
     return render_evidence(
@@ -642,17 +631,3 @@ async def _entity_edge_page(
     except GroupsEdgesNotFoundError:
         return []
     return edges
-
-
-async def forget_episode(memory: Graphiti, *, group_id: str, episode_uuid: str) -> bool:
-    try:
-        episode = await EpisodicNode.get_by_uuid(memory.driver, episode_uuid)
-    except NodeNotFoundError:
-        return False
-    if episode.group_id != group_id:
-        raise FakeYouError(ErrorCode.NOTE_EPISODE_NOT_IN_MEMORY)
-    if episode.source_description == OWNER_NOTE_SOURCE:
-        await forget_owner_note(memory, group_id=group_id, episode_uuid=episode_uuid)
-        return True
-    await memory.remove_episode(episode_uuid)
-    return True

@@ -5,7 +5,6 @@ from typing import Any
 import pytest
 from graphiti_core.nodes import EpisodicNode
 
-import fakeyou.memory.memory as memory_module
 from fakeyou.config.settings import MemorySettings
 from fakeyou.memory.memory import create_memory_tools
 
@@ -46,13 +45,6 @@ def recall_tool(monkeypatch: pytest.MonkeyPatch, memory: Any, episodes: dict[str
         assert driver is memory.driver
         return [episodes[uuid] for uuid in uuids if uuid in episodes]
 
-    async def active_states(
-        _memory: Any, *, group_id: str, episode_uuids: list[str]
-    ) -> dict[str, str]:
-        assert group_id == "team_alpha"
-        return dict.fromkeys(episode_uuids, "active")
-
     monkeypatch.setattr(EpisodicNode, "get_by_uuids", get_by_uuids)
-    monkeypatch.setattr(memory_module, "read_note_states", active_states)
     [recall] = create_memory_tools(memory, group_id="team_alpha")
     return recall

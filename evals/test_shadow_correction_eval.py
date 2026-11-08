@@ -8,7 +8,6 @@ from typing import Any, NamedTuple
 import pytest
 from graphiti_core.nodes import EpisodicNode
 
-import fakeyou.memory.memory as memory_module
 from evals._correction import (
     answer_queries,
     load_correction_fixture,
@@ -305,14 +304,7 @@ async def test_shadow_dual_run_offline(tmp_path: Path, monkeypatch: pytest.Monke
     async def get_by_uuids(_driver: Any, uuids: list[str]) -> list[Any]:
         return [stored[uuid] for uuid in uuids if uuid in stored]
 
-    async def active_states(
-        _memory: Any, *, group_id: str, episode_uuids: list[str]
-    ) -> dict[str, str]:
-        del group_id
-        return dict.fromkeys(episode_uuids, "active")
-
     monkeypatch.setattr(EpisodicNode, "get_by_uuids", get_by_uuids)
-    monkeypatch.setattr(memory_module, "read_note_states", active_states)
     prod_before = await answer_queries(prod_store, queries, group_id=prod_group)
     shadow_answers = await answer_queries(shadow_store, queries, group_id=shadow_group)
     prod_after = await answer_queries(prod_store, queries, group_id=prod_group)

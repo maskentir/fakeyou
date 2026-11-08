@@ -13,7 +13,6 @@ import httpx2
 import pytest
 from graphiti_core import Graphiti
 from graphiti_core.driver.neo4j_driver import Neo4jDriver
-from graphiti_core.edges import EntityEdge
 from graphiti_core.errors import NodeNotFoundError
 from graphiti_core.nodes import EpisodicNode
 from graphiti_core.search.search_filters import ComparisonOperator, date_filter_query_constructor
@@ -44,8 +43,6 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.runtime import Runtime
 from langgraph.types import Command, RetryPolicy, interrupt
-from neo4j.exceptions import ConstraintError
-from neo4j.time import DateTime as Neo4jDateTime
 from pydantic import BaseModel
 
 from tests._conversation_fakes import ToolCallingFakeModel
@@ -202,16 +199,9 @@ async def test_checkpointer_reports_whether_a_thread_has_a_checkpoint() -> None:
         assert await saver.aget_tuple({"configurable": {"thread_id": "meeting:b"}}) is None
 
 
-def test_owner_note_memory_contracts_cover_correction_path() -> None:
-    assert callable(EpisodicNode.save)
-    assert callable(EpisodicNode.get_by_uuid)
+def test_recall_memory_contracts_cover_episode_lookup_and_ingestion_queries() -> None:
     assert callable(EpisodicNode.get_by_uuids)
-    assert callable(EntityEdge.get_by_uuids)
-    assert callable(Neo4jDriver.transaction)
     assert callable(Neo4jDriver.execute_query)
-    assert issubclass(ConstraintError, Exception)
-    assert callable(Neo4jDateTime.from_native)
-    assert callable(Neo4jDateTime.to_native)
 
 
 class ParticipationDecision(BaseModel):

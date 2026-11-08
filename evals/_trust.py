@@ -17,7 +17,6 @@ from graphiti_core.nodes import EpisodicNode
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
 
-import fakeyou.memory.memory as memory_module
 from evals._judge import judge_config
 from evals._shared import (
     REPLAY_EVIDENCE,
@@ -204,9 +203,7 @@ def load_trust_fixture(path: Path = FIXTURE) -> dict[str, Any]:
     return cast(dict[str, Any], json.loads(path.read_text(encoding="utf-8")))
 
 
-def build_case_memory(
-    case: dict[str, Any], group_id: str
-) -> tuple[Any, dict[str, Any], dict[str, str]]:
+def build_case_memory(case: dict[str, Any], group_id: str) -> tuple[Any, dict[str, Any]]:
     spec = case.get("memory", {})
     facts = [str(item) for item in spec.get("facts", [])]
     episodes = {
@@ -233,25 +230,17 @@ def build_case_memory(
             valid_at=source_at,
             created_at=recorded_at,
         )
-    states = {str(uuid): str(status) for uuid, status in spec.get("states", {}).items()}
-    return memory, stored, states
+    return memory, stored
 
 
 @contextlib.contextmanager
-def case_storage(memory: Any, stored: dict[str, Any], states: dict[str, str]) -> Iterator[None]:
+def case_storage(memory: Any, stored: dict[str, Any]) -> Iterator[None]:
     async def get_by_uuids(driver: Any, uuids: list[str]) -> list[Any]:
         assert driver is memory.driver
         return [stored[uuid] for uuid in uuids if uuid in stored]
 
-    async def scripted_states(
-        _memory: Any, *, group_id: str, episode_uuids: list[str]
-    ) -> dict[str, str]:
-        assert group_id
-        return {uuid: states[uuid] for uuid in episode_uuids if uuid in states}
-
     with patch.object(EpisodicNode, "get_by_uuids", get_by_uuids):
-        with patch.object(memory_module, "read_note_states", scripted_states):
-            yield
+        yield
 
 
 def score_aids(case: dict[str, Any], reply: str, *, recalled: bool) -> dict[str, bool]:
@@ -300,8 +289,8 @@ async def replay_trust(
     group_id = profile.memory_group
     score = TrustScore(runtime=runtime_metadata(settings))
     for case in fixture["cases"]:
-        memory, stored, states = build_case_memory(case, group_id)
-        with case_storage(memory, stored, states):
+        memory, stored = build_case_memory(case, group_id)
+        with case_storage(memory, stored):
             score.prompts[case["id"]] = {
                 "system_prompt": persona,
                 "prompt_sha256": hashlib.sha256(persona.encode("utf-8")).hexdigest(),

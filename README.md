@@ -142,12 +142,12 @@ All routes are token-authenticated: `Authorization: Bearer <token>`, owner or ad
 | `GET` | `/v1/sessions/{id}/ingestion` | Ingestion status |
 | `POST` | `/v1/sessions/{id}/debriefs` | Queue a debrief |
 | `GET` | `/v1/sessions/{id}/debrief` | Debrief status and report |
-| `POST` | `/v1/twins/{id}/notes` | Write an owner note into memory |
 | `POST` | `/v1/twins/{id}/reembeddings` | Queue an embedding refresh |
 | `GET` | `/v1/twins/{id}/owner-model` | Active owner model, or `?version=` |
 | `POST` | `/v1/twins/{id}/owner-model` | Add an item |
 | `POST` | `/v1/twins/{id}/owner-model/items/{item}/revisions` | Revise an item |
-| `DELETE` | `/v1/twins/{id}/owner-model/items/{item}` | Retire an item |
+| `POST` | `/v1/twins/{id}/owner-model/items/{item}/retire` | Retire an item, history kept |
+| `DELETE` | `/v1/twins/{id}/owner-model/items/{item}` | Forget an item, content erased |
 | `GET` | `/v1/twins/{id}/owner-model/items/{item}` | Revision history |
 | `GET` | `/v1/twins/{id}/owner-model/proposals` | Learned items awaiting a decision |
 | `POST` | `/v1/twins/{id}/owner-model/proposals/{revision}/approve` | Approve, or `/reject` |
@@ -158,11 +158,16 @@ All routes are token-authenticated: `Authorization: Bearer <token>`, owner or ad
 Interactive docs: `http://127.0.0.1:8000/docs`.
 
 The owner model is what the twin may stand behind on the owner's behalf:
-positions, preferences, decision rules, style examples, and facts. Every change
-is an append-only revision in PostgreSQL, so earlier versions stay readable.
+positions, preferences, decision rules, style examples, and facts. Owner notes
+are owner model facts: a `fact` item with an optional `valid_at`, the moment it
+became true. Every change is an append-only revision in PostgreSQL, so earlier
+versions stay readable.
 Items the owner writes are active at once and bump the model version; items
 learned from a debrief arrive as proposals and change nothing until approved.
 `owner_only` items are for the owner's eyes and never spoken in a room.
+Retiring an item takes it out of the model and keeps its history; forgetting
+erases the content of every revision and leaves only a contentless marker, so
+model versions never repeat.
 Each session freezes the model version it starts with: the twin answers from
 the `room_speakable` items, cites them as `om-<item>`, and a `brief_only`
 meeting uses none of them.
@@ -183,11 +188,13 @@ fakeyou report --meeting-id standup-1
 fakeyou debrief --meeting-id standup-1
 fakeyou brief standup-1 --persona .runtime/audio/persona.json
 fakeyou memory-ingest --meeting-id standup-1
-fakeyou memory-add "The Acme renewal closes on 3 March" --persona .runtime/audio/persona.json
-fakeyou memory-correct "The Acme renewal closes on 28 February" --episode 5b7a3c1e-2f4d-4a6b-8c9d-0e1f2a3b4c5d --source-at 2026-02-01T00:00:00+00:00
 fakeyou memory-forget --meeting-id standup-1
 fakeyou memory-reembed
 fakeyou owner-model add position release "Ship the beta after the load test passes" --persona .runtime/audio/persona.json
+fakeyou owner-model add fact acme-renewal "The Acme renewal closes on 3 March" --valid-at 2026-02-01T00:00:00+00:00 --persona .runtime/audio/persona.json
+fakeyou owner-model revise ITEM_ID fact acme-renewal "The Acme renewal closes on 28 February" --valid-at 2026-02-10T00:00:00+00:00 --persona .runtime/audio/persona.json
+fakeyou owner-model retire ITEM_ID --persona .runtime/audio/persona.json
+fakeyou owner-model forget ITEM_ID --persona .runtime/audio/persona.json
 fakeyou owner-model show --persona .runtime/audio/persona.json
 fakeyou owner-model proposals --persona .runtime/audio/persona.json
 fakeyou worker start https://meet.google.com/abc-defg-hij --meeting-id standup-1 --audio
@@ -339,7 +346,7 @@ Measured against real Google Meet sessions, not fixtures:
 Honest state of the tree, never aspirational:
 
 **Production path.** Join, hear, decide, speak, barge-in, stop, recall across
-meetings, owner notes, forget, ingestion, debrief, reembed.
+meetings, owner model, forget, ingestion, debrief, reembed.
 
 **Known limits.**
 - Operator-driven stop is the only tested end-of-session path; duration and

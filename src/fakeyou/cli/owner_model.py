@@ -1,6 +1,8 @@
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
+from datetime import datetime
 
 import httpx2
+from pydantic import TypeAdapter
 
 from fakeyou.cli.client import ClientSettings, owner_client
 from fakeyou.cli.output import emit_json
@@ -15,6 +17,15 @@ class OwnerModelItem:
     confidence: Confidence
     disclosure: ItemDisclosure
     reason: str | None = None
+    valid_at: datetime | None = None
+
+
+_ITEM = TypeAdapter(OwnerModelItem)
+
+
+def _body(item: OwnerModelItem) -> dict[str, object]:
+    body: dict[str, object] = _ITEM.dump_python(item, mode="json")
+    return body
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,19 +42,25 @@ async def show_owner_model(target: OwnerModelTarget, *, version: int | None) -> 
 
 async def add_owner_model_item(target: OwnerModelTarget, item: OwnerModelItem) -> None:
     async with owner_client(target.settings, transport=target.transport) as client:
-        emit_json(await client.add_owner_model_item(target.twin_id, asdict(item)))
+        emit_json(await client.add_owner_model_item(target.twin_id, _body(item)))
 
 
 async def revise_owner_model_item(
     target: OwnerModelTarget, item_id: str, item: OwnerModelItem
 ) -> None:
     async with owner_client(target.settings, transport=target.transport) as client:
-        emit_json(await client.revise_owner_model_item(target.twin_id, item_id, asdict(item)))
+        emit_json(await client.revise_owner_model_item(target.twin_id, item_id, _body(item)))
 
 
 async def retire_owner_model_item(target: OwnerModelTarget, item_id: str) -> None:
     async with owner_client(target.settings, transport=target.transport) as client:
         emit_json(await client.retire_owner_model_item(target.twin_id, item_id))
+
+
+async def forget_owner_model_item(target: OwnerModelTarget, item_id: str) -> None:
+    async with owner_client(target.settings, transport=target.transport) as client:
+        await client.forget_owner_model_item(target.twin_id, item_id)
+    emit_json({"item_id": item_id, "forgotten": True})
 
 
 async def show_owner_model_history(target: OwnerModelTarget, item_id: str) -> None:
