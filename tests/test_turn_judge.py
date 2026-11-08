@@ -6,13 +6,13 @@ import pytest
 from langchain_core.messages import AIMessage
 
 from fakeyou.conversation.turn_judge import (
-    SPEAKING_NOW,
     JudgeCache,
     JudgeLine,
     JudgeWindow,
     ModelTurnJudge,
     WindowSource,
 )
+from fakeyou.foundation.speakers import UNIDENTIFIED_PARTICIPANT
 from fakeyou.observability.model_inputs import digest, journal_model_inputs
 from fakeyou.persistence.record import MeetingRecord
 from fakeyou.session.identity import Participant, PresenceFact, PresenceStatus
@@ -78,17 +78,21 @@ def test_the_window_keeps_only_the_latest_lines(tmp_path: Path) -> None:
     )
 
     assert [line.text for line in window.earlier] == ["line 3", "line 4"]
-    assert window.latest.speaker == SPEAKING_NOW
+    assert window.latest.speaker == UNIDENTIFIED_PARTICIPANT
     assert window.twin_speaking is True
     record.close()
 
 
-def test_a_final_reuses_the_judgement_of_its_last_interim() -> None:
+def test_only_a_final_that_adds_nothing_shares_the_key_of_its_interim() -> None:
     earlier = (JudgeLine("ayu", "hello"),)
-    interim = JudgeWindow(earlier, JudgeLine(SPEAKING_NOW, "Rani when is the beta"))
-    final = JudgeWindow(earlier, JudgeLine("ayu", "Rani, when is the beta?"))
+    interim = JudgeWindow(earlier, JudgeLine(UNIDENTIFIED_PARTICIPANT, "Rani, when is the beta?"))
+    same = JudgeWindow(earlier, JudgeLine(UNIDENTIFIED_PARTICIPANT, "Rani, when is the beta?"))
+    punctuated = JudgeWindow(earlier, JudgeLine(UNIDENTIFIED_PARTICIPANT, "Rani when is the beta?"))
+    attributed = JudgeWindow(earlier, JudgeLine("ayu", "Rani, when is the beta?"))
 
-    assert interim.key == final.key
+    assert interim.key == same.key
+    assert interim.key != punctuated.key
+    assert interim.key != attributed.key
 
 
 async def test_the_cache_asks_once_for_the_same_window() -> None:
@@ -107,9 +111,10 @@ async def test_the_cache_asks_once_for_the_same_window() -> None:
 async def test_a_new_line_keeps_the_judgement_in_flight() -> None:
     judge = ScriptedJudge(lambda _window: judged("reply"), delay=0.05)
     cache = JudgeCache(judge)
-    cache.prefetch(JudgeWindow((), JudgeLine(SPEAKING_NOW, "Rani when")))
+    cache.prefetch(JudgeWindow((), JudgeLine(UNIDENTIFIED_PARTICIPANT, "Rani when")))
 
-    latest = await cache.judgement(JudgeWindow((), JudgeLine(SPEAKING_NOW, "Rani when is it")))
+    window = JudgeWindow((), JudgeLine(UNIDENTIFIED_PARTICIPANT, "Rani when is it"))
+    latest = await cache.judgement(window)
 
     assert latest.action == "reply"
     assert [window.latest.text for window in judge.windows] == ["Rani when", "Rani when is it"]
@@ -119,7 +124,8 @@ async def test_several_interims_are_judged_at_the_same_time() -> None:
     judge = ScriptedJudge(lambda _window: judged("reply"), delay=0.05)
     cache = JudgeCache(judge)
     windows = [
-        JudgeWindow((), JudgeLine(SPEAKING_NOW, f"Rani when is it {index}")) for index in range(3)
+        JudgeWindow((), JudgeLine(UNIDENTIFIED_PARTICIPANT, f"Rani when is it {index}"))
+        for index in range(3)
     ]
 
     for window in windows:
@@ -134,7 +140,7 @@ async def test_several_interims_are_judged_at_the_same_time() -> None:
 async def test_the_cache_keeps_the_judgement_of_a_finished_line() -> None:
     judge = ScriptedJudge(lambda _window: judged("reply"), delay=0.0)
     cache = JudgeCache(judge)
-    window = JudgeWindow((), JudgeLine(SPEAKING_NOW, "Rani when is it"))
+    window = JudgeWindow((), JudgeLine(UNIDENTIFIED_PARTICIPANT, "Rani when is it"))
 
     await cache.judgement(window)
 
@@ -201,7 +207,7 @@ async def test_the_model_judge_reads_its_structured_output() -> None:
     sent = json.loads(model.seen[-1][-1].text)
     assert sent["twin_names"] == ["Rani"]
     assert sent["earlier"] == [{"speaker": "twin", "text": "Hi.", "by_twin": True}]
-    assert sent["latest"] == {"speaker": "speaking now", "text": "rani beta"}
+    assert sent["latest"] == {"speaker": "ayu", "text": "Rani, beta?"}
 
 
 def claimed(*names: str, status: PresenceStatus = "complete") -> PresenceFact:
@@ -267,8 +273,8 @@ async def test_the_judge_payload_carries_presence_certainty() -> None:
         )
     )
     sent = json.loads(model.seen[-1][-1].text)
-    assert sent["human_speakers"] == ["ayu"]
-    assert sent["latest"] == {"speaker": "speaking now", "text": "can everyone see my screen"}
+    assert sent["human_speakers"] == ["ayu", "budi"]
+    assert sent["latest"] == {"speaker": "budi", "text": "can everyone see my screen?"}
     assert sent["presence"]["plausible_max"] is None
     assert sent["sole_human_responder"] is False
 
@@ -334,7 +340,7 @@ async def test_each_judge_call_records_who_asked_and_the_window_key() -> None:
 
 
 def test_the_purpose_of_a_window_does_not_split_the_cache_key() -> None:
-    line = JudgeLine(SPEAKING_NOW, "Rani, beta?")
+    line = JudgeLine(UNIDENTIFIED_PARTICIPANT, "Rani, beta?")
 
     assert (
         JudgeWindow((), line, purpose="interim").key
@@ -380,17 +386,3 @@ def test_the_owner_s_name_addresses_the_twin_only_as_a_vocative(
 
     assert window.names_twin is named
     record.close()
-
-
-def test_an_interim_and_its_final_send_the_judge_the_same_reading() -> None:
-    interim = JudgeWindow(
-        earlier=(), latest=JudgeLine(speaker="speaking now", text="Twin please raise your hand")
-    )
-    final = JudgeWindow(
-        earlier=(),
-        latest=JudgeLine(speaker="Speaker A, shown as Harun", text="Twin, please raise your hand."),
-        purpose="final",
-    )
-
-    assert interim.key == final.key
-    assert interim.reading == final.reading

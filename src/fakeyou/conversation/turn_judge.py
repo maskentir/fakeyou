@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from fakeyou.conversation.meeting_messages import MeetingHistory, spoken_by
 from fakeyou.foundation.participation import is_vocative, mentions_whole_phrase
+from fakeyou.foundation.speakers import UNIDENTIFIED_PARTICIPANT
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.observability.model_inputs import digest
 from fakeyou.persistence.record import TranscriptEntry, TwinSpeechEntry
@@ -34,15 +35,13 @@ ReactionEmoji = Literal[
     "\U0001f914",
 ]
 Addressee = Literal["twin", "someone_else", "everyone", "unclear"]
-SPEAKING_NOW = "speaking now"
 JUDGE_CONCURRENCY = 4
 
 _JUDGE_RULES = (
     "You read a live meeting for a digital twin and decide what the latest line means for it. "
     "The twin answers to the names listed in the input. Lines come from live speech "
     "recognition: words can be misheard and the latest line can still be growing, so read "
-    "each line by its most plausible meaning in this conversation. The latest line comes in "
-    "lower case without punctuation, and its speaker is not known yet.\n"
+    "each line by its most plausible meaning in this conversation.\n"
     "heard: restate the latest line as the speaker most likely meant it, in the speaker's "
     "language.\n"
     "finished: true when the speaker has completed the turn: a finished question, statement, "
@@ -192,7 +191,7 @@ class JudgeWindow:
                 {"speaker": line.speaker, "text": line.text, "by_twin": line.twin}
                 for line in self.earlier
             ],
-            "latest": {"speaker": SPEAKING_NOW, "text": _utterance(self.latest.text)},
+            "latest": {"speaker": self.latest.speaker, "text": self.latest.text},
             "latest_names_twin": self.names_twin,
         }
 
@@ -203,10 +202,6 @@ class JudgeWindow:
 
 class TurnJudge(Protocol):
     async def judge(self, window: JudgeWindow) -> TurnJudgement: ...
-
-
-def _utterance(text: str) -> str:
-    return " ".join("".join(ch for ch in text.casefold() if ch.isalnum() or ch.isspace()).split())
 
 
 def _line(entry: TranscriptEntry | TwinSpeechEntry) -> JudgeLine:
@@ -271,7 +266,7 @@ class WindowSource:
         earlier = earlier[-self.window_lines :]
         return JudgeWindow(
             tuple(earlier),
-            JudgeLine(SPEAKING_NOW, text),
+            JudgeLine(UNIDENTIFIED_PARTICIPANT, text),
             twin_speaking,
             names_twin=self._names_twin(text),
             presence=self._presence(),
@@ -280,9 +275,7 @@ class WindowSource:
 
 
 def _human_speakers(window: JudgeWindow) -> list[str]:
-    return sorted(
-        {line.speaker for line in window.earlier if not line.twin and line.speaker != SPEAKING_NOW}
-    )
+    return sorted({line.speaker for line in (*window.earlier, window.latest) if not line.twin})
 
 
 def _presence_payload(presence: PresenceFact | None) -> dict[str, object]:

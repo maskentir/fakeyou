@@ -373,11 +373,11 @@ async def test_interim_judgement_answers_the_final_without_blocking(
         diagnostics=Diagnostics(journal=journal),
     )
     loop.actor.bind(audio)
-    await loop.actor.handle_interim("what is next", history_seq=None)
+    await loop.actor.handle_interim("What is next?", history_seq=None)
     judging = loop.actor.judging
     assert judging is not None
     await asyncio.wait_for(judging.cache.wait_idle(), 2)
-    await loop.actor.receive_final(event("t2", "What is next?", participant_id="b"))
+    await loop.actor.receive_final(event("t2", "What is next?"))
     await asyncio.wait_for(loop.actor.wait_idle(), 2)
     assert [row["reason"] for row in journal.events("policy_decided")] == ["judge_reply"]
     assert len(judge.windows) == 1

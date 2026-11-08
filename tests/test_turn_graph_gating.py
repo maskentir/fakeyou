@@ -21,7 +21,6 @@ from fakeyou.conversation.turn_graph import (
     build_turn_graph,
 )
 from fakeyou.conversation.turn_judge import (
-    SPEAKING_NOW,
     JudgeCache,
     JudgeLine,
     JudgeWindow,
@@ -30,6 +29,7 @@ from fakeyou.conversation.turn_judge import (
 )
 from fakeyou.conversation.turn_queue import TurnEvent
 from fakeyou.foundation.participation import ParticipationContext
+from fakeyou.foundation.speakers import UNIDENTIFIED_PARTICIPANT
 from fakeyou.foundation.transcript import TranscriptEvent
 from tests._audio_fakes import SilentSpeaker
 from tests._conversation_fakes import judged
@@ -217,7 +217,7 @@ async def test_interim_is_not_judged_while_a_final_is_in_flight() -> None:
 async def test_the_judge_is_asked_about_the_window_the_ingress_built() -> None:
     judge = GatedJudge()
     cache = judging(judge)
-    window = JudgeWindow((), JudgeLine(SPEAKING_NOW, "twin, hello"), twin_speaking=True)
+    window = JudgeWindow((), JudgeLine(UNIDENTIFIED_PARTICIPANT, "twin, hello"), twin_speaking=True)
 
     await build_turn_graph().run(
         TurnInput(
@@ -283,15 +283,15 @@ async def test_lifecycle_close_cancels_the_running_judgement() -> None:
     assert judge.cancelled == 1
 
 
-async def test_the_final_reuses_the_interim_judgement() -> None:
+async def test_a_final_that_adds_nothing_reuses_the_interim_judgement() -> None:
     judge = GatedJudge(judged("reply"))
     journal = FakeJournal()
     lifecycle, session = bound(judge, journal)
     ingress = ingress_for(lifecycle)
 
-    await ingress.handle_interim("what about the beta", history_seq=None)
+    await ingress.handle_interim("What about the beta?", history_seq=None)
     await settle(lifecycle)
-    await ingress.handle_final(transcript("f2", "What about the beta?"))
+    await ingress.handle_final(transcript("f2", "What about the beta?", participant_id="unknown"))
 
     assert len(judge.calls) == 1
     assert session.spoken == [TWIN_REPLY]
