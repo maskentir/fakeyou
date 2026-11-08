@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -10,6 +10,8 @@ from fakeyou.observability.provider_faults import classify_exception
 from fakeyou.persistence.ingestion_status import (
     IngestionState,
     IngestionStatus,
+    RunOutcome,
+    SettledJob,
     read_status,
     write_status,
 )
@@ -17,7 +19,7 @@ from fakeyou.persistence.ingestion_status import (
 
 @dataclass(frozen=True, slots=True)
 class IngestOutcome:
-    state: IngestionState
+    state: RunOutcome
     windows: int
     resumed_from: int
     ingested: int
@@ -27,6 +29,7 @@ class IngestOutcome:
     reason: str | None
     episode_uuids: Mapping[int, str] | None = None
     record_bytes: int | None = None
+    job_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,7 +46,7 @@ class IngestSummary:
 
 
 def terminal_outcome(
-    state: IngestionState,
+    state: RunOutcome,
     reason: str,
     fallback_sha256: str | None,
     existing: IngestionStatus | None = None,
@@ -63,7 +66,7 @@ def terminal_outcome(
     )
 
 
-def ingest_state(result: IngestResult, stop: asyncio.Event) -> tuple[IngestionState, str | None]:
+def ingest_state(result: IngestResult, stop: asyncio.Event) -> tuple[RunOutcome, str | None]:
     if result.completed:
         return "completed", None
     if stop.is_set():
@@ -102,6 +105,35 @@ def finish_ingest(
     )
 
 
+def settle_correction(
+    status_file: Path,
+    summary: IngestSummary,
+    *,
+    job_id: str | None,
+    group_id: str,
+    faults: FaultReporter,
+) -> IngestSummary:
+    if job_id is None or not summary.stored:
+        return summary
+    previous = read_status(status_file, journal=faults.journal) or IngestionStatus(
+        meeting_id=summary.meeting_id, group_id=group_id, status="not_requested"
+    )
+    settled = previous.model_copy(
+        update={
+            "settled_job": SettledJob(
+                id=job_id, outcome="completed" if summary.succeeded else "failed"
+            ),
+            "updated_at": datetime.now(UTC),
+        }
+    )
+    try:
+        write_status(status_file, settled)
+    except OSError as error:
+        faults.record(classify_exception("memory_ingest", error))
+        return replace(summary, succeeded=False, stored=False)
+    return replace(summary, state=settled.status)
+
+
 def _next_status(
     previous: IngestionStatus | None,
     outcome: IngestOutcome,
@@ -128,4 +160,11 @@ def _next_status(
         correction_episodes=list(previous.correction_episodes) if previous is not None else [],
         correction_windows=dict(previous.correction_windows) if previous is not None else {},
         correction_run=previous.correction_run if previous is not None else None,
+        settled_job=_settled_job(previous, outcome),
     )
+
+
+def _settled_job(previous: IngestionStatus | None, outcome: IngestOutcome) -> SettledJob | None:
+    if outcome.job_id is None or outcome.state == "interrupted":
+        return previous.settled_job if previous is not None else None
+    return SettledJob(id=outcome.job_id, outcome=outcome.state)

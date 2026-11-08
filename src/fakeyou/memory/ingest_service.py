@@ -1,7 +1,7 @@
 import asyncio
 from collections.abc import Callable
 from contextlib import AbstractContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from graphiti_core import Graphiti
@@ -15,6 +15,7 @@ from fakeyou.memory.ingest_status import (
     IngestSummary,
     finish_ingest,
     ingest_state,
+    settle_correction,
     terminal_outcome,
 )
 from fakeyou.memory.ingestion import (
@@ -50,6 +51,7 @@ class IngestRequest:
     meeting_id: SessionId
     twin_name: str | None
     no_correct: bool = False
+    job_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,7 +95,7 @@ class _Attempt:
     def settle(self, outcome: IngestOutcome) -> bool:
         summary = finish_ingest(
             self.status_file,
-            outcome,
+            replace(outcome, job_id=self.request.job_id),
             meeting_id=self.request.meeting_id,
             group_id=self.profile.memory_group,
             faults=self.faults,
@@ -166,7 +168,14 @@ async def run_recorded_correction(
     try:
         with record_lock(record_path, purpose="ingestion"):
             profile, _existing = await _locked_scope(record_path, journal, access)
-            summary = await _correct_recorded(request, record_path, profile, journal, access)
+            corrected = await _correct_recorded(request, record_path, profile, journal, access)
+            summary = settle_correction(
+                status_path(record_path),
+                corrected,
+                job_id=request.job_id,
+                group_id=profile.memory_group,
+                faults=FaultReporter(journal=journal),
+            )
     finally:
         journal.close()
     ports.publish(summary)

@@ -210,6 +210,46 @@ async def test_reembed_gives_up_after_its_time_limit() -> None:
     assert caught.value.exit_code is ExitCode.INFRA_FAILURE
 
 
+def _ingest_view(status: str) -> dict[str, Any]:
+    return {
+        "job_id": "1-0",
+        "kind": "ingest",
+        "meeting_id": "m-1",
+        "status": status,
+        "completed": status in {"completed", "failed"},
+        "succeeded": status == "completed",
+    }
+
+
+async def test_memory_ingest_follows_its_own_job_not_a_stale_meeting_status(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    polls = iter([_ingest_view("pending"), _ingest_view("completed")])
+    seen: list[str] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        seen.append(f"{request.method} {request.url.path}")
+        if request.method == "POST":
+            return httpx2.Response(202, json=_ingest_view("pending"))
+        if request.url.path == "/v1/sessions/m-1/ingestion":
+            return httpx2.Response(200, json={"status": "failed", "completed": True})
+        return httpx2.Response(200, json=next(polls))
+
+    await cli_memory.ingest_recorded_meeting(
+        meeting_id="m-1",
+        settings=SETTINGS,
+        interval=NO_WAIT,
+        transport=httpx2.MockTransport(handler),
+    )
+
+    assert json.loads(capsys.readouterr().out)["succeeded"] is True
+    assert seen == [
+        "POST /v1/sessions/m-1/ingestions",
+        "GET /v1/jobs/1-0",
+        "GET /v1/jobs/1-0",
+    ]
+
+
 def test_twin_id_comes_from_the_persona_file_when_not_given(tmp_path: Path) -> None:
     persona = write_persona(tmp_path)
 

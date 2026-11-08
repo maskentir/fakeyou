@@ -109,7 +109,7 @@ async def ingest_recorded_meeting(
     async with owner_client(settings, transport=transport) as client:
         job_id = (await client.submit_ingestion(meeting_id, kind="ingest"))["job_id"]
         view = await _wait_for_job(
-            lambda: client.ingestion_status(meeting_id),
+            lambda: client.get_job(job_id),
             kind="ingest",
             job_id=job_id,
             interval=interval,

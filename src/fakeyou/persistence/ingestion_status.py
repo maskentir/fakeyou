@@ -22,11 +22,20 @@ from fakeyou.persistence.lease import (
 )
 
 IngestionState = Literal["not_requested", "pending", "completed", "interrupted", "failed"]
+RunOutcome = Literal["completed", "interrupted", "failed"]
+JobOutcome = Literal["completed", "failed"]
 PREFIX_BLOCK_BYTES = 8192
 
 
 class RecordLockError(LeaseError):
     pass
+
+
+class SettledJob(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+
+    id: str
+    outcome: JobOutcome
 
 
 class IngestionStatus(BaseModel):
@@ -47,6 +56,7 @@ class IngestionStatus(BaseModel):
     correction_episodes: list[str] = Field(default_factory=list)
     correction_windows: dict[int, str] = Field(default_factory=dict)
     correction_run: str | None = None
+    settled_job: SettledJob | None = None
 
 
 def status_path(record_path: Path) -> Path:

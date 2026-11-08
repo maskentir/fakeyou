@@ -25,6 +25,7 @@ IngestionJobKind = Literal["ingest", "correct"]
 class IngestionJob:
     meeting_id: str
     kind: IngestionJobKind
+    job_id: str
 
 
 class _IngestionJobFields(BaseModel):
@@ -37,13 +38,13 @@ class _IngestionJobFields(BaseModel):
     kind: IngestionJobKind
 
 
-def parse_ingestion_job(fields: Mapping[str, str]) -> IngestionJob:
+def parse_ingestion_job(fields: Mapping[str, str], *, job_id: str) -> IngestionJob:
     try:
         parsed = _IngestionJobFields.model_validate(dict(fields))
     except ValidationError as error:
         names = sorted({str(item["loc"][0]) for item in error.errors() if item["loc"]})
         raise ValueError(f"invalid ingestion job field: {', '.join(names)}") from None
-    return IngestionJob(meeting_id=parsed.meeting_id, kind=parsed.kind)
+    return IngestionJob(meeting_id=parsed.meeting_id, kind=parsed.kind, job_id=job_id)
 
 
 def _corrupt_status_summary(meeting_id: str) -> IngestSummary:
@@ -76,7 +77,9 @@ async def handle_ingestion_job(
     service = run_recorded_ingest if job.kind == "ingest" else run_recorded_correction
     try:
         await service(
-            IngestRequest(parse_session_id(job.meeting_id, field="meeting_id"), None),
+            IngestRequest(
+                parse_session_id(job.meeting_id, field="meeting_id"), None, job_id=job.job_id
+            ),
             access=access,
             ports=replace(ports, publish=capture),
         )
