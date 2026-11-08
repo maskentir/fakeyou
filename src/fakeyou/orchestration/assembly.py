@@ -247,6 +247,7 @@ class TurnBehavior:
     on_transition: Callable[[ConversationPhase, ConversationPhase, str], None]
     wake_phrases: Sequence[str] = ()
     twin_names: Sequence[str] = ()
+    owner_names: Sequence[str] = ()
     barge_in: bool = False
     commands: MeetCommands | None = None
     kernel: KernelPort | None = None
@@ -517,6 +518,7 @@ class _ConversationBuilder:
                 on_transition=self._behavior.on_transition,
                 wake_phrases=self._behavior.wake_phrases,
                 twin_names=self._behavior.twin_names,
+                owner_names=self._behavior.owner_names,
                 barge_in=self._behavior.barge_in,
                 barge_in_judge_enabled=conversation_settings.barge_in_judge_enabled,
                 participant_policy_enabled=participant_policy_enabled,

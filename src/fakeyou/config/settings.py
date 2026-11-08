@@ -431,7 +431,6 @@ class AttentionSettings(Section):
     ttl_seconds: PositiveSeconds = 30.0
     transcript_moments: bool = True
     unanswered_seconds: PositiveSeconds = 15.0
-    owner_names: tuple[str, ...] = ()
     moment_confidence: float = Field(default=0.8, gt=0, lt=1)
     grounding_confidence: float = Field(default=0.7, gt=0, lt=1)
     similarity_threshold: float = Field(default=0.15, gt=0, lt=1)

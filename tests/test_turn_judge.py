@@ -354,3 +354,28 @@ def test_an_interim_window_holds_only_lines_recorded_before_it_was_heard(
     )
 
     assert [line.text for line in window.earlier] == ["line 0"]
+
+
+@pytest.mark.parametrize(
+    ("text", "named"),
+    [
+        ("Rani, can we ship the beta on Friday?", True),
+        ("Hi Rani, can you hear me?", True),
+        ("Rani Twin, when is the beta?", True),
+        ("The launch checklist belongs to Rani.", False),
+        ("Budi will ask Rani about the budget.", False),
+    ],
+)
+def test_the_owner_s_name_addresses_the_twin_only_as_a_vocative(
+    tmp_path: Path, text: str, *, named: bool
+) -> None:
+    record = _record(tmp_path)
+    latest = event("t1", text, participant_id="ayu")
+    record.add_transcript(latest)
+
+    window = WindowSource(
+        record, window_lines=8, twin_names=("Rani Twin",), owner_names=("Rani",)
+    ).for_final(latest, twin_speaking=False, purpose="final")
+
+    assert window.names_twin is named
+    record.close()

@@ -40,7 +40,7 @@ from fakeyou.identity.identity import SpeakerRegistry
 from fakeyou.meet.browser import profile_lock
 from fakeyou.meet.command_ledger import CommandRecord
 from fakeyou.memory.ingestion import meeting_windows
-from fakeyou.memory.persona import speech_keywords
+from fakeyou.memory.persona import owner_names, speech_keywords
 from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.observability.faults import FaultReporter
 from fakeyou.observability.journal import Journal, JournalFile, journal_path
@@ -330,6 +330,7 @@ async def _open_join_conversation(
                     phrase.strip() for phrase in (prepared.request.wake_phrase or "").split(",")
                 ],
                 twin_names=[prepared.config.twin_name],
+                owner_names=owner_names(prepared.profile),
                 barge_in=prepared.request.barge_in,
                 commands=run.commands,
                 kernel=run.kernel,
@@ -363,7 +364,7 @@ async def _open_moment_detector(prepared: PreparedJoin, run: _JoinRun) -> None:
         ),
         embed=embed_texts if embedder is not None else None,
         twin_names=(prepared.config.twin_name,),
-        owner_names=attention.owner_names,
+        owner_names=owner_names(prepared.profile),
         similarity_threshold=attention.similarity_threshold,
         moment_confidence=attention.moment_confidence,
         unanswered_seconds=attention.unanswered_seconds,

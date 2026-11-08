@@ -619,3 +619,12 @@ def test_owner_model_keeps_the_most_recent_items_in_a_stable_order() -> None:
     assert [item["id"] for item in block] == [
         f"om-item-{index}" for index in range(50 - MAX_OWNER_MODEL_ITEMS, 50)
     ]
+
+
+def test_the_prompt_names_the_owner_when_the_persona_does() -> None:
+    named = build_persona_prompt(profile().model_copy(update={"owner_name": "Rani"}))
+    unnamed = build_persona_prompt(profile().model_copy(update={"owner_name": None}))
+
+    assert '"owner_name": "Rani"' in named
+    assert "never as the owner" in named
+    assert '"owner_name"' not in unnamed.split("Owner profile JSON:")[1].split("\n\n")[0]

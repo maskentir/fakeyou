@@ -10,7 +10,7 @@ from langchain_core.runnables import Runnable
 from pydantic import BaseModel, ConfigDict, Field
 
 from fakeyou.conversation.meeting_messages import MeetingHistory, spoken_by
-from fakeyou.foundation.participation import mentions_whole_phrase
+from fakeyou.foundation.participation import is_vocative, mentions_whole_phrase
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.observability.model_inputs import digest
 from fakeyou.persistence.record import TranscriptEntry, TwinSpeechEntry
@@ -227,10 +227,13 @@ class WindowSource:
     history: MeetingHistory
     window_lines: int
     twin_names: tuple[str, ...] = ()
+    owner_names: tuple[str, ...] = ()
     presence: Callable[[], PresenceFact] | None = None
 
     def _names_twin(self, text: str) -> bool:
-        return any(mentions_whole_phrase(text, name) for name in self.twin_names)
+        return any(mentions_whole_phrase(text, name) for name in self.twin_names) or is_vocative(
+            text, self.owner_names
+        )
 
     def _presence(self) -> PresenceFact | None:
         return self.presence() if self.presence is not None else None

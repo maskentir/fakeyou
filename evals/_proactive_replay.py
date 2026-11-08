@@ -16,7 +16,7 @@ from fakeyou.config.settings import AttentionSettings, Settings
 from fakeyou.conversation.moments import ModelMomentJudge, MomentDetector
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.foundation.transcript import AttentionContext, TranscriptEvent, attention_line
-from fakeyou.memory.persona import PersonaProfile
+from fakeyou.memory.persona import PersonaProfile, owner_names
 from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.observability.journal import Journal
 from fakeyou.orchestration.providers import create_embedder, create_turn_judge_model
@@ -174,7 +174,7 @@ def build_detector(
         ),
         embed=embed_texts if embedder is not None else None,
         twin_names=(profile.display_name,),
-        owner_names=attention.owner_names or ("Rani",),
+        owner_names=owner_names(profile),
         similarity_threshold=attention.similarity_threshold,
         moment_confidence=attention.moment_confidence,
         unanswered_seconds=attention.unanswered_seconds,
@@ -214,7 +214,6 @@ async def run_proactive_scenario(
     attention = AttentionSettings(
         enabled=True,
         transcript_moments=True,
-        owner_names=("Rani",),
         unanswered_seconds=settings.perception.attention.unanswered_seconds,
     )
     config = SessionConfig(

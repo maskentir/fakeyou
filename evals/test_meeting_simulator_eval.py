@@ -184,7 +184,7 @@ async def test_the_twin_joins_a_simulated_meeting_and_answers_a_spoken_question(
     tmp_path: Path,
 ) -> None:
     async with _meeting(tmp_path, "sim-s1", duration=75, brief=False) as meeting:
-        await meeting.simulator.say("beta-question.wav", speaker=HARUN)
+        await meeting.simulator.say("owner-beta-question.wav", speaker=HARUN)
         decision = await wait_for_event(
             meeting.journal,
             "policy_decided",
@@ -197,6 +197,7 @@ async def test_the_twin_joins_a_simulated_meeting_and_answers_a_spoken_question(
     spoken = " ".join(entry.text for entry in meeting.twin_speech())
     assert "orchid" in str(decision.get("heard", "")).casefold()
     assert "14 october" in spoken.casefold()
+    assert "reply_draft_accepted" in meeting.events()
     assert outcome.session.terminal_reason == "duration_limit_reached"
     assert "turn_failed" not in meeting.events()
 
