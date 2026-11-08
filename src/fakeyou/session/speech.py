@@ -42,9 +42,10 @@ OWNER_STANCES: frozenset[EntryKind] = frozenset({"position", "preference", "deci
 QUESTION_GROUNDS: frozenset[EntryKind] = frozenset(
     {"question", "objective", "position", "decision_rule"}
 )
+OWNER_VIEWS: frozenset[ClaimAct] = frozenset({"opinion", "proposal"})
 VOICES: Mapping[ClaimBasis, frozenset[ClaimVoice]] = {
-    "owner_model": frozenset({"owner_proxy", "reporting"}),
-    "brief": frozenset({"owner_proxy", "reporting"}),
+    "owner_model": frozenset({"owner_proxy", "reporting", "twin"}),
+    "brief": frozenset({"owner_proxy", "reporting", "twin"}),
     "memory": frozenset({"reporting"}),
     "screen": frozenset({"reporting", "twin"}),
     "meeting_live": frozenset({"reporting", "twin"}),
@@ -122,7 +123,8 @@ class ClaimHeader(BaseModel):
             "Whose voice the claim is in. owner_proxy: the owner's own view on the owner's "
             "behalf, from owner_model or brief. reporting: what a source or someone else said, "
             "attributed to them; memory is always reporting unless the owner said it. twin: you "
-            "as the owner's AI twin, always for inference and none."
+            "as the owner's AI twin, stating a fact or asking, and always for inference and "
+            "none. An opinion or a proposal is the owner's, never the twin's own."
         )
     )
 
@@ -218,6 +220,8 @@ def _based(claim: ClaimHeader, cited: tuple[BookEntry, ...]) -> bool:
 
 
 def _voiced(claim: ClaimHeader, cited: tuple[BookEntry, ...]) -> bool:
+    if claim.speaks_as == "twin" and claim.act in OWNER_VIEWS:
+        return False
     if claim.speaks_as in VOICES[claim.basis]:
         return True
     return (

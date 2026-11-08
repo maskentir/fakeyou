@@ -181,6 +181,21 @@ def test_the_voice_follows_the_basis() -> None:
     assert check_claim(guess, BOOK) == "speaks_as_mismatch"
 
 
+def test_the_twin_may_state_an_approved_fact_but_never_holds_a_view() -> None:
+    brief_fact = claim("brief:launch", speaks_as="twin")
+    owner_fact = claim("om-ship", basis="owner_model", speaks_as="twin")
+    twin_view = claim("om-ship", act="opinion", basis="owner_model", speaks_as="twin")
+    twin_proposal = claim("om-ship", act="proposal", basis="owner_model", speaks_as="twin")
+    participant_memory = claim("memory:m1", basis="memory", speaks_as="twin")
+
+    assert check_claim(brief_fact, BOOK) == "pass"
+    assert check_claim(owner_fact, BOOK) == "pass"
+    assert check_claim(twin_view, BOOK) == "speaks_as_mismatch"
+    assert check_claim(twin_proposal, BOOK) == "speaks_as_mismatch"
+    assert check_claim(owner("om-ship"), BOOK) == "pass"
+    assert check_claim(participant_memory, BOOK) == "speaks_as_mismatch"
+
+
 def test_a_contribution_needs_a_sourced_claim() -> None:
     meta = claim(act="meta")
     guess = claim(basis="inference", certainty="guess")
