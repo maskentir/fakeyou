@@ -44,6 +44,7 @@ from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.memory.persona import PersonaProfile, meeting_tool_names, persona_digest
 from fakeyou.observability.faults import capture_error
 from fakeyou.orchestration.persona_prompt import build_persona_prompt
+from fakeyou.persistence.owner_model import FrozenOwnerModel, FrozenOwnerModelItem
 from tests._conversation_fakes import ToolCallingFakeModel
 from tests._memory_fakes import make_graphiti
 
@@ -53,6 +54,8 @@ TRUST_RUNS = 3
 USEFULNESS_THRESHOLD = 0.9
 MIN_USEFUL_PAIRS = 79
 EXPECTED_CASE_IDS = frozenset(f"c{i:02d}" for i in range(1, 30))
+CASE_OWNER_MODEL_VERSION = 1
+CASE_OWNER_MODEL_DEFAULTS = {"confidence": "firm", "disclosure": "room_speakable"}
 REVIEW_MODES = frozenset({"contract", "live"})
 AID_CHECKS = (
     "answered",
@@ -233,6 +236,19 @@ def build_case_memory(case: dict[str, Any], group_id: str) -> tuple[Any, dict[st
     return memory, stored
 
 
+def case_owner_model(case: dict[str, Any]) -> FrozenOwnerModel | None:
+    items = case.get("owner_model")
+    if items is None:
+        return None
+    return FrozenOwnerModel(
+        version=CASE_OWNER_MODEL_VERSION,
+        items=tuple(
+            FrozenOwnerModelItem.model_validate({**CASE_OWNER_MODEL_DEFAULTS, **item})
+            for item in items
+        ),
+    )
+
+
 @contextlib.contextmanager
 def case_storage(memory: Any, stored: dict[str, Any]) -> Iterator[None]:
     async def get_by_uuids(driver: Any, uuids: list[str]) -> list[Any]:
@@ -285,11 +301,13 @@ async def replay_trust(
     candidate["fixture_payload_sha256"] = canonical_json_digest(fixture, compact=True)
     names = meeting_tool_names(profile, None, memory_requested=True)
     prefetch = "recall_meeting_context" in names
-    persona = build_persona_prompt(profile.model_copy(update={"allowed_tools": names}))
+    prompt_profile = profile.model_copy(update={"allowed_tools": names})
     group_id = profile.memory_group
     score = TrustScore(runtime=runtime_metadata(settings))
     for case in fixture["cases"]:
         memory, stored = build_case_memory(case, group_id)
+        owner_model = case_owner_model(case)
+        persona = build_persona_prompt(prompt_profile, owner_model=owner_model)
         with case_storage(memory, stored):
             score.prompts[case["id"]] = {
                 "system_prompt": persona,
@@ -310,6 +328,7 @@ async def replay_trust(
                         counter=counter,
                         trajectory=trajectory,
                         meeting_id=f"trust-eval-{case['id']}-{run}",
+                        owner_model=owner_model,
                     ),
                 ) as responder:
                     for index, turn in enumerate(case["turns"]):
