@@ -2936,6 +2936,101 @@ tetap milik kita: library guardrail (NeMo, Guardrails AI, HHEM) menilai
 dukungan secara probabilistik dan tidak memeriksa ref, disclosure, atau
 `speaks_as`. Judge owner-plausible memakai deepeval secara offline.
 
+Desain rinci C2/C3 (2026-11-08, sebelum implementasi, dari pemetaan kode
+di `fcee4eb`). Tiga asumsi rencana di atas salah terhadap kode:
+
+- **Klaim sebelum satu `text` tidak bisa dipetakan ke kalimat.** Teks
+  di-stream per kalimat ke TTS; dengan satu `text` di belakang daftar klaim,
+  kalimat mana milik klaim mana tidak diketahui, sehingga "grounding angka
+  per klaim" diam-diam tetap cek gabungan seperti sekarang. Maka **setiap
+  klaim membawa ucapannya sendiri** (`say`, field terakhir klaim).
+  `ReplyPlanner` melepas potongan `(indeks_klaim, teks)`; pergantian klaim
+  memaksa flush `SentenceStream`, sehingga setiap kalimat milik tepat satu
+  klaim dan digate terhadap basis klaim itu saja.
+- **Partial validation pydantic tidak berlaku untuk BaseModel** (diuji di
+  2.13.5: klaim setengah jadi melempar error) dan `trailing-strings`
+  menyimpan ref terpotong (`"om-be"`). Maka parsing parsial memakai mirror
+  TypedDict (`_PlanDraft`/`_ClaimDraft`, kuncinya dikunci tes sama dengan
+  `SpeechPlan`), dan header klaim dianggap mapan hanya setelah kunci `say`
+  muncul. Enum tak dikenal → verdict `unparsed_plan` (gagal tertutup),
+  menggantikan koersi diam-diam `_act_of`.
+- **Critic sudah ada** (`GroundingVerifier`, hanya untuk giliran proaktif,
+  playback sudah menunggu karena giliran itu tidak di-stream). C3
+  menggantinya, bukan menambah.
+
+Tipe: `SpeechPlan(understood, language, intent, commits_owner, claims)`
+dengan `text` sebagai properti gabungan `say`; `Claim(act, basis, refs,
+certainty, speaks_as, say)` dalam urutan itu (tes mengunci urutan schema).
+`act`: `fact`, `opinion`, `proposal`, `question`, `meta`. `basis`:
+`owner_model` (`om-…`), `memory` (id edge), `brief` (id brief),
+`meeting_live` (yang didengar/dilihat di ruangan), `screen` (`screen#N`
+yang sudah ada di view JSON — bukan format baru), `inference`, `none`.
+`certainty`: `stated`, `guess`. `speaks_as`: `owner_proxy`, `twin`,
+`reporting`.
+
+Gate deterministik, per klaim saat header mapan: ref ada; namespace ref
+cocok dengan basis; disclosure `room_speakable`; `opinion`/`proposal`
+butuh item owner model ber-kind position/preference/decision_rule;
+`question` butuh pertanyaan atau objective brief atau posisi owner;
+`inference` dan item ber-confidence `leaning` wajib `certainty=guess`;
+`speaks_as` sesuai basis (owner_model/brief → owner_proxy|reporting;
+memory → reporting, owner_proxy hanya bila sumbernya owner terverifikasi;
+screen/meeting_live → reporting|twin; inference/none → twin). Per kalimat:
+angka dan tanggal di-ground terhadap yang didengar plus ref klaim itu
+saja (teks dan waktu sumber); shingle instruksi tetap.
+
+**Keputusan menolak gate leksikal** (usulan pemetaan: daftar kata orang
+pertama "saya/aku/gue" dan kata ragu "mungkin/kayaknya"). Jawaban trust
+yang benar penuh "saya belum tahu…", "saya tidak bisa menyetujui…";
+gate kata akan salah-tolak bahasa santai dan sufiks "-ku", dan setiap
+salah-tolak menjadi "Saya belum yakin…". Penggantinya struktural: hanya
+`act=meta` (twin tentang dirinya: tidak tahu, tidak bisa, pengungkapan AI,
+sapaan, pengakuan) yang boleh `basis=none`, tanpa ref dan tanpa angka;
+`fact`/`opinion`/`proposal`/`question` tanpa basis → `unbased_claim`. Jadi
+"my day's been relaxed" sebagai fakta tanpa basis ditolak tanpa daftar
+kata. Salah-label sebagai `meta` dan apakah `guess` terdengar ragu diukur
+di eval (persona, trust) dan dinilai critic untuk kontribusi proaktif.
+
+Layar sebagai sumber: `on_screens` mengisi `TurnEvidence` dengan
+`screen#N` (teks, presenter) dari view dan jawaban look; `BookEntry` dapat
+`attributed_to`. Isi layar orang lain hanya bisa `reporting`/`twin`.
+
+Irisan (rencana "satu PR" terlalu besar untuk ditinjau: parser, gate,
+prompt, replay, baseline, 15 fixture eval, 6 kaset):
+
+- **C2a** kontrak dan parser, perilaku setara: `SpeechPlan`/`Claim`,
+  parsing TypedDict, stream per klaim, gate ref/disclosure/angka per
+  klaim/komitmen/shingle. Hapus `ReplyPlan`, `SpeechAct`, `_act_of`,
+  `parse_partial_json`, field `contribution`/`cites`. Migrasi journal,
+  replay, baseline, fixture eval, kaset (rekam ulang semua).
+- **C2b** aturan basis: act/certainty/speaks_as/`meta`; `OwnerModelSource`
+  dapat kind dan confidence; `RecalledFact` dapat asal owner terverifikasi;
+  objective bisa dikutip pertanyaan. Hapus `uncited_contribution`,
+  `question_not_in_brief`.
+- **C2c** layar sebagai sumber dengan atribusi presenter.
+- **C3** critic menggantikan `GroundingVerifier` (input: daftar klaim +
+  item owner model yang dikutip; verdict owner_would_say,
+  worth_interrupting, guesses_hedged, grounded), plus judge offline
+  owner-plausible (deepeval GEval, keluarga model berbeda dari model
+  balasan).
+
+Gate per irisan: C2a — tes parsial (ref terpotong tidak mapan, enum buruk
+→ `unparsed_plan`), urutan schema, semua eval offline lulus hanya dengan
+perubahan fixture, simulator hijau di kaset baru, first audio tidak
+regresi, nol klaim tanpa basis di journal replay. C2b — "my day's been
+relaxed" ditolak di dua bahasa; opini tanpa posisi ditolak; leaning tanpa
+`guess` ditolak; pertanyaan berbasis objective lolos; tingkat salah-tolak
+persona eval diukur. C2c — "baca baris 42" lolos lewat klaim `screen#N`;
+spreadsheet orang lain sebagai "kemarin saya …" ditolak. C3 — judge
+independen menilai ≥ 80% kontribusi owner-plausible; skenario kontrol
+proaktif tetap diam.
+
+Risiko terbuka: kepatuhan schema bersarang di model kecil (pantau laju
+`structured=false`; gagal tertutup berarti lebih banyak "unsure");
+`max_sentences` versus jumlah klaim (klaim yang terpotong dibuang utuh);
+dua sumber dalam satu kalimat harus dipecah menjadi dua klaim, ukur
+kelancarannya di persona eval.
+
 ### C4: Prompt peran yang pendek
 
 Setelah C2 dan C3, karena prosa hanya boleh dihapus setelah struktur yang
