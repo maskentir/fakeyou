@@ -45,6 +45,7 @@ from tests._cli_support import (
     write_record,
 )
 from tests._conversation_fakes import ScriptedJudge, ToolCallingFakeModel, judged
+from tests._conversation_support import claim, plan_reply
 from tests._error_support import message_pattern
 from tests._ingest_support import ingest_recorded_meeting
 from tests._memory_fakes import make_graphiti
@@ -237,14 +238,9 @@ async def test_join_persona_memory_prefetches_only_profile_scoped_recall(
     fact = "Orchid beta launch is planned for 14 October 2026"
     graphiti = make_graphiti(facts=(fact,), episodes={fact: ["meet-1"]})
     model = replying(
-        json.dumps(
-            {
-                "understood": "When does Orchid launch?",
-                "language": "en",
-                "intent": "answer",
-                "cites": ["edge-0"],
-                "text": "Orchid launches on 14 October.",
-            }
+        plan_reply(
+            claim("Orchid launches on 14 October.", "edge-0", basis="memory"),
+            understood="When does Orchid launch?",
         )
     )
     episode = SimpleNamespace(

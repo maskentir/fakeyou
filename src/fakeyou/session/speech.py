@@ -1,10 +1,11 @@
 import re
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
 
 from num2words import num2words
+from pydantic import BaseModel, ConfigDict, Field
 
 from fakeyou.session.facts import Disclosure, Namespace
 
@@ -17,8 +18,14 @@ SpeechVerdict = Literal[
     "owner_commitment",
     "uncited_contribution",
     "question_not_in_brief",
+    "unparsed_plan",
 ]
-ContributionKind = Literal["none", "fact", "correction", "question"]
+ClaimAct = Literal["fact", "opinion", "proposal", "question", "meta"]
+ClaimBasis = Literal[
+    "owner_model", "memory", "brief", "meeting_live", "screen", "inference", "none"
+]
+ClaimCertainty = Literal["stated", "guess"]
+ClaimVoice = Literal["owner_proxy", "twin", "reporting"]
 DISCLOSURE_SHINGLE_WORDS = 6
 SPOKEN_NUMBER_LANGUAGES = ("id", "en")
 _NUMBER = re.compile(r"\d+(?:[.,:/]\d+)*")
@@ -48,11 +55,41 @@ class FactBook:
         return FactBook(merged, self.heard, self.internal)
 
 
-@dataclass(frozen=True, slots=True)
-class SpeechAct:
-    cites: tuple[str, ...] = ()
-    commits_owner: bool = False
-    contribution: ContributionKind = "none"
+class ClaimHeader(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    act: ClaimAct = Field(
+        description=(
+            "What this claim does. fact: states something that is known. opinion: gives a view. "
+            "proposal: suggests a course of action. question: asks the room something. meta: "
+            "you about yourself, such as not knowing, not being able to, being the owner's AI "
+            "twin, a greeting or an acknowledgement, always with basis none."
+        )
+    )
+    basis: ClaimBasis = Field(
+        description=(
+            "Where this claim comes from. owner_model: an owner model item. memory: a recalled "
+            "memory fact. brief: a meeting brief item. meeting_live: something said or shown in "
+            "this meeting. screen: what is on the shared screen. inference: your own conclusion. "
+            "none: nothing outside yourself, only for meta."
+        )
+    )
+    refs: tuple[str, ...] = Field(
+        description=(
+            "The id of every owner model item (om-<id>), recalled memory fact or brief item this "
+            "claim states or relies on. Empty when the claim rests on no such source."
+        )
+    )
+    certainty: ClaimCertainty = Field(
+        description="stated when the basis says it outright, guess when you are inferring it."
+    )
+    speaks_as: ClaimVoice = Field(
+        description=(
+            "Whose voice the claim is in. owner_proxy: the owner's own view, spoken on the "
+            "owner's behalf. twin: you as the owner's AI twin. reporting: what a source or "
+            "someone else said, attributed to them."
+        )
+    )
 
 
 def numbers_in(text: str) -> frozenset[str]:
@@ -112,21 +149,27 @@ def _shingles(text: str) -> frozenset[tuple[str, ...]]:
     return frozenset(tuple(words[index : index + size]) for index in range(len(words) - size + 1))
 
 
-def check_act(act: SpeechAct, book: FactBook) -> SpeechVerdict:
-    if act.commits_owner:
+def check_plan(
+    claims: Sequence[ClaimHeader], *, commits_owner: bool, proactive: bool
+) -> SpeechVerdict:
+    if commits_owner:
         return "owner_commitment"
-    for fact_id in act.cites:
+    if proactive and not any(claim.refs for claim in claims):
+        return "uncited_contribution"
+    return "pass"
+
+
+def check_claim(claim: ClaimHeader, book: FactBook, *, proactive: bool) -> SpeechVerdict:
+    for fact_id in claim.refs:
         entry = book.entries.get(fact_id)
         if entry is None:
             return "unknown_citation"
         if entry.disclosure != "room_speakable":
             return "not_speakable"
-    if act.contribution == "none":
-        return "pass"
-    if not act.cites:
-        return "uncited_contribution"
-    if act.contribution == "question" and not any(
-        book.entries[fact_id].question for fact_id in act.cites
+    if (
+        proactive
+        and claim.act == "question"
+        and not any(book.entries[fact_id].question for fact_id in claim.refs)
     ):
         return "question_not_in_brief"
     return "pass"
@@ -140,15 +183,11 @@ def _grounding(entry: BookEntry) -> str:
     return " ".join([entry.text, *(spoken_time_numbers(moment) for moment in entry.times)])
 
 
-def check_sentence(sentence: str, act: SpeechAct, book: FactBook) -> SpeechVerdict:
+def check_sentence(sentence: str, refs: Iterable[str], book: FactBook) -> SpeechVerdict:
     grounded = " ".join(
         [
             book.heard,
-            *(
-                _grounding(book.entries[fact_id])
-                for fact_id in act.cites
-                if fact_id in book.entries
-            ),
+            *(_grounding(book.entries[fact_id]) for fact_id in refs if fact_id in book.entries),
         ]
     )
     written = numbers_in(grounded)

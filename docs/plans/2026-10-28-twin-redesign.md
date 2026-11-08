@@ -3027,7 +3027,7 @@ proaktif tetap diam.
 
 Risiko terbuka: kepatuhan schema bersarang di model kecil (pantau laju
 `structured=false`; gagal tertutup berarti lebih banyak "unsure");
-`max_sentences` versus jumlah klaim (klaim yang terpotong dibuang utuh);
+`max_sentences` versus jumlah klaim (klaim yang terpotong cap diucapkan sebatas kalimat yang muat — setiap kalimat sudah di-gate terhadap ref klaimnya; membuangnya utuh terbukti menghapus kalimat konflik c16 di trust eval live);
 dua sumber dalam satu kalimat harus dipecah menjadi dua klaim, ukur
 kelancarannya di persona eval.
 

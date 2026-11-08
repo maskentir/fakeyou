@@ -24,11 +24,15 @@ from fakeyou.replay.fixture import (
     SynthesisTiming,
 )
 from fakeyou.replay.pacer import BYTES_PER_SECOND
+from fakeyou.session.speech import ClaimHeader
 from fakeyou.speech.contract import SpeechTurn
 from fakeyou.speech.streaming import SentenceTurn, SpeechTag, journaled_stream
 
 CHUNK_BYTES = 4800
 FILLER = "x"
+UNRECORDED_CLAIM = ClaimHeader(
+    act="meta", basis="none", refs=(), certainty="stated", speaks_as="twin"
+)
 RECORDED_PROVIDER = "recorded"
 VOICED_SAMPLE = (1000).to_bytes(2, "little", signed=True)
 
@@ -337,26 +341,25 @@ class RecordedModel(BaseChatModel):
         plan = self._plans.get(transcript_id) if transcript_id else None
         if reply is None or plan is None:
             silent = RecordedPlan(
-                language="en",
-                intent="silent",
-                contribution="none",
-                cites=(),
-                structured=True,
-                replaced=False,
+                language="en", intent="silent", claims=(), structured=True, replaced=False
             )
-            return ScriptedReply(_head(silent), (), '"}', None)
+            return ScriptedReply(_head(silent), (), "]}", None)
         pieces: list[tuple[float, str]] = []
         sentences = reply.sentences
-        for index, sentence in enumerate(sentences):
+        for sentence, following in zip(sentences, (*sentences[1:], None), strict=True):
             text = sentence.text if sentence.text is not None else FILLER * max(1, sentence.chars)
             piece = json.dumps(text)[1:-1]
-            if index + 1 < len(sentences):
-                piece += " "
+            if following is not None:
+                same = following.claim == sentence.claim
+                piece += " " if same else f'"}}, {_claim_head(plan, following.claim)}'
             pieces.append((sentence.offset_ms * self._latency_scale, piece))
         duration_ms = (
             reply.duration_ms * self._latency_scale if reply.duration_ms is not None else None
         )
-        return ScriptedReply(_head(plan), tuple(pieces), '"}', duration_ms)
+        if not sentences:
+            return ScriptedReply(_head(plan), (), "]}", duration_ms)
+        head = _head(plan) + _claim_head(plan, sentences[0].claim)
+        return ScriptedReply(head, tuple(pieces), '"}]}', duration_ms)
 
 
 def _head(plan: RecordedPlan) -> str:
@@ -365,12 +368,15 @@ def _head(plan: RecordedPlan) -> str:
             "understood": "",
             "language": plan.language,
             "intent": plan.intent,
-            "contribution": plan.contribution,
-            "cites": list(plan.cites),
             "commits_owner": False,
         }
     )
-    return f'{body[:-1]}, "text": "'
+    return f'{body[:-1]}, "claims": ['
+
+
+def _claim_head(plan: RecordedPlan, claim: int) -> str:
+    header = plan.claims[claim] if claim < len(plan.claims) else UNRECORDED_CLAIM
+    return f'{json.dumps(header.model_dump(mode="json"))[:-1]}, "say": "'
 
 
 def _chunk(text: str) -> ChatGenerationChunk:

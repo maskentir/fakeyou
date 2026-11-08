@@ -4,6 +4,13 @@ from typing import Any
 from fakeyou.observability.baseline import baseline_metrics
 
 START = datetime(2026, 10, 28, 10, 0, tzinfo=UTC)
+OWNER_CLAIM = {
+    "act": "fact",
+    "basis": "owner_model",
+    "refs": ["om-beta"],
+    "certainty": "stated",
+    "speaks_as": "owner_proxy",
+}
 
 
 def row(seconds: float, event: str, **fields: Any) -> dict[str, Any]:
@@ -15,8 +22,9 @@ TURN = [
     row(2.0, "speech_stopped"),
     row(3.2, "transcript_finalized", transcript_id="t1", speaker_bound=True),
     row(3.3, "transcript_finalized", transcript_id="t0", speaker_bound=False),
-    row(4.0, "reply_plan_observed", transcript_id="t1", contribution="fact"),
-    row(4.1, "reply_plan_observed", transcript_id="t0", contribution="question"),
+    row(4.0, "reply_plan_observed", transcript_id="t1", proactive=True, claims=[OWNER_CLAIM]),
+    row(4.1, "reply_plan_observed", transcript_id="t0", proactive=True, claims=[OWNER_CLAIM]),
+    row(4.2, "reply_plan_observed", transcript_id="t2", proactive=False, claims=[OWNER_CLAIM]),
     row(4.4, "synthesis_pcm_emitted", transcript_id="t1", sentence_index=0),
     row(4.5, "playback_started", transcript_id="t1", sentence_index=0),
     row(6.0, "playback_finished", transcript_id="t1", sentence_index=0),
@@ -45,7 +53,7 @@ def test_counts_cover_identity_contribution_and_the_session_end() -> None:
     metrics = baseline_metrics(TURN)
 
     assert metrics["speaker_bound"] == {"count": 1, "of": 2, "ratio": 0.5}
-    assert metrics["contributions_spoken"] == {"count": 1, "of": 2, "ratio": 0.5}
+    assert metrics["contributions_spoken"] == {"count": 1, "of": 3, "ratio": 0.333}
     assert metrics["speech_rejected"] == {"invented_number": 1}
     assert metrics["memory_prefetches"] == 1
     assert (metrics["terminal_reason"], metrics["terminal_detail"]) == (

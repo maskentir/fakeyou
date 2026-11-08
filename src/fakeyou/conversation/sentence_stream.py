@@ -50,6 +50,13 @@ class SentenceStream:
             return self.buffer.strip()
         return None
 
+    def flush_segment(self) -> str | None:
+        tail = self.flush()
+        if tail is not None:
+            self.buffer = ""
+            self.yielded += 1
+        return tail
+
 
 async def shape_sentences(
     chunks: AsyncIterator[SpokenChunk], *, max_sentences: int, language: str

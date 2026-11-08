@@ -123,6 +123,16 @@ def test_sentence_stream_holds_an_unterminated_fragment_until_flush() -> None:
     assert stream.flush() == "Half a thought"
 
 
+def test_a_segment_flush_closes_the_fragment_as_its_own_sentence() -> None:
+    stream = SentenceStream(max_sentences=2, language="en")
+
+    assert stream.take("The beta moved") == []
+    assert stream.flush_segment() == "The beta moved"
+    assert stream.take("Rani asked. Then") == ["Rani asked."]
+    assert stream.flush_segment() is None
+    assert stream.check_cap() is True
+
+
 def test_flush_emits_nothing_when_only_whitespace_remains() -> None:
     stream = SentenceStream(max_sentences=5, language="en")
 

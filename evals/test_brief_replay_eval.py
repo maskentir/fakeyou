@@ -23,7 +23,7 @@ from evals._brief import (
     score_brief_aids,
     write_brief_artifacts,
 )
-from evals._shared import ArtifactMeta, ReplayOptions, suspended_gc
+from evals._shared import ArtifactMeta, ReplayOptions, contract_reply, suspended_gc
 from evals._trust import (
     contract_model,
     load_trust_fixture,
@@ -71,9 +71,9 @@ def test_brief_corpus_defines_12_categories() -> None:
         assert case["turns"]
         for turn in case["turns"]:
             assert turn["say"].strip()
-            assert turn["contract_reply"].strip()
-            assert cap_spoken_reply(turn["contract_reply"]) == turn["contract_reply"].strip()
-        final = str(case["turns"][-1]["contract_reply"])
+            assert contract_reply(turn).strip()
+            assert cap_spoken_reply(contract_reply(turn)) == contract_reply(turn).strip()
+        final = contract_reply(case["turns"][-1])
         aids = score_brief_aids(case, final, [])
         assert all(aids.values()), (case["id"], aids)
     scopes = {case_brief(fixture, case).knowledge_scope for case in cases}
@@ -128,7 +128,7 @@ async def test_contract_brief_replay_captures_36_rated_pairs_and_writes_artifact
             assert turn["memory_prefetch"] == []
     for turn in score.rated_turns():
         case = by_id[turn["case_id"]]
-        assert turn["reply"] == case["turns"][-1]["contract_reply"]
+        assert turn["reply"] == contract_reply(case["turns"][-1])
         assert turn["aids"] == score_brief_aids(case, turn["reply"], turn["tool_trajectory"])
         assert all(turn["aids"][name] for name in AID_CHECKS)
     markers = [str(marker).lower() for marker in fixture["owner_markers"]]

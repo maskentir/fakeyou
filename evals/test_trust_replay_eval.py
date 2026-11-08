@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from evals._shared import ArtifactMeta, ReplayOptions, token_present
+from evals._shared import ArtifactMeta, ReplayOptions, contract_reply, token_present
 from evals._trust import (
     AID_CHECKS,
     EXPECTED_CASE_IDS,
@@ -155,7 +155,7 @@ async def test_contract_replay_brings_prefetched_memory_to_every_trust_turn() ->
         if turn["turn_index"] > 0:
             prior_turn = by_id[turn["case_id"]]["turns"][turn["turn_index"] - 1]
             assert prior_turn["say"] in turn["memory_searches"][-1]
-            assert prior_turn["contract_reply"] in turn["memory_searches"][-1]
+            assert contract_reply(prior_turn) in turn["memory_searches"][-1]
     for turn in score.rated_turns():
         assert all(turn["aids"][name] for name in AID_CHECKS)
     assert {prompt["memory_prefetch"] for prompt in score.prompts.values()} == {True}
@@ -166,7 +166,7 @@ async def test_contract_owner_fact_reaches_prompt_and_gate_but_not_recall() -> N
     case = next(case for case in fixture["cases"] if case["id"] == "c01")
     [item] = case["owner_model"]
     [scripted] = case["turns"]
-    assert scripted["contract_cites"] == [f"om-{item['item_id']}"]
+    assert [claim["refs"] for claim in scripted["contract_claims"]] == [[f"om-{item['item_id']}"]]
     models: list[ToolCallingFakeModel] = []
 
     def recording_model(scripted_case: dict[str, Any]) -> ToolCallingFakeModel:
@@ -181,7 +181,7 @@ async def test_contract_owner_fact_reaches_prompt_and_gate_but_not_recall() -> N
     assert system_prompt == score.prompts["c01"]["system_prompt"]
     assert f'"id": "om-{item["item_id"]}"' in system_prompt
     assert f'"true_since": "{item["valid_at"]}"' in system_prompt
-    assert turn["reply"] == scripted["contract_reply"]
+    assert turn["reply"] == contract_reply(scripted)
     assert all(turn["aids"][name] for name in AID_CHECKS)
     recalled = "\n".join(entry["output"] for entry in turn["memory_prefetch"])
     for meeting_fact in case["memory"]["facts"]:
@@ -197,5 +197,5 @@ async def test_contract_owner_fact_reaches_prompt_and_gate_but_not_recall() -> N
     )
     [ungrounded] = withheld.turns
     assert f"om-{item['item_id']}" not in withheld.prompts["c01"]["system_prompt"]
-    assert ungrounded["reply"] != scripted["contract_reply"]
+    assert ungrounded["reply"] != contract_reply(scripted)
     assert not any(token_present(str(token), ungrounded["reply"]) for token in case["allow"])

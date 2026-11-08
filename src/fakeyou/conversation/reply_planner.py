@@ -1,19 +1,23 @@
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Literal, cast, get_args
+from itertools import groupby
+from typing import Literal, NamedTuple, TypedDict, get_args
 
-from langchain_core.utils.json import parse_partial_json
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.state_speech import locale_of, speech_line
 from fakeyou.foundation.sentences import split_sentences
 from fakeyou.session.speech import (
-    ContributionKind,
+    ClaimAct,
+    ClaimBasis,
+    ClaimCertainty,
+    ClaimHeader,
+    ClaimVoice,
     FactBook,
-    SpeechAct,
     SpeechVerdict,
-    check_act,
+    check_claim,
+    check_plan,
     check_sentence,
 )
 
@@ -30,17 +34,25 @@ ReplyIntent = Literal[
 ]
 ReplyLanguage = Literal["id", "en"]
 
-REPLY_INTENTS: frozenset[str] = frozenset(get_args(ReplyIntent))
 REPLY_LANGUAGES: frozenset[str] = frozenset(get_args(ReplyLanguage))
 SHORT_INTENTS = frozenset({"ack", "decline", "stop", "shorter", "louder"})
 JSON_START = "{"
-CONTRIBUTION_KINDS: frozenset[str] = frozenset(get_args(ContributionKind))
 GateOutcome = Literal["pass", "drop", "n/a"]
 
 IntentHandler = Callable[[ReplyIntent], str | None]
 
 
-class ReplyPlan(BaseModel):
+class Claim(ClaimHeader):
+    say: str = Field(
+        description=(
+            "The words you speak aloud for this claim and nothing else, every word in the "
+            "language you declared: English when language is en, Indonesian when it is id, even "
+            "when your profile and the meeting use the other one."
+        )
+    )
+
+
+class SpeechPlan(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     understood: str = Field(
@@ -62,40 +74,54 @@ class ReplyPlan(BaseModel):
             "clarify: only when no reading of the request makes sense. decline: you must not "
             "agree, approve or decide. silent: you should not speak at all. stop, shorter, repeat, "
             "louder: the participant asked you to stop talking, to be more concise, to say that "
-            "again, or to speak louder; the text is then only a few words acknowledging it."
+            "again, or to speak louder; the claims then say only a few words acknowledging it."
         )
-    )
-    contribution: ContributionKind = Field(
-        default="none",
-        description=(
-            "none for every ordinary reply. Only when nobody asked you anything (a proactive "
-            "contribution): fact adds a known fact the room lacks, correction fixes something the "
-            "room or screen just stated that conflicts with a known fact, question asks a brief "
-            "question that unblocks the discussion."
-        ),
-    )
-    cites: list[str] = Field(
-        default_factory=list,
-        description=(
-            "The id of every brief item, owner model item (om-<id>) or recalled memory fact that "
-            "your text states or relies on. Empty when the text states no such fact. A "
-            "contribution must cite at least one id, and a question must cite a brief question."
-        ),
     )
     commits_owner: bool = Field(
         default=False,
         description=(
-            "True when the text would agree, approve, promise, accept a deadline or price, or "
+            "True when the reply would agree, approve, promise, accept a deadline or price, or "
             "decide anything on the owner's behalf."
         ),
     )
-    text: str = Field(
+    claims: list[Claim] = Field(
         description=(
-            "The words you speak aloud, every word in the language you declared: English when "
-            "language is en, Indonesian when it is id, even when your profile and the meeting use "
-            "the other one. One or two short sentences. Empty when the intent is silent."
+            "What you say, as claims in speaking order, one or two short sentences in all. Each "
+            "claim rests on one basis and its say holds the words for that claim alone; a "
+            "sentence that draws on two sources becomes two claims. A contribution nobody asked "
+            "for needs at least one claim with refs, and its question claim must cite a brief "
+            "question. Empty when the intent is silent."
         )
     )
+
+    @property
+    def text(self) -> str:
+        return " ".join(claim.say for claim in self.claims)
+
+
+class _ClaimDraft(TypedDict, total=False):
+    act: ClaimAct
+    basis: ClaimBasis
+    refs: tuple[str, ...]
+    certainty: ClaimCertainty
+    speaks_as: ClaimVoice
+    say: str
+
+
+class _PlanDraft(TypedDict, total=False):
+    understood: str
+    language: ReplyLanguage
+    intent: ReplyIntent
+    commits_owner: bool
+    claims: list[_ClaimDraft]
+
+
+PLAN_DRAFT = TypeAdapter(_PlanDraft)
+
+
+class SpeechPiece(NamedTuple):
+    claim: int
+    text: str
 
 
 @dataclass(slots=True)
@@ -135,11 +161,12 @@ class PlanRead:
     intent: ReplyIntent
     language: str
     replaced: bool
-    contribution: str = "none"
-    cites: tuple[str, ...] = ()
+    proactive: bool = False
+    claims: tuple[ClaimHeader, ...] = ()
 
 
 PlanHandler = Callable[[PlanRead], None]
+GateHandler = Callable[[SpeechVerdict, ClaimHeader | None], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,21 +174,7 @@ class ReplyHandlers:
     on_intent: IntentHandler | None = None
     on_plan: PlanHandler | None = None
     on_language: Callable[[str], None] | None = None
-    on_gate: Callable[[SpeechVerdict, SpeechAct], None] | None = None
-
-
-def _act_of(plan: dict[str, object]) -> SpeechAct:
-    cites = plan.get("cites")
-    contribution = plan.get("contribution")
-    return SpeechAct(
-        cites=tuple(item for item in cites if isinstance(item, str))
-        if isinstance(cites, list)
-        else (),
-        commits_owner=plan.get("commits_owner") is True,
-        contribution=cast(ContributionKind, contribution)
-        if isinstance(contribution, str) and contribution in CONTRIBUTION_KINDS
-        else "none",
-    )
+    on_gate: GateHandler | None = None
 
 
 class ReplyPlanner:
@@ -181,23 +194,25 @@ class ReplyPlanner:
         self._on_language = resolved.on_language
         self._on_gate = resolved.on_gate
         self._gate = speech_gate
-        self._act: SpeechAct | None = None
+        self._claims: list[ClaimHeader] = []
+        self._commits_owner = False
         self._blocked: SpeechVerdict | None = None
-        self._pending: list[str] = []
         self._raw = ""
-        self._released = 0
+        self._released: list[int] = []
         self._structured: bool | None = None
         self._declared_language: str | None = None
         self._declared_intent: ReplyIntent | None = None
         self._replacement: str | None = None
+        self._lead: int | None = None
+        self._waiting: list[SpeechPiece] = []
         self._held: str | None = None
         self._short_spoken = False
         self._spoken = 0
         self._reported = False
 
     @property
-    def act(self) -> SpeechAct | None:
-        return self._act
+    def claims(self) -> tuple[ClaimHeader, ...]:
+        return tuple(self._claims)
 
     @property
     def blocked(self) -> SpeechVerdict | None:
@@ -223,35 +238,59 @@ class ReplyPlanner:
     def language(self) -> str:
         return self._declared_language or self._language
 
-    def feed(self, piece: str) -> str:
+    def feed(self, piece: str) -> list[SpeechPiece]:
         self._raw += piece
         return self._release(final=False)
 
-    def finish(self) -> str:
+    def finish(self) -> list[SpeechPiece]:
         return self._release(final=True)
 
-    def take_sentence(self, sentence: str) -> list[str]:
-        if self.silent:
+    def speak(self, reply: str) -> list[str]:
+        pieces = [*self.feed(reply), *self.finish()]
+        spoken: list[str] = []
+        if not self.silent:
+            for claim, group in groupby(pieces, key=lambda piece: piece.claim):
+                text = "".join(piece.text for piece in group)
+                for sentence in split_sentences(text, language=self.language):
+                    spoken.extend(self.take_sentence(sentence, claim))
+                spoken.extend(self.end_claim(claim))
+        return [*spoken, *self.finish_sentences()]
+
+    def take_sentence(self, sentence: str, claim: int = 0) -> list[str]:
+        if self.silent or self._blocked is not None:
             return []
-        if self._gate is None:
+        if self._gate is not None:
+            verdict = self._judge(self._gate, sentence, claim)
+            if verdict != "pass":
+                self._block(verdict, self._header(claim))
+                return []
+        if self._lead is None:
+            self._lead = claim
+        if claim == self._lead:
             return self._admit(sentence)
-        self._pending.append(sentence)
-        return self._drain()
+        self._waiting = [piece for piece in self._waiting if piece.claim == claim]
+        self._waiting.append(SpeechPiece(claim, sentence))
+        return []
+
+    def end_claim(self, claim: int) -> list[str]:
+        ended = [piece.text for piece in self._waiting if piece.claim == claim]
+        self._waiting = [piece for piece in self._waiting if piece.claim != claim]
+        return [line for sentence in ended for line in self._admit(sentence)]
 
     def finish_sentences(self) -> list[str]:
-        if self._gate is not None and self._act is None:
-            self._act = self._final_act()
-        spoken = self._drain() if self._gate is not None else []
+        waiting, self._waiting = self._waiting, []
+        spoken = [line for piece in waiting for line in self._admit(piece.text)]
         if self._held is not None:
             held, self._held = self._held, None
             if not (self.intent == "answer" and self._spoken):
                 self._spoken += 1
                 spoken.append(held)
-        return [*spoken, *self._fallback()]
+        spoken.extend(self._fallback())
+        self._report()
+        return spoken
 
-    def _final_act(self) -> SpeechAct:
-        plan = parse_partial_json(self._raw.lstrip()) if self._structured else None
-        return _act_of(plan) if isinstance(plan, dict) else SpeechAct()
+    def _header(self, claim: int) -> ClaimHeader | None:
+        return self._claims[claim] if claim < len(self._claims) else None
 
     def _admit(self, sentence: str) -> list[str]:
         if self.intent in SHORT_INTENTS:
@@ -271,39 +310,29 @@ class ReplyPlanner:
         self._spoken += len(spoken)
         return spoken
 
-    def _drain(self) -> list[str]:
-        act, gate = self._act, self._gate
-        if act is None or gate is None:
-            return []
-        pending, self._pending = self._pending, []
-        spoken: list[str] = []
-        for sentence in pending:
-            verdict = self._blocked or self._judge(act, gate, sentence)
-            if verdict != "pass":
-                self._block(verdict, act)
-                break
-            spoken.extend(self._admit(sentence))
-        return spoken
-
-    def _judge(self, act: SpeechAct, gate: SpeechGate, sentence: str) -> SpeechVerdict:
-        verdict = check_act(act, gate.book)
-        if verdict == "pass" and gate.proactive and act.contribution == "none":
-            verdict = "uncited_contribution"
+    def _judge(self, gate: SpeechGate, sentence: str, claim: int) -> SpeechVerdict:
+        verdict = check_plan(
+            self._claims, commits_owner=self._commits_owner, proactive=gate.proactive
+        )
+        header = self._header(claim)
+        if verdict == "pass" and header is not None:
+            verdict = check_claim(header, gate.book, proactive=gate.proactive)
         if verdict != "pass":
             return verdict
-        return check_sentence(sentence, act, gate.book)
+        return check_sentence(sentence, header.refs if header is not None else (), gate.book)
 
-    def _block(self, verdict: SpeechVerdict, act: SpeechAct) -> None:
+    def _block(self, verdict: SpeechVerdict, claim: ClaimHeader | None) -> None:
         if self._blocked is not None:
             return
         self._blocked = verdict
         self._held = None
+        self._waiting = []
         if self._on_gate is not None:
-            self._on_gate(verdict, act)
+            self._on_gate(verdict, claim)
 
     def _fallback(self) -> list[str]:
         gate, locale = self._gate, locale_of(self.language)
-        if self._blocked is None or self._spoken or gate is None or locale is None:
+        if self._blocked is None or self._spoken or self.silent or gate is None or locale is None:
             return []
         if self._blocked == "owner_commitment":
             self._spoken += 1
@@ -313,67 +342,87 @@ class ReplyPlanner:
         self._spoken += 1
         return [speech_line("unsure", locale)]
 
-    def _release(self, *, final: bool) -> str:
+    def _release(self, *, final: bool) -> list[SpeechPiece]:
         if self._structured is None:
             body = self._raw.lstrip()
             if not body:
-                return ""
+                return []
             self._structured = body.startswith(JSON_START)
         if not self._structured:
-            if self._act is None:
-                self._act = SpeechAct()
-            self._report(structured=False)
-            return self._take_text(self._raw)
-        plan = parse_partial_json(self._raw.lstrip())
-        if not isinstance(plan, dict):
-            if final and self._act is None:
-                self._act = SpeechAct()
-            return ""
-        if self._act is None and ("text" in plan or final) and ("cites" in plan or final):
-            self._act = _act_of(plan)
-        if not self._read_plan(plan, final=final):
-            return ""
-        text = self._replacement if self._replacement is not None else plan.get("text")
-        return self._take_text(text) if isinstance(text, str) else ""
+            return self._fresh(0, self._raw)
+        if self._blocked == "unparsed_plan":
+            return []
+        try:
+            draft = PLAN_DRAFT.validate_json(
+                self._raw.lstrip(),
+                experimental_allow_partial=False if final else "trailing-strings",
+            )
+        except ValidationError:
+            self._block("unparsed_plan", None)
+            return []
+        if "claims" not in draft and not final:
+            return []
+        self._read_plan(draft)
+        if self._replacement is not None:
+            return self._fresh(0, self._replacement)
+        if final and "claims" not in draft and not self.silent:
+            self._block("unparsed_plan", None)
+            return []
+        return self._claim_pieces(draft.get("claims", []), final=final)
 
-    def _read_plan(self, plan: dict[str, object], *, final: bool) -> bool:
+    def _claim_pieces(self, claims: Sequence[_ClaimDraft], *, final: bool) -> list[SpeechPiece]:
+        pieces: list[SpeechPiece] = []
+        for index, claim in enumerate(claims):
+            if index == len(self._released):
+                self._released.append(0)
+                pieces.append(SpeechPiece(index, ""))
+            if "say" not in claim:
+                if final:
+                    self._block("unparsed_plan", None)
+                return pieces
+            if index == len(self._claims):
+                try:
+                    self._claims.append(ClaimHeader.model_validate(claim))
+                except ValidationError:
+                    self._block("unparsed_plan", None)
+                    return pieces
+            pieces.extend(self._fresh(index, claim["say"]))
+        return pieces
+
+    def _fresh(self, claim: int, text: str) -> list[SpeechPiece]:
+        if claim == len(self._released):
+            self._released.append(0)
+        fresh = text[self._released[claim] :]
+        self._released[claim] = len(text)
+        return [SpeechPiece(claim, fresh)] if fresh else []
+
+    def _read_plan(self, draft: _PlanDraft) -> None:
         if self._declared_intent is not None:
-            return True
-        if "text" not in plan and not final:
-            return False
-        language = plan.get("language")
-        if isinstance(language, str) and language in REPLY_LANGUAGES:
+            return
+        self._commits_owner = draft.get("commits_owner", False)
+        language = draft.get("language")
+        if language is not None:
             self._declared_language = language
             if self._on_language is not None:
                 self._on_language(language)
-        intent = plan.get("intent")
-        known = isinstance(intent, str) and intent in REPLY_INTENTS
-        self._declared_intent = cast(ReplyIntent, intent) if known else "answer"
+        self._declared_intent = draft.get("intent", "answer")
         if self._on_intent is not None:
             self._replacement = self._on_intent(self.intent)
-        self._report(structured=True, plan=plan)
-        return True
 
-    def _report(self, *, structured: bool, plan: dict[str, object] | None = None) -> None:
-        if self._reported or self._on_plan is None:
+    def _report(self) -> None:
+        if self._reported or self._on_plan is None or self._structured is None:
             return
         self._reported = True
-        act = _act_of(plan) if plan is not None else SpeechAct()
         self._on_plan(
             PlanRead(
-                structured=structured,
+                structured=self._structured,
                 intent=self.intent,
                 language=self.language,
                 replaced=self._replacement is not None,
-                contribution=act.contribution,
-                cites=act.cites,
+                proactive=self._gate is not None and self._gate.proactive,
+                claims=self.claims,
             )
         )
-
-    def _take_text(self, text: str) -> str:
-        fresh = text[self._released :]
-        self._released = len(text)
-        return fresh
 
 
 def planned_reply(
@@ -390,11 +439,4 @@ def planned_reply(
         handlers=handlers,
         speech_gate=speech_gate,
     )
-    content = planner.feed(text) + planner.finish()
-    if planner.silent:
-        return SpokenChunk(text="", language=planner.language)
-    spoken: list[str] = []
-    for sentence in split_sentences(content, language=planner.language):
-        spoken.extend(planner.take_sentence(sentence))
-    spoken.extend(planner.finish_sentences())
-    return SpokenChunk(text=" ".join(spoken), language=planner.language)
+    return SpokenChunk(text=" ".join(planner.speak(text)), language=planner.language)

@@ -17,17 +17,11 @@ from fakeyou.conversation.grounding import GroundingVerdict
 from fakeyou.conversation.meeting_messages import NoHistory
 from fakeyou.conversation.speech_book import BookSource
 from fakeyou.foundation.transcript import AttentionContext, TranscriptEvent
+from tests._conversation_support import claim, plan_reply
 from tests._persistence_fakes import RecordingJournal
 
-PLAN = json.dumps(
-    {
-        "understood": "screen changed",
-        "language": "en",
-        "intent": "answer",
-        "contribution": "correction",
-        "cites": ["om-beta"],
-        "text": "The beta actually launches on 14 October.",
-    }
+PLAN = plan_reply(
+    claim("The beta actually launches on 14 October.", "om-beta"), understood="screen changed"
 )
 
 
@@ -115,7 +109,9 @@ async def test_a_grounded_contribution_is_spoken() -> None:
     assert verifier.calls[0]["source_text"].endswith("14 October 2026")
     assert journal.events("contribution_verified")
     observed = journal.events("reply_plan_observed")[0]
-    assert (observed["contribution"], observed["cites"]) == ("correction", ["om-beta"])
+    assert observed["proactive"] is True
+    assert [(item["act"], item["refs"]) for item in observed["claims"]] == [("fact", ["om-beta"])]
+    assert verifier.calls[0]["kind"] == "fact"
 
 
 @pytest.mark.parametrize(

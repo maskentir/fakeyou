@@ -23,6 +23,7 @@ from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.conversation.conversation import (
     MeetingResponder,
+    StreamTrace,
     cap_spoken_reply,
     stream_sentences,
 )
@@ -34,16 +35,20 @@ from fakeyou.conversation.meeting_turns import (
     TurnTiming,
     build_meeting_turns,
 )
+from fakeyou.conversation.reply_planner import SpeechGate
 from fakeyou.observability.diagnostics import Diagnostics
+from fakeyou.session.speech import BookEntry, FactBook
 from tests._audio_fakes import FakeReplyAudio
 from tests._conversation_fakes import (
     FakeResponder,
     ToolCallingFakeModel,
 )
-from tests._conversation_support import AgentT, callback_handlers, event
+from tests._conversation_support import AgentT, callback_handlers, claim, event, plan_reply
 from tests._error_support import message_pattern
 from tests._persistence_fakes import RecordingJournal
 from tests._pregen_support import StreamingResponder
+
+SILENT_PLAN = plan_reply("I would have said something.", intent="silent")
 
 
 class ScriptedStream:
@@ -223,7 +228,7 @@ async def test_the_declared_language_reaches_the_speaker(journal: RecordingJourn
         [
             (
                 "chunk",
-                '{"language": "en", "intent": "answer", "text": "The launch is on 14 October."}',
+                plan_reply("The launch is on 14 October."),
                 "model",
             )
         ]
@@ -240,8 +245,8 @@ async def test_the_declared_language_reaches_the_speaker(journal: RecordingJourn
 async def test_a_silent_plan_speaks_nothing(journal: RecordingJournal) -> None:
     agent = ScriptedAgent(
         [
-            ("chunk", '{"language": "en", "intent": "sil', "model"),
-            ("chunk", 'ent", "text": "I would have said something."}', "model"),
+            ("chunk", SILENT_PLAN[: SILENT_PLAN.index("sil") + 3], "model"),
+            ("chunk", SILENT_PLAN[SILENT_PLAN.index("sil") + 3 :], "model"),
         ]
     )
     audio = FakeReplyAudio()
@@ -254,7 +259,7 @@ async def test_a_silent_plan_speaks_nothing(journal: RecordingJournal) -> None:
 
 async def test_an_ack_plan_speaks_one_sentence(journal: RecordingJournal) -> None:
     agent = ScriptedAgent(
-        [("chunk", '{"language": "id", "intent": "ack", "text": "Okay. More to say."}', "model")]
+        [("chunk", plan_reply("Okay. More to say.", intent="ack", language="id"), "model")]
     )
     audio = FakeReplyAudio()
     loop = streamed_loop(agent, audio, journal)
@@ -269,8 +274,7 @@ async def test_an_answer_plan_drops_the_closing_question(journal: RecordingJourn
         [
             (
                 "chunk",
-                '{"language": "en", "intent": "answer", '
-                '"text": "The launch is on 14 October. Anything else?"}',
+                plan_reply("The launch is on 14 October. Anything else?"),
                 "model",
             )
         ]
@@ -557,6 +561,7 @@ async def test_streamed_journal_events_carry_metadata_only(journal: RecordingJou
             "request_id",
             "transcript_id",
             "sentence_index",
+            "claim_index",
             "chars",
         }
     ] * 2
@@ -955,3 +960,68 @@ async def test_a_slow_model_is_asked_again_before_the_turn_dies(
     assert retried["attempt"] == 1
     assert retried["detail"] == "timeout"
     assert journal.events("turn_failed") == []
+
+
+CLAIM_BOOK = FactBook(
+    {
+        "demo-date": BookEntry("demo-date", "The demo is booked for Friday the 9th.", "brief"),
+        "om-beta": BookEntry("om-beta", "The beta launches on 14 October.", "owner_model"),
+    }
+)
+
+
+async def streamed_claims(
+    *claims: dict[str, Any], max_sentences: int, journal: RecordingJournal | None = None
+) -> list[str]:
+    raw = plan_reply(*claims)
+    agent = SlowTokenAgent([raw[start : start + 6] for start in range(0, len(raw), 6)], 0.0)
+    trace = StreamTrace(language="en", journal=journal, speech_gate=SpeechGate(lambda: CLAIM_BOOK))
+    return [
+        chunk.text
+        async for chunk in stream_sentences(
+            cast(AgentT, agent),
+            [HumanMessage("when?")],
+            stream_config(),
+            max_sentences=max_sentences,
+            trace=trace,
+        )
+    ]
+
+
+async def test_each_streamed_sentence_is_grounded_by_its_own_claim() -> None:
+    journal = RecordingJournal()
+
+    spoken = await streamed_claims(
+        claim("The demo is on Friday the 9th.", "demo-date"),
+        claim("The beta launches on 14 October.", "om-beta"),
+        max_sentences=2,
+        journal=journal,
+    )
+
+    assert spoken == ["The demo is on Friday the 9th.", "The beta launches on 14 October."]
+    assert [row["claim_index"] for row in journal.events("answer_sentence_emitted")] == [0, 1]
+
+
+async def test_a_number_from_another_claim_is_refused_in_a_streamed_sentence() -> None:
+    spoken = await streamed_claims(
+        claim("The demo is on Friday the 14th.", "demo-date"),
+        claim("The beta launches on 14 October.", "om-beta"),
+        max_sentences=2,
+    )
+
+    assert spoken == ["I'm not sure about that, so I'd rather not guess."]
+
+
+async def test_a_claim_cut_off_by_the_cap_keeps_the_sentences_that_fit() -> None:
+    lead = claim("The beta launches on 14 October.", "om-beta")
+    spoken = await streamed_claims(
+        lead,
+        claim("The demo is on Friday the 9th. It was booked last week.", "demo-date"),
+        max_sentences=2,
+    )
+    fitting = await streamed_claims(
+        lead, claim("The demo is on Friday the 9th.", "demo-date"), max_sentences=2
+    )
+
+    assert spoken == ["The beta launches on 14 October.", "The demo is on Friday the 9th."]
+    assert fitting == ["The beta launches on 14 October.", "The demo is on Friday the 9th."]

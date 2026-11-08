@@ -43,8 +43,9 @@
       "turns": [
         {
           "say": "Demo customer Orchid jadinya hari apa?",
-          "contract_reply": "Demo customer Orchid pindah ke hari Jumat menurut kabar terbaru dari Rani.",
-          "contract_cites": ["om-c01-demo"]
+          "contract_claims": [
+            {"act": "fact", "basis": "owner_model", "refs": ["om-c01-demo"], "certainty": "stated", "speaks_as": "owner_proxy", "say": "Demo customer Orchid pindah ke hari Jumat menurut kabar terbaru dari Rani."}
+          ]
         }
       ],
       "owner_model": [
@@ -82,8 +83,9 @@
       "turns": [
         {
           "say": "Kapan demo Orchid dijadwalkan ulang?",
-          "contract_reply": "Demo Orchid dijadwalkan ulang ke hari Jumat.",
-          "contract_cites": ["om-c02-demo"]
+          "contract_claims": [
+            {"act": "fact", "basis": "owner_model", "refs": ["om-c02-demo"], "certainty": "stated", "speaks_as": "owner_proxy", "say": "Demo Orchid dijadwalkan ulang ke hari Jumat."}
+          ]
         }
       ],
       "owner_model": [
@@ -121,8 +123,9 @@
       "turns": [
         {
           "say": "Kapan kickoff Orchid?",
-          "contract_reply": "Kickoff Orchid dilaksanakan tanggal 9 Oktober.",
-          "contract_cites": ["om-c03-kickoff"]
+          "contract_claims": [
+            {"act": "fact", "basis": "owner_model", "refs": ["om-c03-kickoff"], "certainty": "stated", "speaks_as": "owner_proxy", "say": "Kickoff Orchid dilaksanakan tanggal 9 Oktober."}
+          ]
         }
       ],
       "owner_model": [
@@ -271,8 +274,9 @@
       "turns": [
         {
           "say": "Demo customer Orchid hari apa?",
-          "contract_reply": "Demo customer Orchid hari Jumat menurut kabar dari Rani.",
-          "contract_cites": ["om-c09-demo"]
+          "contract_claims": [
+            {"act": "fact", "basis": "owner_model", "refs": ["om-c09-demo"], "certainty": "stated", "speaks_as": "owner_proxy", "say": "Demo customer Orchid hari Jumat menurut kabar dari Rani."}
+          ]
         }
       ],
       "owner_model": [
@@ -298,8 +302,9 @@
       "turns": [
         {
           "say": "Demo customer Orchid hari apa?",
-          "contract_reply": "Demo customer Orchid hari Senin menurut koreksi terbaru Rani.",
-          "contract_cites": ["om-c10-demo"]
+          "contract_claims": [
+            {"act": "fact", "basis": "owner_model", "refs": ["om-c10-demo"], "certainty": "stated", "speaks_as": "owner_proxy", "say": "Demo customer Orchid hari Senin menurut koreksi terbaru Rani."}
+          ]
         }
       ],
       "owner_model": [
@@ -325,8 +330,9 @@
       "turns": [
         {
           "say": "Demo customer Orchid hari apa?",
-          "contract_reply": "Demo customer Orchid hari Senin menurut kabar terbaru Rani.",
-          "contract_cites": ["om-c11-demo"]
+          "contract_claims": [
+            {"act": "fact", "basis": "owner_model", "refs": ["om-c11-demo"], "certainty": "stated", "speaks_as": "owner_proxy", "say": "Demo customer Orchid hari Senin menurut kabar terbaru Rani."}
+          ]
         }
       ],
       "owner_model": [
@@ -352,8 +358,9 @@
       "turns": [
         {
           "say": "Demo customer Orchid hari apa?",
-          "contract_reply": "Demo customer Orchid hari Senin menurut koreksi Rani.",
-          "contract_cites": ["om-c12-demo"]
+          "contract_claims": [
+            {"act": "fact", "basis": "owner_model", "refs": ["om-c12-demo"], "certainty": "stated", "speaks_as": "owner_proxy", "say": "Demo customer Orchid hari Senin menurut koreksi Rani."}
+          ]
         }
       ],
       "owner_model": [
@@ -379,8 +386,9 @@
       "turns": [
         {
           "say": "Demo customer Orchid hari apa?",
-          "contract_reply": "Demo customer Orchid hari Jumat menurut kabar dari Rani.",
-          "contract_cites": ["om-c13-demo"]
+          "contract_claims": [
+            {"act": "fact", "basis": "owner_model", "refs": ["om-c13-demo"], "certainty": "stated", "speaks_as": "owner_proxy", "say": "Demo customer Orchid hari Jumat menurut kabar dari Rani."}
+          ]
         }
       ],
       "owner_model": [
@@ -424,8 +432,9 @@
       "turns": [
         {
           "say": "Demo kan hari Kamis?",
-          "contract_reply": "Menurut kabar terbaru Rani, demonya hari Jumat.",
-          "contract_cites": ["om-c15-demo"]
+          "contract_claims": [
+            {"act": "fact", "basis": "owner_model", "refs": ["om-c15-demo"], "certainty": "stated", "speaks_as": "owner_proxy", "say": "Menurut kabar terbaru Rani, demonya hari Jumat."}
+          ]
         }
       ],
       "owner_model": [
@@ -463,8 +472,9 @@
       "turns": [
         {
           "say": "Venue acaranya di mana?",
-          "contract_reply": "Sumbernya berbeda: peserta menyebut Jakarta, sedangkan kabar Rani menyebut Bandung; Rani perlu memastikannya.",
-          "contract_cites": ["om-c16-venue"]
+          "contract_claims": [
+            {"act": "fact", "basis": "owner_model", "refs": ["om-c16-venue"], "certainty": "stated", "speaks_as": "owner_proxy", "say": "Sumbernya berbeda: peserta menyebut Jakarta, sedangkan kabar Rani menyebut Bandung; Rani perlu memastikannya."}
+          ]
         }
       ],
       "owner_model": [
@@ -600,8 +610,9 @@
       "turns": [
         {
           "say": "Kapan beta launch Orchid?",
-          "contract_reply": "Beta launch Orchid direncanakan tanggal 14 Oktober 2026.",
-          "contract_cites": ["om-orchid-beta-launch"]
+          "contract_claims": [
+            {"act": "fact", "basis": "owner_model", "refs": ["om-orchid-beta-launch"], "certainty": "stated", "speaks_as": "owner_proxy", "say": "Beta launch Orchid direncanakan tanggal 14 Oktober 2026."}
+          ]
         }
       ],
       "memory": {"facts": []},
@@ -635,13 +646,15 @@
       "turns": [
         {
           "say": "Demo customer Orchid jadinya hari apa?",
-          "contract_reply": "Demo customer Orchid hari Jumat menurut kabar Rani.",
-          "contract_cites": ["om-c24-demo"]
+          "contract_claims": [
+            {"act": "fact", "basis": "owner_model", "refs": ["om-c24-demo"], "certainty": "stated", "speaks_as": "owner_proxy", "say": "Demo customer Orchid hari Jumat menurut kabar Rani."}
+          ]
         },
         {
           "say": "Jam berapa mulainya?",
-          "contract_reply": "Mulainya pukul sepuluh.",
-          "contract_cites": ["om-c24-demo"]
+          "contract_claims": [
+            {"act": "fact", "basis": "owner_model", "refs": ["om-c24-demo"], "certainty": "stated", "speaks_as": "owner_proxy", "say": "Mulainya pukul sepuluh."}
+          ]
         }
       ],
       "owner_model": [
