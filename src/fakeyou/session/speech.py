@@ -1,6 +1,7 @@
 import re
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Literal
 
 from num2words import num2words
@@ -32,6 +33,7 @@ class BookEntry:
     namespace: Namespace
     disclosure: Disclosure = "room_speakable"
     question: bool = False
+    times: tuple[datetime, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,11 +132,23 @@ def check_act(act: SpeechAct, book: FactBook) -> SpeechVerdict:
     return "pass"
 
 
+def spoken_time_numbers(moment: datetime) -> str:
+    return f"{moment.day} {moment.month} {moment.year} {moment.hour} {moment:%H:%M}"
+
+
+def _grounding(entry: BookEntry) -> str:
+    return " ".join([entry.text, *(spoken_time_numbers(moment) for moment in entry.times)])
+
+
 def check_sentence(sentence: str, act: SpeechAct, book: FactBook) -> SpeechVerdict:
     grounded = " ".join(
         [
             book.heard,
-            *(book.entries[fact_id].text for fact_id in act.cites if fact_id in book.entries),
+            *(
+                _grounding(book.entries[fact_id])
+                for fact_id in act.cites
+                if fact_id in book.entries
+            ),
         ]
     )
     written = numbers_in(grounded)

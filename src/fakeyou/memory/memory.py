@@ -52,7 +52,7 @@ from fakeyou.config.settings import (
     RecallSettings,
     require_secret,
 )
-from fakeyou.conversation.contribution import memory_refs_from_evidence
+from fakeyou.conversation.contribution import RecalledFact, memory_refs_from_evidence
 from fakeyou.foundation.provenance import render_evidence
 from fakeyou.foundation.transcript import spoken_part
 from fakeyou.foundation.triggers import current_trigger
@@ -368,7 +368,7 @@ def build_prefetch_query(messages: Sequence[AnyMessage], speech: Sequence[HumanM
     return query
 
 
-PrefetchListener = Callable[[str, Mapping[str, str]], None]
+PrefetchListener = Callable[[str, Mapping[str, RecalledFact]], None]
 
 
 class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):

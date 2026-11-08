@@ -1,7 +1,9 @@
-import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Literal
+
+from pydantic import BaseModel, ValidationError
 
 from fakeyou.session.facts import Disclosure
 
@@ -12,6 +14,37 @@ ContributionSource = Literal["profile", "brief", "memory", "owner_model"]
 class OwnerModelSource:
     text: str
     disclosure: Disclosure
+    since: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RecalledFact:
+    text: str
+    times: tuple[datetime, ...] = ()
+
+
+class _EvidenceSource(BaseModel):
+    source_at: datetime | None = None
+    recorded_at: datetime | None = None
+
+
+class _EvidenceFact(BaseModel):
+    fact_ids: list[str]
+    text: str
+    sources: list[_EvidenceSource] = []
+
+    def recalled(self) -> RecalledFact:
+        moments = (
+            moment
+            for source in self.sources
+            for moment in (source.source_at, source.recorded_at)
+            if moment is not None
+        )
+        return RecalledFact(self.text, tuple(dict.fromkeys(moments)))
+
+
+class _Evidence(BaseModel):
+    facts: list[_EvidenceFact] = []
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,25 +92,11 @@ def source_registry(
     )
 
 
-def memory_refs_from_evidence(text: str) -> dict[str, str]:
+def memory_refs_from_evidence(text: str) -> dict[str, RecalledFact]:
     try:
-        payload = json.loads(text)
-    except (json.JSONDecodeError, ValueError):
+        evidence = _Evidence.model_validate_json(text)
+    except ValidationError:
         return {}
-    if not isinstance(payload, dict):
-        return {}
-    refs: dict[str, str] = {}
-    facts = payload.get("facts")
-    if not isinstance(facts, list):
-        return refs
-    for fact in facts:
-        if not isinstance(fact, dict):
-            continue
-        fact_text = fact.get("text")
-        fact_ids = fact.get("fact_ids")
-        if not isinstance(fact_text, str) or not isinstance(fact_ids, list):
-            continue
-        for fact_id in fact_ids:
-            if isinstance(fact_id, str) and fact_id:
-                refs[fact_id] = fact_text
-    return refs
+    return {
+        fact_id: fact.recalled() for fact in evidence.facts for fact_id in fact.fact_ids if fact_id
+    }

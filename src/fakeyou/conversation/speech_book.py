@@ -2,7 +2,7 @@ from collections import OrderedDict
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 
-from fakeyou.conversation.contribution import SourceRegistry
+from fakeyou.conversation.contribution import RecalledFact, SourceRegistry
 from fakeyou.session.facts import Disclosure, Namespace
 from fakeyou.session.speech import BookEntry, FactBook
 
@@ -13,16 +13,16 @@ KEPT_MEMORY_FACTS = 64
 @dataclass(slots=True)
 class TurnEvidence:
     _observed: OrderedDict[str, list[str]] = field(default_factory=OrderedDict)
-    _memory: OrderedDict[str, str] = field(default_factory=OrderedDict)
+    _memory: OrderedDict[str, RecalledFact] = field(default_factory=OrderedDict)
 
     def note_observed(self, transcript_id: str, text: str) -> None:
         self._observed.setdefault(transcript_id, []).append(text)
         self._observed.move_to_end(transcript_id)
         _bound(self._observed)
 
-    def note_memory(self, refs: Mapping[str, str]) -> None:
-        for fact_id, text in refs.items():
-            self._memory[fact_id] = text
+    def note_memory(self, refs: Mapping[str, RecalledFact]) -> None:
+        for fact_id, fact in refs.items():
+            self._memory[fact_id] = fact
             self._memory.move_to_end(fact_id)
         while len(self._memory) > KEPT_MEMORY_FACTS:
             self._memory.popitem(last=False)
@@ -30,7 +30,7 @@ class TurnEvidence:
     def observed(self, transcript_id: str) -> str:
         return "\n".join(self._observed.get(transcript_id, ()))
 
-    def memory(self) -> Mapping[str, str]:
+    def memory(self) -> Mapping[str, RecalledFact]:
         return dict(self._memory)
 
 
@@ -50,13 +50,14 @@ def _speakable(permission: str, source: BookSource) -> Disclosure:
     return "room_speakable" if permission in source.permissions else "owner_only"
 
 
-def _entries(source: BookSource, memory: Mapping[str, str]) -> Iterator[BookEntry]:
+def _entries(source: BookSource, memory: Mapping[str, RecalledFact]) -> Iterator[BookEntry]:
     registry = source.registry
     facts = _speakable("explain_facts", source)
     questions = _speakable("ask_brief_questions", source)
     persona: Disclosure = "room_speakable" if source.persona_knowledge else "owner_only"
+    for fact_id, fact in memory.items():
+        yield BookEntry(fact_id, fact.text, "memory", persona, times=fact.times)
     namespaces: tuple[tuple[Mapping[str, str], Namespace, Disclosure, bool], ...] = (
-        (memory, "memory", persona, False),
         (registry.profile, "persona", persona, False),
         (registry.questions, "brief", questions, True),
         (registry.facts, "brief", facts, False),
@@ -66,11 +67,12 @@ def _entries(source: BookSource, memory: Mapping[str, str]) -> Iterator[BookEntr
             yield BookEntry(fact_id, text, namespace, disclosure, question=question)
     for ref, item in registry.owner_model.items():
         owned = item.disclosure if source.persona_knowledge else "owner_only"
-        yield BookEntry(ref, item.text, "owner_model", owned)
+        since = (item.since,) if item.since is not None else ()
+        yield BookEntry(ref, item.text, "owner_model", owned, times=since)
 
 
 def fact_book(
-    source: BookSource, *, heard: str, observed: str, memory: Mapping[str, str]
+    source: BookSource, *, heard: str, observed: str, memory: Mapping[str, RecalledFact]
 ) -> FactBook:
     return FactBook(
         entries={entry.fact_id: entry for entry in _entries(source, memory)},
