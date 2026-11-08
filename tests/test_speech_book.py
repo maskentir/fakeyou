@@ -1,7 +1,8 @@
 import json
 from collections.abc import Mapping
+from datetime import UTC, datetime
 
-from fakeyou.conversation.contribution import OwnerModelSource, source_registry
+from fakeyou.conversation.contribution import OwnerModelSource, RecalledFact, source_registry
 from fakeyou.conversation.reply_planner import SpeechGate, planned_reply
 from fakeyou.conversation.speech_book import BookSource, TurnEvidence, fact_book
 from fakeyou.session.speech import SpeechAct, check_act
@@ -17,6 +18,8 @@ REGISTRY = source_registry(
         "om-salary": OwnerModelSource("My salary floor is 90 thousand.", "owner_only"),
     },
 )
+JAKARTA = "A participant said the venue is Jakarta."
+BANDUNG = "The venue is Bandung."
 EVERYTHING = frozenset({"explain_facts", "ask_brief_questions"})
 
 
@@ -24,7 +27,7 @@ def gate(
     *,
     permissions: frozenset[str] = EVERYTHING,
     proactive: bool = False,
-    memory: Mapping[str, str] | None = None,
+    memory: Mapping[str, RecalledFact] | None = None,
     persona_knowledge: bool = True,
 ) -> SpeechGate:
     source = BookSource(REGISTRY, permissions, persona_knowledge)
@@ -146,7 +149,7 @@ def test_a_proactive_question_must_come_from_the_brief() -> None:
 
 def test_recalled_memory_can_be_cited_after_it_was_prefetched() -> None:
     evidence = TurnEvidence()
-    evidence.note_memory({"mem-7": "The vendor promised the API for 30 November."})
+    evidence.note_memory({"mem-7": RecalledFact("The vendor promised the API for 30 November.")})
     text = "The vendor promised the API for 30 November."
 
     spoken = say(text, gate(memory=evidence.memory()), cites=["mem-7"])
@@ -165,9 +168,56 @@ def test_plain_text_is_gated_like_a_plan_without_citations() -> None:
 def test_observations_are_kept_per_turn_and_memory_across_turns() -> None:
     evidence = TurnEvidence()
     evidence.note_observed("t1", "Meeting view: Q3 revenue 4.2 million")
-    evidence.note_memory({"m1": "one"})
-    evidence.note_memory({"m2": "two"})
+    evidence.note_memory({"m1": RecalledFact("one")})
+    evidence.note_memory({"m2": RecalledFact("two")})
 
     assert evidence.observed("t1") == "Meeting view: Q3 revenue 4.2 million"
     assert evidence.observed("t2") == ""
-    assert evidence.memory() == {"m1": "one", "m2": "two"}
+    assert evidence.memory() == {"m1": RecalledFact("one"), "m2": RecalledFact("two")}
+
+
+def test_a_cited_source_time_may_be_spoken() -> None:
+    meeting = datetime(2026, 10, 1, 3, 0, tzinfo=UTC)
+    owner = datetime(2026, 9, 30, 6, 40, tzinfo=UTC)
+    evidence = TurnEvidence()
+    evidence.note_memory(
+        {"edge-0": RecalledFact("A participant said the venue is Jakarta.", (meeting,))}
+    )
+    dated_gate = gate(memory=evidence.memory())
+    text = "In the meeting on 1 October at 03:00, a participant said the venue is Jakarta."
+
+    assert say(text, dated_gate, cites=["edge-0"]) == text
+    assert say(text, gate(), cites=[]) == "I'm not sure about that, so I'd rather not guess."
+    owner_gate = SpeechGate(
+        lambda: fact_book(
+            BookSource(
+                source_registry(
+                    owner_model={
+                        "om-venue": OwnerModelSource(
+                            "The venue is Bandung.", "room_speakable", owner
+                        )
+                    }
+                )
+            ),
+            heard=TRIGGER,
+            observed="",
+            memory={},
+        )
+    )
+    owner_text = "Since 30 September the owner's view is that the venue is Bandung."
+    assert say(owner_text, owner_gate, cites=["om-venue"]) == owner_text
+
+
+def test_a_time_from_an_uncited_source_is_still_invented() -> None:
+    meeting = datetime(2026, 10, 1, 3, 0, tzinfo=UTC)
+    evidence = TurnEvidence()
+    evidence.note_memory(
+        {"edge-0": RecalledFact("A participant said the venue is Jakarta.", (meeting,))}
+    )
+    evidence.note_memory({"edge-1": RecalledFact("The budget is open.")})
+
+    text = "On 1 October the budget was opened."
+
+    assert say(text, gate(memory=evidence.memory()), cites=["edge-1"]) == (
+        "I'm not sure about that, so I'd rather not guess."
+    )

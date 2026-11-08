@@ -6,7 +6,11 @@ from typing import Any, cast
 import pytest
 from langchain_core.messages import AIMessage
 
-from fakeyou.conversation.contribution import memory_refs_from_evidence, source_registry
+from fakeyou.conversation.contribution import (
+    RecalledFact,
+    memory_refs_from_evidence,
+    source_registry,
+)
 from fakeyou.conversation.conversation import MeetingAgent, MeetingResponder
 from fakeyou.conversation.grounding import GroundingVerdict
 from fakeyou.conversation.meeting_messages import NoHistory
@@ -162,11 +166,20 @@ async def test_the_streaming_path_verifies_before_speaking() -> None:
 
 def test_memory_refs_come_from_rendered_evidence() -> None:
     payload = json.dumps(
-        {"schema": "x", "facts": [{"fact_ids": ["edge-1", "edge-2"], "text": "Beta is 14 Oct"}]}
+        {
+            "schema": "x",
+            "facts": [
+                {
+                    "fact_ids": ["edge-1", "edge-2"],
+                    "text": "Beta is 14 Oct",
+                    "sources": [
+                        {"kind": "meeting_transcript", "source_at": "2026-10-01T03:00:00+00:00"}
+                    ],
+                }
+            ],
+        }
     )
+    recalled = RecalledFact("Beta is 14 Oct", (datetime(2026, 10, 1, 3, 0, tzinfo=UTC),))
 
-    assert memory_refs_from_evidence(payload) == {
-        "edge-1": "Beta is 14 Oct",
-        "edge-2": "Beta is 14 Oct",
-    }
+    assert memory_refs_from_evidence(payload) == {"edge-1": recalled, "edge-2": recalled}
     assert memory_refs_from_evidence("No relevant meeting memory found.") == {}

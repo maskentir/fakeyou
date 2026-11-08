@@ -19,7 +19,12 @@ from fakeyou.audio.graph import TurnAudioTap
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.agent import CONTRIBUTION_GUIDANCE, create_meeting_agent
-from fakeyou.conversation.contribution import OwnerModelSource, SourceRegistry, source_registry
+from fakeyou.conversation.contribution import (
+    OwnerModelSource,
+    RecalledFact,
+    SourceRegistry,
+    source_registry,
+)
 from fakeyou.conversation.control import ReplyControl
 from fakeyou.conversation.conversation import (
     MeetingAgent,
@@ -283,7 +288,7 @@ def build_source_registry(
         brief_questions={item.id: item.text for item in brief.questions} if brief else None,
         brief_objectives={item.id: item.text for item in brief.objectives} if brief else None,
         owner_model={
-            item.ref: OwnerModelSource(item.statement, item.disclosure)
+            item.ref: OwnerModelSource(item.statement, item.disclosure, item.valid_at)
             for item in (owner_model.items if owner_model is not None else ())
         },
     )
@@ -438,7 +443,7 @@ class _ConversationBuilder:
             middleware=self._middleware,
         )
 
-    def _note_prefetch(self, outcome: str, refs: Mapping[str, str]) -> None:
+    def _note_prefetch(self, outcome: str, refs: Mapping[str, RecalledFact]) -> None:
         self._evidence.note_memory(refs)
         if self._behavior.kernel is not None:
             self._behavior.kernel.memory_outcome(outcome)
