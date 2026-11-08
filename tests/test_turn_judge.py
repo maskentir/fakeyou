@@ -201,7 +201,7 @@ async def test_the_model_judge_reads_its_structured_output() -> None:
     sent = json.loads(model.seen[-1][-1].text)
     assert sent["twin_names"] == ["Rani"]
     assert sent["earlier"] == [{"speaker": "twin", "text": "Hi.", "by_twin": True}]
-    assert sent["latest"] == {"speaker": "ayu", "text": "Rani, beta?"}
+    assert sent["latest"] == {"speaker": "speaking now", "text": "rani beta"}
 
 
 def claimed(*names: str, status: PresenceStatus = "complete") -> PresenceFact:
@@ -267,7 +267,8 @@ async def test_the_judge_payload_carries_presence_certainty() -> None:
         )
     )
     sent = json.loads(model.seen[-1][-1].text)
-    assert sent["human_speakers"] == ["ayu", "budi"]
+    assert sent["human_speakers"] == ["ayu"]
+    assert sent["latest"] == {"speaker": "speaking now", "text": "can everyone see my screen"}
     assert sent["presence"]["plausible_max"] is None
     assert sent["sole_human_responder"] is False
 
@@ -328,7 +329,7 @@ async def test_each_judge_call_records_who_asked_and_the_window_key() -> None:
 
     [row] = journal.events("model_input_recorded")
     assert row["judge_purpose"] == "final"
-    assert row["judge_key"] == digest(repr(window.key))
+    assert row["judge_key"] == digest(window.key)
     assert row["transcript_id"] == "t1"
 
 
@@ -379,3 +380,17 @@ def test_the_owner_s_name_addresses_the_twin_only_as_a_vocative(
 
     assert window.names_twin is named
     record.close()
+
+
+def test_an_interim_and_its_final_send_the_judge_the_same_reading() -> None:
+    interim = JudgeWindow(
+        earlier=(), latest=JudgeLine(speaker="speaking now", text="Twin please raise your hand")
+    )
+    final = JudgeWindow(
+        earlier=(),
+        latest=JudgeLine(speaker="Speaker A, shown as Harun", text="Twin, please raise your hand."),
+        purpose="final",
+    )
+
+    assert interim.key == final.key
+    assert interim.reading == final.reading

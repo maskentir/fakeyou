@@ -41,7 +41,8 @@ _JUDGE_RULES = (
     "You read a live meeting for a digital twin and decide what the latest line means for it. "
     "The twin answers to the names listed in the input. Lines come from live speech "
     "recognition: words can be misheard and the latest line can still be growing, so read "
-    "each line by its most plausible meaning in this conversation.\n"
+    "each line by its most plausible meaning in this conversation. The latest line comes in "
+    "lower case without punctuation, and its speaker is not known yet.\n"
     "heard: restate the latest line as the speaker most likely meant it, in the speaker's "
     "language.\n"
     "finished: true when the speaker has completed the turn: a finished question, statement, "
@@ -180,21 +181,31 @@ class JudgeWindow:
         return self.presence is not None and self.presence.sole_human_responder
 
     @property
-    def key(self) -> tuple[object, ...]:
-        return (
-            self.earlier,
-            _normalized(self.latest.text),
-            self.twin_speaking,
-            self.names_twin,
-            self.presence,
-        )
+    def reading(self) -> dict[str, object]:
+        return {
+            "twin_is_speaking": self.twin_speaking,
+            "human_speakers": _human_speakers(self),
+            "participants": _participants_payload(self.presence),
+            "presence": _presence_payload(self.presence),
+            "sole_human_responder": self.sole_human_responder,
+            "earlier": [
+                {"speaker": line.speaker, "text": line.text, "by_twin": line.twin}
+                for line in self.earlier
+            ],
+            "latest": {"speaker": SPEAKING_NOW, "text": _utterance(self.latest.text)},
+            "latest_names_twin": self.names_twin,
+        }
+
+    @property
+    def key(self) -> str:
+        return json.dumps(self.reading, ensure_ascii=False)
 
 
 class TurnJudge(Protocol):
     async def judge(self, window: JudgeWindow) -> TurnJudgement: ...
 
 
-def _normalized(text: str) -> str:
+def _utterance(text: str) -> str:
     return " ".join("".join(ch for ch in text.casefold() if ch.isalnum() or ch.isspace()).split())
 
 
@@ -269,13 +280,9 @@ class WindowSource:
 
 
 def _human_speakers(window: JudgeWindow) -> list[str]:
-    speakers = {
-        line.speaker for line in window.earlier if not line.twin and line.speaker != SPEAKING_NOW
-    }
-    latest = window.latest
-    if not latest.twin and latest.speaker != SPEAKING_NOW:
-        speakers.add(latest.speaker)
-    return sorted(speakers)
+    return sorted(
+        {line.speaker for line in window.earlier if not line.twin and line.speaker != SPEAKING_NOW}
+    )
 
 
 def _presence_payload(presence: PresenceFact | None) -> dict[str, object]:
@@ -299,24 +306,7 @@ def _participants_payload(presence: PresenceFact | None) -> list[dict[str, str]]
 
 
 def _rendered(window: JudgeWindow, twin_names: Sequence[str]) -> str:
-    humans = _human_speakers(window)
-    return json.dumps(
-        {
-            "twin_names": list(twin_names),
-            "twin_is_speaking": window.twin_speaking,
-            "human_speakers": humans,
-            "participants": _participants_payload(window.presence),
-            "presence": _presence_payload(window.presence),
-            "sole_human_responder": window.sole_human_responder,
-            "earlier": [
-                {"speaker": line.speaker, "text": line.text, "by_twin": line.twin}
-                for line in window.earlier
-            ],
-            "latest": {"speaker": window.latest.speaker, "text": window.latest.text},
-            "latest_names_twin": window.names_twin,
-        },
-        ensure_ascii=False,
-    )
+    return json.dumps({"twin_names": list(twin_names), **window.reading}, ensure_ascii=False)
 
 
 class ModelTurnJudge:
@@ -349,7 +339,7 @@ class ModelTurnJudge:
 
 
 def _call_metadata(window: JudgeWindow) -> dict[str, str]:
-    metadata = {"judge_purpose": window.purpose, "judge_key": digest(repr(window.key))}
+    metadata = {"judge_purpose": window.purpose, "judge_key": digest(window.key)}
     if window.transcript_id is not None:
         metadata["transcript_id"] = window.transcript_id
     return metadata
@@ -359,7 +349,7 @@ class JudgeCache:
     def __init__(self, judge: TurnJudge, *, keep: int = 16) -> None:
         self._judge = judge
         self._keep = max(1, keep)
-        self._tasks: dict[tuple[object, ...], asyncio.Task[TurnJudgement]] = {}
+        self._tasks: dict[str, asyncio.Task[TurnJudgement]] = {}
 
     def prefetch(self, window: JudgeWindow) -> bool:
         key = window.key
