@@ -12,6 +12,7 @@ from fakeyou.db.owner_model import (
     Confidence,
     ItemDisclosure,
     OwnerModelEntry,
+    OwnerModelImport,
     OwnerModelKind,
     OwnerModelRepository,
     OwnerModelRevision,
@@ -22,6 +23,10 @@ from fakeyou.db.owner_model import (
 )
 
 _IDENTIFIER = rf"^{IDENTIFIER_BODY}$"
+_PLAIN_TEXT = r"^[^\x00]*$"
+_Topic = Annotated[str, Field(min_length=1, max_length=120, pattern=_PLAIN_TEXT)]
+_Statement = Annotated[str, Field(min_length=1, max_length=2000, pattern=_PLAIN_TEXT)]
+_ImportedStatements = Annotated[tuple[_Statement, ...], Field(max_length=200)]
 
 
 class OwnerModelItemBody(BaseModel):
@@ -30,9 +35,9 @@ class OwnerModelItemBody(BaseModel):
     )
 
     kind: OwnerModelKind
-    topic: str = Field(min_length=1, max_length=120)
-    statement: str = Field(min_length=1, max_length=2000)
-    reason: str | None = Field(default=None, min_length=1, max_length=2000)
+    topic: _Topic
+    statement: _Statement
+    reason: _Statement | None = None
     confidence: Confidence = "firm"
     disclosure: ItemDisclosure = "room_speakable"
     valid_at: AwareDatetime | None = None
@@ -90,6 +95,50 @@ class OwnerModelRevisionView(BaseModel):
         )
 
 
+class OwnerModelImportBody(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", frozen=True, hide_input_in_errors=True, str_strip_whitespace=True
+    )
+
+    facts: _ImportedStatements = ()
+    preferences: _ImportedStatements = ()
+
+    def entries(self) -> list[OwnerModelEntry]:
+        imported: tuple[tuple[OwnerModelKind, tuple[str, ...]], ...] = (
+            ("fact", self.facts),
+            ("preference", self.preferences),
+        )
+        return [
+            OwnerModelEntry(kind=kind, topic=f"imported {kind}", statement=statement)
+            for kind, statements in imported
+            for statement in statements
+        ]
+
+
+class SkippedImportView(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: OwnerModelKind
+    statement: str
+
+
+class OwnerModelImportView(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    added: list[OwnerModelRevisionView]
+    skipped: list[SkippedImportView]
+
+    @classmethod
+    def of(cls, imported: OwnerModelImport) -> "OwnerModelImportView":
+        return cls(
+            added=[OwnerModelRevisionView.of(revision) for revision in imported.added],
+            skipped=[
+                SkippedImportView(kind=entry.kind, statement=entry.statement)
+                for entry in imported.skipped
+            ],
+        )
+
+
 class OwnerModelView(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -144,6 +193,15 @@ async def add_owner_model_item(
     return OwnerModelRevisionView.of(
         await repository.add(scope, body.entry(), "owner", status_now())
     )
+
+
+@router.post("/imports", response_model=OwnerModelImportView)
+async def import_owner_model(
+    twin_id: _TwinId, body: OwnerModelImportBody, principal: _Owner, repository: _Repository
+) -> OwnerModelImportView:
+    scope = _scope(principal, twin_id)
+    imported = await repository.import_entries(scope, body.entries(), status_now())
+    return OwnerModelImportView.of(imported)
 
 
 @router.get("/proposals", response_model=list[OwnerModelRevisionView])

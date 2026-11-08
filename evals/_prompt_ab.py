@@ -11,7 +11,9 @@ from evals._replay import (
     REQUIRED_CHECKS,
     REQUIRED_PASS_RATE,
     ROOT,
+    PromptBuilder,
     ReplayScore,
+    fixture_owner_model,
     replay,
 )
 from fakeyou.memory.persona import PersonaProfile
@@ -20,12 +22,13 @@ from fakeyou.memory.persona import PersonaProfile
 @dataclass(frozen=True, slots=True)
 class PromptVariant:
     name: str
-    build: Callable[[PersonaProfile], str]
+    build: PromptBuilder
 
 
 def prompt_digest(variant: PromptVariant, fixture: dict[str, Any]) -> str:
     profile = PersonaProfile.model_validate_json((ROOT / fixture["persona"]).read_bytes())
-    return hashlib.sha256(variant.build(profile).encode("utf-8")).hexdigest()
+    prompt = variant.build(profile, owner_model=fixture_owner_model(fixture))
+    return hashlib.sha256(prompt.encode("utf-8")).hexdigest()
 
 
 async def replay_variants(

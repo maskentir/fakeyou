@@ -8,7 +8,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from fakeyou.config.identifiers import SessionId
 from fakeyou.memory.persona import PersonaProfile
+from fakeyou.orchestration.persona_prompt import owner_model_prompt_json
 from fakeyou.persistence.brief import BriefItem, BriefPermission, MeetingBrief
+from fakeyou.persistence.owner_model import FrozenOwnerModel
 
 BRIEF_PERMISSIONS: frozenset[BriefPermission] = frozenset(
     {"explain_facts", "discuss_options", "ask_brief_questions"}
@@ -17,8 +19,9 @@ BRIEF_PERMISSIONS: frozenset[BriefPermission] = frozenset(
 _BRIEF_RULES = (
     "You prepare the brief for a meeting twin. The twin speaks for its owner and must know why "
     "the meeting happens, what it should settle, and which questions are still open. Use only "
-    "the supplied owner notes, open questions and owner profile; never invent facts, owners, "
-    "dates, decisions or approvals. Write every line in the language of the owner profile. "
+    "the supplied owner notes, open questions, owner model and owner profile; never invent "
+    "facts, owners, dates, decisions or approvals. Write every line in the language of the "
+    "owner profile. "
     "The agenda lists what the meeting covers. Objectives are what the meeting should settle, "
     "one line each. Questions are what the twin should ask or find out, one line each. Leave a "
     "list empty when the sources do not support it."
@@ -44,6 +47,7 @@ class BriefSources:
     notes: tuple[str, ...] = ()
     open_questions: tuple[str, ...] = ()
     previous_meeting: str | None = None
+    owner_model: FrozenOwnerModel | None = None
 
 
 def _prompt(profile: PersonaProfile, meeting_id: SessionId, sources: BriefSources) -> str:
@@ -51,6 +55,9 @@ def _prompt(profile: PersonaProfile, meeting_id: SessionId, sources: BriefSource
         f"Meeting: {meeting_id}",
         f"Owner profile: {profile.model_dump_json(indent=2)}",
     ]
+    owner_model = owner_model_prompt_json(sources.owner_model)
+    if owner_model:
+        lines.append(f"Owner model: {owner_model}")
     if sources.notes:
         lines.append("Owner notes:")
         lines.extend(f"- {note}" for note in sources.notes)

@@ -183,6 +183,8 @@ async def test_valid_at_round_trips_and_may_not_be_in_the_future(
         {**POSITION, "source": "debrief"},
         {**POSITION, "valid_at": "2026-03-01T00:00:00"},
         {**POSITION, "valid_at": "not a time"},
+        {**POSITION, "statement": "Ship\u0000 now."},
+        {**POSITION, "topic": "release\u0000"},
     ],
 )
 async def test_invalid_items_are_rejected(client: httpx2.AsyncClient, body: object) -> None:
@@ -198,3 +200,50 @@ async def test_requests_without_the_owner_token_are_unauthorized(
     response = await client.get(BASE, headers={"Authorization": "Bearer wrong"})
 
     assert response.status_code == 401
+
+
+async def test_an_import_adds_facts_and_preferences_once(client: httpx2.AsyncClient) -> None:
+    body = {
+        "facts": ["  The beta launches on 14 October.  "],
+        "preferences": ["Keep the weekly sync short."],
+    }
+
+    first = await client.post(f"{BASE}/imports", json=body)
+    second = await client.post(f"{BASE}/imports", json=body)
+    current = await client.get(BASE)
+
+    assert first.status_code == 200
+    assert [
+        (item["kind"], item["topic"], item["statement"], item["source"], item["status"])
+        for item in first.json()["added"]
+    ] == [
+        ("fact", "imported fact", "The beta launches on 14 October.", "import", "approved"),
+        ("preference", "imported preference", "Keep the weekly sync short.", "import", "approved"),
+    ]
+    assert [item["model_version"] for item in first.json()["added"]] == [1, 2]
+    assert first.json()["skipped"] == []
+    assert second.json() == {
+        "added": [],
+        "skipped": [
+            {"kind": "fact", "statement": "The beta launches on 14 October."},
+            {"kind": "preference", "statement": "Keep the weekly sync short."},
+        ],
+    }
+    assert current.json()["version"] == 2
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"facts": ["   "]},
+        {"facts": "The beta launches on 14 October."},
+        {"decision_rules": ["Hire slow."]},
+        {"facts": ["x" * 2001]},
+        {"preferences": ["Keep\u0000 it short."]},
+    ],
+)
+async def test_invalid_imports_are_rejected(client: httpx2.AsyncClient, body: object) -> None:
+    response = await client.post(f"{BASE}/imports", json=body)
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "input.invalid"

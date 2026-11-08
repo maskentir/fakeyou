@@ -124,22 +124,24 @@ def test_trust_corpus_defines_29_rated_cases() -> None:
 
 
 def test_trust_owner_model_cases_hold_approved_facts_and_cite_them() -> None:
-    cases = load_trust_fixture()["cases"]
+    fixture = load_trust_fixture()
+    cases = fixture["cases"]
     owner_cases = {case["id"] for case in cases if "owner_model" in case}
     assert owner_cases == {f"c{i:02d}" for i in (1, 2, 3, 9, 10, 11, 12, 13, 14, 15, 16, 24)}
+    assert {item["kind"] for item in fixture["owner_model"]} == {"fact", "preference"}
     for case in cases:
         stored = case.get("memory", {}).get("stored", {}).values()
         assert all(item["label"] != "owner note" for item in stored)
-        owner_model = case_owner_model(case)
-        refs = {item.ref for item in owner_model.items} if owner_model is not None else set()
-        if owner_model is not None:
-            assert len(refs) == len(owner_model.items)
-            for item in owner_model.items:
-                assert item.kind == "fact"
-                assert item.confidence == "firm"
-                assert item.disclosure == "room_speakable"
-                assert item.statement.strip()
-                assert item.valid_at is not None
+        owner_model = case_owner_model(fixture, case)
+        refs = {item.ref for item in owner_model.items}
+        assert len(refs) == len(owner_model.items)
+        for item in owner_model.items:
+            assert item.confidence == "firm"
+            assert item.disclosure == "room_speakable"
+            assert item.statement.strip()
+        for item in case.get("owner_model", []):
+            assert item["kind"] == "fact"
+            assert item["valid_at"]
         for turn in case["turns"]:
             cited = {str(ref) for ref in turn.get("contract_cites", [])}
             assert {ref for ref in cited if ref.startswith(OWNER_MODEL_REF_PREFIX)} <= refs

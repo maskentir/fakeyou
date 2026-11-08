@@ -4,10 +4,24 @@ from evals._prompt_ab import PromptVariant, compare_variants, prompt_digest, rep
 from evals._shared import cited_reply
 from fakeyou.memory.persona import PersonaProfile
 from fakeyou.orchestration.persona_prompt import build_persona_prompt
+from fakeyou.persistence.owner_model import FrozenOwnerModel
 from tests._conversation_fakes import ToolCallingFakeModel
 
 FIXTURE = {
     "persona": "examples/persona.example.json",
+    "owner_model": {
+        "version": 1,
+        "items": [
+            {
+                "item_id": "beta",
+                "kind": "fact",
+                "topic": "imported fact",
+                "statement": "The Orchid beta launch is planned for 14 October 2026",
+                "confidence": "firm",
+                "disclosure": "room_speakable",
+            }
+        ],
+    },
     "sessions": [
         {
             "meeting_id": "m1",
@@ -18,8 +32,10 @@ FIXTURE = {
 }
 
 
-def _xml_variant(profile: PersonaProfile) -> str:
-    return "<role>marked-xml-variant</role>\n\n" + build_persona_prompt(profile)
+def _xml_variant(profile: PersonaProfile, *, owner_model: FrozenOwnerModel | None) -> str:
+    return "<role>marked-xml-variant</role>\n\n" + build_persona_prompt(
+        profile, owner_model=owner_model
+    )
 
 
 def _system_texts(model: ToolCallingFakeModel) -> list[str]:
@@ -36,7 +52,7 @@ async def test_variants_reach_the_model_and_score_separately() -> None:
 
     def factory() -> ToolCallingFakeModel:
         replies: list[BaseMessage] = [
-            AIMessage(content=cited_reply("The beta launch is on 14 October 2026.", "fact-0"))
+            AIMessage(content=cited_reply("The beta launch is on 14 October 2026.", "om-beta"))
         ]
         model = ToolCallingFakeModel(responses=replies)
         created.append(model)

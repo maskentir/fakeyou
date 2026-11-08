@@ -54,7 +54,6 @@ TRUST_RUNS = 3
 USEFULNESS_THRESHOLD = 0.9
 MIN_USEFUL_PAIRS = 79
 EXPECTED_CASE_IDS = frozenset(f"c{i:02d}" for i in range(1, 30))
-CASE_OWNER_MODEL_VERSION = 1
 CASE_OWNER_MODEL_DEFAULTS = {"confidence": "firm", "disclosure": "room_speakable"}
 REVIEW_MODES = frozenset({"contract", "live"})
 AID_CHECKS = (
@@ -236,12 +235,10 @@ def build_case_memory(case: dict[str, Any], group_id: str) -> tuple[Any, dict[st
     return memory, stored
 
 
-def case_owner_model(case: dict[str, Any]) -> FrozenOwnerModel | None:
-    items = case.get("owner_model")
-    if items is None:
-        return None
+def case_owner_model(fixture: dict[str, Any], case: dict[str, Any]) -> FrozenOwnerModel:
+    items = [*fixture["owner_model"], *case.get("owner_model", [])]
     return FrozenOwnerModel(
-        version=CASE_OWNER_MODEL_VERSION,
+        version=len(items),
         items=tuple(
             FrozenOwnerModelItem.model_validate({**CASE_OWNER_MODEL_DEFAULTS, **item})
             for item in items
@@ -306,7 +303,7 @@ async def replay_trust(
     score = TrustScore(runtime=runtime_metadata(settings))
     for case in fixture["cases"]:
         memory, stored = build_case_memory(case, group_id)
-        owner_model = case_owner_model(case)
+        owner_model = case_owner_model(fixture, case)
         persona = build_persona_prompt(prompt_profile, owner_model=owner_model)
         with case_storage(memory, stored):
             score.prompts[case["id"]] = {

@@ -22,7 +22,6 @@ PERSONA_DATA = {
     "twin_id": "settings-twin",
     "display_name": "Rani Twin",
     "role": "Product lead for the synthetic Orchid project",
-    "verified_facts": ["The Orchid beta launch is planned for 14 October 2026"],
     "allowed_tools": ["recall_meeting_context"],
 }
 

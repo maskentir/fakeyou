@@ -145,6 +145,7 @@ All routes are token-authenticated: `Authorization: Bearer <token>`, owner or ad
 | `POST` | `/v1/twins/{id}/reembeddings` | Queue an embedding refresh |
 | `GET` | `/v1/twins/{id}/owner-model` | Active owner model, or `?version=` |
 | `POST` | `/v1/twins/{id}/owner-model` | Add an item |
+| `POST` | `/v1/twins/{id}/owner-model/imports` | Import persona facts and preferences once |
 | `POST` | `/v1/twins/{id}/owner-model/items/{item}/revisions` | Revise an item |
 | `POST` | `/v1/twins/{id}/owner-model/items/{item}/retire` | Retire an item, history kept |
 | `DELETE` | `/v1/twins/{id}/owner-model/items/{item}` | Forget an item, content erased |
@@ -168,6 +169,17 @@ learned from a debrief arrive as proposals and change nothing until approved.
 Retiring an item takes it out of the model and keeps its history; forgetting
 erases the content of every revision and leaves only a contentless marker, so
 model versions never repeat.
+The persona holds only who the twin is and how it speaks: `display_name`,
+`role`, `language`, `speaking_style`, `vocabulary`, `ai_disclosure`, and
+`allowed_tools`. What the twin knows about the owner lives in the owner model, so
+a persona that still carries `verified_facts` or `goals` is refused with
+`persona.knowledge_moved`. `fakeyou owner-model import --persona PATH` moves them
+once: each `verified_facts` line becomes a `fact` and each `goals` line a
+`preference`, word for word, approved with source `import`; a statement the model
+already holds with the same kind is skipped, so running it again adds nothing.
+Turn an imported fact that is really a rule into a `decision_rule` with
+`owner-model revise`, then delete both keys from the persona file.
+`fakeyou brief` drafts from the `room_speakable` items too.
 Each session freezes the model version it starts with: the twin answers from
 the `room_speakable` items, cites them as `om-<item>`, and a `brief_only`
 meeting uses none of them. Forgetting an item does not reach sessions that
@@ -192,6 +204,7 @@ fakeyou brief standup-1 --persona .runtime/audio/persona.json
 fakeyou memory-ingest --meeting-id standup-1
 fakeyou memory-forget --meeting-id standup-1
 fakeyou memory-reembed
+fakeyou owner-model import --persona .runtime/audio/persona.json
 fakeyou owner-model add position release "Ship the beta after the load test passes" --persona .runtime/audio/persona.json
 fakeyou owner-model add fact acme-renewal "The Acme renewal closes on 3 March" --valid-at 2026-02-01T00:00:00+00:00 --persona .runtime/audio/persona.json
 fakeyou owner-model revise ITEM_ID fact acme-renewal "The Acme renewal closes on 28 February" --valid-at 2026-02-10T00:00:00+00:00 --persona .runtime/audio/persona.json

@@ -356,7 +356,7 @@ async def _open_moment_detector(prepared: PreparedJoin, run: _JoinRun) -> None:
         return await embedder.aembed_documents(list(texts))
 
     detector = MomentDetector(
-        registry=build_source_registry(prepared.profile, prepared.brief, prepared.owner_model),
+        registry=build_source_registry(prepared.brief, prepared.owner_model),
         judge=ModelMomentJudge(
             journal_model_inputs(create_turn_judge_model(settings), run.journal, "judge"),
             timeout_seconds=settings.turn_judge.timeout_seconds,

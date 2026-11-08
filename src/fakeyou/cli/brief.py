@@ -2,6 +2,7 @@ import asyncio
 from pathlib import Path
 
 from fakeyou.catalog.errors import FakeYouError
+from fakeyou.cli.client import ClientSettings, owner_client
 from fakeyou.cli.output import emit_json
 from fakeyou.config.identifiers import parse_session_id
 from fakeyou.config.settings import Settings
@@ -14,6 +15,7 @@ from fakeyou.orchestration.brief_preparation import (
     draft_brief,
 )
 from fakeyou.orchestration.providers import create_chat_model
+from fakeyou.persistence.owner_model import FrozenOwnerModel, FrozenOwnerModelItem
 
 BRIEF_QUERY = "what the owner wants to settle, notes, and open items from earlier meetings"
 
@@ -49,18 +51,34 @@ async def _owner_memory(settings: Settings, profile: PersonaProfile) -> str:
         )
 
 
+async def _owner_model(api: ClientSettings, twin_id: str) -> FrozenOwnerModel:
+    async with owner_client(api) as client:
+        document = await client.owner_model(twin_id, version=None)
+    return FrozenOwnerModel(
+        version=document["version"],
+        items=tuple(
+            FrozenOwnerModelItem.model_validate(
+                {name: item[name] for name in FrozenOwnerModelItem.model_fields}
+            )
+            for item in document["items"]
+        ),
+    )
+
+
 async def prepare_brief(
     *,
     meeting_id: str,
     persona_path: Path,
     out_path: Path,
     settings: Settings,
+    api: ClientSettings,
 ) -> None:
     parsed = parse_session_id(meeting_id, field="meeting_id")
     profile = PersonaProfile.model_validate_json(await asyncio.to_thread(persona_path.read_bytes))
     sources = BriefSources(
         notes=(await _owner_memory(settings, profile),),
         open_questions=_open_questions(settings),
+        owner_model=await _owner_model(api, profile.twin_id),
     )
     draft = await draft_brief(create_chat_model(settings), profile, parsed, sources)
     brief = build_brief(draft, profile, parsed)

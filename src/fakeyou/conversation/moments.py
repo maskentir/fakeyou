@@ -29,7 +29,7 @@ _JUDGE_RULES = (
     "You watch a live meeting for a digital twin that nobody has addressed. Decide whether "
     "the latest line creates a moment where the twin, speaking for its owner, has something "
     "the room does not have. You are given recent lines and candidate source items (owner "
-    "profile facts and meeting brief items) that are semantically close to the latest line.\n"
+    "model items and meeting brief items) that are semantically close to the latest line.\n"
     "moment: unanswered_question when the latest line asks the room something a candidate "
     "source can answer and nobody has answered yet; owner_task only when the room assigns "
     "or expects a concrete action from the owner, not merely when the topic touches "

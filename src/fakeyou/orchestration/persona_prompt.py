@@ -8,19 +8,16 @@ from fakeyou.conversation.agent import (
     SPOKEN_LANGUAGE_GUIDANCE,
 )
 from fakeyou.memory.persona import (
+    AFTER_MEETING_RULE,
     ATTENTION_RULE,
-    BRIEF_ONLY_PROFILE_FIELDS,
     BRIEF_PROMPT_FIELDS,
     BRIEF_RULES,
     CONFIDENCE_RULE,
     CONFIDENTIALITY_RULE,
     DISCLOSURE_RULES,
-    GOALS_RULE,
     IDENTITY_RULE,
     KNOWN_FACT_RULES,
     NATURAL_SPEECH_RULE,
-    OWNER_MODEL_RULE,
-    PROMPT_PROFILE_FIELDS,
     PROVENANCE_RULE,
     RECALL_RULE,
     SOURCE_RULES,
@@ -40,7 +37,6 @@ MAX_OWNER_MODEL_ITEMS = 40
 class _PromptParts:
     role: tuple[str, ...]
     authority: str = ""
-    goals: str = ""
     recall: str = ""
     profile_json: str = ""
     brief_rules: str = ""
@@ -99,7 +95,6 @@ def _prompt_parts(
     scope = brief.knowledge_scope if brief is not None else None
     persona_knowledge = scope != "brief_only"
     recall = persona_knowledge and "recall_meeting_context" in profile.allowed_tools
-    profile_fields = PROMPT_PROFILE_FIELDS if persona_knowledge else BRIEF_ONLY_PROFILE_FIELDS
     owner_model_json = owner_model_prompt_json(owner_model) if persona_knowledge else ""
     return _PromptParts(
         role=(MEETING_GUIDANCE, SPOKEN_LANGUAGE_GUIDANCE[profile.language]),
@@ -111,15 +106,14 @@ def _prompt_parts(
                 CONFIDENTIALITY_RULE,
                 ATTENTION_RULE,
                 TOOL_ECONOMY_RULE,
+                AFTER_MEETING_RULE,
                 KNOWN_FACT_RULES[scope],
-                OWNER_MODEL_RULE if owner_model_json else "",
                 SOURCE_RULES,
             )
             if rule
         ),
-        goals=GOALS_RULE if persona_knowledge else "",
         recall=RECALL_RULE if recall else "",
-        profile_json=profile_prompt_json(profile, profile_fields, with_fact_ids=persona_knowledge),
+        profile_json=profile_prompt_json(profile),
         brief_rules=BRIEF_RULES if brief is not None else "",
         brief_json=(
             brief.model_dump_json(include=BRIEF_PROMPT_FIELDS, indent=2)
@@ -153,7 +147,6 @@ def build_persona_prompt(
     return _paragraphs(
         *parts.role,
         parts.authority,
-        parts.goals,
         parts.recall,
         f"Owner profile JSON:\n{parts.profile_json}" if parts.profile_json else "",
         f"Owner model JSON:\n{parts.owner_model_json}" if parts.owner_model_json else "",

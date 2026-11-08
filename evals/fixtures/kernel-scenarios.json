@@ -153,7 +153,7 @@
       "kind": "contribution_gate",
       "classification": "preserve",
       "given": {
-        "registry": {"brief": {"fact-1": "Beta launches on 14 October."}, "brief_questions": ["q-1"], "profile": {}},
+        "registry": {"brief": {"fact-1": "Beta launches on 14 October."}, "brief_questions": ["q-1"], "owner_model": {}},
         "claim": {"structured": true, "intent": "answer", "text": "Beta launches on 14 October.", "kind": "fact", "source": "brief", "source_ref": "fact-1"}
       },
       "current": {"outcome": "pass", "passed": true, "reason": ""},
@@ -165,7 +165,7 @@
       "kind": "contribution_gate",
       "classification": "preserve",
       "given": {
-        "registry": {"brief": {"fact-1": "Beta launches on 14 October."}, "brief_questions": [], "profile": {}},
+        "registry": {"brief": {"fact-1": "Beta launches on 14 October."}, "brief_questions": [], "owner_model": {}},
         "claim": {"structured": true, "intent": "answer", "text": "Beta launches on 20 October.", "kind": "fact", "source": "brief", "source_ref": "fact-9"}
       },
       "current": {"outcome": "drop", "passed": false, "reason": "unknown_source_ref"},
@@ -177,8 +177,8 @@
       "kind": "contribution_gate",
       "classification": "preserve",
       "given": {
-        "registry": {"brief": {}, "brief_questions": [], "profile": {"fact-0": "The owner prefers short briefs."}},
-        "claim": {"structured": true, "intent": "answer", "text": "What is the budget?", "kind": "question", "source": "profile", "source_ref": "fact-0"}
+        "registry": {"brief": {}, "brief_questions": [], "owner_model": {"om-short-briefs": "The owner prefers short briefs."}},
+        "claim": {"structured": true, "intent": "answer", "text": "What is the budget?", "kind": "question", "source": "owner_model", "source_ref": "om-short-briefs"}
       },
       "current": {"outcome": "drop", "passed": false, "reason": "kind_source_mismatch"},
       "target": {"outcome": "drop"}

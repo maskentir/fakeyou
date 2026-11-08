@@ -5,6 +5,51 @@
     "display_name": "Rani",
     "allowed_tools": []
   },
+  "owner_model": {
+    "version": 5,
+    "items": [
+      {
+        "item_id": "orchid-beta-launch",
+        "kind": "fact",
+        "topic": "imported fact",
+        "statement": "The Orchid beta launch is planned for 14 October 2026",
+        "confidence": "firm",
+        "disclosure": "room_speakable"
+      },
+      {
+        "item_id": "orchid-checklist",
+        "kind": "fact",
+        "topic": "imported fact",
+        "statement": "Rani owns the Orchid launch checklist",
+        "confidence": "firm",
+        "disclosure": "room_speakable"
+      },
+      {
+        "item_id": "budget-approval",
+        "kind": "fact",
+        "topic": "imported fact",
+        "statement": "Budget and contract decisions need Rani's written approval",
+        "confidence": "firm",
+        "disclosure": "room_speakable"
+      },
+      {
+        "item_id": "weekly-sync",
+        "kind": "preference",
+        "topic": "imported preference",
+        "statement": "Keep the weekly Orchid sync on schedule",
+        "confidence": "firm",
+        "disclosure": "room_speakable"
+      },
+      {
+        "item_id": "open-questions",
+        "kind": "preference",
+        "topic": "imported preference",
+        "statement": "Collect open questions for Rani to answer after the meeting",
+        "confidence": "firm",
+        "disclosure": "room_speakable"
+      }
+    ]
+  },
   "scenarios": [
     {
       "id": "s01",

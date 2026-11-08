@@ -5,9 +5,13 @@ import pytest
 from pydantic import ValidationError
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.catalog.exit_codes import ExitCode
 from fakeyou.config.identifiers import SessionId, is_identifier
+from fakeyou.config.settings import Settings
 from fakeyou.memory.persona import (
+    OperatorIdentity,
     PersonaProfile,
+    load_operator_persona,
     load_persona,
     memory_group_for,
     persona_digest,
@@ -19,7 +23,7 @@ from tests._persona_support import EXAMPLES, profile, profile_data
 EXAMPLE_PROFILE = EXAMPLES / "persona.example.json"
 
 
-EXAMPLE_PERSONA_DIGEST = "e502182a3de44518fc991de5e617c2e42f8506d61c9af4f566936d00050b264b"
+EXAMPLE_PERSONA_DIGEST = "687c0ed18ac0e13eb4e3ac078eaf82b66a3dac50c0bd0fafbab1dcd917411d68"
 
 
 def identity(owner_id: str = "owner-a", twin_id: str = "twin-a") -> dict[str, str]:
@@ -41,7 +45,6 @@ async def test_example_profile_is_valid_and_synthetic() -> None:
 
     assert loaded.allowed_tools == frozenset({"recall_meeting_context"})
     assert loaded.ingest_transcripts is True
-    assert loaded.verified_facts
 
 
 async def test_load_persona_returns_validated_profile(tmp_path: Path) -> None:
@@ -50,7 +53,40 @@ async def test_load_persona_returns_validated_profile(tmp_path: Path) -> None:
     loaded = await load_persona(path, **identity())
 
     assert loaded == profile()
-    assert loaded.goals == ("Keep the weekly sync on schedule",)
+
+
+@pytest.mark.parametrize(
+    ("moved", "named"),
+    [
+        ({"verified_facts": ["The beta launches in October"]}, "verified_facts"),
+        ({"goals": []}, "goals"),
+        ({"verified_facts": [], "goals": []}, "verified_facts, goals"),
+    ],
+)
+async def test_load_persona_points_owner_knowledge_to_the_owner_model_import(
+    tmp_path: Path, moved: dict[str, object], named: str
+) -> None:
+    path = write_profile(tmp_path, json.dumps({**profile_data(), **moved}))
+
+    with pytest.raises(FakeYouError, match="now live in the owner model") as caught:
+        await load_persona(path, **identity())
+
+    assert caught.value.code is ErrorCode.PERSONA_KNOWLEDGE_MOVED
+    assert caught.value.exit_code is ExitCode.INPUT_REJECTED
+    assert f"persona fields {named} now live in the owner model" in str(caught.value)
+    assert "fakeyou owner-model import --persona PATH" in str(caught.value)
+
+
+async def test_the_operator_persona_of_a_worker_session_refuses_owner_knowledge(
+    tmp_path: Path, settings: Settings
+) -> None:
+    path = tmp_path / "worker-persona.json"
+    path.write_text(json.dumps({**profile_data(), "goals": ["Keep the sync short"]}))
+
+    with pytest.raises(FakeYouError, match="owner-model import") as caught:
+        await load_operator_persona(OperatorIdentity(path, "owner-a", "twin-a"), settings)
+
+    assert caught.value.code is ErrorCode.PERSONA_KNOWLEDGE_MOVED
 
 
 async def test_load_persona_rejects_malformed_json(tmp_path: Path) -> None:
@@ -80,9 +116,6 @@ async def test_load_persona_rejects_identity_mismatch(
         {"role": "   "},
         {"display_name": ""},
         {"speaking_style": " "},
-        {"goals": ["valid goal", "  "]},
-        {"verified_facts": [""]},
-        {"verified_facts": ["fact"] * 21},
         {"role": "x" * 501},
         {"allowed_tools": ["remember_meeting_fact"]},
         {"allowed_tools": ["browser_click"]},
@@ -122,8 +155,6 @@ def test_profile_defaults_are_conservative() -> None:
 
     assert minimal.language == "id"
     assert minimal.speaking_style == "concise"
-    assert minimal.goals == ()
-    assert minimal.verified_facts == ()
     assert minimal.allowed_tools == frozenset()
     assert minimal.ingest_transcripts is False
     assert minimal.vocabulary == ()
@@ -134,7 +165,7 @@ def test_profile_is_immutable() -> None:
 
     with pytest.raises(ValidationError):
         loaded.owner_id = SessionId("owner-b")
-    assert isinstance(loaded.verified_facts, tuple)
+    assert isinstance(loaded.vocabulary, tuple)
     assert isinstance(loaded.allowed_tools, frozenset)
 
 
@@ -210,8 +241,7 @@ async def test_persona_digest_ignores_file_formatting_and_key_order(tmp_path: Pa
 @pytest.mark.parametrize(
     "overrides",
     [
-        {"goals": ["Keep the weekly sync short"]},
-        {"verified_facts": ["The Orchid beta launch is planned for 15 October 2026"]},
+        {"speaking_style": "Long and formal"},
         {"allowed_tools": []},
         {"vocabulary": ["Orchid"]},
     ],
@@ -221,11 +251,11 @@ def test_persona_digest_changes_with_profile_content(overrides: dict[str, object
 
 
 def test_persona_digest_keeps_list_order() -> None:
-    forward = profile(goals=["First goal", "Second goal"])
-    backward = profile(goals=["Second goal", "First goal"])
+    forward = profile(vocabulary=["Orchid", "Rani"])
+    backward = profile(vocabulary=["Rani", "Orchid"])
 
     assert persona_digest(forward) != persona_digest(backward)
-    assert persona_digest(forward) == persona_digest(profile(goals=["First goal", "Second goal"]))
+    assert persona_digest(forward) == persona_digest(profile(vocabulary=["Orchid", "Rani"]))
 
 
 def test_the_twin_never_claims_to_be_human_whatever_the_disclosure_setting() -> None:

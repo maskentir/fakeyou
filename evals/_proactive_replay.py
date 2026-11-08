@@ -22,6 +22,7 @@ from fakeyou.observability.journal import Journal
 from fakeyou.orchestration.providers import create_embedder, create_turn_judge_model
 from fakeyou.perception.attention import AttentionPrefilter
 from fakeyou.persistence.brief import MeetingBrief
+from fakeyou.persistence.owner_model import FrozenOwnerModel
 from fakeyou.persistence.record import MeetingRecord
 from tests._audio_fakes import FakeReplyAudio
 
@@ -68,6 +69,7 @@ class ProactiveFixture(BaseModel):
     version: int
     persona: str
     persona_overrides: dict[str, Any] = {}
+    owner_model: FrozenOwnerModel
     brief: MeetingBrief
     scenarios: tuple[ProactiveScenario, ...]
 
@@ -165,7 +167,7 @@ def build_detector(
         return await embedder.aembed_documents(list(texts))
 
     return MomentDetector(
-        registry=assembly.build_source_registry(profile, fixture.brief),
+        registry=assembly.build_source_registry(fixture.brief, fixture.owner_model),
         judge=ModelMomentJudge(
             create_turn_judge_model(settings),
             timeout_seconds=settings.turn_judge.timeout_seconds,
@@ -250,7 +252,12 @@ async def run_proactive_scenario(
         async with assembly.open_conversation(
             settings,
             config,
-            agent=assembly.AgentWiring(profile=profile, brief=fixture.brief, history=record),
+            agent=assembly.AgentWiring(
+                profile=profile,
+                brief=fixture.brief,
+                history=record,
+                owner_model=fixture.owner_model,
+            ),
             behavior=assembly.TurnBehavior(
                 on_transition=lambda *_: None,
                 wake_phrases=(profile.display_name,),

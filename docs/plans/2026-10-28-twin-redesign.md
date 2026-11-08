@@ -2860,6 +2860,40 @@ menjadi lupa; pensiun pindah ke `POST .../items/{id}/retire`. Rute
 kode error `note.*`, dan eval koreksi note Graphiti dihapus; recall graf
 hanya berisi episode meeting.
 
+Hasil C1c (#150) sesuai revisi di atas; trust eval live dipindah ke owner
+model per kasus di PR berikutnya.
+
+Desain rinci C1d (2026-11-08, sebelum implementasi). Revisi atas rencana
+awal "persona lama tetap dibaca selama transisi": transisi berarti dua
+sumber pengetahuan owner hidup berdampingan — kesalahan yang sama dengan
+note. Persona dev nyata (`persona-harun-*`, acceptance) berisi
+`verified_facts` campuran fakta dan aturan keputusan, dan tidak ada
+pengguna selain dev. Maka putus bersih:
+
+- `PersonaProfile` kehilangan `goals` dan `verified_facts`; persona hanya
+  identitas dan suara. File persona yang masih memuat kunci itu ditolak
+  dengan kode katalog khusus yang menunjuk ke perintah impor, bukan error
+  `extra_forbidden` generik.
+- **Impor sekali** `fakeyou owner-model import --persona PATH` (lewat API,
+  token owner) membaca JSON mentah: `verified_facts` → `fact`, `goals` →
+  `preference`, `source=import`, langsung `approved`. Rute
+  `POST .../owner-model/imports` dalam satu transaksi di bawah lock yang
+  sama, idempoten: pernyataan yang sudah aktif dengan kind sama dilewati,
+  respons menyebut yang ditambah dan dilewati. **Tidak ada klasifikasi
+  otomatis** ke `decision_rule`: isi buatan owner tidak boleh ditulis ulang
+  mesin; owner merevisi kind lewat `owner-model revise`.
+- Prompt: `GOALS_RULE`, `verified_facts` di profile JSON, dan namespace
+  `persona` (id `fact-N`) dihapus; `KNOWN_FACT_RULES` digabung dengan
+  `OWNER_MODEL_RULE` menjadi satu aturan: fakta dan posisi owner yang
+  diketahui hanyalah item owner model (dan, untuk `persona_memory`, memory
+  dengan provenance). Moment detector memakai sumber owner model.
+- Brief drafting (`fakeyou brief`) mengambil owner model lewat API dan hanya
+  memakai item `room_speakable`, karena fakta brief yang di-approve menjadi
+  ucapan di ruangan.
+- Fixture eval/simulator yang memakai `goals`/`verified_facts` pindah ke
+  `owner_model` per fixture; kaset simulator direkam ulang bila prompt
+  berubah melampaui ambang cocok.
+
 ### C2 dan C3: Kontribusi berbasis klaim dan gate per klaim
 
 Satu PR, karena kontrak dan gate tidak bisa dipisah.

@@ -23,6 +23,7 @@ from fakeyou.foundation.transcript import EventSource, TranscriptEvent
 from fakeyou.memory.persona import PersonaProfile
 from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.observability.journal import Journal
+from fakeyou.persistence.owner_model import FrozenOwnerModel
 from fakeyou.persistence.record import MeetingRecord
 from tests._audio_fakes import FakeReplyAudio
 
@@ -84,6 +85,7 @@ class ScenarioFixture(BaseModel):
     version: int
     persona: str
     persona_overrides: dict[str, Any] = {}
+    owner_model: FrozenOwnerModel
     scenarios: tuple[Scenario, ...]
 
 
@@ -223,7 +225,10 @@ async def _settle(turns: Any) -> None:
 
 
 async def run_scenario(
-    scenario: Scenario, profile: PersonaProfile, settings: Settings
+    scenario: Scenario,
+    profile: PersonaProfile,
+    settings: Settings,
+    owner_model: FrozenOwnerModel | None = None,
 ) -> list[StepOutcome]:
     config = SessionConfig(
         owner_id=profile.owner_id,
@@ -244,7 +249,7 @@ async def run_scenario(
         async with assembly.open_conversation(
             settings,
             config,
-            agent=assembly.AgentWiring(profile=profile, history=record),
+            agent=assembly.AgentWiring(profile=profile, history=record, owner_model=owner_model),
             behavior=assembly.TurnBehavior(
                 on_transition=lambda *_: None,
                 wake_phrases=(profile.display_name,),
@@ -513,7 +518,7 @@ async def replay_conversations(
     outcomes: list[StepOutcome] = []
     for _ in range(runs):
         for scenario in fixture.scenarios:
-            played = await run_scenario(scenario, profile, settings)
+            played = await run_scenario(scenario, profile, settings, fixture.owner_model)
             outcomes += await grade(scenario, played, judge, profile.language)
     return ReplayReport(outcomes)
 
