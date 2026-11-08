@@ -2824,6 +2824,42 @@ ditulis lewat owner model dan diproyeksikan ke Graphiti, migrasi note lama;
 Gate C1 tetap: owner menambah posisi dan melihatnya dipakai di replay;
 prompt tidak pernah berisi item `owner_only`.
 
+Hasil C1a/C1b (2026-11-08): store, API, CLI (#148); pembekuan per sesi,
+blok prompt `room_speakable`, namespace gate `owner_model`, dan
+`brief_only` membuang seluruh pengetahuan persona dari registry (#149).
+
+Revisi desain C1c (2026-11-08, sebelum implementasi): **tidak ada
+proyeksi ke Graphiti.** Alasan, dari pemetaan kode dan data:
+
+- Proyeksi berarti dual write Postgres → Neo4j tanpa transaksi bersama.
+  Benar secara konsisten butuh outbox + projector idempoten, dan semantik
+  `forget_owner_note` menolak note dalam rantai koreksi
+  (`NOTE_IN_CORRECTION_CHAIN`), sehingga pensiun/lupa item yang pernah
+  direvisi tidak bisa dicerminkan ke graf. Sumber kebenaran ganda adalah
+  kesalahan desain yang sama yang ingin dihapus C1.
+- Alasan riset yang menolak Graphiti sebagai store (ekstraksi LLM mengubah
+  kata dan dapat menginvalidasi edge tanpa approval) berlaku juga untuk
+  proyeksi: fakta owner yang sudah di-approve akan kembali lewat recall
+  dalam kata-kata ekstraktor, sebagai "memory", bukan sebagai posisi owner
+  yang dikutip `om-<item>`.
+- Item owner model sudah masuk prompt apa adanya (C1b). Recall item di luar
+  batas prompt adalah pekerjaan recall set C5, atas owner model langsung
+  dengan gerbang relevansi leksikal yang sudah ada — bukan graf.
+- Data: Graphiti dev berisi **0** node `FakeyouOwnerNote`; tidak ada note
+  yang perlu dimigrasi, jadi tidak perlu alat migrasi.
+
+Maka C1c: owner note **adalah** item owner model `kind=fact`. Kolom baru
+`valid_at` (kapan fakta mulai berlaku; dulu `source_at` note). Owner model
+membedakan **pensiun** (owner tidak lagi memegangnya; riwayat tetap) dari
+**lupa** (hapus isi semua revisi item; sisa satu baris nisan
+`status=forgotten` tanpa isi agar `model_version` tetap monoton dan versi
+yang sudah dibekukan sesi tidak dipakai ulang). `DELETE .../items/{id}`
+menjadi lupa; pensiun pindah ke `POST .../items/{id}/retire`. Rute
+`/v1/twins/{id}/notes*`, CLI `memory-add`/`memory-correct`/
+`memory-forget --episode`, pipeline `owner_notes.py`/`owner_note_service.py`,
+kode error `note.*`, dan eval koreksi note Graphiti dihapus; recall graf
+hanya berisi episode meeting.
+
 ### C2 dan C3: Kontribusi berbasis klaim dan gate per klaim
 
 Satu PR, karena kontrak dan gate tidak bisa dipisah.
