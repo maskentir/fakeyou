@@ -1,10 +1,7 @@
 import asyncio
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Any
-from uuid import UUID, uuid4
 
 import httpx2
 from pydantic import ValidationError
@@ -12,7 +9,7 @@ from pydantic import ValidationError
 from fakeyou.catalog.errors import ErrorCode
 from fakeyou.catalog.exit_codes import ExitCode
 from fakeyou.cli.client import ClientSettings, admin_client, api_failure, owner_client
-from fakeyou.cli.output import emit_json, emit_progress, emit_text
+from fakeyou.cli.output import emit_json, emit_text
 from fakeyou.config.identifiers import parse_session_id
 from fakeyou.memory.persona import PersonaProfile
 
@@ -40,72 +37,6 @@ async def initialize_memory(
     async with admin_client(settings, transport=transport) as client:
         await client.memory_init()
     emit_text("Graphiti indexes initialized.")
-
-
-def _operation_id(note_id: UUID | None) -> UUID:
-    if note_id is not None:
-        return note_id
-    generated = uuid4()
-    emit_progress(f"fakeyou: note-id {generated}")
-    return generated
-
-
-@dataclass(frozen=True, slots=True)
-class NoteDraft:
-    text: str
-    twin_id: str
-    source_at: datetime | None = None
-    note_id: UUID | None = None
-
-
-async def add_owner_note(
-    draft: NoteDraft,
-    *,
-    settings: ClientSettings,
-    transport: httpx2.AsyncBaseTransport | None = None,
-) -> None:
-    operation = _operation_id(draft.note_id)
-    async with owner_client(settings, transport=transport) as client:
-        view = await client.add_note(
-            draft.twin_id,
-            note_id=str(operation),
-            text=draft.text,
-            source_at=draft.source_at.isoformat() if draft.source_at is not None else None,
-        )
-    emit_json(view)
-
-
-async def correct_owner_note(
-    draft: NoteDraft,
-    *,
-    episode_uuid: str,
-    settings: ClientSettings,
-    transport: httpx2.AsyncBaseTransport | None = None,
-) -> None:
-    if draft.source_at is None:
-        raise api_failure(ErrorCode.MEMORY_SOURCE_AT_INVALID, value="missing")
-    operation = _operation_id(draft.note_id)
-    async with owner_client(settings, transport=transport) as client:
-        view = await client.correct_note(
-            draft.twin_id,
-            episode_uuid,
-            note_id=str(operation),
-            text=draft.text,
-            source_at=draft.source_at.isoformat(),
-        )
-    emit_json(view)
-
-
-async def forget_episode_memory(
-    *,
-    twin_id: str,
-    episode_uuid: str,
-    settings: ClientSettings,
-    transport: httpx2.AsyncBaseTransport | None = None,
-) -> None:
-    async with owner_client(settings, transport=transport) as client:
-        await client.forget_episode(twin_id, episode_uuid)
-    emit_json({"removed_episodes": 1})
 
 
 async def forget_meeting_memory(

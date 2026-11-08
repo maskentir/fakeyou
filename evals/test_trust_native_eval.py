@@ -75,9 +75,9 @@ async def test_trust_native_recall_failure_becomes_unavailable_evidence(
     original = build_case_memory
 
     def failing_memory(case: dict[str, Any], group: str) -> Any:
-        memory, stored, states = original(case, group)
+        memory, stored = original(case, group)
         memory.search.side_effect = RuntimeError("scripted memory unavailable")
-        return memory, stored, states
+        return memory, stored
 
     monkeypatch.setitem(replay_trust.__globals__, "build_case_memory", failing_memory)
     score = await replay_trust(
@@ -102,10 +102,10 @@ async def test_trust_recall_deadline_records_cancelled_attempt_as_unavailable(
     memories: list[Any] = []
 
     def blocked_memory(case: dict[str, Any], group: str) -> Any:
-        memory, stored, states = original(case, group)
+        memory, stored = original(case, group)
         memory.search_gate = asyncio.Event()
         memories.append(memory)
-        return memory, stored, states
+        return memory, stored
 
     monkeypatch.setitem(replay_trust.__globals__, "build_case_memory", blocked_memory)
     settings = Settings()
@@ -140,7 +140,7 @@ async def test_failed_recall_after_success_records_current_prefetch_result(
     original = build_case_memory
 
     def second_search_fails(case: dict[str, Any], group: str) -> Any:
-        memory, stored, states = original(case, group)
+        memory, stored = original(case, group)
         search = memory.search.side_effect
         attempted = False
 
@@ -153,7 +153,7 @@ async def test_failed_recall_after_success_records_current_prefetch_result(
             return await search(*args, **kwargs)
 
         memory.search.side_effect = search_once
-        return memory, stored, states
+        return memory, stored
 
     monkeypatch.setitem(replay_trust.__globals__, "build_case_memory", second_search_fails)
     score = await replay_trust(

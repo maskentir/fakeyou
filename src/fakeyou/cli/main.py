@@ -5,7 +5,6 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, NoReturn
-from uuid import UUID
 
 import typer
 from pydantic import AwareDatetime, TypeAdapter, ValidationError
@@ -22,10 +21,6 @@ from fakeyou.cli.debrief import debrief_meeting
 from fakeyou.cli.diagnostics import check_api, show_browser_tools, show_session_report
 from fakeyou.cli.diarize import diarize_show
 from fakeyou.cli.memory import (
-    NoteDraft,
-    add_owner_note,
-    correct_owner_note,
-    forget_episode_memory,
     forget_meeting_memory,
     ingest_recorded_meeting,
     initialize_memory,
@@ -38,6 +33,7 @@ from fakeyou.cli.owner_model import (
     OwnerModelTarget,
     add_owner_model_item,
     decide_owner_model_proposal,
+    forget_owner_model_item,
     retire_owner_model_item,
     revise_owner_model_item,
     show_owner_model,
@@ -69,23 +65,16 @@ from fakeyou.identity.enrollment import EnrollSubject, LivenessGate
 from fakeyou.memory.persona import OperatorIdentity
 from fakeyou.observability.provider_faults import ProviderFault
 
-_SOURCE_AT_ARGUMENT = TypeAdapter(AwareDatetime)
+_VALID_AT_ARGUMENT = TypeAdapter(AwareDatetime)
 
 
-def _source_at_value(value: str) -> datetime:
+def _valid_at_value(value: str) -> datetime:
     try:
-        return _SOURCE_AT_ARGUMENT.validate_python(value)
+        return _VALID_AT_ARGUMENT.validate_python(value)
     except ValidationError:
         raise typer.BadParameter(
-            render_error(ErrorCode.MEMORY_SOURCE_AT_INVALID, value=value)
+            render_error(ErrorCode.OWNER_MODEL_VALID_AT_INVALID, value=value)
         ) from None
-
-
-def _note_id_value(value: str) -> UUID:
-    try:
-        return UUID(value)
-    except ValueError:
-        raise typer.BadParameter(render_error(ErrorCode.NOTE_ID_NOT_UUID, value=value)) from None
 
 
 def _latency_scale_value(value: float) -> float:
@@ -213,62 +202,11 @@ def memory_init_command() -> None:
     asyncio.run(initialize_memory(client_settings_from_env()))
 
 
-@app.command("memory-add", help="Store an owner note in the persona's memory through the api")
-@_guard_interrupts
-def memory_add_command(
-    text: Annotated[str, typer.Argument()],
-    *,
-    source_at: Annotated[str | None, typer.Option("--source-at")] = None,
-    note_id: Annotated[str | None, typer.Option("--note-id")] = None,
-    persona_path: Annotated[Path | None, typer.Option("--persona")] = None,
-    twin_id: Annotated[str | None, typer.Option("--twin-id")] = None,
-) -> None:
-    asyncio.run(
-        add_owner_note(
-            draft=NoteDraft(
-                text=text,
-                twin_id=twin_id_for(persona_path, twin_id),
-                source_at=_source_at_value(source_at) if source_at is not None else None,
-                note_id=_note_id_value(note_id) if note_id is not None else None,
-            ),
-            settings=client_settings_from_env(),
-        )
-    )
-
-
-@app.command(
-    "memory-correct", help="Replace one owner note with a corrected note in the persona's memory"
-)
-@_guard_interrupts
-def memory_correct_command(
-    text: Annotated[str, typer.Argument()],
-    *,
-    episode_uuid: Annotated[str, typer.Option("--episode")],
-    source_at: Annotated[str, typer.Option("--source-at")],
-    note_id: Annotated[str | None, typer.Option("--note-id")] = None,
-    persona_path: Annotated[Path | None, typer.Option("--persona")] = None,
-    twin_id: Annotated[str | None, typer.Option("--twin-id")] = None,
-) -> None:
-    asyncio.run(
-        correct_owner_note(
-            draft=NoteDraft(
-                text=text,
-                twin_id=twin_id_for(persona_path, twin_id),
-                source_at=_source_at_value(source_at),
-                note_id=_note_id_value(note_id) if note_id is not None else None,
-            ),
-            episode_uuid=episode_uuid,
-            settings=client_settings_from_env(),
-        )
-    )
-
-
-@app.command("memory-forget", help="Delete one meeting or one episode from the persona's memory")
+@app.command("memory-forget", help="Delete one meeting from the persona's memory")
 @_guard_interrupts
 def memory_forget_command(
     *,
-    meeting_id: Annotated[str | None, typer.Option("--meeting-id")] = None,
-    episode_uuid: Annotated[str | None, typer.Option("--episode")] = None,
+    meeting_id: Annotated[str, typer.Option("--meeting-id")],
     keep_record: Annotated[
         bool,
         typer.Option(
@@ -277,25 +215,10 @@ def memory_forget_command(
             "so the meeting can be ingested again",
         ),
     ] = False,
-    persona_path: Annotated[Path | None, typer.Option("--persona")] = None,
-    twin_id: Annotated[str | None, typer.Option("--twin-id")] = None,
 ) -> None:
-    if (meeting_id is None) == (episode_uuid is None):
-        raise api_failure(ErrorCode.MEMORY_FORGET_TARGET_REQUIRED)
-    if episode_uuid is not None:
-        if keep_record:
-            raise api_failure(ErrorCode.MEMORY_KEEP_RECORD_REQUIRES_MEETING)
-        asyncio.run(
-            forget_episode_memory(
-                twin_id=twin_id_for(persona_path, twin_id),
-                episode_uuid=episode_uuid,
-                settings=client_settings_from_env(),
-            )
-        )
-        return
     asyncio.run(
         forget_meeting_memory(
-            meeting_id=str(parse_session_id(meeting_id or "", field="--meeting-id")),
+            meeting_id=str(parse_session_id(meeting_id, field="--meeting-id")),
             settings=client_settings_from_env(),
             keep_record=keep_record,
         )
@@ -807,6 +730,15 @@ _KindArgument = Annotated[OwnerModelKind, typer.Argument()]
 _ConfidenceOption = Annotated[Confidence, typer.Option("--confidence")]
 _DisclosureOption = Annotated[ItemDisclosure, typer.Option("--disclosure")]
 _ReasonOption = Annotated[str | None, typer.Option("--reason")]
+_ValidAtOption = Annotated[
+    datetime | None,
+    typer.Option(
+        "--valid-at",
+        parser=_valid_at_value,
+        metavar="ISO-DATETIME",
+        help="When the item became true, with a timezone",
+    ),
+]
 
 
 def _owner_model_target(persona_path: Path | None, twin_id: str | None) -> OwnerModelTarget:
@@ -834,10 +766,11 @@ def owner_model_add_command(
     confidence: _ConfidenceOption = "firm",
     disclosure: _DisclosureOption = "room_speakable",
     reason: _ReasonOption = None,
+    valid_at: _ValidAtOption = None,
     persona_path: _PersonaOption = None,
     twin_id: _TwinOption = None,
 ) -> None:
-    item = OwnerModelItem(kind, topic, statement, confidence, disclosure, reason)
+    item = OwnerModelItem(kind, topic, statement, confidence, disclosure, reason, valid_at)
     asyncio.run(add_owner_model_item(_owner_model_target(persona_path, twin_id), item))
 
 
@@ -852,15 +785,16 @@ def owner_model_revise_command(
     confidence: _ConfidenceOption = "firm",
     disclosure: _DisclosureOption = "room_speakable",
     reason: _ReasonOption = None,
+    valid_at: _ValidAtOption = None,
     persona_path: _PersonaOption = None,
     twin_id: _TwinOption = None,
 ) -> None:
-    item = OwnerModelItem(kind, topic, statement, confidence, disclosure, reason)
+    item = OwnerModelItem(kind, topic, statement, confidence, disclosure, reason, valid_at)
     target = _owner_model_target(persona_path, twin_id)
     asyncio.run(revise_owner_model_item(target, item_id, item))
 
 
-@owner_model_app.command("retire", help="Take an item out of the owner model")
+@owner_model_app.command("retire", help="Stop holding an item; its history stays")
 @_guard_interrupts
 def owner_model_retire_command(
     item_id: Annotated[str, typer.Argument()],
@@ -869,6 +803,17 @@ def owner_model_retire_command(
     twin_id: _TwinOption = None,
 ) -> None:
     asyncio.run(retire_owner_model_item(_owner_model_target(persona_path, twin_id), item_id))
+
+
+@owner_model_app.command("forget", help="Erase an item and every revision of its content")
+@_guard_interrupts
+def owner_model_forget_command(
+    item_id: Annotated[str, typer.Argument()],
+    *,
+    persona_path: _PersonaOption = None,
+    twin_id: _TwinOption = None,
+) -> None:
+    asyncio.run(forget_owner_model_item(_owner_model_target(persona_path, twin_id), item_id))
 
 
 @owner_model_app.command("history", help="Show every revision of one item")

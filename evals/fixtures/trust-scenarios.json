@@ -35,8 +35,7 @@
             "source_at": "2026-09-30T06:40:00+00:00",
             "recorded_at": "2026-10-02T08:00:00+00:00"
           }
-        },
-        "states": {"c01-note": "active"}
+        }
       },
       "allow": ["jumat"],
       "forbid": ["kamis"],
@@ -75,8 +74,7 @@
             "source_at": "2026-09-30T06:40:00+00:00",
             "recorded_at": "2026-10-02T08:00:00+00:00"
           }
-        },
-        "states": {"c02-note": "active"}
+        }
       },
       "allow": ["jumat"],
       "forbid": ["kamis", "senin", "rabu"],
@@ -105,8 +103,7 @@
             "source_at": "2026-09-30T06:40:00+00:00",
             "recorded_at": "2026-10-02T08:00:00+00:00"
           }
-        },
-        "states": {"c03-note": "active"}
+        }
       },
       "allow": ["9 oktober"],
       "forbid": ["2 oktober", "30 september", "1 oktober"],
@@ -258,8 +255,7 @@
             "source_at": "2026-09-30T06:40:00+00:00",
             "recorded_at": "2026-10-02T08:00:00+00:00"
           }
-        },
-        "states": {"c09-note": "active"}
+        }
       },
       "allow": ["jumat"],
       "forbid": ["senin", "kamis"],
@@ -299,8 +295,7 @@
             "source_at": "2026-10-01T04:00:00+00:00",
             "recorded_at": "2026-10-01T04:05:00+00:00"
           }
-        },
-        "states": {"c10-v1": "superseded", "c10-v2": "active"}
+        }
       },
       "allow": ["senin"],
       "forbid": ["jumat"],
@@ -340,8 +335,7 @@
             "source_at": "2026-10-01T04:00:00+00:00",
             "recorded_at": "2026-10-01T04:05:00+00:00"
           }
-        },
-        "states": {"c11-v1": "superseded", "c11-v2": "active"}
+        }
       },
       "allow": ["senin"],
       "forbid": ["jumat"],
@@ -371,8 +365,7 @@
             "source_at": "2026-10-01T04:00:00+00:00",
             "recorded_at": "2026-10-01T04:05:00+00:00"
           }
-        },
-        "states": {"c12-v2": "active"}
+        }
       },
       "allow": ["senin"],
       "forbid": ["jumat"],
@@ -400,8 +393,7 @@
             "source_at": "2026-09-30T06:40:00+00:00",
             "recorded_at": "2026-10-02T08:00:00+00:00"
           }
-        },
-        "states": {"c13-note": "active"}
+        }
       },
       "allow": ["jumat"],
       "forbid": ["senin"],
@@ -429,8 +421,7 @@
             "source_at": "2026-10-01T09:00:00+00:00",
             "recorded_at": "2026-10-01T09:00:30+00:00"
           }
-        },
-        "states": {"c14-pending": "pending"}
+        }
       },
       "allow": ["belum tahu"],
       "forbid": ["rabu", "sudah pindah"],
@@ -469,8 +460,7 @@
             "source_at": "2026-09-30T06:40:00+00:00",
             "recorded_at": "2026-10-02T08:00:00+00:00"
           }
-        },
-        "states": {"c15-note": "active"}
+        }
       },
       "allow": ["jumat"],
       "forbid": ["kamis"],
@@ -509,8 +499,7 @@
             "source_at": "2026-09-30T06:40:00+00:00",
             "recorded_at": "2026-10-02T08:00:00+00:00"
           }
-        },
-        "states": {"c16-note": "active"}
+        }
       },
       "allow": ["jakarta", "bandung"],
       "forbid": ["sudah pasti", "pasti di"],
@@ -678,8 +667,7 @@
             "source_at": "2026-09-30T06:40:00+00:00",
             "recorded_at": "2026-10-02T08:00:00+00:00"
           }
-        },
-        "states": {"c24-note": "active"}
+        }
       },
       "allow": ["sepuluh"],
       "forbid": ["tidak tahu", "belum tahu"],

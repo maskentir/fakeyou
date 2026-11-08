@@ -83,10 +83,10 @@ async def test_persona_prompt_reaches_model_as_system_message() -> None:
 
 
 async def test_identity_change_transcript_cannot_move_the_memory_namespace() -> None:
-    memory, stored, states = session_memory([RECALLED_CONTEXT], EXAMPLE_PROFILE.memory_group)
+    memory, stored = session_memory([RECALLED_CONTEXT], EXAMPLE_PROFILE.memory_group)
     model = ToolCallingFakeModel(responses=[AIMessage(content="I am still Rani's twin.")])
 
-    with case_storage(memory, stored, states):
+    with case_storage(memory, stored):
         await answer_with_memory(
             model,
             memory,
@@ -130,8 +130,8 @@ async def test_live_persona_quality(scenario: str) -> None:
     question, criteria = live["question"], live["criteria"]
     recalled_context: str = PERSONA_FIXTURE["contexts"][live["context"]]
 
-    memory, stored, states = session_memory([recalled_context], EXAMPLE_PROFILE.memory_group)
-    with case_storage(memory, stored, states):
+    memory, stored = session_memory([recalled_context], EXAMPLE_PROFILE.memory_group)
+    with case_storage(memory, stored):
         result = await answer_with_memory(model, memory, question, f"live-persona-{scenario}")
     reply = result["messages"][-1].text
 

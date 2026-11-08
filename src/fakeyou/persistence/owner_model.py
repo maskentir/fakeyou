@@ -1,6 +1,6 @@
 from typing import Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from fakeyou.db.owner_model import (
     Confidence,
@@ -22,6 +22,7 @@ class FrozenOwnerModelItem(BaseModel):
     statement: str
     confidence: Confidence
     disclosure: ItemDisclosure
+    valid_at: AwareDatetime | None = None
 
     @property
     def ref(self) -> str:
@@ -46,6 +47,7 @@ class FrozenOwnerModel(BaseModel):
                     statement=item.entry.statement,
                     confidence=item.entry.confidence,
                     disclosure=item.entry.disclosure,
+                    valid_at=item.entry.valid_at,
                 )
                 for item in snapshot.items
             ),

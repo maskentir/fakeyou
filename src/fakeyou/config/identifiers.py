@@ -30,4 +30,4 @@ def verify_chat_thread_id(thread: str) -> None:
 
 def verify_memory_group_id(group_id: str) -> None:
     if not is_identifier(group_id):
-        raise FakeYouError(ErrorCode.NOTE_GROUP_ID_INVALID)
+        raise FakeYouError(ErrorCode.MEMORY_GROUP_ID_INVALID)

@@ -12,7 +12,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from fakeyou.api.admin import router as admin_router
 from fakeyou.api.auth import Principal, TokenStore, require_admin, require_owner
 from fakeyou.api.debrief import router as debrief_router
-from fakeyou.api.errors import DomainConflict, error_response, http_status_for
+from fakeyou.api.errors import error_response, http_status_for
 from fakeyou.api.events import router as events_router
 from fakeyou.api.memory import router as memory_router
 from fakeyou.api.owner_model import router as owner_model_router
@@ -39,7 +39,6 @@ class ApiDeps:
     transport: Callable[[], object] | None = None
     snapshot_store: Callable[[], object] | None = None
     now_iso: Callable[[], str] | None = None
-    memory_service: Callable[[], object] | None = None
     debrief_service: Callable[[], object] | None = None
     memory_init: Callable[[], Awaitable[None]] | None = None
     chat_turn: Callable[..., Awaitable[str]] | None = None
@@ -60,13 +59,6 @@ def _install_error_handlers(app: FastAPI) -> None:
     async def fakeyou_error(_request: Request, error: FakeYouError) -> JSONResponse:
         status = http_status_for(error)
         return error_response(str(error.code), str(error), status=status)
-
-    @app.exception_handler(DomainConflict)
-    async def domain_conflict(_request: Request, conflict: DomainConflict) -> JSONResponse:
-        error = conflict.error
-        return error_response(
-            str(error.code), str(error), status=http_status_for(error), details=conflict.details
-        )
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(_request: Request, _error: RequestValidationError) -> JSONResponse:

@@ -57,7 +57,7 @@ def _tree(root: Path) -> list[Path]:
         ),
         pytest.param(
             (
-                ["memory-forget", "--meeting-id", "../../x", "--persona", PERSONA],
+                ["memory-forget", "--meeting-id", "../../x"],
                 "--meeting-id",
                 "../../x",
             ),
@@ -72,11 +72,19 @@ def _tree(root: Path) -> list[Path]:
         ),
         pytest.param(
             (
-                ["memory-add", "note", "--persona", PERSONA, "--twin-id", "../x"],
+                ["memory-reembed", "--persona", PERSONA, "--twin-id", "../x"],
                 "--twin-id",
                 "../x",
             ),
-            id="memory-add-twin",
+            id="memory-reembed-twin",
+        ),
+        pytest.param(
+            (
+                ["owner-model", "add", "fact", "t", "s", "--persona", PERSONA, "--twin-id", "../x"],
+                "--twin-id",
+                "../x",
+            ),
+            id="owner-model-add-twin",
         ),
         pytest.param(
             (["worker", "start", LINK, "--meeting-id", "../x"], "--meeting-id", "../x"),

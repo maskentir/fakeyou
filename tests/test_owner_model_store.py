@@ -1,5 +1,5 @@
 import asyncio
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -176,3 +176,117 @@ async def test_concurrent_approvals_get_distinct_versions(
 
     assert sorted(revision.model_version or 0 for revision in added) == list(range(1, 9))
     assert (await store.snapshot(SCOPE)).version == 8
+
+
+async def test_valid_at_is_kept_on_the_revision_and_in_the_snapshot(
+    migrated_async_engine: AsyncEngine,
+) -> None:
+    store = OwnerModelStore(migrated_async_engine)
+    since = datetime(2026, 3, 1, tzinfo=timezone(timedelta(hours=7)))
+    fact = OwnerModelEntry("fact", "vendor", "We buy cloud from Orchid.", valid_at=since)
+
+    added = await store.add(SCOPE, fact, "owner", NOW)
+
+    assert added.entry.valid_at == since
+    [item] = (await store.snapshot(SCOPE)).items
+    assert item.entry.valid_at == since
+
+
+@pytest.mark.parametrize(
+    ("valid_at", "code"),
+    [
+        (datetime(2026, 3, 1), ErrorCode.OWNER_MODEL_VALID_AT_INVALID),
+        (NOW + timedelta(seconds=1), ErrorCode.OWNER_MODEL_VALID_AT_FUTURE),
+    ],
+)
+async def test_valid_at_must_be_aware_and_not_after_the_write(
+    migrated_async_engine: AsyncEngine, valid_at: datetime, code: ErrorCode
+) -> None:
+    store = OwnerModelStore(migrated_async_engine)
+    first = await store.add(SCOPE, POSITION, "owner", NOW)
+    fact = OwnerModelEntry("fact", "vendor", "We buy cloud from Orchid.", valid_at=valid_at)
+
+    for attempt in (
+        store.add(SCOPE, fact, "owner", NOW),
+        store.revise(SCOPE, first.item_id, fact, "owner", NOW),
+    ):
+        with pytest.raises(FakeYouError, match="valid_at") as raised:
+            await attempt
+        assert raised.value.code is code
+    assert (await store.snapshot(SCOPE)).version == 1
+
+
+async def test_forget_erases_every_revision_and_leaves_one_tombstone(
+    migrated_async_engine: AsyncEngine,
+) -> None:
+    store = OwnerModelStore(migrated_async_engine)
+    first = await store.add(SCOPE, POSITION, "owner", NOW)
+    revision = OwnerModelEntry("position", "release", "Ship the beta next week.", reason="Ready.")
+    await store.revise(SCOPE, first.item_id, revision, "owner", NOW)
+    await store.revise(SCOPE, first.item_id, STYLE, "debrief", NOW)
+    kept = await store.add(SCOPE, STYLE, "owner", NOW)
+
+    tombstone = await store.forget(SCOPE, first.item_id, LATER)
+
+    assert (tombstone.item_id, tombstone.status, tombstone.source) == (
+        first.item_id,
+        "forgotten",
+        "owner",
+    )
+    assert tombstone.entry == OwnerModelEntry("style_example", "", "")
+    assert (tombstone.model_version, tombstone.decided_at) == (4, LATER)
+    assert await store.history(SCOPE, first.item_id) == [tombstone]
+    assert await store.proposals(SCOPE) == []
+    for version in (None, 1, 2, 3, 4):
+        snapshot = await store.snapshot(SCOPE, version)
+        assert all(item.item_id != first.item_id for item in snapshot.items)
+    assert [item.item_id for item in (await store.snapshot(SCOPE)).items] == [kept.item_id]
+    added = await store.add(SCOPE, POSITION, "owner", LATER)
+    assert added.model_version == 5
+
+
+async def test_forgetting_twice_returns_the_same_tombstone(
+    migrated_async_engine: AsyncEngine,
+) -> None:
+    store = OwnerModelStore(migrated_async_engine)
+    first = await store.add(SCOPE, POSITION, "owner", NOW)
+    await store.retire(SCOPE, first.item_id, NOW)
+
+    tombstone = await store.forget(SCOPE, first.item_id, LATER)
+
+    assert await store.forget(SCOPE, first.item_id, LATER + timedelta(minutes=1)) == tombstone
+    assert (await store.snapshot(SCOPE)).version == tombstone.model_version == 3
+
+
+async def test_a_forgotten_item_cannot_be_revised_or_retired(
+    migrated_async_engine: AsyncEngine,
+) -> None:
+    store = OwnerModelStore(migrated_async_engine)
+    first = await store.add(SCOPE, POSITION, "owner", NOW)
+    proposed = await store.revise(SCOPE, first.item_id, STYLE, "debrief", NOW)
+    await store.forget(SCOPE, first.item_id, LATER)
+
+    for attempt in (
+        store.retire(SCOPE, first.item_id, LATER),
+        store.revise(SCOPE, first.item_id, STYLE, "owner", LATER),
+        store.revise(SCOPE, first.item_id, STYLE, "debrief", LATER),
+    ):
+        with pytest.raises(FakeYouError, match="was forgotten") as raised:
+            await attempt
+        assert raised.value.code is ErrorCode.OWNER_MODEL_ITEM_FORGOTTEN
+    with pytest.raises(FakeYouError, match="not awaiting a decision") as raised:
+        await store.decide(SCOPE, proposed.revision_id, approve=True, at=LATER)
+    assert raised.value.code is ErrorCode.OWNER_MODEL_NOT_PROPOSED
+
+
+async def test_forget_of_an_unknown_or_foreign_item_is_unknown(
+    migrated_async_engine: AsyncEngine,
+) -> None:
+    store = OwnerModelStore(migrated_async_engine)
+    first = await store.add(SCOPE, POSITION, "owner", NOW)
+
+    for scope, item_id in ((SCOPE, "missing"), (OTHER, first.item_id)):
+        with pytest.raises(FakeYouError, match="does not exist") as raised:
+            await store.forget(scope, item_id, LATER)
+        assert raised.value.code is ErrorCode.OWNER_MODEL_ITEM_UNKNOWN
+    assert [item.entry for item in (await store.snapshot(SCOPE)).items] == [POSITION]

@@ -317,7 +317,7 @@ async def test_reembed_consumer_faults_and_does_not_ack_a_failing_run(
         access: OperatorAccess, *, ack: Callable[[], Awaitable[None]], **_kwargs: object
     ) -> str:
         del access, ack
-        raise FakeYouError(ErrorCode.MEMORY_FORGET_TARGET_REQUIRED)
+        raise FakeYouError(ErrorCode.MEMORY_FORGET_SESSION_LIVE, meeting_id="m1")
 
     journal = RecordingJournal()
     stream.seed(REEMBED_STREAM, "0-0", REEMBED_JOB)

@@ -53,15 +53,6 @@
     "/v1/sessions/{meeting_id}/stop": [
       "post"
     ],
-    "/v1/twins/{twin_id}/notes": [
-      "post"
-    ],
-    "/v1/twins/{twin_id}/notes/{episode_uuid}": [
-      "delete"
-    ],
-    "/v1/twins/{twin_id}/notes/{episode_uuid}/corrections": [
-      "post"
-    ],
     "/v1/twins/{twin_id}/owner-model": [
       "get",
       "post"
@@ -69,6 +60,9 @@
     "/v1/twins/{twin_id}/owner-model/items/{item_id}": [
       "delete",
       "get"
+    ],
+    "/v1/twins/{twin_id}/owner-model/items/{item_id}/retire": [
+      "post"
     ],
     "/v1/twins/{twin_id}/owner-model/items/{item_id}/revisions": [
       "post"
@@ -102,9 +96,6 @@
     "IngestionView",
     "JobView",
     "MemoryInitView",
-    "NoteCorrect",
-    "NoteCreate",
-    "NoteView",
     "OwnerModelItemBody",
     "OwnerModelRevisionView",
     "OwnerModelView",

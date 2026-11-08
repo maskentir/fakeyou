@@ -1,10 +1,7 @@
-from collections.abc import Mapping
-
 from fastapi.responses import JSONResponse
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.catalog.exit_codes import ExitCode
-from fakeyou.memory.owner_notes import NOTE_CONFLICT_CODES
 
 CONFLICT_CODES: frozenset[str] = frozenset(
     {
@@ -12,8 +9,8 @@ CONFLICT_CODES: frozenset[str] = frozenset(
         "meeting.already_ended",
         "memory.forget_session_live",
         str(ErrorCode.OWNER_MODEL_ITEM_RETIRED),
+        str(ErrorCode.OWNER_MODEL_ITEM_FORGOTTEN),
         str(ErrorCode.OWNER_MODEL_NOT_PROPOSED),
-        *(code.value for code in NOTE_CONFLICT_CODES),
     }
 )
 
@@ -24,13 +21,6 @@ _API_STATUS: dict[str, int] = {
     str(ErrorCode.OWNER_MODEL_ITEM_UNKNOWN): 404,
     str(ErrorCode.API_RATE_LIMITED): 429,
 }
-
-
-class DomainConflict(Exception):
-    def __init__(self, error: FakeYouError, details: Mapping[str, object]) -> None:
-        super().__init__(str(error))
-        self.error = error
-        self.details = dict(details)
 
 
 def http_status_for(error: FakeYouError) -> int:

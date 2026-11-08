@@ -116,23 +116,6 @@ class ApiClient:
     async def admin_check(self) -> dict[str, Any]:
         return await self._json("GET", "/v1/admin/check")
 
-    async def add_note(
-        self, twin_id: str, *, note_id: str, text: str, source_at: str | None
-    ) -> dict[str, Any]:
-        body = {"text": text, "source_at": source_at, "note_id": note_id}
-        return await self._json("POST", f"/v1/twins/{twin_id}/notes", json=body)
-
-    async def correct_note(
-        self, twin_id: str, episode_uuid: str, *, note_id: str, text: str, source_at: str
-    ) -> dict[str, Any]:
-        body = {"text": text, "source_at": source_at, "note_id": note_id}
-        return await self._json(
-            "POST", f"/v1/twins/{twin_id}/notes/{episode_uuid}/corrections", json=body
-        )
-
-    async def forget_episode(self, twin_id: str, episode_uuid: str) -> None:
-        await self._send("DELETE", f"/v1/twins/{twin_id}/notes/{episode_uuid}")
-
     async def forget_meeting(self, meeting_id: str, *, keep_record: bool) -> dict[str, Any]:
         body = {"keep_record": keep_record}
         return await self._json("POST", f"/v1/sessions/{meeting_id}/forget", json=body)
@@ -162,7 +145,11 @@ class ApiClient:
         return await self._json("POST", path, json=item)
 
     async def retire_owner_model_item(self, twin_id: str, item_id: str) -> dict[str, Any]:
-        return await self._json("DELETE", f"/v1/twins/{twin_id}/owner-model/items/{item_id}")
+        path = f"/v1/twins/{twin_id}/owner-model/items/{item_id}/retire"
+        return await self._json("POST", path)
+
+    async def forget_owner_model_item(self, twin_id: str, item_id: str) -> None:
+        await self._send("DELETE", f"/v1/twins/{twin_id}/owner-model/items/{item_id}")
 
     async def owner_model_history(self, twin_id: str, item_id: str) -> list[dict[str, Any]]:
         return await self._json_list("GET", f"/v1/twins/{twin_id}/owner-model/items/{item_id}")

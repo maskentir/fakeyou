@@ -340,16 +340,13 @@ def test_join_owner_id_flag(monkeypatch: pytest.MonkeyPatch) -> None:
     assert captured["options"].owner_id == "owner-9"
 
 
-@pytest.mark.parametrize(
-    "command", ["join", "memory-add", "memory-forget", "memory-ingest", "memory-reembed"]
-)
+@pytest.mark.parametrize("command", ["join", "memory-forget", "memory-ingest", "memory-reembed"])
 def test_cli_rejects_owner_alias(
     command: str, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     arguments = {
         "join": ["https://meet.google.com/abc-defg-hij"],
-        "memory-add": ["A note.", "--persona", "p.json"],
-        "memory-forget": ["--meeting-id", "meeting-1", "--persona", "p.json"],
+        "memory-forget": ["--meeting-id", "meeting-1"],
         "memory-ingest": ["--meeting-id", "meeting-1"],
         "memory-reembed": ["--persona", "p.json"],
     }

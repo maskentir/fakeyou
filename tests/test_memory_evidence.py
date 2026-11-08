@@ -7,7 +7,6 @@ import pytest
 from graphiti_core.nodes import EpisodicNode
 from graphiti_core.search.search_config import EdgeReranker, EdgeSearchMethod
 
-import fakeyou.memory.evidence as evidence_module
 from fakeyou.config.settings import RecallSettings
 from fakeyou.foundation.provenance import FactDict, MemoryEvidence
 from fakeyou.memory.evidence import (
@@ -29,24 +28,12 @@ from tests._persona_support import profile
 SOURCE_AT = datetime(2026, 9, 30, 9, tzinfo=UTC)
 
 
-def patch_episodes(
-    monkeypatch: pytest.MonkeyPatch,
-    memory: Any,
-    stored: dict[str, Any],
-    states: dict[str, str] | None = None,
-) -> None:
+def patch_episodes(monkeypatch: pytest.MonkeyPatch, memory: Any, stored: dict[str, Any]) -> None:
     async def get_by_uuids(driver: Any, uuids: list[str]) -> list[Any]:
         assert driver is memory.driver
         return [stored[uuid] for uuid in uuids if uuid in stored]
 
-    async def note_states(
-        _memory: Any, *, group_id: str, episode_uuids: list[str]
-    ) -> dict[str, str]:
-        assert group_id == "team_alpha"
-        return {uuid: (states or {}).get(uuid, "active") for uuid in episode_uuids}
-
     monkeypatch.setattr(EpisodicNode, "get_by_uuids", get_by_uuids)
-    monkeypatch.setattr(evidence_module, "read_note_states", note_states)
 
 
 def found_set(text: str, *, fact_id: str = "f1") -> MemoryEvidence:
@@ -54,7 +41,7 @@ def found_set(text: str, *, fact_id: str = "f1") -> MemoryEvidence:
     return {
         "outcome": "found",
         "facts": [fact],
-        "excluded": {"pending": 0, "superseded": 0, "missing_source": 0},
+        "excluded": {"superseded": 0, "missing_source": 0},
     }
 
 
@@ -62,14 +49,14 @@ def empty_set() -> MemoryEvidence:
     return {
         "outcome": "empty",
         "facts": [],
-        "excluded": {"pending": 0, "superseded": 0, "missing_source": 0},
+        "excluded": {"superseded": 0, "missing_source": 0},
     }
 
 
 async def test_search_evidence_returns_structured_found_set(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    stored = {"e0": fake_episode("e0", "team_alpha", "owner note", SOURCE_AT)}
+    stored = {"e0": fake_episode("e0", "team_alpha", "Google Meet m1 transcript", SOURCE_AT)}
     memory = make_graphiti(facts=["Budget approved"], episodes={"Budget approved": ["e0"]})
     patch_episodes(monkeypatch, memory, stored)
 
@@ -78,18 +65,17 @@ async def test_search_evidence_returns_structured_found_set(
 
     assert rendered["outcome"] == "found"
     assert rendered["facts"][0]["text"] == "Budget approved"
-    assert rendered["facts"][0]["sources"][0]["kind"] == "owner_note"
     assert rendered["facts"][0]["sources"][0] == {
         "episode_id": "e0",
-        "kind": "owner_note",
-        "label": "owner note",
+        "kind": "meeting_transcript",
+        "label": "Google Meet m1 transcript",
         "source_at": "2026-09-30T09:00:00+00:00",
         "recorded_at": "2026-09-30T09:00:00+00:00",
-        "time_granularity": "document",
+        "time_granularity": "episode_window",
         "speaker_verified": False,
-        "speaker_identity": "owner",
+        "speaker_identity": "unverified: may or may not be the owner or any named person",
     }
-    assert rendered["excluded"] == {"pending": 0, "superseded": 0, "missing_source": 0}
+    assert rendered["excluded"] == {"superseded": 0, "missing_source": 0}
     assert json.loads(render_memory_evidence([rendered], 1200))["schema"] == "memory_evidence/v1"
 
 
@@ -106,30 +92,25 @@ async def test_search_evidence_without_matching_facts_is_empty(
     assert evidence_set(result, result_limit=5) == empty_set()
 
 
-async def test_search_evidence_counts_pending_and_superseded_sources(
+async def test_search_evidence_counts_superseded_and_unsourced_facts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     stored = {
-        "live": fake_episode("live", "team_alpha", "owner note", SOURCE_AT),
-        "waiting": fake_episode("waiting", "team_alpha", "owner note", SOURCE_AT),
-        "old": fake_episode("old", "team_alpha", "owner note", SOURCE_AT),
+        "live": fake_episode("live", "team_alpha", "Google Meet m1 transcript", SOURCE_AT),
+        "old": fake_episode("old", "team_alpha", "Google Meet m1 transcript", SOURCE_AT),
     }
     memory = make_graphiti(
-        facts=["Live fact.", "Waiting fact.", "Old fact.", "Lost fact."],
-        episodes={
-            "Live fact.": ["live"],
-            "Waiting fact.": ["waiting"],
-            "Old fact.": ["old"],
-            "Lost fact.": ["missing"],
-        },
+        facts=["Live fact.", "Old fact.", "Lost fact."],
+        episodes={"Live fact.": ["live"], "Old fact.": ["old"], "Lost fact.": ["missing"]},
+        invalidated=["Old fact."],
     )
-    patch_episodes(monkeypatch, memory, stored, states={"waiting": "pending", "old": "superseded"})
+    patch_episodes(monkeypatch, memory, stored)
 
     result = await search_evidence(memory, "fact", group_id="team_alpha", recall=RecallSettings())
     rendered = evidence_set(result, result_limit=5)
 
     assert [fact["text"] for fact in rendered["facts"]] == ["Live fact."]
-    assert rendered["excluded"] == {"pending": 1, "superseded": 1, "missing_source": 1}
+    assert rendered["excluded"] == {"superseded": 1, "missing_source": 1}
 
 
 async def test_search_evidence_lets_search_failures_escape() -> None:
@@ -173,7 +154,7 @@ def test_unavailable_set_is_the_frozen_shape() -> None:
     assert dict(unavailable_set()) == {
         "outcome": "unavailable",
         "facts": [],
-        "excluded": {"pending": 0, "superseded": 0, "missing_source": 0},
+        "excluded": {"superseded": 0, "missing_source": 0},
     }
 
 
@@ -198,7 +179,7 @@ def test_renderer_drops_tail_facts_of_older_sets_before_cutting_text() -> None:
             {"fact_ids": ["f1"], "text": "first " * 10, "sources": []},
             {"fact_ids": ["f2"], "text": "second " * 10, "sources": []},
         ],
-        "excluded": {"pending": 0, "superseded": 0, "missing_source": 0},
+        "excluded": {"superseded": 0, "missing_source": 0},
     }
 
     first, latest = render_memory_evidence([older, found_set("now")], 240).splitlines()

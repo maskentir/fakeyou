@@ -81,7 +81,7 @@ class ReplayScore:
         }
 
 
-def session_memory(facts: list[str], group_id: str) -> tuple[Any, dict[str, Any], dict[str, str]]:
+def session_memory(facts: list[str], group_id: str) -> tuple[Any, dict[str, Any]]:
     spec = {
         "facts": facts,
         "episodes": dict.fromkeys(facts, [REPLAY_MEMORY_EPISODE]),
@@ -151,9 +151,9 @@ async def _replay_session(
     model: BaseChatModel, session: dict[str, Any], context: _SessionRun
 ) -> None:
     profile, score, run = context.profile, context.score, context.run
-    memory, stored, states = session_memory(session["memory"], profile.memory_group)
+    memory, stored = session_memory(session["memory"], profile.memory_group)
     evidence = TurnEvidence()
-    with case_storage(memory, stored, states), TemporaryDirectory() as folder:
+    with case_storage(memory, stored), TemporaryDirectory() as folder:
         agent = create_meeting_agent(
             model,
             persona=context.prompt_builder(profile),

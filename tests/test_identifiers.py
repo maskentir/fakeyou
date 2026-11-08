@@ -106,7 +106,7 @@ def test_memory_group_validator_accepts_identifiers(value: str) -> None:
 def test_memory_group_validator_rejects_with_its_catalog_code(value: str) -> None:
     with pytest.raises(FakeYouError, match="group_id") as caught:
         verify_memory_group_id(value)
-    assert caught.value.code is ErrorCode.NOTE_GROUP_ID_INVALID
+    assert caught.value.code is ErrorCode.MEMORY_GROUP_ID_INVALID
 
 
 @pytest.mark.parametrize("value", VALID)

@@ -18,14 +18,13 @@ from fakeyou.catalog.exit_codes import ExitCode
 from fakeyou.cli.output import emit_json
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
-from fakeyou.memory.forget import ForgetRequest, require_complete, run_forget
+from fakeyou.memory.forget import require_complete, run_forget
 from fakeyou.memory.operator_access import OperatorAccess
 from fakeyou.memory.persona import OperatorIdentity, PersonaProfile
 from fakeyou.persistence.brief import context_path, read_meeting_context, write_meeting_context
 from fakeyou.persistence.ingestion_status import record_lock
 from fakeyou.persistence.lease import LockPurpose
 from fakeyou.persistence.record import meeting_record_path
-from tests._cli_memory_support import tracked_memory
 from tests._cli_support import (
     PERSONA_DATA,
     expected_context,
@@ -42,15 +41,16 @@ STATUS_AT = datetime(2026, 10, 31, tzinfo=UTC)
 
 
 async def forget_in_process(
-    request: ForgetRequest,
     *,
+    keep_record: bool = False,
     identity: OperatorIdentity,
     settings: Settings,
     status: MemorySessionStatus | None = None,
 ) -> None:
     summary = await run_forget(
-        request,
-        access=OperatorAccess(identity, settings, lambda: providers.open_persona_memory(settings)),
+        OperatorAccess(identity, settings, lambda: providers.open_persona_memory(settings)),
+        meeting_id=SessionId("meeting-9"),
+        keep_record=keep_record,
         status=status or MemorySessionStatus(),
     )
     document: dict[str, Any] = {"removed_episodes": summary.removed_episodes}
@@ -77,7 +77,6 @@ async def test_memory_forget_meeting_uses_persona_group(
     monkeypatch.setattr(forget_service, "forget_meeting", forget)
 
     await forget_in_process(
-        ForgetRequest(SessionId("meeting-9"), None),
         identity=OperatorIdentity(write_persona(tmp_path), None, None),
         settings=settings,
     )
@@ -118,7 +117,7 @@ async def forget_meeting_with_local_files(
 
     monkeypatch.setattr(forget_service, "forget_meeting", forget)
     await forget_in_process(
-        ForgetRequest(SessionId("meeting-9"), None, keep_record),
+        keep_record=keep_record,
         identity=OperatorIdentity(write_persona(tmp_path), None, None),
         settings=settings,
         status=status,
@@ -191,64 +190,14 @@ async def test_memory_forget_keeps_the_meeting_context_only_with_the_record(
         assert read_meeting_context(context_file) == expected_context(meeting_brief(), profile)
 
 
-async def test_memory_forget_episode_uses_persona_group(
-    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    graphiti = make_graphiti()
-    fake_persona_memory(monkeypatch, graphiti)
-    calls: list[dict[str, Any]] = []
-
-    async def forget(_memory: Any, **kwargs: Any) -> None:
-        calls.append(kwargs)
-
-    monkeypatch.setattr(forget_service, "forget_episode", forget)
-
-    await forget_in_process(
-        ForgetRequest(None, "episode-7"),
-        identity=OperatorIdentity(write_persona(tmp_path), None, None),
-        settings=settings,
-    )
-
-    profile = PersonaProfile.model_validate(PERSONA_DATA)
-    assert calls == [{"group_id": profile.memory_group, "episode_uuid": "episode-7"}]
-
-
-@pytest.mark.parametrize(
-    ("meeting_id", "episode_uuid"),
-    [(None, None), ("meeting-9", "episode-7")],
-)
-async def test_memory_forget_validates_before_opening_memory(
-    settings: Settings,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    meeting_id: str | None,
-    episode_uuid: str | None,
-) -> None:
-    opened = fake_persona_memory(monkeypatch, make_graphiti())
-
-    with pytest.raises(FakeYouError, match="exactly one") as caught:
-        await forget_in_process(
-            ForgetRequest(None if meeting_id is None else SessionId(meeting_id), episode_uuid),
-            identity=OperatorIdentity(write_persona(tmp_path), None, None),
-            settings=settings,
-        )
-    assert caught.value.code is ErrorCode.MEMORY_FORGET_TARGET_REQUIRED
-    assert opened == []
-
-
 def test_memory_forget_rejects_a_malformed_meeting_id_before_opening_memory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     opened = fake_persona_memory(monkeypatch, make_graphiti())
-    persona = write_persona(tmp_path)
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["fakeyou", "memory-forget", "--meeting-id", "bad meeting", "--persona", str(persona)],
-    )
+    monkeypatch.setattr(sys, "argv", ["fakeyou", "memory-forget", "--meeting-id", "bad meeting"])
 
     with pytest.raises(SystemExit) as caught:
         cli_main.main()
@@ -256,18 +205,6 @@ def test_memory_forget_rejects_a_malformed_meeting_id_before_opening_memory(
     assert caught.value.code == ExitCode.INPUT_REJECTED
     assert "invalid --meeting-id: 'bad meeting'" in capsys.readouterr().err
     assert opened == []
-
-
-async def test_memory_forget_keep_record_requires_a_meeting(
-    settings: Settings, tmp_path: Path
-) -> None:
-    with pytest.raises(FakeYouError, match="--keep-record") as caught:
-        await forget_in_process(
-            ForgetRequest(None, "episode-7", keep_record=True),
-            identity=OperatorIdentity(write_persona(tmp_path), None, None),
-            settings=settings,
-        )
-    assert caught.value.code is ErrorCode.MEMORY_KEEP_RECORD_REQUIRES_MEETING
 
 
 @pytest.mark.parametrize("lock_purpose", ["meeting", "ingestion", "debrief"])
@@ -295,7 +232,7 @@ async def test_memory_forget_meeting_refuses_an_active_lock(
     with record_lock(record_path, purpose=lock_purpose):
         with pytest.raises(FakeYouError, match="locked") as caught:
             await forget_in_process(
-                ForgetRequest(SessionId("meeting-9"), None, keep_record),
+                keep_record=keep_record,
                 identity=OperatorIdentity(write_persona(tmp_path), None, None),
                 settings=settings,
             )
@@ -328,26 +265,6 @@ async def test_open_persona_memory_passes_domain_error_through(
     assert caught.value.code is ErrorCode.CONFIG_PERCEPTION_BASE_URL_REQUIRED
 
 
-async def test_run_forget_refuses_an_ambiguous_target_before_opening_memory(
-    settings: Settings, tmp_path: Path
-) -> None:
-    opened: list[str] = []
-    access = OperatorAccess(
-        OperatorIdentity(write_persona(tmp_path), None, None),
-        settings,
-        lambda: tracked_memory(opened),
-    )
-
-    with pytest.raises(FakeYouError, match="exactly one") as caught:
-        await run_forget(
-            ForgetRequest(None, None),
-            access=access,
-            status=MemorySessionStatus(),
-        )
-    assert caught.value.code is ErrorCode.MEMORY_FORGET_TARGET_REQUIRED
-    assert opened == []
-
-
 @asynccontextmanager
 async def _memory_context(memory: Graphiti) -> AsyncIterator[Graphiti]:
     yield memory
@@ -374,10 +291,14 @@ async def test_second_run_forget_over_the_same_meeting_is_complete(
 
     monkeypatch.setattr(forget_service, "forget_meeting", forget)
     access = _forget_access(settings, tmp_path)
-    request = ForgetRequest(SessionId("meeting-9"), None)
+    meeting_id = SessionId("meeting-9")
 
-    first = await run_forget(request, access=access, status=MemorySessionStatus())
-    second = await run_forget(request, access=access, status=MemorySessionStatus())
+    first = await run_forget(
+        access, meeting_id=meeting_id, keep_record=False, status=MemorySessionStatus()
+    )
+    second = await run_forget(
+        access, meeting_id=meeting_id, keep_record=False, status=MemorySessionStatus()
+    )
 
     assert [stage.stage for stage in first.stages] == [
         "graph",
@@ -411,8 +332,9 @@ async def test_failed_graph_stage_still_runs_the_file_stages(
     monkeypatch.setattr(forget_service, "forget_meeting", broken)
 
     summary = await run_forget(
-        ForgetRequest(SessionId("meeting-9"), None),
-        access=_forget_access(settings, tmp_path),
+        _forget_access(settings, tmp_path),
+        meeting_id=SessionId("meeting-9"),
+        keep_record=False,
         status=MemorySessionStatus(),
     )
 
@@ -433,8 +355,9 @@ async def test_keep_record_reports_the_file_stages_as_kept(
     monkeypatch.setattr(forget_service, "forget_meeting", forget)
 
     summary = await run_forget(
-        ForgetRequest(SessionId("meeting-9"), None, keep_record=True),
-        access=_forget_access(settings, tmp_path),
+        _forget_access(settings, tmp_path),
+        meeting_id=SessionId("meeting-9"),
+        keep_record=True,
         status=MemorySessionStatus(),
     )
 
@@ -449,24 +372,6 @@ async def test_keep_record_reports_the_file_stages_as_kept(
     }
 
 
-async def test_forget_of_an_absent_episode_is_an_idempotent_summary(
-    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    async def absent(_memory: Any, **_kwargs: Any) -> bool:
-        return False
-
-    monkeypatch.setattr(forget_service, "forget_episode", absent)
-
-    summary = await run_forget(
-        ForgetRequest(None, "episode-7"),
-        access=_forget_access(settings, tmp_path),
-        status=MemorySessionStatus(),
-    )
-
-    assert (summary.removed_episodes, summary.complete) == (0, True)
-    assert [(stage.stage, stage.status) for stage in summary.stages] == [("graph", "absent")]
-
-
 async def test_require_complete_turns_a_failed_stage_into_the_named_error(
     settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -475,8 +380,9 @@ async def test_require_complete_turns_a_failed_stage_into_the_named_error(
 
     monkeypatch.setattr(forget_service, "forget_meeting", broken)
     summary = await run_forget(
-        ForgetRequest(SessionId("meeting-9"), None, keep_record=True),
-        access=_forget_access(settings, tmp_path),
+        _forget_access(settings, tmp_path),
+        meeting_id=SessionId("meeting-9"),
+        keep_record=True,
         status=MemorySessionStatus(),
     )
 
@@ -498,8 +404,9 @@ async def test_require_complete_returns_a_complete_summary(
 
     monkeypatch.setattr(forget_service, "forget_meeting", forget)
     summary = await run_forget(
-        ForgetRequest(SessionId("meeting-9"), None),
-        access=_forget_access(settings, tmp_path),
+        _forget_access(settings, tmp_path),
+        meeting_id=SessionId("meeting-9"),
+        keep_record=False,
         status=MemorySessionStatus(),
     )
 

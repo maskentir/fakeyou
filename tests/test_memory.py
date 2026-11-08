@@ -17,7 +17,6 @@ from neo4j.exceptions import ServiceUnavailable
 import fakeyou.memory.memory as memory_module
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import DEFAULTS, IngestionSettings, MemorySettings
-from fakeyou.memory import owner_notes
 from fakeyou.memory.memory import (
     create_memory_tools,
     ensure_indexes,
@@ -32,7 +31,7 @@ from tests._memory_support import memory_settings
 def test_memory_tools_reject_invalid_group_ids(group_id: str) -> None:
     with pytest.raises(FakeYouError, match="group_id") as caught:
         create_memory_tools(make_graphiti(), group_id=group_id)
-    assert caught.value.code is ErrorCode.NOTE_GROUP_ID_INVALID
+    assert caught.value.code is ErrorCode.MEMORY_GROUP_ID_INVALID
 
 
 async def test_memory_tools_keep_group_id_scoped(
@@ -181,22 +180,10 @@ async def test_verify_memory_connection_requires_neo4j_driver() -> None:
         await verify_memory_connection(cast(Graphiti, SimpleNamespace(driver=object())))
 
 
-async def test_ensure_indexes_initializes_note_controls(
-    graphiti: MagicMock, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    memory = graphiti
-    calls: list[Any] = []
+async def test_ensure_indexes_builds_the_graphiti_indices(graphiti: MagicMock) -> None:
+    await ensure_indexes(graphiti)
 
-    async def guarded_indexes(note_memory: Any) -> None:
-        calls.append(note_memory)
-
-    assert memory_module.ensure_note_indexes is owner_notes.ensure_note_indexes
-    monkeypatch.setattr(memory_module, "ensure_note_indexes", guarded_indexes)
-
-    await ensure_indexes(memory)
-
-    assert memory.events == ["build"]
-    assert calls == [memory]
+    assert graphiti.events == ["build"]
 
 
 async def test_reembed_group_pages_through_entities_and_facts(

@@ -93,8 +93,10 @@ def test_build_persona_mentions_recall_only_when_allowed() -> None:
 def test_build_persona_explains_recalled_source_labels() -> None:
     prompt = build_persona_prompt(profile())
 
-    for label in ("owner note", "transcript", "Digital twin"):
+    for label in ("transcript", "Digital twin"):
         assert label in prompt
+    assert "owner note" not in prompt
+    assert "owner_note" not in prompt
     assert "twin speech" not in prompt
     assert "most recent source" in prompt
 
@@ -523,6 +525,27 @@ def test_owner_model_lists_only_room_speakable_items_with_their_ids() -> None:
     assert OWNER_MODEL_RULE in prompt
     assert "salary" not in prompt
     assert "90k" not in prompt
+
+
+def test_owner_model_states_since_when_a_fact_holds() -> None:
+    fact = owner_item(
+        "vendor", "Orchid hosts our cloud.", kind="fact", valid_at="2026-03-01T00:30:00+07:00"
+    )
+
+    block = owner_model_block(
+        build_persona_prompt(profile(), owner_model=FrozenOwnerModel(version=1, items=(fact,)))
+    )
+
+    assert block == [
+        {
+            "id": "om-vendor",
+            "kind": "fact",
+            "topic": "release",
+            "statement": "Orchid hosts our cloud.",
+            "confidence": "firm",
+            "true_since": "2026-03-01T00:30:00+07:00",
+        }
+    ]
 
 
 @pytest.mark.parametrize(

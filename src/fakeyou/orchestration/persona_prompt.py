@@ -30,7 +30,7 @@ from fakeyou.memory.persona import (
 )
 from fakeyou.perception.context import PERCEPTION_GUIDANCE
 from fakeyou.persistence.brief import MeetingBrief
-from fakeyou.persistence.owner_model import FrozenOwnerModel
+from fakeyou.persistence.owner_model import FrozenOwnerModel, FrozenOwnerModelItem
 
 PARAGRAPH = "\n\n"
 MAX_OWNER_MODEL_ITEMS = 40
@@ -64,18 +64,22 @@ def owner_model_prompt_json(owner_model: FrozenOwnerModel | None) -> str:
     if not speakable:
         return ""
     return json.dumps(
-        [
-            {
-                "id": item.ref,
-                "kind": item.kind,
-                "topic": item.topic,
-                "statement": item.statement,
-                "confidence": item.confidence,
-            }
-            for item in speakable[-MAX_OWNER_MODEL_ITEMS:]
-        ],
+        [_owner_model_prompt_item(item) for item in speakable[-MAX_OWNER_MODEL_ITEMS:]],
         indent=2,
     )
+
+
+def _owner_model_prompt_item(item: FrozenOwnerModelItem) -> dict[str, str]:
+    rendered = {
+        "id": item.ref,
+        "kind": item.kind,
+        "topic": item.topic,
+        "statement": item.statement,
+        "confidence": item.confidence,
+    }
+    if item.valid_at is not None:
+        rendered["true_since"] = item.valid_at.isoformat()
+    return rendered
 
 
 def _prompt_parts(

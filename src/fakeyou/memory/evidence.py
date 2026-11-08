@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol, TypedDict
 
@@ -19,7 +19,6 @@ from pydantic import TypeAdapter
 from fakeyou.config.settings import RecallSettings
 from fakeyou.foundation.provenance import (
     EVIDENCE_SCHEMA,
-    OWNER_SPEAKER_IDENTITY,
     UNVERIFIED_SPEAKER_IDENTITY,
     EvidenceOutcome,
     ExcludedDict,
@@ -30,7 +29,6 @@ from fakeyou.foundation.provenance import (
     SourceKind,
     render_evidence,
 )
-from fakeyou.memory.owner_notes import OWNER_NOTE_SOURCE, NoteStatus, read_note_states
 from fakeyou.memory.persona import memory_group_for
 from fakeyou.observability.faults import capture_error
 
@@ -76,12 +74,6 @@ class EvidenceResult:
     facts: tuple[FactEvidence, ...]
     excluded: dict[str, int]
     search_rank: dict[str, int]
-
-
-class NoteStateReader(Protocol):
-    async def __call__(
-        self, memory: Graphiti, *, group_id: str, episode_uuids: list[str]
-    ) -> Mapping[str, NoteStatus]: ...
 
 
 class MemorySearch(Protocol):
@@ -153,8 +145,6 @@ async def search_edges(
 
 
 def _evidence_kind(source_description: str) -> SourceKind:
-    if source_description == OWNER_NOTE_SOURCE:
-        return "owner_note"
     if source_description.endswith(TRANSCRIPT_SOURCE_SUFFIX):
         return "meeting_transcript"
     if source_description.endswith(SCREEN_SOURCE_SUFFIX):
@@ -172,10 +162,8 @@ def _source_evidence(episode: EpisodicNode) -> SourceEvidence:
         label=episode.source_description,
         source_at=episode.valid_at,
         recorded_at=episode.created_at,
-        time_granularity="document" if kind in ("owner_note", "other") else "episode_window",
-        speaker_identity=OWNER_SPEAKER_IDENTITY
-        if kind == "owner_note"
-        else UNVERIFIED_SPEAKER_IDENTITY,
+        time_granularity="document" if kind == "other" else "episode_window",
+        speaker_identity=UNVERIFIED_SPEAKER_IDENTITY,
     )
 
 
@@ -184,7 +172,6 @@ async def collect_facts(
     edges: list[EntityEdge],
     *,
     group_id: str,
-    note_states: NoteStateReader,
 ) -> EvidenceResult:
     episode_uuids = sorted({uuid for edge in edges for uuid in edge.episodes})
     episodes = (
@@ -195,14 +182,8 @@ async def collect_facts(
         if episode_uuids
         else {}
     )
-    owned = sorted(
-        uuid
-        for uuid, episode in episodes.items()
-        if episode.group_id == group_id and episode.source_description == OWNER_NOTE_SOURCE
-    )
-    states = await note_states(memory, group_id=group_id, episode_uuids=owned) if owned else {}
     facts: list[FactEvidence] = []
-    excluded = {"pending": 0, "superseded": 0, "missing_source": 0}
+    excluded = {"superseded": 0, "missing_source": 0}
     search_rank: dict[str, int] = {}
     for position, edge in enumerate(edges):
         key = " ".join(edge.fact.split())
@@ -216,24 +197,17 @@ async def collect_facts(
             for uuid in edge.episodes
             if uuid in episodes and episodes[uuid].group_id == group_id
         ]
-        notes = [episode for episode in present if episode.source_description == OWNER_NOTE_SOURCE]
-        if any(states.get(note.uuid) == "pending" for note in notes):
-            excluded["pending"] += 1
-            continue
-        superseded = [note for note in notes if states.get(note.uuid) == "superseded"]
-        active_notes = [note for note in notes if states.get(note.uuid) in (None, "active")]
-        if (superseded or invalidated(edge)) and not active_notes:
+        if invalidated(edge):
             excluded["superseded"] += 1
             continue
-        usable = [episode for episode in present if states.get(episode.uuid) in (None, "active")]
-        if not usable:
+        if not present:
             excluded["missing_source"] += 1
             continue
         facts.append(
             FactEvidence(
                 fact_ids=(edge.uuid,),
                 text=edge.fact,
-                sources=tuple(_source_evidence(episode) for episode in usable),
+                sources=tuple(_source_evidence(episode) for episode in present),
             )
         )
     return EvidenceResult(
@@ -253,7 +227,7 @@ async def search_evidence(
     backend: SearchBackend = "search",
 ) -> EvidenceResult:
     edges = await search_edges(memory, query, group_id=group_id, recall=recall, backend=backend)
-    return await collect_facts(memory, edges, group_id=group_id, note_states=read_note_states)
+    return await collect_facts(memory, edges, group_id=group_id)
 
 
 def evidence_set(result: EvidenceResult, *, result_limit: int) -> MemoryEvidence:
@@ -277,7 +251,7 @@ def unavailable_set() -> MemoryEvidence:
     return MemoryEvidence(
         outcome="unavailable",
         facts=[],
-        excluded=ExcludedDict(pending=0, superseded=0, missing_source=0),
+        excluded=ExcludedDict(superseded=0, missing_source=0),
     )
 
 

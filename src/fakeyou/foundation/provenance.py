@@ -5,7 +5,7 @@ from typing import Literal, TypedDict, get_args
 
 EVIDENCE_SCHEMA = "memory_evidence/v1"
 EvidenceOutcome = Literal["found", "empty", "unavailable"]
-SourceKind = Literal["owner_note", "meeting_transcript", "meeting_screen", "meeting_chat", "other"]
+SourceKind = Literal["meeting_transcript", "meeting_screen", "meeting_chat", "other"]
 TimeGranularity = Literal["document", "episode_window"]
 SOURCE_KINDS: frozenset[str] = frozenset(get_args(SourceKind))
 TIME_GRANULARITIES: frozenset[str] = frozenset(get_args(TimeGranularity))
@@ -29,7 +29,6 @@ class FactDict(TypedDict):
 
 
 class ExcludedDict(TypedDict):
-    pending: int
     superseded: int
     missing_source: int
 
@@ -40,7 +39,6 @@ class MemoryEvidence(TypedDict):
     excluded: ExcludedDict
 
 
-OWNER_SPEAKER_IDENTITY = "owner"
 UNVERIFIED_SPEAKER_IDENTITY = "unverified: may or may not be the owner or any named person"
 
 
@@ -97,13 +95,13 @@ def _rendered_source_compact(source: SourceEvidence) -> dict[str, str | bool]:
     return rendered
 
 
-_OrderedEntry = tuple[int, float, str, str, tuple[str, ...], tuple[SourceEvidence, ...]]
+_OrderedEntry = tuple[float, str, str, tuple[str, ...], tuple[SourceEvidence, ...]]
 
 
 def _validate_render_inputs(result_limit: int, excluded: dict[str, int]) -> None:
     if result_limit < 1:
         raise ValueError("result_limit must be at least 1")
-    allowed = ("pending", "superseded", "missing_source")
+    allowed = ("superseded", "missing_source")
     for key in excluded:
         if key not in allowed:
             raise ValueError("excluded holds unknown key")
@@ -145,22 +143,12 @@ def _rank_facts(
         ranked = tuple(
             sorted(
                 merged_sources[key].values(),
-                key=lambda source: (
-                    source.kind != "owner_note",
-                    -source.source_at.timestamp(),
-                    source.episode_id,
-                ),
+                key=lambda source: (-source.source_at.timestamp(), source.episode_id),
             )
         )
         fact_ids = tuple(sorted(ids))
-        if ranked:
-            owner_rank = 0 if any(item.kind == "owner_note" for item in ranked) else 1
-            newest = max(item.source_at for item in ranked).timestamp()
-            time_rank = -newest
-        else:
-            owner_rank = 1
-            time_rank = float("inf")
-        ordered.append((owner_rank, time_rank, fact_ids[0], key, fact_ids, ranked))
+        time_rank = -ranked[0].source_at.timestamp() if ranked else float("inf")
+        ordered.append((time_rank, fact_ids[0], key, fact_ids, ranked))
     return ordered
 
 
@@ -168,29 +156,16 @@ def _trim_ordered(
     ordered: list[_OrderedEntry], result_limit: int, search_rank: dict[str, int] | None
 ) -> list[_OrderedEntry]:
     if search_rank is None:
-        ordered.sort(key=lambda entry: (entry[0], entry[1], entry[2], entry[3]))
+        ordered.sort(key=lambda entry: entry[:3])
         return ordered[:result_limit]
-    ordered.sort(
-        key=lambda entry: (
-            search_rank.get(entry[3], len(search_rank)),
-            entry[0],
-            entry[1],
-            entry[2],
-            entry[3],
-        )
-    )
-    trimmed = ordered[:result_limit]
-    if trimmed and not any(entry[0] == 0 for entry in trimmed):
-        pinned = next((entry for entry in ordered if entry[0] == 0), None)
-        if pinned is not None:
-            trimmed = [*trimmed[:-1], pinned]
-    return trimmed
+    ordered.sort(key=lambda entry: (search_rank.get(entry[2], len(search_rank)), *entry[:3]))
+    return ordered[:result_limit]
 
 
 def _render_fact_entry(entry: _OrderedEntry, *, compact: bool) -> dict[str, object]:
-    text = entry[3]
-    fact_ids = entry[4]
-    ranked = entry[5]
+    text = entry[2]
+    fact_ids = entry[3]
+    ranked = entry[4]
     rendered_sources: list[dict[str, str | bool]] = []
     for source in ranked:
         if compact:
@@ -228,7 +203,6 @@ def render_evidence(
         "schema": EVIDENCE_SCHEMA,
         "facts": rendered_facts,
         "excluded": {
-            "pending": excluded.get("pending", 0),
             "superseded": excluded.get("superseded", 0),
             "missing_source": excluded.get("missing_source", 0),
         },

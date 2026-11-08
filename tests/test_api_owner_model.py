@@ -45,7 +45,7 @@ async def test_the_owner_adds_revises_and_retires_an_item(client: httpx2.AsyncCl
     )
     current = await client.get(BASE)
     earlier = await client.get(BASE, params={"version": 1})
-    retired = await client.delete(f"{BASE}/items/{item_id}")
+    retired = await client.post(f"{BASE}/items/{item_id}/retire")
     late = await client.post(f"{BASE}/items/{item_id}/revisions", json=POSITION)
     history = await client.get(f"{BASE}/items/{item_id}")
 
@@ -60,6 +60,7 @@ async def test_the_owner_adds_revises_and_retires_an_item(client: httpx2.AsyncCl
         "reason": None,
         "confidence": "firm",
         "disclosure": "room_speakable",
+        "valid_at": None,
         "source": "owner",
         "status": "approved",
         "model_version": 1,
@@ -113,7 +114,8 @@ async def test_another_owners_items_stay_invisible(
 
     model = await client.get(BASE)
     history = await client.get(f"{BASE}/items/{foreign.item_id}")
-    retire = await client.delete(f"{BASE}/items/{foreign.item_id}")
+    retire = await client.post(f"{BASE}/items/{foreign.item_id}/retire")
+    forget = await client.delete(f"{BASE}/items/{foreign.item_id}")
 
     assert model.json() == {"twin_id": "demo_twin", "version": 0, "items": []}
     assert (history.status_code, history.json()["error"]["code"]) == (
@@ -121,6 +123,55 @@ async def test_another_owners_items_stay_invisible(
         "owner_model.item_unknown",
     )
     assert retire.status_code == 404
+    assert forget.status_code == 404
+    [kept] = await store.history(foreign.scope, foreign.item_id)
+    assert kept.entry.statement == "Private."
+
+
+async def test_forget_erases_the_item_and_answers_without_a_body(
+    client: httpx2.AsyncClient,
+) -> None:
+    added = await client.post(BASE, json=POSITION)
+    item_id = added.json()["item_id"]
+
+    forgotten = await client.delete(f"{BASE}/items/{item_id}")
+    again = await client.delete(f"{BASE}/items/{item_id}")
+    history = await client.get(f"{BASE}/items/{item_id}")
+    retire = await client.post(f"{BASE}/items/{item_id}/retire")
+    revise = await client.post(f"{BASE}/items/{item_id}/revisions", json=POSITION)
+    model = await client.get(BASE)
+
+    assert (forgotten.status_code, forgotten.content) == (204, b"")
+    assert again.status_code == 204
+    [tombstone] = history.json()
+    assert (tombstone["status"], tombstone["topic"], tombstone["statement"]) == (
+        "forgotten",
+        "",
+        "",
+    )
+    assert "Ship after the load test." not in history.text
+    for refused in (retire, revise):
+        assert (refused.status_code, refused.json()["error"]["code"]) == (
+            409,
+            "owner_model.item_forgotten",
+        )
+    assert model.json() == {"twin_id": "demo_twin", "version": 2, "items": []}
+
+
+async def test_valid_at_round_trips_and_may_not_be_in_the_future(
+    client: httpx2.AsyncClient,
+) -> None:
+    added = await client.post(BASE, json={**POSITION, "valid_at": "2026-03-01T00:00:00+07:00"})
+    future = await client.post(BASE, json={**POSITION, "valid_at": "2999-01-01T00:00:00+00:00"})
+
+    assert added.status_code == 201
+    assert datetime.fromisoformat(added.json()["valid_at"]) == datetime(
+        2026, 2, 28, 17, 0, tzinfo=UTC
+    )
+    assert (future.status_code, future.json()["error"]["code"]) == (
+        400,
+        "owner_model.valid_at_future",
+    )
 
 
 @pytest.mark.parametrize(
@@ -130,6 +181,8 @@ async def test_another_owners_items_stay_invisible(
         {**POSITION, "statement": "   "},
         {**POSITION, "disclosure": "public"},
         {**POSITION, "source": "debrief"},
+        {**POSITION, "valid_at": "2026-03-01T00:00:00"},
+        {**POSITION, "valid_at": "not a time"},
     ],
 )
 async def test_invalid_items_are_rejected(client: httpx2.AsyncClient, body: object) -> None:

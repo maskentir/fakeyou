@@ -1,9 +1,7 @@
 from pathlib import Path
 from typing import Annotated, Any, Literal, Self
-from uuid import UUID
 
 from pydantic import (
-    AwareDatetime,
     BaseModel,
     ConfigDict,
     Field,
@@ -198,32 +196,6 @@ class IngestionView(BaseModel):
     status: IngestionState
     completed: bool
     succeeded: bool
-
-
-class NoteCreate(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
-
-    text: str
-    source_at: AwareDatetime | None = None
-    note_id: UUID
-
-
-class NoteCorrect(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
-
-    text: str
-    source_at: AwareDatetime | None = None
-    note_id: UUID
-
-
-class NoteView(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
-
-    episode_uuid: str
-    facts: tuple[str, ...]
-    source_at: str
-    recorded_at: str
-    supersedes: str | None
 
 
 class ForgetMeeting(BaseModel):

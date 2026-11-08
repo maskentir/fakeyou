@@ -11,7 +11,6 @@ from langchain.agents.middleware import ModelFallbackMiddleware
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
-import fakeyou.memory.memory as memory_module
 import fakeyou.orchestration.assembly as assembly
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import RecallSettings
@@ -60,14 +59,7 @@ def stored_memory(monkeypatch: pytest.MonkeyPatch, **options: Any) -> Any:
     async def get_by_uuids(_driver: Any, uuids: list[str]) -> list[Any]:
         return [episode for uuid in uuids if uuid == "e1"]
 
-    async def active_states(
-        _memory: Any, *, group_id: str, episode_uuids: list[str]
-    ) -> dict[str, Any]:
-        del group_id
-        return dict.fromkeys(episode_uuids, "active")
-
     monkeypatch.setattr(EpisodicNode, "get_by_uuids", get_by_uuids)
-    monkeypatch.setattr(memory_module, "read_note_states", active_states)
     return make_graphiti(**options)
 
 

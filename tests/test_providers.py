@@ -3,7 +3,6 @@ import json
 import socket
 import time
 from datetime import UTC, datetime
-from functools import partial
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -11,7 +10,7 @@ from uuid import uuid4
 
 import pytest
 from _pytest.outcomes import Failed
-from graphiti_core.nodes import EpisodeType, EpisodicNode
+from graphiti_core.nodes import EpisodeType
 from langchain.agents.middleware import ModelFallbackMiddleware
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import tool
@@ -23,18 +22,15 @@ from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import CompatibleReply, MemorySettings, Settings, require_secret
 from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.foundation.transcript import TranscriptEvent
-from fakeyou.memory import owner_notes
 from fakeyou.memory.ingestion import IngestScope, ingest_meeting
 from fakeyou.memory.memory import (
     create_graphiti_memory,
     create_memory_tools,
-    forget_episode,
     forget_meeting,
 )
-from fakeyou.memory.owner_notes import NoteIdentity, read_note_states, remember_owner_note
 from fakeyou.memory.persona import PersonaProfile
 from fakeyou.observability.diagnostics import Diagnostics
-from fakeyou.observability.faults import FaultReporter, capture_error
+from fakeyou.observability.faults import FaultReporter
 from fakeyou.observability.journal import Journal
 from fakeyou.orchestration.providers import (
     create_chat_model,
@@ -277,17 +273,8 @@ async def _recall(memory: Any, group_id: str, query: str) -> str:
     return text
 
 
-def _episode_sources(payload: dict[str, Any], episode_id: str) -> list[dict[str, Any]]:
-    return [
-        source
-        for fact in payload["facts"]
-        for source in fact["sources"]
-        if source["episode_id"] == episode_id
-    ]
-
-
 @pytest.mark.live
-async def test_recorded_meeting_ingest_resume_recall_correction_and_forget(tmp_path: Path) -> None:
+async def test_recorded_meeting_ingest_resume_recall_and_forget(tmp_path: Path) -> None:
     config = _neo4j_config_or_skip()
     run = uuid4().hex[:10]
     project = f"Orchid{run}"
@@ -351,17 +338,8 @@ async def test_recorded_meeting_ingest_resume_recall_correction_and_forget(tmp_p
             memory = None
             memory = await asyncio.to_thread(create_graphiti_memory, config)
             recalled = await _recall(memory, profile.memory_group, f"{project} customer demo day")
-            note = await remember_owner_note(
-                memory,
-                group_id=profile.memory_group,
-                text=meeting["owner_note"].format(project=project),
-            )
-            corrected = await _recall(memory, profile.memory_group, f"{project} customer demo day")
             removed = await forget_meeting(
                 memory, group_id=profile.memory_group, meeting_id=meeting_id
-            )
-            await forget_episode(
-                memory, group_id=profile.memory_group, episode_uuid=note.episode_uuid
             )
             leftover = await _group_node_count(memory, profile.memory_group)
     except Exception as error:
@@ -384,7 +362,6 @@ async def test_recorded_meeting_ingest_resume_recall_correction_and_forget(tmp_p
     assert not [line for line in lines if '"event":"fault_recorded"' in line]
     assert first.facts > 0, f"Graphiti extracted no facts: {episodes}"
     assert f"Google Meet {meeting_id} transcript" in recalled
-    assert "owner note" in corrected
     assert removed == 1
     assert leftover == 0
 
@@ -442,219 +419,3 @@ async def test_model_fallback_answers_and_calls_tools_when_the_primary_is_down()
     )
     assert "agenda-marker-904" in result["messages"][-1].text
     assert elapsed < 20
-
-
-@pytest.mark.live
-async def test_owner_note_correction_roundtrip_survives_reopen() -> None:
-    config = _neo4j_config_or_skip()
-    run = uuid4().hex[:10]
-    group_id = f"test_owner_notes_live_{run}"
-    target_id = uuid4()
-    fix_id = uuid4()
-    target_at = datetime(2026, 9, 30, 3, 10, tzinfo=UTC)
-    fix_at = datetime(2026, 9, 30, 6, 40, tzinfo=UTC)
-    memory = None
-    try:
-        async with asyncio.timeout(420):
-            memory = await asyncio.to_thread(create_graphiti_memory, config)
-            await memory.build_indices_and_constraints()
-            await owner_notes.ensure_note_indexes(memory)
-            target = await owner_notes.remember_owner_note(
-                memory,
-                group_id=group_id,
-                text=f"Rani announced the Orchid{run} customer demo moves to Thursday morning.",
-                source_at=target_at,
-                identity=NoteIdentity(target_id),
-            )
-            assert target.facts
-            fix = await owner_notes.remember_owner_note(
-                memory,
-                group_id=group_id,
-                text=f"Rani announced that the Orchid{run} customer demo moves to Friday morning.",
-                source_at=fix_at,
-                identity=NoteIdentity(fix_id, target_id),
-            )
-            assert fix.supersedes == str(target_id)
-            again = await owner_notes.remember_owner_note(
-                memory,
-                group_id=group_id,
-                text=f"Rani announced that the Orchid{run} customer demo moves to Friday morning.",
-                source_at=fix_at,
-                identity=NoteIdentity(fix_id, target_id),
-            )
-            assert again == fix
-            episode = await EpisodicNode.get_by_uuid(memory.driver, str(fix_id))
-            await episode.save(memory.driver)
-            await _close_memory(memory)
-            memory = None
-            memory = await asyncio.to_thread(create_graphiti_memory, config)
-            states = await owner_notes.read_note_states(
-                memory, group_id=group_id, episode_uuids=[str(target_id), str(fix_id)]
-            )
-            assert states == {str(target_id): "superseded", str(fix_id): "active"}
-            reopened = await owner_notes.remember_owner_note(
-                memory,
-                group_id=group_id,
-                text=f"Rani announced that the Orchid{run} customer demo moves to Friday morning.",
-                source_at=fix_at,
-                identity=NoteIdentity(fix_id, target_id),
-            )
-            assert reopened == fix
-    except Exception as error:
-        raise _provider_failure(error, "Graphiti owner note roundtrip") from error
-    finally:
-        if memory is None:
-            memory, _ = await capture_error(
-                lambda: asyncio.to_thread(create_graphiti_memory, config)
-            )
-        if memory is not None:
-            try:
-                async with asyncio.timeout(120):
-                    await memory.driver.execute_query(
-                        "MATCH (n) WHERE n.group_id = $group_id DETACH DELETE n",
-                        group_id=group_id,
-                    )
-            finally:
-                await _close_memory(memory)
-
-
-@pytest.mark.live
-async def test_trust_roundtrip_correction_survives_client_reopen(tmp_path: Path) -> None:
-    config = _neo4j_config_or_skip()
-    run = uuid4().hex[:10]
-    group_id = f"trust_roundtrip_{run}"
-    comparison_id = f"trust_roundtrip_cmp_{run}"
-    project = f"Anggrek{run}"
-    meeting_id = f"trust-roundtrip-{run}"
-    old_source = datetime(2026, 9, 20, 6, 0, tzinfo=UTC)
-    new_source = datetime(2026, 9, 25, 6, 0, tzinfo=UTC)
-    note_id = uuid4()
-    correction_id = uuid4()
-    comparison_note_id = uuid4()
-    owned = [str(comparison_note_id), str(note_id), str(correction_id)]
-    touched = False
-    memory = None
-    try:
-        async with asyncio.timeout(600):
-            memory = await asyncio.to_thread(create_graphiti_memory, config)
-            await memory.build_indices_and_constraints()
-            touched = True
-            comparison_note = await remember_owner_note(
-                memory,
-                group_id=comparison_id,
-                text="Rani announced the comparison team serves jasmine tea on Friday morning.",
-                identity=NoteIdentity(comparison_note_id),
-            )
-            assert comparison_note.facts
-            comparison_snapshot = await _group_node_count(memory, comparison_id)
-            first = await remember_owner_note(
-                memory,
-                group_id=group_id,
-                text=f"Rani announced that the {project} customer demo moves to Friday morning.",
-                source_at=old_source,
-                identity=NoteIdentity(note_id),
-            )
-            assert first.source_at == old_source
-            assert first.recorded_at >= old_source
-            assert first.facts
-            assert first.episode_uuid == str(note_id)
-            record_path = meeting_record_path(tmp_path, SessionId(meeting_id))
-            record = MeetingRecord(record_path)
-            record.add_twin_speech(f"Opening synthetic check for {project}.")
-            record.add_transcript(
-                TranscriptEvent(
-                    id=f"{run}-0",
-                    timestamp=datetime.now(UTC).isoformat(),
-                    source="meeting_audio",
-                    text=f"Customer demo of project {project} is planned this week.",
-                    finalized=True,
-                    participant_id="unknown",
-                    speaker_evidence_id=None,
-                )
-            )
-            record.close()
-            lines: list[str] = []
-            journal = Journal(meeting_id, emit=lines.append)
-            try:
-                ingested = await ingest_meeting(
-                    memory,
-                    load_meeting_record(record_path),
-                    IngestScope(
-                        group_id=group_id,
-                        meeting_id=meeting_id,
-                        twin_name="Trust Twin",
-                        vocabulary=(project,),
-                    ),
-                    diagnostics=Diagnostics(faults=FaultReporter(journal=journal), journal=journal),
-                )
-            finally:
-                journal.close()
-            assert (ingested.windows, ingested.ingested, ingested.completed) == (1, 1, True)
-            before = json.loads(await _recall(memory, group_id, f"{project} customer demo day"))
-            assert before["schema"] == "memory_evidence/v1"
-            assert _episode_sources(before, first.episode_uuid)
-            assert {
-                source["source_at"] for source in _episode_sources(before, first.episode_uuid)
-            } == {old_source.isoformat()}
-            corrected = await remember_owner_note(
-                memory,
-                group_id=group_id,
-                text=f"Rani announced that the {project} customer demo moves to Monday morning.",
-                source_at=new_source,
-                identity=NoteIdentity(correction_id, note_id),
-            )
-            assert corrected.supersedes == str(note_id)
-            assert corrected.source_at == new_source
-            assert corrected.episode_uuid == str(correction_id)
-            await _close_memory(memory)
-            memory = None
-            memory = await asyncio.to_thread(create_graphiti_memory, config)
-            states = await read_note_states(
-                memory,
-                group_id=group_id,
-                episode_uuids=[first.episode_uuid, corrected.episode_uuid],
-            )
-            assert states[first.episode_uuid] == "superseded"
-            assert states[corrected.episode_uuid] == "active"
-            after = json.loads(await _recall(memory, group_id, f"{project} customer demo day"))
-            assert _episode_sources(after, first.episode_uuid) == []
-            assert _episode_sources(after, corrected.episode_uuid)
-            retried = await remember_owner_note(
-                memory,
-                group_id=group_id,
-                text=f"Rani announced that the {project} customer demo moves to Monday morning.",
-                identity=NoteIdentity(correction_id, note_id),
-            )
-            assert retried == corrected
-            controls = await memory.driver.execute_query(
-                "MATCH (n:FakeyouOwnerNote {group_id: $group_id}) RETURN count(n) AS count",
-                group_id=group_id,
-            )
-            assert controls.records[0]["count"] == 2
-            final = json.loads(await _recall(memory, group_id, f"{project} customer demo day"))
-            assert _episode_sources(final, first.episode_uuid) == []
-            assert _episode_sources(final, corrected.episode_uuid)
-            assert await _group_node_count(memory, comparison_id) == comparison_snapshot
-            assert project not in await _recall(memory, comparison_id, "jasmine tea")
-    except Exception as error:
-        raise _provider_failure(error, "Graphiti trust roundtrip") from error
-    finally:
-        if memory is None and touched:
-            memory = await asyncio.to_thread(create_graphiti_memory, config)
-        if memory is not None and touched:
-            try:
-                async with asyncio.timeout(180):
-                    await forget_meeting(memory, group_id=group_id, meeting_id=meeting_id)
-                    for episode_uuid in owned:
-                        _, _ = await capture_error(partial(memory.remove_episode, episode_uuid))
-                    for target in (group_id, comparison_id):
-                        await memory.driver.execute_query(
-                            "MATCH (n:FakeyouOwnerNote {group_id: $group_id}) DETACH DELETE n",
-                            group_id=target,
-                        )
-                        await memory.driver.execute_query(
-                            "MATCH (n {group_id: $group_id}) DETACH DELETE n",
-                            group_id=target,
-                        )
-            finally:
-                await _close_memory(memory)

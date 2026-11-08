@@ -21,7 +21,6 @@ from tests._sanitize_support import SYNTHETIC_MARKERS, assert_no_synthetic_marke
 from tests._session_status_fakes import MemoryOwnerModel, MemorySessionStatus
 
 AT = "2026-10-03T12:00:00+00:00"
-EPISODE = "9c8b7a6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d"
 PERSONA_EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "persona.example.json"
 SESSION_OPERATIONS: tuple[tuple[str, str], ...] = (
     ("post", "/v1/sessions"),
@@ -46,11 +45,7 @@ MEMORY_OPERATIONS: tuple[tuple[str, str], ...] = (
 MEMORY_SESSION_OPERATIONS: tuple[tuple[str, str], ...] = tuple(
     operation for operation in MEMORY_OPERATIONS if operation[1] != "/v1/jobs/1-0"
 )
-TWIN_OPERATIONS: tuple[tuple[str, str], ...] = (
-    ("post", "/v1/twins/demo_twin/notes"),
-    ("post", f"/v1/twins/demo_twin/notes/{EPISODE}/corrections"),
-    ("delete", f"/v1/twins/demo_twin/notes/{EPISODE}"),
-)
+TWIN_OPERATIONS: tuple[tuple[str, str], ...] = (("post", "/v1/twins/demo_twin/reembeddings"),)
 ALL_OPERATIONS: tuple[tuple[str, str], ...] = (
     SESSION_OPERATIONS + MEMORY_OPERATIONS + TWIN_OPERATIONS
 )
@@ -209,8 +204,6 @@ def _valid_body(method: str, path: str) -> object | None:
         return {"kind": "ingest"}
     if path.endswith("/debriefs"):
         return {"force": False}
-    if path.endswith(("/notes", "/corrections")):
-        return {"text": "Rani owns the checklist.", "note_id": EPISODE}
     return {}
 
 

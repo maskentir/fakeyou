@@ -199,8 +199,8 @@ def test_main_reports_unavailable_memory_with_infra_exit_code(
     async def unavailable(*_args: Any, **_kwargs: Any) -> NoReturn:
         raise ProviderFault("memory", "unavailable")
 
-    monkeypatch.setattr(cli_main, "add_owner_note", unavailable)
-    monkeypatch.setattr(sys, "argv", ["fakeyou", "memory-add", "x", "--twin-id", "t"])
+    monkeypatch.setattr(cli_main, "reembed_memory", unavailable)
+    monkeypatch.setattr(sys, "argv", ["fakeyou", "memory-reembed", "--twin-id", "t"])
     with pytest.raises(SystemExit) as caught:
         cli_main.main()
 
