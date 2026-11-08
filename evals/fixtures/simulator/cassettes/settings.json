@@ -89,11 +89,11 @@
       "window_utterances": 20
     },
     "llm": {
-      "base_url": "https://api.meta.ai/v1",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
       "client": "openai_generic",
       "max_retries": 2,
-      "model": "muse-spark-1.2",
-      "small_model": "muse-spark-1.2",
+      "model": "gemini-3.8-flash",
+      "small_model": "gemini-3.1-flash-lite",
       "timeout_seconds": 60.0
     },
     "recall": {
