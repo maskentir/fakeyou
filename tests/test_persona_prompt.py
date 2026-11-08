@@ -529,7 +529,7 @@ def test_owner_model_lists_only_room_speakable_items_with_their_ids() -> None:
 
 def test_owner_model_states_since_when_a_fact_holds() -> None:
     fact = owner_item(
-        "vendor", "Orchid hosts our cloud.", kind="fact", valid_at="2026-03-01T08:00:00+07:00"
+        "vendor", "Orchid hosts our cloud.", kind="fact", valid_at="2026-03-01T00:30:00+07:00"
     )
 
     block = owner_model_block(
@@ -543,7 +543,7 @@ def test_owner_model_states_since_when_a_fact_holds() -> None:
             "topic": "release",
             "statement": "Orchid hosts our cloud.",
             "confidence": "firm",
-            "true_since": "2026-03-01",
+            "true_since": "2026-03-01T00:30:00+07:00",
         }
     ]
 

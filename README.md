@@ -170,7 +170,9 @@ erases the content of every revision and leaves only a contentless marker, so
 model versions never repeat.
 Each session freezes the model version it starts with: the twin answers from
 the `room_speakable` items, cites them as `om-<item>`, and a `brief_only`
-meeting uses none of them.
+meeting uses none of them. Forgetting an item does not reach sessions that
+already froze it: their records keep what they ran with until the meeting
+itself is forgotten with `memory-forget --meeting-id`.
 
 ## CLI
 

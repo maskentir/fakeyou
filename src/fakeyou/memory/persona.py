@@ -64,7 +64,7 @@ OWNER_MODEL_RULE = (
     "decision rules, style examples and facts. You may state them on the owner's behalf as "
     "the owner's view, and cite in cites the id (om-...) of every item your reply states or "
     "relies on. Voice an item whose confidence is leaning as tentative, as where the owner is "
-    "leaning, never as a settled view. An item's true_since, when present, is the date it "
+    "leaning, never as a settled view. An item's true_since, when present, is the moment it "
     "became true. Never invent a position, preference or decision rule "
     "for the owner that is not listed. A listed item is the owner's view, never permission to "
     "decide, approve or commit to anything new."

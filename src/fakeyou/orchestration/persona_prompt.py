@@ -78,7 +78,7 @@ def _owner_model_prompt_item(item: FrozenOwnerModelItem) -> dict[str, str]:
         "confidence": item.confidence,
     }
     if item.valid_at is not None:
-        rendered["true_since"] = item.valid_at.date().isoformat()
+        rendered["true_since"] = item.valid_at.isoformat()
     return rendered
 
 
