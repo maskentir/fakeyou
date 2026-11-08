@@ -13,8 +13,9 @@ from evals._proactive_replay import (
 )
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.contribution import OwnerModelSource, source_registry
-from fakeyou.conversation.grounding import GroundingVerdict
+from fakeyou.conversation.critic import CriticClaim, CriticVerdict
 from fakeyou.conversation.moments import MomentCandidate, MomentDetector, MomentJudgement
+from fakeyou.session.speech import BookEntry
 from tests._conversation_fakes import ScriptedJudge, ToolCallingFakeModel, judged
 from tests._conversation_support import claim, plan_reply
 
@@ -22,19 +23,24 @@ NO_ENV_FILE: dict[str, Any] = {"_env_file": None}
 FACT = "The Orchid beta launch is planned for 14 October 2026"
 
 
-class _Verifier:
-    async def verify(
+class _Critic:
+    async def judge(
         self,
         *,
-        text: str,
-        source_text: str,
+        claims: Sequence[CriticClaim],
+        sources: Sequence[BookEntry],
         trigger_text: str,
-        kind: str | None,
         recent_lines: Sequence[str] = (),
-    ) -> GroundingVerdict:
-        del text, source_text, trigger_text, kind, recent_lines
-        return GroundingVerdict(
-            grounded=True, adds_information=True, on_topic=True, confidence=0.95
+    ) -> CriticVerdict:
+        del claims, sources, trigger_text, recent_lines
+        return CriticVerdict(
+            owner_would_say=True,
+            worth_interrupting=True,
+            guesses_hedged=True,
+            grounded=True,
+            adds_information=True,
+            on_topic=True,
+            confidence=0.95,
         )
 
 
@@ -79,7 +85,7 @@ async def test_the_replay_runs_detector_to_speech_offline(
     monkeypatch.setattr(
         assembly, "build_turn_judge", lambda *_args: ScriptedJudge(lambda _w: judged("stay_silent"))
     )
-    monkeypatch.setattr(assembly, "build_grounding_verifier", lambda *_args: _Verifier())
+    monkeypatch.setattr(assembly, "build_contribution_critic", lambda *_args: _Critic())
     fixture = load_proactive_fixture()
     profile = proactive_profile(fixture)
     detector = MomentDetector(

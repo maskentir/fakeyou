@@ -31,9 +31,6 @@ _CRITIC_RULES = (
     "confidence: how sure you are about your answers, from 0 to 1."
 )
 
-REVIEWED_ACTS = frozenset({"opinion", "proposal"})
-
-
 class CriticVerdict(BaseModel):
     model_config = ConfigDict(frozen=True)
 

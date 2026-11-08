@@ -15,7 +15,6 @@ from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.control import ReplyControl
 from fakeyou.conversation.critic import (
-    REVIEWED_ACTS,
     ContributionCritic,
     CriticClaim,
     CriticVerdict,
@@ -50,7 +49,13 @@ from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.observability.faults import ConsumerSink, capture_error, guard_consumer
 from fakeyou.observability.journal import Journal, JournalTiming
 from fakeyou.observability.provider_faults import ProviderFault, classify_exception
-from fakeyou.session.speech import BookEntry, ClaimHeader, FactBook, SpeechVerdict
+from fakeyou.session.speech import (
+    OWNER_VIEWS,
+    BookEntry,
+    ClaimHeader,
+    FactBook,
+    SpeechVerdict,
+)
 
 
 @runtime_checkable
@@ -436,7 +441,7 @@ async def invoke_reply(
 
 def _hold_reviews(planner: ReplyPlanner) -> None:
     for index, header in enumerate(planner.claims):
-        if header.act in REVIEWED_ACTS:
+        if header.act in OWNER_VIEWS:
             planner.hold_for_review(index)
 
 
@@ -819,7 +824,7 @@ class MeetingResponder:
         review = trace.review
         if review is not None:
             _hold_reviews(planner)
-            claims = [claim for claim in _plan_claims(planner) if claim.header.act in REVIEWED_ACTS]
+            claims = [claim for claim in _plan_claims(planner) if claim.header.act in OWNER_VIEWS]
             if claims:
                 outcome = await review.judge_plan(claims)
                 if outcome.reason is not None:
