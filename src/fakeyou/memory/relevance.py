@@ -3,6 +3,7 @@ from collections.abc import Iterable, Sequence
 from functools import cache
 
 from graphiti_core.edges import EntityEdge
+from Sastrawi.Stemmer.StemmerFactory import Stemmer, StemmerFactory
 
 from fakeyou.foundation.language import function_words
 
@@ -16,15 +17,26 @@ def _function_words() -> frozenset[str]:
     return frozenset().union(*function_words().values())
 
 
+@cache
+def _stemmer() -> Stemmer:
+    return StemmerFactory().create_stemmer()
+
+
+@cache
+def _word_root(word: str) -> str:
+    return _stemmer().stem(word) or word
+
+
 def content_words(text: str, *, ignored: Iterable[str] = ()) -> frozenset[str]:
     skipped = _function_words() | {
         word for name in ignored for word in WORD.findall(name.casefold())
     }
-    return frozenset(
-        word
+    roots = (
+        _word_root(word)
         for word in WORD.findall(text.casefold())
         if len(word) >= MIN_WORD_LENGTH and word not in skipped
     )
+    return frozenset(root for root in roots if len(root) >= MIN_WORD_LENGTH and root not in skipped)
 
 
 def relevant_edges(

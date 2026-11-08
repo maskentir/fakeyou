@@ -47,3 +47,23 @@ def test_nothing_is_relevant_to_a_question_without_content_words() -> None:
 
     assert relevant_edges("Can you hear me?", [edge("Rani can hear the room")]) == []
     assert relevant_edges(case["question"], [edge(case["fact"])], ignored=["Rani Twin"]) == []
+
+
+def test_indonesian_word_forms_match_their_root() -> None:
+    for name in ("inflected_forms", "affixed_forms"):
+        case = CASES[name]
+        edges = [edge(case["fact"])]
+
+        assert relevant_edges(case["question"], edges) == edges, name
+
+
+def test_words_are_never_cut_to_a_different_root() -> None:
+    case = CASES["lookalike_roots"]
+
+    assert relevant_edges(case["question"], [edge(case["fact"])]) == []
+
+
+def test_english_words_keep_their_form() -> None:
+    assert content_words("The meeting venue for the launch") == frozenset(
+        {"meeting", "venue", "launch"}
+    )
