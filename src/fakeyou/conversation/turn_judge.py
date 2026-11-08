@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from fakeyou.conversation.meeting_messages import MeetingHistory, spoken_by
 from fakeyou.foundation.participation import is_vocative, mentions_whole_phrase
+from fakeyou.foundation.speakers import UNIDENTIFIED_PARTICIPANT
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.observability.model_inputs import digest
 from fakeyou.persistence.record import TranscriptEntry, TwinSpeechEntry
@@ -34,7 +35,6 @@ ReactionEmoji = Literal[
     "\U0001f914",
 ]
 Addressee = Literal["twin", "someone_else", "everyone", "unclear"]
-SPEAKING_NOW = "speaking now"
 JUDGE_CONCURRENCY = 4
 
 _JUDGE_RULES = (
@@ -180,22 +180,28 @@ class JudgeWindow:
         return self.presence is not None and self.presence.sole_human_responder
 
     @property
-    def key(self) -> tuple[object, ...]:
-        return (
-            self.earlier,
-            _normalized(self.latest.text),
-            self.twin_speaking,
-            self.names_twin,
-            self.presence,
-        )
+    def reading(self) -> dict[str, object]:
+        return {
+            "twin_is_speaking": self.twin_speaking,
+            "human_speakers": _human_speakers(self),
+            "participants": _participants_payload(self.presence),
+            "presence": _presence_payload(self.presence),
+            "sole_human_responder": self.sole_human_responder,
+            "earlier": [
+                {"speaker": line.speaker, "text": line.text, "by_twin": line.twin}
+                for line in self.earlier
+            ],
+            "latest": {"speaker": self.latest.speaker, "text": self.latest.text},
+            "latest_names_twin": self.names_twin,
+        }
+
+    @property
+    def key(self) -> str:
+        return json.dumps(self.reading, ensure_ascii=False)
 
 
 class TurnJudge(Protocol):
     async def judge(self, window: JudgeWindow) -> TurnJudgement: ...
-
-
-def _normalized(text: str) -> str:
-    return " ".join("".join(ch for ch in text.casefold() if ch.isalnum() or ch.isspace()).split())
 
 
 def _line(entry: TranscriptEntry | TwinSpeechEntry) -> JudgeLine:
@@ -254,13 +260,19 @@ class WindowSource:
         )
 
     def for_interim(
-        self, text: str, *, twin_speaking: bool, purpose: JudgePurpose, history_seq: int | None
+        self,
+        text: str,
+        *,
+        twin_speaking: bool,
+        purpose: JudgePurpose,
+        history_seq: int | None,
+        speaker: str = UNIDENTIFIED_PARTICIPANT,
     ) -> JudgeWindow:
         earlier = _spoken_lines(self.history, skip=None, history_seq=history_seq)
         earlier = earlier[-self.window_lines :]
         return JudgeWindow(
             tuple(earlier),
-            JudgeLine(SPEAKING_NOW, text),
+            JudgeLine(speaker, text),
             twin_speaking,
             names_twin=self._names_twin(text),
             presence=self._presence(),
@@ -269,13 +281,7 @@ class WindowSource:
 
 
 def _human_speakers(window: JudgeWindow) -> list[str]:
-    speakers = {
-        line.speaker for line in window.earlier if not line.twin and line.speaker != SPEAKING_NOW
-    }
-    latest = window.latest
-    if not latest.twin and latest.speaker != SPEAKING_NOW:
-        speakers.add(latest.speaker)
-    return sorted(speakers)
+    return sorted({line.speaker for line in (*window.earlier, window.latest) if not line.twin})
 
 
 def _presence_payload(presence: PresenceFact | None) -> dict[str, object]:
@@ -299,24 +305,7 @@ def _participants_payload(presence: PresenceFact | None) -> list[dict[str, str]]
 
 
 def _rendered(window: JudgeWindow, twin_names: Sequence[str]) -> str:
-    humans = _human_speakers(window)
-    return json.dumps(
-        {
-            "twin_names": list(twin_names),
-            "twin_is_speaking": window.twin_speaking,
-            "human_speakers": humans,
-            "participants": _participants_payload(window.presence),
-            "presence": _presence_payload(window.presence),
-            "sole_human_responder": window.sole_human_responder,
-            "earlier": [
-                {"speaker": line.speaker, "text": line.text, "by_twin": line.twin}
-                for line in window.earlier
-            ],
-            "latest": {"speaker": window.latest.speaker, "text": window.latest.text},
-            "latest_names_twin": window.names_twin,
-        },
-        ensure_ascii=False,
-    )
+    return json.dumps({"twin_names": list(twin_names), **window.reading}, ensure_ascii=False)
 
 
 class ModelTurnJudge:
@@ -349,7 +338,7 @@ class ModelTurnJudge:
 
 
 def _call_metadata(window: JudgeWindow) -> dict[str, str]:
-    metadata = {"judge_purpose": window.purpose, "judge_key": digest(repr(window.key))}
+    metadata = {"judge_purpose": window.purpose, "judge_key": digest(window.key)}
     if window.transcript_id is not None:
         metadata["transcript_id"] = window.transcript_id
     return metadata
@@ -359,7 +348,7 @@ class JudgeCache:
     def __init__(self, judge: TurnJudge, *, keep: int = 16) -> None:
         self._judge = judge
         self._keep = max(1, keep)
-        self._tasks: dict[tuple[object, ...], asyncio.Task[TurnJudgement]] = {}
+        self._tasks: dict[str, asyncio.Task[TurnJudgement]] = {}
 
     def prefetch(self, window: JudgeWindow) -> bool:
         key = window.key

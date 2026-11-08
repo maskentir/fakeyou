@@ -278,8 +278,10 @@ def test_peek_leaves_the_utterance_for_the_attribution_that_closes_it() -> None:
     )
 
     early = tracker.peek()
+    again = tracker.peek()
     final = tracker.attribute()
 
     assert (early.participant_id, early.slot) == ("speaker-a", 3)
     assert (final.participant_id, final.slot) == ("speaker-a", 3)
+    assert early.evidence_id == again.evidence_id == final.evidence_id
     assert tracker.attribute().reason == "no_speech"

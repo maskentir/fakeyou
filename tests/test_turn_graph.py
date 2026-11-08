@@ -73,24 +73,26 @@ def judging(judge: TurnJudge) -> TurnJudging:
     )
 
 
-def transcript(text: str = QUESTION) -> TranscriptEvent:
+def transcript(text: str = QUESTION, participant_id: str = "Ana") -> TranscriptEvent:
     return TranscriptEvent(
         id="e1",
         timestamp="2026-10-17T10:00:00+00:00",
         source="meeting_audio",
         text=text,
         finalized=True,
-        participant_id="Ana",
+        participant_id=participant_id,
         speaker_evidence_id=None,
     )
 
 
-def turn_input(*, addressed: bool = False, others_speaking: bool = False) -> TurnInput:
+def turn_input(
+    *, addressed: bool = False, others_speaking: bool = False, participant_id: str = "Ana"
+) -> TurnInput:
     return TurnInput(
         event=TurnEvent(kind="final", event_id="e1", at=1.0, payload=QUESTION),
         context=ParticipationContext(addressed=addressed, others_speaking=others_speaking),
         speaking_generation=4,
-        transcript_event=transcript(),
+        transcript_event=transcript(participant_id=participant_id),
     )
 
 
@@ -167,7 +169,21 @@ async def test_a_final_after_a_gated_interim_judges_its_own_window() -> None:
     assert speaker.utterances == [TWIN_REPLY]
 
 
-async def test_the_final_reuses_the_judgement_started_on_its_interim() -> None:
+async def test_a_final_that_adds_nothing_reuses_the_judgement_of_its_interim() -> None:
+    judge = ScriptedJudge(lambda _window: judged("reply"), delay=0.01)
+    speaker = FakeSpeaker()
+    graph = build_turn_graph()
+    context = runtime(speaker, judge=judge)
+
+    await graph.run(interim_input(QUESTION), context=context)
+    await graph.run(turn_input(participant_id="unknown"), context=context)
+    await context.start_pending()
+
+    assert [window.latest.text for window in judge.windows] == [QUESTION]
+    assert speaker.utterances == [TWIN_REPLY]
+
+
+async def test_a_final_that_adds_its_speaker_and_punctuation_is_judged_again() -> None:
     judge = ScriptedJudge(lambda _window: judged("reply"), delay=0.01)
     speaker = FakeSpeaker()
     graph = build_turn_graph()
@@ -177,7 +193,8 @@ async def test_the_final_reuses_the_judgement_started_on_its_interim() -> None:
     await graph.run(turn_input(), context=context)
     await context.start_pending()
 
-    assert [window.latest.text for window in judge.windows] == ["twin are you there"]
+    assert [window.latest.text for window in judge.windows] == ["twin are you there", QUESTION]
+    assert judge.windows[-1].latest.speaker == "Ana"
     assert speaker.utterances == [TWIN_REPLY]
 
 

@@ -251,6 +251,7 @@ class VoiceActivityTracker:
     def attribute(self) -> VoiceAttribution:
         now = self.now_ms()
         attribution = self._attribution(now)
+        self._attempts += 1
         self._cursor_ms = now
         return attribution
 
@@ -259,8 +260,7 @@ class VoiceActivityTracker:
 
     def _attribution(self, now: float) -> VoiceAttribution:
         spans = self._speech.since(self._cursor_ms, now)
-        self._attempts += 1
-        evidence_id = f"voice-{self._attempts}"
+        evidence_id = f"voice-{self._attempts + 1}"
         if not spans:
             return VoiceAttribution("unknown", "no_speech", evidence_id)
         if self._partners:

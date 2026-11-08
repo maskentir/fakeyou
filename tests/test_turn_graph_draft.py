@@ -15,7 +15,6 @@ from fakeyou.conversation.turn_graph import (
     build_turn_graph,
 )
 from fakeyou.conversation.turn_judge import (
-    SPEAKING_NOW,
     JudgeCache,
     JudgeWindow,
     TurnJudgement,
@@ -23,6 +22,7 @@ from fakeyou.conversation.turn_judge import (
 )
 from fakeyou.conversation.turn_queue import TurnEvent
 from fakeyou.foundation.participation import ParticipationContext
+from fakeyou.foundation.speakers import UNIDENTIFIED_PARTICIPANT
 from fakeyou.foundation.transcript import TranscriptEvent
 from tests._conversation_fakes import judged
 from tests._prepared_support import PreparedSpeaker
@@ -107,7 +107,7 @@ class SlowFinalJudge:
         self._history = history
 
     async def judge(self, window: JudgeWindow) -> TurnJudgement:
-        if window.latest.speaker == SPEAKING_NOW:
+        if window.latest.speaker == UNIDENTIFIED_PARTICIPANT:
             return judged("reply")
         await asyncio.sleep(FINAL_JUDGE_SECONDS)
         if self._history is not None:
