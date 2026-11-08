@@ -132,6 +132,22 @@ def test_a_claim_without_its_header_leaves_the_plan_unparsed() -> None:
     assert spoken == ["I'm not sure about that, so I'd rather not guess."]
 
 
+def test_a_plan_that_never_lists_its_claims_falls_back_instead_of_going_quiet() -> None:
+    planner = ReplyPlanner(max_sentences=2, language="en", speech_gate=beta_gate())
+
+    spoken = planner.speak('{"language": "en", "intent": "answer", "text": "The beta is late."}')
+
+    assert planner.blocked == "unparsed_plan"
+    assert spoken == ["I'm not sure about that, so I'd rather not guess."]
+
+
+def test_a_silent_plan_needs_no_claims() -> None:
+    planner = ReplyPlanner(max_sentences=2, language="en", speech_gate=beta_gate())
+
+    assert planner.speak('{"language": "en", "intent": "silent"}') == []
+    assert planner.blocked is None
+
+
 def test_a_silent_plan_says_nothing() -> None:
     assert planned_reply(plan_reply(intent="silent"), max_sentences=2, language="en").text == ""
 

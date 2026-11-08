@@ -365,6 +365,9 @@ class ReplyPlanner:
         self._read_plan(draft)
         if self._replacement is not None:
             return self._fresh(0, self._replacement)
+        if final and "claims" not in draft and not self.silent:
+            self._block("unparsed_plan", None)
+            return []
         return self._claim_pieces(draft.get("claims", []), final=final)
 
     def _claim_pieces(self, claims: Sequence[_ClaimDraft], *, final: bool) -> list[SpeechPiece]:
