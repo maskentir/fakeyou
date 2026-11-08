@@ -278,8 +278,8 @@ class ReplyPlanner:
         return [line for sentence in ended for line in self._admit(sentence)]
 
     def finish_sentences(self) -> list[str]:
-        self._waiting = []
-        spoken: list[str] = []
+        waiting, self._waiting = self._waiting, []
+        spoken = [line for piece in waiting for line in self._admit(piece.text)]
         if self._held is not None:
             held, self._held = self._held, None
             if not (self.intent == "answer" and self._spoken):

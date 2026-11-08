@@ -1012,7 +1012,7 @@ async def test_a_number_from_another_claim_is_refused_in_a_streamed_sentence() -
     assert spoken == ["I'm not sure about that, so I'd rather not guess."]
 
 
-async def test_a_claim_cut_off_by_the_cap_is_dropped_whole() -> None:
+async def test_a_claim_cut_off_by_the_cap_keeps_the_sentences_that_fit() -> None:
     lead = claim("The beta launches on 14 October.", "om-beta")
     spoken = await streamed_claims(
         lead,
@@ -1023,5 +1023,5 @@ async def test_a_claim_cut_off_by_the_cap_is_dropped_whole() -> None:
         lead, claim("The demo is on Friday the 9th.", "demo-date"), max_sentences=2
     )
 
-    assert spoken == ["The beta launches on 14 October."]
+    assert spoken == ["The beta launches on 14 October.", "The demo is on Friday the 9th."]
     assert fitting == ["The beta launches on 14 October.", "The demo is on Friday the 9th."]
