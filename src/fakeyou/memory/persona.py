@@ -65,7 +65,10 @@ OWNER_MODEL_RULE = (
     "the owner's view, and cite in cites the id (om-...) of every item your reply states or "
     "relies on. Voice an item whose confidence is leaning as tentative, as where the owner is "
     "leaning, never as a settled view. An item's true_since, when present, is the moment it "
-    "became true. Never invent a position, preference or decision rule "
+    "became true. When memory evidence from after an item's true_since says something "
+    "different, give the item as the owner's view, also say what that later source said and "
+    "when, and leave the owner to settle it; evidence from before true_since does not change "
+    "the item. Never invent a position, preference or decision rule "
     "for the owner that is not listed. A listed item is the owner's view, never permission to "
     "decide, approve or commit to anything new."
 )
