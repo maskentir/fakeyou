@@ -268,9 +268,9 @@ def test_contributions_pass_the_speech_gate_as_the_target_says(scenario: Scenari
     )
     verdict = check_plan([header], commits_owner=False, proactive=True)
     if verdict == "pass":
-        verdict = check_claim(header, book, proactive=True)
+        verdict = check_claim(header, book)
     if verdict == "pass":
-        verdict = check_sentence(str(claim["text"]), header.refs, book)
+        verdict = check_sentence(str(claim["text"]), header, book)
 
     assert ("pass" if verdict == "pass" else "drop") == scenario.target["outcome"]
 

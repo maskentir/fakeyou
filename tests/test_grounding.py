@@ -16,6 +16,7 @@ from fakeyou.conversation.conversation import MeetingAgent, MeetingResponder
 from fakeyou.conversation.grounding import GroundingVerdict
 from fakeyou.conversation.meeting_messages import NoHistory
 from fakeyou.conversation.speech_book import BookSource
+from fakeyou.foundation.provenance import OWNER_SPEAKER_IDENTITY
 from fakeyou.foundation.transcript import AttentionContext, TranscriptEvent
 from tests._conversation_support import claim, plan_reply
 from tests._persistence_fakes import RecordingJournal
@@ -184,3 +185,23 @@ def test_memory_refs_come_from_rendered_evidence() -> None:
 
     assert memory_refs_from_evidence(payload) == {"edge-1": recalled, "edge-2": recalled}
     assert memory_refs_from_evidence("No relevant meeting memory found.") == {}
+
+
+def test_only_a_fact_whose_every_source_is_the_verified_owner_is_owner_spoken() -> None:
+    owner = {"speaker_verified": True, "speaker_identity": OWNER_SPEAKER_IDENTITY}
+    claimed = {"speaker_verified": False, "speaker_identity": OWNER_SPEAKER_IDENTITY}
+    payload = json.dumps(
+        {
+            "facts": [
+                {"fact_ids": ["edge-owner"], "text": "Weekly demos", "sources": [owner]},
+                {"fact_ids": ["edge-mixed"], "text": "Ship Friday", "sources": [owner, claimed]},
+                {"fact_ids": ["edge-bare"], "text": "No source", "sources": []},
+            ]
+        }
+    )
+
+    refs = memory_refs_from_evidence(payload)
+
+    assert refs["edge-owner"].owner_spoken
+    assert not refs["edge-mixed"].owner_spoken
+    assert not refs["edge-bare"].owner_spoken

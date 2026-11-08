@@ -9,11 +9,9 @@ from fakeyou.api.status import status_now
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import IDENTIFIER_BODY
 from fakeyou.db.owner_model import (
-    Confidence,
     ItemDisclosure,
     OwnerModelEntry,
     OwnerModelImport,
-    OwnerModelKind,
     OwnerModelRepository,
     OwnerModelRevision,
     OwnerModelStore,
@@ -21,6 +19,7 @@ from fakeyou.db.owner_model import (
     RevisionStatus,
     TwinScope,
 )
+from fakeyou.session.facts import Confidence, OwnerModelKind
 
 _IDENTIFIER = rf"^{IDENTIFIER_BODY}$"
 _PLAIN_TEXT = r"^[^\x00]*$"

@@ -545,8 +545,7 @@ class FloorActor:
     def _build_recovery(self) -> TurnRecovery:
         return TurnRecovery(
             journal=self._journal,
-            faults=self._options.faults,
-            language=self._options.language,
+            options=self._options,
             is_closed=lambda: self._closed,
             clock=self._clock,
         )

@@ -266,7 +266,7 @@ async def _replay(
             open_conversation(
                 settings,
                 config,
-                agent=AgentWiring(history=record),
+                agent=AgentWiring(history=record, verify_gate=False, apologize=False),
                 behavior=TurnBehavior(
                     on_transition=lambda *_args: None,
                     wake_phrases=behavior.wake_phrases,

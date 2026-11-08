@@ -5,7 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ValidationError
 
-from fakeyou.session.facts import Disclosure
+from fakeyou.foundation.provenance import OWNER_SPEAKER_IDENTITY, UNVERIFIED_SPEAKER_IDENTITY
+from fakeyou.session.facts import Confidence, Disclosure, OwnerModelKind
 
 ContributionSource = Literal["brief", "memory", "owner_model"]
 
@@ -14,6 +15,8 @@ ContributionSource = Literal["brief", "memory", "owner_model"]
 class OwnerModelSource:
     text: str
     disclosure: Disclosure
+    kind: OwnerModelKind = "fact"
+    confidence: Confidence = "firm"
     since: datetime | None = None
 
 
@@ -21,11 +24,18 @@ class OwnerModelSource:
 class RecalledFact:
     text: str
     times: tuple[datetime, ...] = ()
+    owner_spoken: bool = False
 
 
 class _EvidenceSource(BaseModel):
     source_at: datetime | None = None
     recorded_at: datetime | None = None
+    speaker_verified: bool = False
+    speaker_identity: str = UNVERIFIED_SPEAKER_IDENTITY
+
+    @property
+    def owner_spoken(self) -> bool:
+        return self.speaker_verified and self.speaker_identity == OWNER_SPEAKER_IDENTITY
 
 
 class _EvidenceFact(BaseModel):
@@ -40,7 +50,11 @@ class _EvidenceFact(BaseModel):
             for moment in (source.source_at, source.recorded_at)
             if moment is not None
         )
-        return RecalledFact(self.text, tuple(dict.fromkeys(moments)))
+        return RecalledFact(
+            self.text,
+            tuple(dict.fromkeys(moments)),
+            owner_spoken=bool(self.sources) and all(source.owner_spoken for source in self.sources),
+        )
 
 
 class _Evidence(BaseModel):

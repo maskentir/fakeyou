@@ -1,0 +1,18 @@
+{
+  "unbased_personal": [
+    {"language": "en", "say": "My day's been relaxed."},
+    {"language": "id", "say": "Hari saya santai kok."}
+  ],
+  "meta": [
+    {
+      "language": "en",
+      "pass": "I'm Rani's AI twin, so I don't know that yet.",
+      "counted": "Give me 5 minutes and I'll check."
+    },
+    {
+      "language": "id",
+      "pass": "Saya twin AI-nya Rani, jadi saya belum tahu.",
+      "counted": "Kasih saya lima menit ya."
+    }
+  ]
+}

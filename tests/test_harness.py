@@ -9,7 +9,12 @@ from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.conversation.state_speech import render
-from fakeyou.persistence.record import ChatEntry, TwinSpeechEntry, load_meeting_record
+from fakeyou.persistence.record import (
+    ChatEntry,
+    TranscriptEntry,
+    TwinSpeechEntry,
+    load_meeting_record,
+)
 from fakeyou.replay.fixture import ReplayFixture, build_fixture, load_fixture
 from fakeyou.replay.harness import (
     RecordedBehavior,
@@ -259,3 +264,65 @@ def test_the_oue_4_gate_passes_and_fails_when_the_reply_model_halves_its_latency
 
     assert gate(1.0)
     assert not gate(0.5)
+
+
+def test_a_turn_the_recording_kept_silent_stays_silent_in_the_replay(
+    settings: Settings, tmp_path: Path
+) -> None:
+    rows: list[dict[str, Any]] = [
+        {
+            "event": "speech_started",
+            "meeting_id": "m-1",
+            "at": (START + timedelta(seconds=0.0)).isoformat(),
+        },
+        {
+            "event": "speech_stopped",
+            "meeting_id": "m-1",
+            "at": (START + timedelta(seconds=1.0)).isoformat(),
+        },
+        {
+            "event": "transcript_finalized",
+            "meeting_id": "m-1",
+            "at": (START + timedelta(seconds=2.0)).isoformat(),
+            "transcript_id": "t1",
+        },
+        {
+            "event": "policy_decided",
+            "meeting_id": "m-1",
+            "at": (START + timedelta(seconds=2.4)).isoformat(),
+            "transcript_id": "t1",
+            "action": "reply",
+            "confidence": 0.9,
+        },
+        {
+            "event": "request_started",
+            "meeting_id": "m-1",
+            "at": (START + timedelta(seconds=2.5)).isoformat(),
+            "source": "llm",
+            "operation": "chat",
+            "request_id": "r1",
+            "transcript_id": "t1",
+        },
+    ]
+    entries = [
+        TranscriptEntry(
+            at=START + timedelta(seconds=2.0),
+            seq=1,
+            id="t1",
+            spoken_at=(START + timedelta(seconds=2.0)).isoformat(),
+            source="meeting_audio",
+            text="Harun, can you see my screen",
+            participant_id="unknown",
+            speaker_evidence_id=None,
+        )
+    ]
+
+    result = replayed(build_fixture(rows, entries), settings, tmp_path)
+
+    spoken = [
+        entry
+        for entry in events(result, "answer_sentence_emitted")
+        if entry.get("transcript_id") == "t1"
+    ]
+    assert spoken == []
+    assert events(result, "playback_started") == []

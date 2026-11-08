@@ -119,6 +119,7 @@ class RecoveryOptions:
     faults: FaultReporter | None = None
     language: str | Callable[[], str] = DEFAULTS.speech.language
     response_timeout_seconds: float = DEFAULTS.conversation.response_timeout_seconds
+    apologize: bool = True
 
     def __post_init__(self) -> None:
         seconds = self.response_timeout_seconds
@@ -131,16 +132,16 @@ class TurnRecovery:
         self,
         *,
         journal: JournalSink,
-        faults: FaultReporter | None,
-        language: str | Callable[[], str],
+        options: RecoveryOptions,
         is_closed: Callable[[], bool],
         clock: Callable[[], float] = monotonic,
     ) -> None:
         self._journal = journal
-        self._faults = faults
+        self._faults = options.faults
         self._is_closed = is_closed
-        self._language = language
+        self._language = options.language
         self._clock = clock
+        self._apologize = options.apologize
         self._consecutive = 0
         self._apology_muted_until = 0.0
 
@@ -155,7 +156,7 @@ class TurnRecovery:
 
     @property
     def should_apologize(self) -> bool:
-        return self._clock() >= self._apology_muted_until
+        return self._apologize and self._clock() >= self._apology_muted_until
 
     def record_success(self) -> None:
         self._consecutive = 0

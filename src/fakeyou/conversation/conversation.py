@@ -671,7 +671,9 @@ class MeetingResponder:
             on_intent=on_intent,
             on_language=on_language,
             speech_gate=SpeechGate(
-                partial(self._book, tuple(events)), proactive=self._is_attention(events)
+                partial(self._book, tuple(events)),
+                proactive=self._is_attention(events),
+                verify=self.book_source.verify,
             ),
         )
 
@@ -726,9 +728,7 @@ class MeetingResponder:
 
         gate = trace.speech_gate
         refs = list(dict.fromkeys(ref for claim in claims for ref in claim.refs))
-        if gate is None or not refs:
-            return drop("missing_citation")
-        if self.verifier is None:
+        if gate is None or self.verifier is None:
             return drop("verifier_unavailable")
         last = events[-1]
         checked, _error = await capture_error(

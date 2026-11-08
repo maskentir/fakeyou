@@ -7,7 +7,7 @@ from typing import Literal
 from num2words import num2words
 from pydantic import BaseModel, ConfigDict, Field
 
-from fakeyou.session.facts import Disclosure, Namespace
+from fakeyou.session.facts import Confidence, Disclosure, Namespace, OwnerModelKind
 
 SpeechVerdict = Literal[
     "pass",
@@ -16,9 +16,14 @@ SpeechVerdict = Literal[
     "invented_number",
     "instruction_disclosure",
     "owner_commitment",
-    "uncited_contribution",
-    "question_not_in_brief",
     "unparsed_plan",
+    "basis_mismatch",
+    "unbased_claim",
+    "meta_with_content",
+    "opinion_without_position",
+    "question_without_basis",
+    "guess_as_fact",
+    "speaks_as_mismatch",
 ]
 ClaimAct = Literal["fact", "opinion", "proposal", "question", "meta"]
 ClaimBasis = Literal[
@@ -26,6 +31,26 @@ ClaimBasis = Literal[
 ]
 ClaimCertainty = Literal["stated", "guess"]
 ClaimVoice = Literal["owner_proxy", "twin", "reporting"]
+EntryKind = OwnerModelKind | Literal["question", "objective"]
+CITED_NAMESPACES: Mapping[ClaimBasis, Namespace] = {
+    "owner_model": "owner_model",
+    "memory": "memory",
+    "brief": "brief",
+}
+SOURCED_BASES: frozenset[ClaimBasis] = frozenset({"owner_model", "memory", "brief", "screen"})
+OWNER_STANCES: frozenset[EntryKind] = frozenset({"position", "preference", "decision_rule"})
+QUESTION_GROUNDS: frozenset[EntryKind] = frozenset(
+    {"question", "objective", "position", "decision_rule"}
+)
+VOICES: Mapping[ClaimBasis, frozenset[ClaimVoice]] = {
+    "owner_model": frozenset({"owner_proxy", "reporting"}),
+    "brief": frozenset({"owner_proxy", "reporting"}),
+    "memory": frozenset({"reporting"}),
+    "screen": frozenset({"reporting", "twin"}),
+    "meeting_live": frozenset({"reporting", "twin"}),
+    "inference": frozenset({"twin"}),
+    "none": frozenset({"twin"}),
+}
 DISCLOSURE_SHINGLE_WORDS = 6
 SPOKEN_NUMBER_LANGUAGES = ("id", "en")
 _NUMBER = re.compile(r"\d+(?:[.,:/]\d+)*")
@@ -39,7 +64,9 @@ class BookEntry:
     text: str
     namespace: Namespace
     disclosure: Disclosure = "room_speakable"
-    question: bool = False
+    kind: EntryKind = "fact"
+    confidence: Confidence = "firm"
+    owner_spoken: bool = False
     times: tuple[datetime, ...] = ()
 
 
@@ -60,34 +87,42 @@ class ClaimHeader(BaseModel):
 
     act: ClaimAct = Field(
         description=(
-            "What this claim does. fact: states something that is known. opinion: gives a view. "
-            "proposal: suggests a course of action. question: asks the room something. meta: "
-            "you about yourself, such as not knowing, not being able to, being the owner's AI "
-            "twin, a greeting or an acknowledgement, always with basis none."
+            "What this claim does. fact: states something known. opinion: gives the owner's "
+            "view, and proposal: suggests a course of action, both only from an owner model "
+            "position, preference or decision rule. question: asks the room, only from a brief "
+            "question, a brief objective or an owner position or decision rule. meta: only you "
+            "about yourself, such as not knowing, not being able to, being the owner's AI twin, "
+            "a greeting, an acknowledgement or asking someone to repeat or clarify; a meta claim "
+            "has no refs and no numbers."
         )
     )
     basis: ClaimBasis = Field(
         description=(
-            "Where this claim comes from. owner_model: an owner model item. memory: a recalled "
-            "memory fact. brief: a meeting brief item. meeting_live: something said or shown in "
-            "this meeting. screen: what is on the shared screen. inference: your own conclusion. "
-            "none: nothing outside yourself, only for meta."
+            "Where this claim comes from. owner_model, memory, brief: the owner model items, "
+            "recalled memory facts or brief items in refs, and only that kind. meeting_live: "
+            "something said or shown in this meeting. screen: what is on the shared screen. "
+            "inference: your own conclusion. none: nothing outside yourself, only for meta."
         )
     )
     refs: tuple[str, ...] = Field(
         description=(
             "The id of every owner model item (om-<id>), recalled memory fact or brief item this "
-            "claim states or relies on. Empty when the claim rests on no such source."
+            "claim states or relies on, all of the kind its basis names. Empty for any other "
+            "basis."
         )
     )
     certainty: ClaimCertainty = Field(
-        description="stated when the basis says it outright, guess when you are inferring it."
+        description=(
+            "stated when the basis says it outright. guess for an inference and for any owner "
+            "model item whose confidence is leaning, said as where the owner is leaning."
+        )
     )
     speaks_as: ClaimVoice = Field(
         description=(
-            "Whose voice the claim is in. owner_proxy: the owner's own view, spoken on the "
-            "owner's behalf. twin: you as the owner's AI twin. reporting: what a source or "
-            "someone else said, attributed to them."
+            "Whose voice the claim is in. owner_proxy: the owner's own view on the owner's "
+            "behalf, from owner_model or brief. reporting: what a source or someone else said, "
+            "attributed to them; memory is always reporting unless the owner said it. twin: you "
+            "as the owner's AI twin, always for inference and none."
         )
     )
 
@@ -154,24 +189,65 @@ def check_plan(
 ) -> SpeechVerdict:
     if commits_owner:
         return "owner_commitment"
-    if proactive and not any(claim.refs for claim in claims):
-        return "uncited_contribution"
+    if proactive and not any(claim.basis in SOURCED_BASES for claim in claims):
+        return "unbased_claim"
     return "pass"
 
 
-def check_claim(claim: ClaimHeader, book: FactBook, *, proactive: bool) -> SpeechVerdict:
-    for fact_id in claim.refs:
-        entry = book.entries.get(fact_id)
-        if entry is None:
-            return "unknown_citation"
-        if entry.disclosure != "room_speakable":
-            return "not_speakable"
-    if (
-        proactive
-        and claim.act == "question"
-        and not any(book.entries[fact_id].question for fact_id in claim.refs)
+def _cited(claim: ClaimHeader, book: FactBook) -> tuple[BookEntry, ...] | SpeechVerdict:
+    entries = tuple(book.entries.get(fact_id) for fact_id in claim.refs)
+    if None in entries:
+        return "unknown_citation"
+    cited = tuple(entry for entry in entries if entry is not None)
+    if any(not _speakable(entry, claim) for entry in cited):
+        return "not_speakable"
+    return cited
+
+
+def _speakable(entry: BookEntry, claim: ClaimHeader) -> bool:
+    if entry.disclosure == "internal_instruction":
+        return claim.act == "question"
+    return entry.disclosure == "room_speakable"
+
+
+def _based(claim: ClaimHeader, cited: tuple[BookEntry, ...]) -> bool:
+    namespace = CITED_NAMESPACES.get(claim.basis)
+    if namespace is None:
+        return not cited
+    return bool(cited) and all(entry.namespace == namespace for entry in cited)
+
+
+def _voiced(claim: ClaimHeader, cited: tuple[BookEntry, ...]) -> bool:
+    if claim.speaks_as in VOICES[claim.basis]:
+        return True
+    return (
+        claim.basis == "memory"
+        and claim.speaks_as == "owner_proxy"
+        and all(entry.owner_spoken for entry in cited)
+    )
+
+
+def check_claim(claim: ClaimHeader, book: FactBook) -> SpeechVerdict:
+    if claim.act == "meta" and claim.refs:
+        return "meta_with_content"
+    cited = _cited(claim, book)
+    if isinstance(cited, str):
+        return cited
+    kinds = {entry.kind for entry in cited}
+    if not _based(claim, cited):
+        return "basis_mismatch"
+    if claim.act != "meta" and claim.basis == "none":
+        return "unbased_claim"
+    if claim.act in ("opinion", "proposal") and not kinds & OWNER_STANCES:
+        return "opinion_without_position"
+    if claim.act == "question" and not kinds & QUESTION_GROUNDS:
+        return "question_without_basis"
+    if claim.certainty == "stated" and (
+        claim.basis == "inference" or any(entry.confidence == "leaning" for entry in cited)
     ):
-        return "question_not_in_brief"
+        return "guess_as_fact"
+    if not _voiced(claim, cited):
+        return "speaks_as_mismatch"
     return "pass"
 
 
@@ -183,7 +259,10 @@ def _grounding(entry: BookEntry) -> str:
     return " ".join([entry.text, *(spoken_time_numbers(moment) for moment in entry.times)])
 
 
-def check_sentence(sentence: str, refs: Iterable[str], book: FactBook) -> SpeechVerdict:
+def check_sentence(sentence: str, claim: ClaimHeader | None, book: FactBook) -> SpeechVerdict:
+    if claim is not None and claim.act == "meta":
+        return "meta_with_content" if _counts(sentence) else _undisclosed(sentence, book)
+    refs = claim.refs if claim is not None else ()
     grounded = " ".join(
         [
             book.heard,
@@ -197,6 +276,14 @@ def check_sentence(sentence: str, refs: Iterable[str], book: FactBook) -> Speech
         for number in numbers_in(sentence)
     ):
         return "invented_number"
+    return _undisclosed(sentence, book)
+
+
+def _counts(sentence: str) -> bool:
+    return bool(numbers_in(sentence) or spoken_numbers(sentence))
+
+
+def _undisclosed(sentence: str, book: FactBook) -> SpeechVerdict:
     shingles = _shingles(sentence)
     if shingles and any(shingles & _shingles(instruction) for instruction in book.internal):
         return "instruction_disclosure"

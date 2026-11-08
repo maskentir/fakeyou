@@ -10,7 +10,8 @@ from fakeyou.catalog.errors import ErrorCode
 from fakeyou.cli.client import ClientSettings, api_failure, owner_client
 from fakeyou.cli.output import emit_json
 from fakeyou.config.identifiers import SessionIdField, parse_session_id
-from fakeyou.db.owner_model import Confidence, ItemDisclosure, OwnerModelKind
+from fakeyou.db.owner_model import ItemDisclosure
+from fakeyou.session.facts import Confidence, OwnerModelKind
 
 
 @dataclass(frozen=True, slots=True)

@@ -19,6 +19,8 @@ Modality = Literal[
     "inferred",
 ]
 Disclosure = Literal["room_speakable", "owner_only", "internal_instruction"]
+OwnerModelKind = Literal["position", "preference", "decision_rule", "style_example", "fact"]
+Confidence = Literal["firm", "leaning"]
 RevisionDomain = Literal["presence", "screen", "health"]
 UnknownReason = Literal["stale_source", "not_in_call", "no_record"]
 

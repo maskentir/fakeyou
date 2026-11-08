@@ -39,6 +39,10 @@ def gate(
     )
 
 
+def spoken(reply: str, speech_gate: SpeechGate) -> str:
+    return planned_reply(reply, max_sentences=2, language="en", speech_gate=speech_gate).text
+
+
 def say(
     text: str,
     speech_gate: SpeechGate,
@@ -47,12 +51,11 @@ def say(
     act: str = "fact",
     commits_owner: bool = False,
 ) -> str:
-    return planned_reply(
-        plan_reply(claim(text, *refs, act=act), commits_owner=commits_owner),
-        max_sentences=2,
-        language="en",
-        speech_gate=speech_gate,
-    ).text
+    return spoken(plan_reply(claim(text, *refs, act=act), commits_owner=commits_owner), speech_gate)
+
+
+def recall(text: str, speech_gate: SpeechGate, ref: str) -> str:
+    return spoken(plan_reply(claim(text, ref, basis="memory")), speech_gate)
 
 
 def owner_claim(ref: str) -> ClaimHeader:
@@ -100,8 +103,8 @@ def test_an_owner_only_owner_model_item_is_never_spoken() -> None:
     text = "Rani's salary floor is 90 thousand."
     book = fact_book(BookSource(REGISTRY, EVERYTHING), heard="", observed="", memory={})
 
-    assert check_claim(owner_claim("om-salary"), book, proactive=False) == "not_speakable"
-    assert check_claim(owner_claim("om-ship"), book, proactive=False) == "pass"
+    assert check_claim(owner_claim("om-salary"), book) == "not_speakable"
+    assert check_claim(owner_claim("om-ship"), book) == "pass"
     assert say(text, gate(), refs=["om-salary"]) == (
         "I'm not sure about that, so I'd rather not guess."
     )
@@ -146,7 +149,7 @@ def test_a_proactive_line_must_cite_and_stays_silent_when_it_fails() -> None:
     )
 
 
-def test_a_proactive_question_must_come_from_the_brief() -> None:
+def test_a_proactive_question_must_rest_on_the_brief_or_an_owner_position() -> None:
     proactive = gate(proactive=True)
 
     assert say(
@@ -158,15 +161,59 @@ def test_a_proactive_question_must_come_from_the_brief() -> None:
     assert say("Is the beta on track?", proactive, ["om-beta"], act="question") == ""
 
 
+def test_an_objective_grounds_a_question_but_is_never_stated() -> None:
+    asking = "Is anything still blocking the kickoff?"
+
+    assert say(asking, gate(proactive=True), ["blockers"], act="question") == asking
+    unpermitted = gate(proactive=True, permissions=frozenset())
+    assert say(asking, unpermitted, ["blockers"], act="question") == ""
+    assert say("Nothing is blocking the kickoff.", gate(), ["blockers"]) == (
+        "I'm not sure about that, so I'd rather not guess."
+    )
+
+
+def test_owner_model_kind_and_confidence_reach_the_gate() -> None:
+    leaning = source_registry(
+        owner_model={
+            "om-vendor": OwnerModelSource(
+                "Leaning towards the second vendor.",
+                "room_speakable",
+                kind="preference",
+                confidence="leaning",
+            )
+        }
+    )
+    book = fact_book(BookSource(leaning), heard="", observed="", memory={})
+    stated = ClaimHeader.model_validate(claim("", "om-vendor", act="opinion"))
+    guessed = stated.model_copy(update={"certainty": "guess"})
+
+    assert check_claim(stated, book) == "guess_as_fact"
+    assert check_claim(guessed, book) == "pass"
+
+
+def test_recalled_owner_speech_may_be_voiced_for_the_owner() -> None:
+    memory = {
+        "edge-owner": RecalledFact("Rani prefers weekly demos.", owner_spoken=True),
+        "edge-room": RecalledFact("Ayu prefers weekly demos."),
+    }
+    book = fact_book(BookSource(REGISTRY), heard="", observed="", memory=memory)
+
+    def voiced(ref: str) -> ClaimHeader:
+        return ClaimHeader.model_validate(claim("", ref, basis="memory", speaks_as="owner_proxy"))
+
+    assert check_claim(voiced("edge-owner"), book) == "pass"
+    assert check_claim(voiced("edge-room"), book) == "speaks_as_mismatch"
+
+
 def test_recalled_memory_can_be_cited_after_it_was_prefetched() -> None:
     evidence = TurnEvidence()
     evidence.note_memory({"mem-7": RecalledFact("The vendor promised the API for 30 November.")})
     text = "The vendor promised the API for 30 November."
 
-    spoken = say(text, gate(memory=evidence.memory()), refs=["mem-7"])
+    said = recall(text, gate(memory=evidence.memory()), "mem-7")
 
-    assert spoken == text
-    assert say(text, gate(), refs=["mem-7"]) == "I'm not sure about that, so I'd rather not guess."
+    assert said == text
+    assert recall(text, gate(), "mem-7") == ("I'm not sure about that, so I'd rather not guess.")
 
 
 def test_plain_text_is_gated_like_a_plan_without_citations() -> None:
@@ -197,7 +244,7 @@ def test_a_cited_source_time_may_be_spoken() -> None:
     dated_gate = gate(memory=evidence.memory())
     text = "In the meeting on 1 October at 03:00, a participant said the venue is Jakarta."
 
-    assert say(text, dated_gate, refs=["edge-0"]) == text
+    assert recall(text, dated_gate, "edge-0") == text
     assert say(text, gate(), refs=[]) == "I'm not sure about that, so I'd rather not guess."
     owner_gate = SpeechGate(
         lambda: fact_book(
@@ -205,7 +252,7 @@ def test_a_cited_source_time_may_be_spoken() -> None:
                 source_registry(
                     owner_model={
                         "om-venue": OwnerModelSource(
-                            "The venue is Bandung.", "room_speakable", owner
+                            "The venue is Bandung.", "room_speakable", since=owner
                         )
                     }
                 )
@@ -229,7 +276,7 @@ def test_a_time_from_an_uncited_source_is_still_invented() -> None:
 
     text = "On 1 October the budget was opened."
 
-    assert say(text, gate(memory=evidence.memory()), refs=["edge-1"]) == (
+    assert recall(text, gate(memory=evidence.memory()), "edge-1") == (
         "I'm not sure about that, so I'd rather not guess."
     )
 

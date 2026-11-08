@@ -494,8 +494,7 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
                 evidence_full = full
             self._journal.request_finished(request_id, transcript_id=transcript_id, outcome=outcome)
         if self._on_prefetch is not None:
-            refs = memory_refs_from_evidence(content.removeprefix(PREFETCH_EVIDENCE_PREFIX))
-            self._on_prefetch(outcome, refs if outcome == "found" else {})
+            self._on_prefetch(outcome, memory_refs_from_evidence(evidence_full))
         self._sequence += 1
         tool_call_id = (
             f"{transcript_id}-memory-recall" if transcript_id else f"memory-recall-{self._sequence}"

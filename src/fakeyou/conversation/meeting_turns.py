@@ -60,6 +60,7 @@ class TurnInteraction:
     owner_names: Sequence[str] = ()
     barge_in: bool = False
     barge_in_judge_enabled: bool = True
+    apologize: bool = True
     participant_policy_enabled: bool = False
     others_speaking: Callable[[], bool] | None = None
     presence: Callable[[], PresenceFact] | None = None
@@ -238,6 +239,7 @@ def build_meeting_turns(
             faults=diagnostics.faults,
             language=generation.language if language is None else language.read,
             response_timeout_seconds=timing.response_timeout_seconds,
+            apologize=interaction.apologize,
         )
     )
     actor.configure_reply(reply)
