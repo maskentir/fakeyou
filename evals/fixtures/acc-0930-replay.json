@@ -1,11 +1,23 @@
 {
   "persona": "examples/persona.example.json",
+  "owner_model": {
+    "version": 1,
+    "items": [
+      {
+        "item_id": "orchid-demo",
+        "kind": "fact",
+        "topic": "Demo customer Orchid",
+        "statement": "Rani memberi update bahwa demo customer Orchid dipindah ke hari Jumat, 3 Oktober 2026, jam dua siang.",
+        "confidence": "firm",
+        "disclosure": "room_speakable",
+        "valid_at": "2026-09-30T10:12:00+00:00"
+      }
+    ]
+  },
   "sessions": [
     {
       "meeting_id": "acc-0930-s1",
-      "memory": [
-        "From owner note on 2026-09-30 10:12 UTC: Rani memberi update bahwa demo customer Orchid dipindah ke hari Jumat, 3 Oktober 2026, jam dua siang."
-      ],
+      "memory": [],
       "turns": [
         {"say": "Rani Twin kapan beta launch or chill", "must_mention": ["14 oktober"]},
         {"say": "demo customer old shield jadinya hari apa", "must_mention": ["jumat"]},
@@ -18,7 +30,6 @@
     {
       "meeting_id": "acc-0930-s2",
       "memory": [
-        "From owner note on 2026-09-30 10:12 UTC: Rani memberi update bahwa demo customer Orchid dipindah ke hari Jumat, 3 Oktober 2026, jam dua siang.",
         "From Google Meet acc-0930-s1 transcript on 2026-09-30 10:18 UTC: Unidentified participant decided that kickoff vendor Orchid diputuskan hari Selasa jam 10 pagi.",
         "From Google Meet acc-0930-s1 transcript on 2026-09-30 10:18 UTC: Unidentified participant said that PIC kickoff vendor Orchid adalah Budi.",
         "From Google Meet acc-0930-s1 transcript on 2026-09-30 10:18 UTC: Digital twin said that PIC kickoff vendor Orchid adalah Budi."

@@ -20,6 +20,7 @@ from fakeyou.memory.memory import RecallScope, create_memory_prefetch_middleware
 from fakeyou.memory.persona import PersonaProfile
 from fakeyou.orchestration.persona_prompt import build_persona_prompt
 from fakeyou.orchestration.providers import create_chat_model
+from fakeyou.persistence.owner_model import FrozenOwnerModel
 from tests._conversation_fakes import ToolCallingFakeModel
 
 EXAMPLE_PROFILE = PersonaProfile.model_validate_json(
@@ -34,6 +35,13 @@ LIVE_SCENARIOS: dict[str, dict[str, str]] = PERSONA_FIXTURE["scenarios"]
 RECALLED_CONTEXT = PERSONA_FIXTURE["contexts"]["demo_moved_to_thursday"]
 
 
+def scenario_owner_model(scenario: dict[str, str]) -> FrozenOwnerModel | None:
+    name = scenario.get("owner_model")
+    if name is None:
+        return None
+    return FrozenOwnerModel.model_validate(PERSONA_FIXTURE["owner_models"][name])
+
+
 def participant_asks(text: str) -> HumanMessage:
     return HumanMessage(
         content=text,
@@ -44,11 +52,15 @@ def participant_asks(text: str) -> HumanMessage:
 
 
 async def answer_with_memory(
-    model: BaseChatModel, memory: Any, question: str, thread_id: str
+    model: BaseChatModel,
+    memory: Any,
+    question: str,
+    thread_id: str,
+    owner_model: FrozenOwnerModel | None = None,
 ) -> dict[str, Any]:
     agent = create_meeting_agent(
         model,
-        persona=build_persona_prompt(EXAMPLE_PROFILE),
+        persona=build_persona_prompt(EXAMPLE_PROFILE, owner_model=owner_model),
         middleware=[
             create_memory_prefetch_middleware(
                 memory,
@@ -100,6 +112,27 @@ async def test_identity_change_transcript_cannot_move_the_memory_namespace() -> 
     assert model.seen[-1][0].content == build_persona_prompt(EXAMPLE_PROFILE)
 
 
+async def test_owner_fact_scenario_reaches_the_prompt_not_recall() -> None:
+    scenario = LIVE_SCENARIOS["owner_fact_overrides_meeting_claim"]
+    owner_model = scenario_owner_model(scenario)
+    assert owner_model is not None
+    [item] = owner_model.items
+    recalled_context = PERSONA_FIXTURE["contexts"][scenario["context"]]
+    assert item.statement not in recalled_context
+    memory, stored = session_memory([recalled_context], EXAMPLE_PROFILE.memory_group)
+    model = ToolCallingFakeModel(responses=[AIMessage(content="The demo is on Friday.")])
+
+    with case_storage(memory, stored):
+        await answer_with_memory(
+            model, memory, scenario["question"], "persona-owner-fact", owner_model
+        )
+
+    prompt = str(model.seen[-1][0].content)
+    assert f'"id": "{item.ref}"' in prompt
+    assert item.valid_at is not None
+    assert f'"true_since": "{item.valid_at.isoformat()}"' in prompt
+
+
 KNOWN_MODEL_LIMITATIONS = {
     "misheard_project_name": (
         "gpt-4.1-mini repeats a participant's misheard name (0/18 probes across prompt variants "
@@ -129,10 +162,13 @@ async def test_live_persona_quality(scenario: str) -> None:
     live = LIVE_SCENARIOS[scenario]
     question, criteria = live["question"], live["criteria"]
     recalled_context: str = PERSONA_FIXTURE["contexts"][live["context"]]
+    owner_model = scenario_owner_model(live)
 
     memory, stored = session_memory([recalled_context], EXAMPLE_PROFILE.memory_group)
     with case_storage(memory, stored):
-        result = await answer_with_memory(model, memory, question, f"live-persona-{scenario}")
+        result = await answer_with_memory(
+            model, memory, question, f"live-persona-{scenario}", owner_model
+        )
     reply = result["messages"][-1].text
 
     metric: BaseMetric = GEval(
@@ -151,6 +187,10 @@ async def test_live_persona_quality(scenario: str) -> None:
         input=question,
         actual_output=reply,
         context=[f"Owner verified fact: {fact}" for fact in EXAMPLE_PROFILE.verified_facts]
-        + [f"Recalled meeting context: {recalled_context}"],
+        + [f"Recalled meeting context: {recalled_context}"]
+        + [
+            f"Owner model fact {item.ref}, true since {item.valid_at}: {item.statement}"
+            for item in (owner_model.items if owner_model is not None else ())
+        ],
     )
     assert_test(test_case=case, metrics=[metric], run_async=False)

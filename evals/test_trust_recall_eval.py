@@ -61,5 +61,29 @@ async def test_contract_recall_uses_production_evidence_schema() -> None:
     kinds = {source["kind"] for fact in payload["facts"] for source in fact["sources"]}
     assert kinds == {"meeting_transcript"}
     assert payload["excluded"] == {"superseded": 0, "missing_source": 0}
-    for case_id in ("c07", "c08"):
+    for case_id in ("c07", "c08", "c14"):
         assert await recall_output_for(by_id[case_id], group_id) == RECALL_EMPTY_RESULT
+    conflicting = json.loads(await recall_output_for(by_id["c01"], group_id))
+    assert [fact["text"] for fact in conflicting["facts"]] == by_id["c01"]["memory"]["facts"]
+    assert {source["kind"] for fact in conflicting["facts"] for source in fact["sources"]} == {
+        "meeting_transcript"
+    }
+
+
+async def test_owner_facts_live_only_in_the_owner_model_never_in_recall() -> None:
+    fixture = load_trust_fixture()
+    group_id = PersonaProfile.model_validate_json(
+        (ROOT / fixture["persona"]).read_bytes()
+    ).memory_group
+    owner_cases = [case for case in fixture["cases"] if case.get("owner_model")]
+    assert owner_cases
+    for case in owner_cases:
+        meeting_facts = set(case["memory"]["facts"])
+        recalled = await recall_output_for(case, group_id)
+        for item in case["owner_model"]:
+            assert item["statement"] in meeting_facts or item["statement"] not in recalled
+        if recalled != RECALL_EMPTY_RESULT:
+            facts = json.loads(recalled)["facts"]
+            assert {fact["text"] for fact in facts} <= meeting_facts
+            kinds = {source["kind"] for fact in facts for source in fact["sources"]}
+            assert kinds == {"meeting_transcript"}

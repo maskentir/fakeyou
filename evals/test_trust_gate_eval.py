@@ -4,6 +4,7 @@ from typing import Any, cast
 import pytest
 
 from evals._trust import (
+    case_owner_model,
     load_trust_fixture,
     passing_trust_reviews,
     summarize_trust,
@@ -11,6 +12,7 @@ from evals._trust import (
     write_trust_summary,
 )
 from fakeyou.conversation.conversation import cap_spoken_reply
+from fakeyou.persistence.owner_model import OWNER_MODEL_REF_PREFIX
 
 
 def test_missing_reviews_and_one_severe_violation_fail_gate() -> None:
@@ -61,7 +63,7 @@ def test_trust_gate_rejects_malformed_reviews() -> None:
     assert not trust_gate(malformed, expected_case_ids=case_ids, runs=3)
     malformed = passing_trust_reviews(case_ids, 3)
     malformed[0]["mode"] = "live"
-    malformed[0]["source_ref"] = "c01 turn reply plus owner-note evidence"
+    malformed[0]["source_ref"] = "c01 turn reply plus owner model evidence"
     malformed[0]["checked"] = ["all_turns"]
     assert trust_gate(malformed, expected_case_ids=case_ids, runs=3)
 
@@ -81,7 +83,7 @@ def test_trust_gate_enforces_usefulness_floor() -> None:
 @pytest.mark.parametrize(
     "reason",
     [
-        "Answer cites transcript as source although evidence comes from owner note.",
+        "Answer cites transcript as source although evidence comes from the owner model.",
         "Answer presents source date as event date.",
         "Answer greets a name without identity source.",
         "Answer implicitly approves a contract without written permission.",
@@ -119,6 +121,28 @@ def test_trust_corpus_defines_29_rated_cases() -> None:
             assert turn["contract_reply"].strip()
             assert cap_spoken_reply(turn["contract_reply"]) == turn["contract_reply"].strip()
     assert families == {"sumber_waktu": 11, "koreksi_gagal": 8, "otoritas_guna": 10}
+
+
+def test_trust_owner_model_cases_hold_approved_facts_and_cite_them() -> None:
+    cases = load_trust_fixture()["cases"]
+    owner_cases = {case["id"] for case in cases if "owner_model" in case}
+    assert owner_cases == {f"c{i:02d}" for i in (1, 2, 3, 9, 10, 11, 12, 13, 14, 15, 16, 24)}
+    for case in cases:
+        stored = case.get("memory", {}).get("stored", {}).values()
+        assert all(item["label"] != "owner note" for item in stored)
+        owner_model = case_owner_model(case)
+        refs = {item.ref for item in owner_model.items} if owner_model is not None else set()
+        if owner_model is not None:
+            assert len(refs) == len(owner_model.items)
+            for item in owner_model.items:
+                assert item.kind == "fact"
+                assert item.confidence == "firm"
+                assert item.disclosure == "room_speakable"
+                assert item.statement.strip()
+                assert item.valid_at is not None
+        for turn in case["turns"]:
+            cited = {str(ref) for ref in turn.get("contract_cites", [])}
+            assert {ref for ref in cited if ref.startswith(OWNER_MODEL_REF_PREFIX)} <= refs
 
 
 def test_trust_summary_reports_gate_and_usefulness(tmp_path: Path) -> None:

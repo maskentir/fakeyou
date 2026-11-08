@@ -2,10 +2,11 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from evals._shared import ArtifactMeta, ReplayOptions
+from evals._shared import ArtifactMeta, ReplayOptions, token_present
 from evals._trust import (
     AID_CHECKS,
     EXPECTED_CASE_IDS,
@@ -24,6 +25,7 @@ from evals._trust import (
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import Settings
 from fakeyou.orchestration.providers import create_chat_model, create_fallback_chat_model
+from tests._conversation_fakes import ToolCallingFakeModel
 
 
 async def test_contract_replay_captures_87_rated_pairs_and_writes_artifacts(
@@ -157,3 +159,43 @@ async def test_contract_replay_brings_prefetched_memory_to_every_trust_turn() ->
     for turn in score.rated_turns():
         assert all(turn["aids"][name] for name in AID_CHECKS)
     assert {prompt["memory_prefetch"] for prompt in score.prompts.values()} == {True}
+
+
+async def test_contract_owner_fact_reaches_prompt_and_gate_but_not_recall() -> None:
+    fixture = load_trust_fixture()
+    case = next(case for case in fixture["cases"] if case["id"] == "c01")
+    [item] = case["owner_model"]
+    [scripted] = case["turns"]
+    assert scripted["contract_cites"] == [f"om-{item['item_id']}"]
+    models: list[ToolCallingFakeModel] = []
+
+    def recording_model(scripted_case: dict[str, Any]) -> ToolCallingFakeModel:
+        models.append(contract_model(scripted_case))
+        return models[-1]
+
+    score = await replay_trust(
+        recording_model, {**fixture, "cases": [case]}, 1, options=ReplayOptions(settings=Settings())
+    )
+    [turn] = score.turns
+    system_prompt = models[0].seen[0][0].text
+    assert system_prompt == score.prompts["c01"]["system_prompt"]
+    assert f'"id": "om-{item["item_id"]}"' in system_prompt
+    assert f'"true_since": "{item["valid_at"]}"' in system_prompt
+    assert turn["reply"] == scripted["contract_reply"]
+    assert all(turn["aids"][name] for name in AID_CHECKS)
+    recalled = "\n".join(entry["output"] for entry in turn["memory_prefetch"])
+    for meeting_fact in case["memory"]["facts"]:
+        assert meeting_fact in recalled
+    assert item["statement"] not in recalled
+
+    without_model = {key: value for key, value in case.items() if key != "owner_model"}
+    withheld = await replay_trust(
+        contract_model,
+        {**fixture, "cases": [without_model]},
+        1,
+        options=ReplayOptions(settings=Settings()),
+    )
+    [ungrounded] = withheld.turns
+    assert "om-" not in withheld.prompts["c01"]["system_prompt"]
+    assert ungrounded["reply"] != scripted["contract_reply"]
+    assert not any(token_present(str(token), ungrounded["reply"]) for token in case["allow"])

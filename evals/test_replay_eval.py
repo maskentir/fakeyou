@@ -19,6 +19,7 @@ from evals._shared import cited_reply
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import Settings
 from fakeyou.orchestration.providers import create_chat_model
+from fakeyou.persistence.owner_model import FrozenOwnerModel
 from tests._conversation_fakes import ToolCallingFakeModel
 
 
@@ -144,6 +145,10 @@ def test_replay_fixture_uses_real_session_transcripts() -> None:
         "acc-0930-s2",
     ]
     assert sum(len(session["turns"]) for session in fixture["sessions"]) == 8
+    owner_model = FrozenOwnerModel.model_validate(fixture["owner_model"])
+    assert [item.ref for item in owner_model.items] == ["om-orchid-demo"]
+    for session in fixture["sessions"]:
+        assert all(fact.startswith("From Google Meet ") for fact in session["memory"])
 
 
 @pytest.mark.live
