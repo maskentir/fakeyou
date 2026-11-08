@@ -106,9 +106,9 @@ class RequestKey:
 class _Score:
     latest: float
     recent: float
-    whole: float
     unused: bool
     earlier: int
+    whole: float
 
     def __post_init__(self) -> None:
         for name in ("latest", "recent", "whole"):
