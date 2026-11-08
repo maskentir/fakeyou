@@ -23,7 +23,7 @@ from fakeyou.conversation.turn_graph import (
     drain_turns,
 )
 from fakeyou.conversation.turn_queue import AdmittedFinals, BargeLatch, PendingFinals
-from fakeyou.conversation.turn_recovery import TurnRecovery
+from fakeyou.conversation.turn_recovery import RecoveryOptions, TurnRecovery
 from fakeyou.observability.faults import FaultReporter
 from fakeyou.observability.journal import JournalSink
 
@@ -68,8 +68,7 @@ class TurnTestContext:
     def __post_init__(self) -> None:
         self._recovery = TurnRecovery(
             journal=self.journal,
-            faults=self.faults,
-            language=DEFAULTS.speech.language,
+            options=RecoveryOptions(faults=self.faults, language=DEFAULTS.speech.language),
             is_closed=lambda: self.is_closed,
         )
 

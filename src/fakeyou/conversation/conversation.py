@@ -671,7 +671,9 @@ class MeetingResponder:
             on_intent=on_intent,
             on_language=on_language,
             speech_gate=SpeechGate(
-                partial(self._book, tuple(events)), proactive=self._is_attention(events)
+                partial(self._book, tuple(events)),
+                proactive=self._is_attention(events),
+                verify=self.book_source.verify,
             ),
         )
 

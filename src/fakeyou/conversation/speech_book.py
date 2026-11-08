@@ -44,6 +44,7 @@ class BookSource:
     registry: SourceRegistry = field(default_factory=SourceRegistry)
     permissions: frozenset[str] = frozenset()
     persona_knowledge: bool = True
+    verify: bool = True
 
 
 def _speakable(permission: str, source: BookSource) -> Disclosure:

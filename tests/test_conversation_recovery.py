@@ -6,6 +6,7 @@ from fakeyou.conversation.reply_planner import SpokenChunk, TurnLanguage
 from fakeyou.conversation.turn_recovery import (
     MAX_CONSECUTIVE_TURN_FAILURES,
     TURN_FAILED_LINES,
+    RecoveryOptions,
     TurnRecovery,
 )
 from fakeyou.foundation.transcript import TranscriptEvent
@@ -118,8 +119,7 @@ def test_the_failure_line_follows_the_language_the_participant_used() -> None:
     language = TurnLanguage("en")
     recovery = TurnRecovery(
         journal=RecordingJournal("meeting-1"),
-        faults=None,
-        language=language.read,
+        options=RecoveryOptions(faults=None, language=language.read),
         is_closed=lambda: False,
     )
 

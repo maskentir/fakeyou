@@ -128,6 +128,7 @@ class SpeechPiece(NamedTuple):
 class SpeechGate:
     compose: Callable[[], FactBook]
     proactive: bool = False
+    verify: bool = True
     _book: FactBook | None = None
 
     @property
@@ -311,6 +312,8 @@ class ReplyPlanner:
         return spoken
 
     def _judge(self, gate: SpeechGate, sentence: str, claim: int) -> SpeechVerdict:
+        if not gate.verify:
+            return "pass"
         verdict = check_plan(
             self._claims, commits_owner=self._commits_owner, proactive=gate.proactive
         )

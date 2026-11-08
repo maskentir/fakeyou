@@ -220,6 +220,8 @@ class AgentWiring:
     perception: PerceptionContext | None = None
     history: MeetingHistory = field(default_factory=NoHistory)
     owner_model: FrozenOwnerModel | None = None
+    verify_gate: bool = True
+    apologize: bool = True
 
 
 DEFAULT_AGENT_WIRING = AgentWiring()
@@ -485,6 +487,7 @@ class _ConversationBuilder:
             registry=build_source_registry(brief, self._agent.owner_model),
             permissions=frozenset(brief.permissions) if brief is not None else frozenset(),
             persona_knowledge=brief is None or brief.knowledge_scope != "brief_only",
+            verify=self._agent.verify_gate,
         )
 
     def build_responder(
@@ -527,6 +530,7 @@ class _ConversationBuilder:
                 owner_names=self._behavior.owner_names,
                 barge_in=self._behavior.barge_in,
                 barge_in_judge_enabled=conversation_settings.barge_in_judge_enabled,
+                apologize=self._agent.apologize,
                 participant_policy_enabled=participant_policy_enabled,
                 others_speaking=self._behavior.others_speaking,
                 presence=self._behavior.presence,
