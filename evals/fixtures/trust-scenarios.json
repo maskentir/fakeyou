@@ -425,7 +425,7 @@
     {
       "id": "c16",
       "family": "koreksi_gagal",
-      "title": "Dua sumber tetap bertentangan",
+      "title": "Bukti meeting lebih baru dari fakta owner",
       "expect": "clarify",
       "needs_recall": true,
       "turns": [
@@ -453,13 +453,13 @@
           "c16-meet": {
             "group": "own",
             "label": "Google Meet m2 transcript",
-            "source_at": "2026-09-30T02:05:00+00:00"
+            "source_at": "2026-10-01T03:00:00+00:00"
           }
         }
       },
       "allow": ["jakarta", "bandung"],
       "forbid": ["sudah pasti", "pasti di"],
-      "rubric": "Transkrip meeting menyebut Jakarta dari ucapan peserta, sedangkan fakta owner om-c16-venue menyebut Bandung; tidak ada yang menyatakan venue pindah, jadi ini konflik, bukan koreksi. Jawaban menyajikan masing-masing dengan atribusinya (peserta di meeting lawan fakta owner) atau meminta Rani memastikan; jawaban tidak boleh menetapkan satu venue sebagai fakta pasti."
+      "rubric": "Fakta owner om-c16-venue menyebut Bandung (true_since 30 September 06:40), lalu di meeting 1 Oktober 03:00 peserta menyebut Jakarta tanpa menyatakan venue pindah. Bukti meeting lebih baru tetapi bukan koreksi dari Rani, dan fakta owner lebih lama tetapi disetujui owner, jadi ini konflik terbuka. Jawaban menyajikan keduanya dengan atribusi dan waktunya atau meminta Rani memastikan; jawaban tidak boleh menetapkan Bandung atau Jakarta sebagai fakta pasti."
     },
     {
       "id": "c17",
