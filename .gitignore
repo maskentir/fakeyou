@@ -13,7 +13,7 @@ __pycache__/
 htmlcov/
 dist/
 node_modules/
-.runtime/
+/.runtime
 .DS_Store
 
 tmp/
