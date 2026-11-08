@@ -19,9 +19,8 @@ from fakeyou.db.engine import configured_url, create_async_engine_for_url, requi
 from fakeyou.db.schema import require_current_on
 from fakeyou.db.tables import owner_model_revisions
 from fakeyou.foundation.timeparse import is_aware
+from fakeyou.session.facts import Confidence, OwnerModelKind
 
-OwnerModelKind = Literal["position", "preference", "decision_rule", "style_example", "fact"]
-Confidence = Literal["firm", "leaning"]
 ItemDisclosure = Literal["room_speakable", "owner_only"]
 RevisionSource = Literal["owner", "import", "debrief"]
 RevisionStatus = Literal["proposed", "approved", "rejected", "retired", "forgotten"]

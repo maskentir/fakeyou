@@ -60,11 +60,12 @@ from fakeyou.cli.voiceprint import (
 from fakeyou.config.identifiers import parse_session_id
 from fakeyou.config.settings import Settings
 from fakeyou.db.checkpoint import is_database_error
-from fakeyou.db.owner_model import Confidence, ItemDisclosure, OwnerModelKind
+from fakeyou.db.owner_model import ItemDisclosure
 from fakeyou.diarization.diarize_service import diarize_run
 from fakeyou.identity.enrollment import EnrollSubject, LivenessGate
 from fakeyou.memory.persona import OperatorIdentity
 from fakeyou.observability.provider_faults import ProviderFault
+from fakeyou.session.facts import Confidence, OwnerModelKind
 
 _VALID_AT_ARGUMENT = TypeAdapter(AwareDatetime)
 

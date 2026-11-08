@@ -285,7 +285,13 @@ def build_source_registry(
         brief_questions={item.id: item.text for item in brief.questions} if brief else None,
         brief_objectives={item.id: item.text for item in brief.objectives} if brief else None,
         owner_model={
-            item.ref: OwnerModelSource(item.statement, item.disclosure, item.valid_at)
+            item.ref: OwnerModelSource(
+                item.statement,
+                item.disclosure,
+                kind=item.kind,
+                confidence=item.confidence,
+                since=item.valid_at,
+            )
             for item in (owner_model.items if owner_model is not None else ())
         },
     )

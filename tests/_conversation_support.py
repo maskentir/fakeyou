@@ -38,7 +38,7 @@ def claim(
     say: str, *refs: str, act: str = "fact", basis: str | None = None, speaks_as: str | None = None
 ) -> dict[str, Any]:
     owner = bool(refs) and all(ref.startswith("om-") for ref in refs)
-    inferred = "owner_model" if owner else "brief" if refs else "none"
+    inferred = "owner_model" if owner else "brief" if refs else "meeting_live"
     voice = "owner_proxy" if owner else "reporting" if refs else "twin"
     return {
         "act": act,

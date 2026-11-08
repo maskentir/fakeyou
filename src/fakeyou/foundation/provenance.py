@@ -40,6 +40,7 @@ class MemoryEvidence(TypedDict):
 
 
 UNVERIFIED_SPEAKER_IDENTITY = "unverified: may or may not be the owner or any named person"
+OWNER_SPEAKER_IDENTITY = "owner"
 
 
 @dataclass(frozen=True, slots=True)

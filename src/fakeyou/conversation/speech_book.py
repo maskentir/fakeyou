@@ -3,8 +3,8 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 
 from fakeyou.conversation.contribution import RecalledFact, SourceRegistry
-from fakeyou.session.facts import Disclosure, Namespace
-from fakeyou.session.speech import BookEntry, FactBook
+from fakeyou.session.facts import Disclosure
+from fakeyou.session.speech import BookEntry, EntryKind, FactBook
 
 KEPT_TURNS = 16
 KEPT_MEMORY_FACTS = 64
@@ -54,20 +54,37 @@ def _entries(source: BookSource, memory: Mapping[str, RecalledFact]) -> Iterator
     registry = source.registry
     facts = _speakable("explain_facts", source)
     questions = _speakable("ask_brief_questions", source)
+    objectives: Disclosure = "internal_instruction" if questions == "room_speakable" else questions
     persona: Disclosure = "room_speakable" if source.persona_knowledge else "owner_only"
     for fact_id, fact in memory.items():
-        yield BookEntry(fact_id, fact.text, "memory", persona, times=fact.times)
-    namespaces: tuple[tuple[Mapping[str, str], Namespace, Disclosure, bool], ...] = (
-        (registry.questions, "brief", questions, True),
-        (registry.facts, "brief", facts, False),
+        yield BookEntry(
+            fact_id,
+            fact.text,
+            "memory",
+            persona,
+            owner_spoken=fact.owner_spoken,
+            times=fact.times,
+        )
+    brief: tuple[tuple[Mapping[str, str], Disclosure, EntryKind], ...] = (
+        (registry.questions, questions, "question"),
+        (registry.facts, facts, "fact"),
+        (registry.objectives, objectives, "objective"),
     )
-    for texts, namespace, disclosure, question in namespaces:
+    for texts, disclosure, kind in brief:
         for fact_id, text in texts.items():
-            yield BookEntry(fact_id, text, namespace, disclosure, question=question)
+            yield BookEntry(fact_id, text, "brief", disclosure, kind=kind)
     for ref, item in registry.owner_model.items():
         owned = item.disclosure if source.persona_knowledge else "owner_only"
         since = (item.since,) if item.since is not None else ()
-        yield BookEntry(ref, item.text, "owner_model", owned, times=since)
+        yield BookEntry(
+            ref,
+            item.text,
+            "owner_model",
+            owned,
+            kind=item.kind,
+            confidence=item.confidence,
+            times=since,
+        )
 
 
 def fact_book(

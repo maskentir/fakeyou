@@ -58,10 +58,10 @@ CONTRIBUTION_GUIDANCE = (
     "you have something the room does not have: a fact from the owner model or the meeting "
     "brief, something you know from an earlier meeting, or a question that unblocks the "
     "discussion. Never thank the room, never say that you see or notice what is on the screen, "
-    "and never narrate the screen. When you do add something, say it as claims whose act is "
-    "its kind and put in refs the id of every brief item, owner model item or recalled memory "
-    "fact each claim rests on, so the claim can be checked against those sources, and use the "
-    "answer intent for the contribution itself. "
+    "and never narrate the screen. When you do add something, at least one claim must rest on "
+    "the owner model, the brief, a recalled memory fact or the screen, with refs to every item "
+    "it rests on so it can be checked against those sources, and use the answer intent for the "
+    "contribution itself. "
     "If you have nothing to add, set the intent to silent and say nothing at all."
 )
 

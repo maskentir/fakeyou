@@ -726,9 +726,7 @@ class MeetingResponder:
 
         gate = trace.speech_gate
         refs = list(dict.fromkeys(ref for claim in claims for ref in claim.refs))
-        if gate is None or not refs:
-            return drop("missing_citation")
-        if self.verifier is None:
+        if gate is None or self.verifier is None:
             return drop("verifier_unavailable")
         last = events[-1]
         checked, _error = await capture_error(

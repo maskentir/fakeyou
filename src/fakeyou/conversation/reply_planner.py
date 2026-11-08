@@ -89,8 +89,8 @@ class SpeechPlan(BaseModel):
             "What you say, as claims in speaking order, one or two short sentences in all. Each "
             "claim rests on one basis and its say holds the words for that claim alone; a "
             "sentence that draws on two sources becomes two claims. A contribution nobody asked "
-            "for needs at least one claim with refs, and its question claim must cite a brief "
-            "question. Empty when the intent is silent."
+            "for needs at least one claim whose basis is owner_model, memory, brief or screen. "
+            "Empty when the intent is silent."
         )
     )
 
@@ -316,10 +316,10 @@ class ReplyPlanner:
         )
         header = self._header(claim)
         if verdict == "pass" and header is not None:
-            verdict = check_claim(header, gate.book, proactive=gate.proactive)
+            verdict = check_claim(header, gate.book)
         if verdict != "pass":
             return verdict
-        return check_sentence(sentence, header.refs if header is not None else (), gate.book)
+        return check_sentence(sentence, header, gate.book)
 
     def _block(self, verdict: SpeechVerdict, claim: ClaimHeader | None) -> None:
         if self._blocked is not None:

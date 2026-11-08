@@ -3,12 +3,11 @@ from typing import Self
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from fakeyou.db.owner_model import (
-    Confidence,
     ItemDisclosure,
-    OwnerModelKind,
     OwnerModelSnapshot,
 )
 from fakeyou.foundation.digest import canonical_json_digest
+from fakeyou.session.facts import Confidence, OwnerModelKind
 
 OWNER_MODEL_REF_PREFIX = "om-"
 
