@@ -269,7 +269,7 @@ def test_the_oue_4_gate_passes_and_fails_when_the_reply_model_halves_its_latency
 def test_a_turn_the_recording_kept_silent_stays_silent_in_the_replay(
     settings: Settings, tmp_path: Path
 ) -> None:
-    rows = [
+    rows: list[dict[str, Any]] = [
         {
             "event": "speech_started",
             "meeting_id": "m-1",
