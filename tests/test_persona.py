@@ -23,7 +23,7 @@ from tests._persona_support import EXAMPLES, profile, profile_data
 EXAMPLE_PROFILE = EXAMPLES / "persona.example.json"
 
 
-EXAMPLE_PERSONA_DIGEST = "687c0ed18ac0e13eb4e3ac078eaf82b66a3dac50c0bd0fafbab1dcd917411d68"
+EXAMPLE_PERSONA_DIGEST = "b42b63be3e35e8e1b74a6d58bc1be88ad21186a6fa3bc2ae58ccbb12602bba07"
 
 
 def identity(owner_id: str = "owner-a", twin_id: str = "twin-a") -> dict[str, str]:

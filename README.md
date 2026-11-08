@@ -170,8 +170,11 @@ Retiring an item takes it out of the model and keeps its history; forgetting
 erases the content of every revision and leaves only a contentless marker, so
 model versions never repeat.
 The persona holds only who the twin is and how it speaks: `display_name`,
-`role`, `language`, `speaking_style`, `vocabulary`, `ai_disclosure`, and
-`allowed_tools`. What the twin knows about the owner lives in the owner model, so
+`owner_name`, `role`, `language`, `speaking_style`, `vocabulary`, `ai_disclosure`,
+and `allowed_tools`. People in a meeting call the twin by the owner's name, so a
+line that opens with `owner_name` ("Rani, can we…", "Hi Rani, …") addresses the
+twin just like one naming `display_name` anywhere; a mention elsewhere in the
+line ("ask Rani later") does not. What the twin knows about the owner lives in the owner model, so
 a persona that still carries `verified_facts` or `goals` is refused with
 `persona.knowledge_moved`. `fakeyou owner-model import --persona PATH` moves them
 once: each `verified_facts` line becomes a `fact` and each `goals` line a

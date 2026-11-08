@@ -113,7 +113,6 @@
       "grounding_confidence": 0.7,
       "max_interjections_per_10min": 2,
       "moment_confidence": 0.8,
-      "owner_names": [],
       "similarity_threshold": 0.15,
       "transcript_moments": true,
       "ttl_seconds": 30.0,

@@ -57,6 +57,7 @@ class TurnInteraction:
     on_transition: TransitionObserver | None = None
     wake_phrases: Sequence[str] = ()
     twin_names: Sequence[str] = ()
+    owner_names: Sequence[str] = ()
     barge_in: bool = False
     barge_in_judge_enabled: bool = True
     participant_policy_enabled: bool = False
@@ -197,6 +198,7 @@ def _judging(interaction: TurnInteraction) -> TurnJudging | None:
             interaction.history,
             interaction.judge_window_lines,
             twin_names=tuple(dict.fromkeys((*interaction.wake_phrases, *interaction.twin_names))),
+            owner_names=tuple(interaction.owner_names),
             presence=interaction.presence,
         ),
         thresholds=interaction.judge_thresholds,
@@ -222,7 +224,8 @@ def build_meeting_turns(
             speculative_replies=generation.speculative_replies,
             clock=timing.clock,
             ingress=IngressOptions(
-                addressing_names=wake_phrases or addressing_phrases(interaction.twin_names),
+                addressing_names=wake_phrases
+                or addressing_phrases((*interaction.twin_names, *interaction.owner_names)),
                 wake_phrases=wake_phrases,
                 timing=IngressTiming(clock=timing.clock),
                 barge_in_judge_enabled=interaction.barge_in_judge_enabled,

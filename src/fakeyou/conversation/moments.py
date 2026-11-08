@@ -13,7 +13,7 @@ from langchain_core.runnables import Runnable
 from pydantic import BaseModel, ConfigDict, Field
 
 from fakeyou.conversation.contribution import SourceRegistry
-from fakeyou.foundation.participation import mentions_whole_phrase
+from fakeyou.foundation.participation import is_vocative, mentions_whole_phrase
 from fakeyou.foundation.transcript import AttentionContext, TranscriptEvent
 from fakeyou.observability.faults import capture_error
 from fakeyou.observability.journal import Journal
@@ -190,7 +190,9 @@ class MomentDetector:
         return scored[:_MAX_CANDIDATES]
 
     def _names_twin(self, text: str) -> bool:
-        return any(mentions_whole_phrase(text, name) for name in self.twin_names)
+        return any(mentions_whole_phrase(text, name) for name in self.twin_names) or is_vocative(
+            text, self.owner_names
+        )
 
     def _passes_gate(self, event: TranscriptEvent) -> bool:
         if not event.finalized or not event.text.strip():

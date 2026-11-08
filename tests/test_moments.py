@@ -54,6 +54,7 @@ def _detector(judgement: MomentJudgement, judge: _Judge | None = None) -> Moment
             FACT: [1.0, 0.0],
             QUESTION: [0.95, 0.05],
             f"Rani Twin, {QUESTION.lower()}": [0.95, 0.05],
+            f"Rani, {QUESTION.lower()}": [0.95, 0.05],
             "unrelated": [0.0, 1.0],
         }
     )
@@ -62,6 +63,7 @@ def _detector(judgement: MomentJudgement, judge: _Judge | None = None) -> Moment
         judge=judge if judge is not None else _Judge(judgement),
         embed=embedder,
         twin_names=("Rani Twin",),
+        owner_names=("Rani",),
         similarity_threshold=0.5,
         unanswered_seconds=15.0,
     )
@@ -94,6 +96,18 @@ async def test_a_line_naming_the_twin_is_left_to_the_normal_lane() -> None:
     assert named is None
     assert judge.calls == 0
     assert detector.poll(now=200.0) is None
+
+
+async def test_a_line_addressing_the_owner_by_name_is_left_to_the_normal_lane() -> None:
+    judgement = MomentJudgement(moment="unanswered_question", source_ref="om-beta", confidence=0.9)
+    judge = _Judge(judgement)
+    detector = _detector(judgement, judge=judge)
+    await detector.prepare()
+
+    addressed = await detector.observe(_event("t1", f"Rani, {QUESTION.lower()}"), now=100.0)
+
+    assert addressed is None
+    assert judge.calls == 0
 
 
 async def test_a_line_naming_the_twin_cancels_a_pending_question() -> None:
