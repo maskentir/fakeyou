@@ -3084,10 +3084,33 @@ milik kita.
 Gate: replay oue-4 menyampaikan kontribusi proactive yang relevan saat
 diskusi tentang tim owner; tidak ada proactive saat orang bicara.
 
-Revisi riset: ingestion memberi `entity_types`/`edge_types` Graphiti
-(`Commitment`, `Decision`, `OpenQuestion`), sehingga kandidat dari meeting
-lalu diambil dengan `SearchFilters(edge_types=...)`. Deteksi live tetap di
-kernel karena ingestion berjalan setelah meeting.
+Revisi riset (2026-11-10, menggantikan revisi riset sebelumnya di seksi
+ini): recall dua jalur. `entity_types`/`edge_types` Graphiti bersifat
+advisory, bukan enforced: di `graphiti_core` 0.30.2
+(`utils/maintenance/edge_operations.py:655`) tipe edge dipilih dari nama
+yang diemit LLM dan jatuh ke `RELATES_TO` bila tidak persis cocok, jadi
+typed extraction naif menghasilkan graf yang tampak typed tetapi isinya
+tidak terjamin. Jalur typed karena itu ditulis deterministik dari
+structured adapter yang sudah ada, bukan dari ekstraksi LLM: item debrief
+(`decision_claim`, `proposal`, `action_item`, `open_question`,
+`owner_decision`, masing-masing dengan `EvidenceRef(entry_id, quote)`)
+menjadi edge bertipe dari paket ontologi berversi `core/v1`
+(`memory/ontology.py`, nama tipe dinamespace `Core*` karena
+`SearchFilters(edge_types=...)` global per query dan paket vertikal nanti
+butuh nama sendiri), ditulis `memory/typed_lane.py` dengan uuid stabil
+agar re-ingest idempoten, membawa `modality`/`disclosure`/`valid_at`/
+bukti dari `session/facts.py`. Ekstraksi LLM tetap untuk residu tak
+terstruktur dan tetap untyped. Recall mendahulukan edge typed
+(`evidence.typed_first`); gate bicara tidak berubah. Disiplin sumber
+kebenaran: Postgres (owner model revisions, artefak debrief) tetap
+source of truth untuk fakta approved/typed; Graphiti adalah derived
+index. Ontologi orang dipisah dari ontologi konten: kehadiran dan state
+meeting tetap milik `session/facts.py`, graf hanya memuat konten.
+Dependensi tercatat: `speaker_verified` di jalur memory masih selalu
+False, jadi assertion tentang Person berhenti di
+`participant_claimed` sampai resolusi identitas terverifikasi ada.
+Kandidat dari meeting lalu di C6 diambil dari jalur typed ini. Deteksi
+live tetap di kernel karena ingestion berjalan setelah meeting.
 
 ### C7: Belajar dari debrief
 
