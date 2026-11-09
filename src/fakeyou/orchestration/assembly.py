@@ -8,7 +8,7 @@ from contextlib import (
     contextmanager,
 )
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from graphiti_core import Graphiti
 from langchain.agents.middleware import AgentMiddleware, ModelFallbackMiddleware
@@ -62,8 +62,10 @@ from fakeyou.identity.verify import CalibrationArtifact, load_calibration_artifa
 from fakeyou.identity.voiceprint_embed import SpeakerEmbedder, load_embedder
 from fakeyou.identity.voiceprint_match import VoiceprintMatcher
 from fakeyou.memory.memory import (
+    RecallListener,
     RecallScope,
-    create_memory_prefetch_middleware,
+    create_memory_recall_middleware,
+    create_recall_listener,
 )
 from fakeyou.memory.persona import (
     PersonaProfile,
@@ -90,6 +92,7 @@ from fakeyou.perception.context import (
 from fakeyou.persistence.brief import MeetingBrief
 from fakeyou.persistence.owner_model import FrozenOwnerModel
 from fakeyou.session.commands import CommandOutcome
+from fakeyou.session.contracts import RecallOutcome
 from fakeyou.session.facts import StateQuestion, state_fact
 from fakeyou.session.identity import PresenceFact
 from fakeyou.session.intent import Reading, intent_of
@@ -333,6 +336,7 @@ class _ConversationBuilder:
         self._control = ReplyControl()
         self._turn_language = TurnLanguage(settings.speech.language)
         self._evidence = TurnEvidence()
+        self.recall_listener: RecallListener | None = None
 
     def build_persona(self) -> None:
         profile = self._agent.profile
@@ -374,15 +378,17 @@ class _ConversationBuilder:
         graphiti = self._agent.graphiti
         if graphiti is None or profile is None or "recall_meeting_context" not in self._tool_names:
             return
-        self._middleware.append(
-            create_memory_prefetch_middleware(
-                graphiti,
-                scope=RecallScope(profile.memory_group, (profile.display_name,)),
-                recall=self._settings.memory.recall,
-                diag=self._diagnostics,
-                on_prefetch=self._note_prefetch,
-            )
+        listener = create_recall_listener(
+            graphiti,
+            scope=RecallScope(profile.memory_group, (profile.display_name,)),
+            recall=self._settings.memory.recall,
+            diag=self._diagnostics,
+            on_recall=self._note_recall,
         )
+        self.recall_listener = listener
+        if self._behavior.kernel is not None:
+            self._behavior.kernel.on_final(listener.observe_final)
+        self._middleware.append(create_memory_recall_middleware(listener))
 
     def add_perception(self) -> None:
         perception = self._agent.perception
@@ -453,10 +459,16 @@ class _ConversationBuilder:
             middleware=self._middleware,
         )
 
-    def _note_prefetch(self, outcome: str, refs: Mapping[str, RecalledFact]) -> None:
+    def _note_recall(
+        self, _transcript_id: str, query: str, outcome: str, refs: Mapping[str, RecalledFact]
+    ) -> None:
         self._evidence.note_memory(refs)
         if self._behavior.kernel is not None:
-            self._behavior.kernel.memory_outcome(outcome)
+            self._behavior.kernel.recall_observed(
+                query=query,
+                outcome=cast(RecallOutcome, outcome),
+                fact_refs=tuple(refs),
+            )
 
     def build_reply_model(self) -> BaseChatModel:
         factory = self._models.reply
@@ -515,6 +527,7 @@ class _ConversationBuilder:
             evidence=self._evidence,
             critic=critic,
             critic_threshold=self._settings.perception.attention.critic_confidence,
+            recall_feed=self.recall_listener,
         )
 
     def build_turns(
@@ -601,4 +614,6 @@ async def open_conversation(
             responder, participant_policy_enabled=config.participant_policy_enabled
         )
         resources.push_async_callback(turns.actor.close)
+        if builder.recall_listener is not None:
+            resources.push_async_callback(builder.recall_listener.close)
         yield turns

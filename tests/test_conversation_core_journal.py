@@ -136,7 +136,7 @@ async def test_loop_journals_turn_without_modifying_injected_responder(
 
 
 def memory_event(event_id: str) -> TranscriptEvent:
-    return replace(event(event_id, "When is the demo?"), evidence_needs=("memory",))
+    return replace(event(event_id, "When is the demo?"), evidence_needs=("screen",))
 
 
 def _recall_then_reply() -> ToolCallingFakeModel:

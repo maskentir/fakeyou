@@ -112,7 +112,7 @@ async def test_an_evidence_turn_speaks_the_opener_without_waiting_for_the_timer(
     journal = RecordingJournal()
     gate = asyncio.Event()
     responder = FakeResponder(gate)
-    judge = ScriptedJudge(lambda _window: judged("reply", evidence=["memory"]))
+    judge = ScriptedJudge(lambda _window: judged("reply", evidence=["screen"]))
     audio = CueAudio()
     turns = build_meeting_turns(
         responder,

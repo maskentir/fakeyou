@@ -227,9 +227,9 @@ async def test_a_line_said_while_the_judge_decided_makes_the_turn_answer_afresh(
     assert journal.reasons("reply_draft_dropped") == ["key_mismatch"]
 
 
-async def test_a_turn_the_judge_planned_memory_for_still_speaks_the_draft() -> None:
+async def test_a_turn_without_evidence_needs_still_speaks_the_draft() -> None:
     journal, model = Journal(), Model()
-    context = runtime(judged("reply", evidence=("memory",)), journal, model)
+    context = runtime(judged("reply", evidence=()), journal, model)
 
     await converse(context, "twin are you")
 

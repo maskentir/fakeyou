@@ -795,7 +795,7 @@ def _finish_turn(
 
 _NO_GRANT = Grant(frozenset())
 MAX_PENDING_PLANS = 32
-UNJUDGED_EVIDENCE: tuple[EvidenceNeed, ...] = ("chat_history", "memory")
+UNJUDGED_EVIDENCE: tuple[EvidenceNeed, ...] = ("chat_history",)
 
 
 def reading_of(verdict: ParticipationDecision) -> Reading:

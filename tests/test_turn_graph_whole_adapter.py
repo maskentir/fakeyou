@@ -227,7 +227,7 @@ async def test_evidence_is_gathered_once_for_the_heard_question_before_the_reply
     def planning(event: TranscriptEvent, reading: Reading, channel: Channel) -> PlannedTurn:
         del reading, channel
         return PlannedTurn(
-            TurnPlan(f"plan-{event.id}", "evidence_then_speech", "speech", ("screen", "memory"))
+            TurnPlan(f"plan-{event.id}", "evidence_then_speech", "speech", ("screen",))
         )
 
     harness = Harness(FakeReplier())
@@ -235,7 +235,7 @@ async def test_evidence_is_gathered_once_for_the_heard_question_before_the_reply
 
     await harness.say("f1", "twin, what is on the slide")
 
-    assert asked == [("twin, what is on the slide", ("screen", "memory"))]
+    assert asked == [("twin, what is on the slide", ("screen",))]
     assert harness.replier.events[0][-1].evidence == gathered
 
 
