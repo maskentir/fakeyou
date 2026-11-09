@@ -368,10 +368,10 @@ def build_prefetch_query(messages: Sequence[AnyMessage], speech: Sequence[HumanM
     return query
 
 
-PrefetchListener = Callable[[str, Mapping[str, RecalledFact]], None]
+RecallListenerCallback = Callable[[str, str, str, Mapping[str, RecalledFact]], None]
 
 
-class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
+class RecallListener:
     def __init__(
         self,
         memory: Graphiti,
@@ -379,20 +379,80 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
         scope: RecallScope,
         recall: RecallSettings,
         diag: Diagnostics = DEFAULT_DIAGNOSTICS,
-        on_prefetch: PrefetchListener | None = None,
+        on_recall: RecallListenerCallback | None = None,
     ) -> None:
-        self._on_prefetch = on_prefetch
-        self._scope = scope
         self._memory = memory
+        self._scope = scope
         self._group_id = scope.group_id
         self._recall = recall
         self._faults = diag.faults
         self._journal = diag.journal or Journal("", echo=False)
+        self._on_recall = on_recall
         self._latest: tuple[str, AIMessage, ToolMessage] | None = None
         self._retained: dict[str, tuple[AIMessage, ToolMessage]] = {}
         self._sequence = 0
+        self._pending: tuple[str, str, str] | None = None
+        self._task: asyncio.Task[None] | None = None
+        self._closed = False
 
-    def _retained_pairs(
+    def observe(self, transcript_id: str, *, query: str, question: str) -> None:
+        if self._closed or not transcript_id:
+            return
+        if self._latest is not None and self._latest[0] == transcript_id:
+            return
+        if self._pending is not None and self._pending[0] == transcript_id:
+            return
+        self._pending = (transcript_id, query, question)
+        self._schedule()
+
+    def observe_final(self, transcript_id: str, window: Sequence[str]) -> None:
+        if not window:
+            return
+        query = "\n".join(window)
+        if len(query) > PREFETCH_QUERY_MAX_CHARS:
+            query = query[-PREFETCH_QUERY_MAX_CHARS:]
+        self.observe(transcript_id, query=query, question=window[-1])
+
+    def _schedule(self) -> None:
+        if self._task is not None and not self._task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._task = loop.create_task(self._run(), name="memory-recall-listener")
+
+    async def _run(self) -> None:
+        while self._pending is not None and not self._closed:
+            transcript_id, query, question = self._pending
+            self._pending = None
+            call, evidence = await self._evidence(transcript_id, query=query, question=question)
+            self._latest = (transcript_id, call, evidence)
+            if _found(evidence):
+                self._retained[transcript_id] = (call, evidence)
+                while len(self._retained) > PREFETCH_RETAINED_EVIDENCE:
+                    self._retained.pop(next(iter(self._retained)))
+
+    async def idle(self) -> None:
+        self._schedule()
+        while self._task is not None and not self._task.done():
+            await self._task
+
+    async def close(self) -> None:
+        self._closed = True
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+
+    def pair(self, transcript_id: str | None) -> tuple[AIMessage, ToolMessage] | None:
+        if self._latest is None or transcript_id is None or self._latest[0] != transcript_id:
+            return None
+        return self._latest[1], self._latest[2]
+
+    def retained_pairs(
         self, messages: Sequence[AnyMessage], *, exclude: str | None
     ) -> dict[str, tuple[AIMessage, ToolMessage]]:
         ids = [
@@ -409,48 +469,9 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
             for speech_id in ids[-(PREFETCH_RETAINED_EVIDENCE - 1) :]
         }
 
-    @override
-    async def awrap_model_call(
-        self,
-        request: ModelRequest[Any],
-        handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
-    ) -> ModelResponse[Any]:
-        position, speech = current_trigger(request.messages)
-        if not speech:
-            return await handler(request)
-        key = speech[-1].id
-        kept = self._retained_pairs(request.messages, exclude=key)
-        if key is None or self._latest is None or self._latest[0] != key:
-            call, evidence = await self._evidence(request.messages, speech)
-            self._latest = (key or "", call, evidence)
-            if key is not None and _found(evidence):
-                self._retained[key] = (call, evidence)
-                while len(self._retained) > PREFETCH_RETAINED_EVIDENCE:
-                    self._retained.pop(next(iter(self._retained)))
-        _, call, evidence = self._latest
-        current = _outcome(evidence) in INJECTED_OUTCOMES
-        if not current and not kept:
-            return await handler(request)
-        assembled: list[AnyMessage] = []
-        for index, message in enumerate(request.messages):
-            assembled.append(message)
-            if index == position - 1 and current:
-                assembled.extend([call, evidence])
-            elif (
-                isinstance(message, HumanMessage) and message.id is not None and message.id in kept
-            ):
-                kept_call, kept_evidence = kept[message.id]
-                assembled.extend([kept_call, _trim_retained_evidence(kept_evidence)])
-        return await handler(request.override(messages=assembled))
-
     async def _evidence(
-        self,
-        messages: Sequence[AnyMessage],
-        speech: list[HumanMessage],
+        self, transcript_id: str, *, query: str, question: str
     ) -> tuple[AIMessage, ToolMessage]:
-        query = build_prefetch_query(messages, speech)
-        question = spoken_question(speech)
-        transcript_id = speech[-1].id
         request_id = self._journal.request_started(
             source="memory", operation="prefetch", transcript_id=transcript_id
         )
@@ -493,8 +514,8 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
                 outcome, content = "found", PREFETCH_EVIDENCE_PREFIX + slim
                 evidence_full = full
             self._journal.request_finished(request_id, transcript_id=transcript_id, outcome=outcome)
-        if self._on_prefetch is not None:
-            self._on_prefetch(outcome, memory_refs_from_evidence(evidence_full))
+        if self._on_recall is not None:
+            self._on_recall(transcript_id, query, outcome, memory_refs_from_evidence(evidence_full))
         self._sequence += 1
         tool_call_id = (
             f"{transcript_id}-memory-recall" if transcript_id else f"memory-recall-{self._sequence}"
@@ -528,21 +549,59 @@ class _MemoryPrefetchMiddleware(AgentMiddleware[Any, Any, Any]):
         return call, evidence
 
 
-def create_memory_prefetch_middleware(
+class _MemoryRecallMiddleware(AgentMiddleware[Any, Any, Any]):
+    def __init__(self, listener: RecallListener) -> None:
+        self._listener = listener
+
+    @override
+    async def awrap_model_call(
+        self,
+        request: ModelRequest[Any],
+        handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
+    ) -> ModelResponse[Any]:
+        position, speech = current_trigger(request.messages)
+        if not speech:
+            return await handler(request)
+        key = speech[-1].id
+        self._listener.observe(
+            key or "",
+            query=build_prefetch_query(request.messages, speech),
+            question=spoken_question(speech),
+        )
+        kept = self._listener.retained_pairs(request.messages, exclude=key)
+        latest = self._listener.pair(key)
+        current = latest is not None and _outcome(latest[1]) in INJECTED_OUTCOMES
+        if not current and not kept:
+            return await handler(request)
+        assembled: list[AnyMessage] = []
+        for index, message in enumerate(request.messages):
+            assembled.append(message)
+            if index == position - 1 and current:
+                assert latest is not None
+                assembled.extend(latest)
+            elif (
+                isinstance(message, HumanMessage) and message.id is not None and message.id in kept
+            ):
+                kept_call, kept_evidence = kept[message.id]
+                assembled.extend([kept_call, _trim_retained_evidence(kept_evidence)])
+        return await handler(request.override(messages=assembled))
+
+
+def create_recall_listener(
     memory: Graphiti,
     *,
     scope: RecallScope,
     recall: RecallSettings = DEFAULTS.memory.recall,
     diag: Diagnostics = DEFAULT_DIAGNOSTICS,
-    on_prefetch: PrefetchListener | None = None,
+    on_recall: RecallListenerCallback | None = None,
+) -> RecallListener:
+    return RecallListener(memory, scope=scope, recall=recall, diag=diag, on_recall=on_recall)
+
+
+def create_memory_recall_middleware(
+    listener: RecallListener,
 ) -> AgentMiddleware[Any, Any, Any]:
-    return _MemoryPrefetchMiddleware(
-        memory,
-        scope=scope,
-        recall=recall,
-        diag=diag,
-        on_prefetch=on_prefetch,
-    )
+    return _MemoryRecallMiddleware(listener)
 
 
 async def describe_facts(

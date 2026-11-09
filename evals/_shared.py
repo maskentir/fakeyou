@@ -11,7 +11,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 
 from fakeyou.config.settings import Settings
 
-REPLAY_EVIDENCE = ("memory",)
+REPLAY_EVIDENCE: tuple[str, ...] = ()
 CREDENTIAL_MARKERS = (
     "key",
     "token",

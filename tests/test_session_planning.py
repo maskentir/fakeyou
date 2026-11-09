@@ -62,7 +62,7 @@ def test_an_action_with_an_answer_is_one_action_and_one_output() -> None:
         "judge_reply",
         meet_action="react",
         reaction_emoji="\U0001f44d",
-        evidence=("screen", "memory", "chat_history", "bogus"),
+        evidence=("screen", "chat_history", "bogus"),
     )
 
     assert intent_of(reading) == Compound(
@@ -208,7 +208,7 @@ def test_no_plan_holds_a_side_effect_its_grant_does_not_allow(
         (NoResponse("x"), "speech", "silent"),
         (Answer(), "speech", "speech_only"),
         (Answer(("screen",)), "speech", "evidence_then_speech"),
-        (Answer(("memory",)), "chat", "evidence_then_chat"),
+        (Answer(("screen",)), "chat", "evidence_then_chat"),
         (ChatRequest(), "speech", "chat_only"),
         (Clarify(), "speech", "speech_only"),
         (MeetAction("raise_hand"), "speech", "action_only"),

@@ -316,7 +316,7 @@ CATALOG_PLANS: dict[str, Callable[[], bool]] = {
     ),
     "k-pl2": lambda: (
         _planned(
-            Compound(MeetAction("leave"), Answer(("screen", "memory"))),
+            Compound(MeetAction("leave"), Answer(("screen",))),
             Actor("participant", "dev-ayu"),
             EVERY_PERMISSION,
         ).evidence

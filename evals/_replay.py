@@ -20,7 +20,11 @@ from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.conversation.conversation import MeetingResponder, cap_spoken_reply
 from fakeyou.conversation.speech_book import BookSource, TurnEvidence
 from fakeyou.foundation.transcript import TranscriptEvent
-from fakeyou.memory.memory import RecallScope, create_memory_prefetch_middleware
+from fakeyou.memory.memory import (
+    RecallScope,
+    create_memory_recall_middleware,
+    create_recall_listener,
+)
 from fakeyou.memory.persona import PersonaProfile
 from fakeyou.observability.faults import capture_error
 from fakeyou.orchestration.assembly import build_source_registry
@@ -163,17 +167,16 @@ async def _replay_session(
     profile, score, run = context.profile, context.score, context.run
     memory, stored = session_memory(session["memory"], profile.memory_group)
     evidence = TurnEvidence()
+    listener = create_recall_listener(
+        memory,
+        scope=RecallScope(profile.memory_group, (profile.display_name,)),
+        on_recall=lambda _transcript_id, _query, _outcome, refs: evidence.note_memory(refs),
+    )
     with case_storage(memory, stored), TemporaryDirectory() as folder:
         agent = create_meeting_agent(
             model,
             persona=context.prompt_builder(profile, owner_model=context.owner_model),
-            middleware=[
-                create_memory_prefetch_middleware(
-                    memory,
-                    scope=RecallScope(profile.memory_group, (profile.display_name,)),
-                    on_prefetch=lambda _outcome, refs: evidence.note_memory(refs),
-                )
-            ],
+            middleware=[create_memory_recall_middleware(listener)],
         )
         record = MeetingRecord(Path(folder) / "record.jsonl")
         book_source = BookSource(registry=build_source_registry(None, context.owner_model))
@@ -189,6 +192,7 @@ async def _replay_session(
             if context.streaming
             else MeetingResponder(agent, record, book_source=book_source, evidence=evidence)
         )
+        heard: list[str] = []
         for index, turn in enumerate(session["turns"]):
             event = TranscriptEvent(
                 id=f"{session['meeting_id']}-{run}-{index}",
@@ -200,6 +204,9 @@ async def _replay_session(
                 speaker_evidence_id=None,
                 evidence_needs=REPLAY_EVIDENCE,
             )
+            heard.append(turn["say"])
+            listener.observe_final(event.id, tuple(heard[-8:]))
+            await listener.idle()
             record.add_transcript(event)
             started = time.monotonic()
             if context.streaming:
@@ -225,6 +232,7 @@ async def _replay_session(
                     "checks": outcome,
                 }
             )
+        await listener.close()
         record.close()
 
 

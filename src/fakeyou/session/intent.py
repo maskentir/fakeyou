@@ -4,7 +4,7 @@ from typing import Literal, cast, get_args
 from fakeyou.session.facts import StateQuestion
 
 MeetActionKind = Literal["raise_hand", "lower_hand", "react", "mute", "unmute", "leave"]
-EvidenceNeed = Literal["screen", "participant", "chat_history", "memory"]
+EvidenceNeed = Literal["screen", "participant", "chat_history"]
 Decision = Literal["speak", "silent", "clarify"]
 MAX_EVIDENCE = 2
 _ACTIONS: frozenset[str] = frozenset(get_args(MeetActionKind))

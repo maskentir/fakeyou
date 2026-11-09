@@ -19,7 +19,7 @@ from fakeyou.session.identity import PresenceFact
 
 JudgeAction = Literal["reply", "clarify", "stay_silent"]
 MeetAction = Literal["none", "raise_hand", "lower_hand", "react", "mute", "unmute", "leave"]
-EvidenceNeed = Literal["screen", "participant", "chat_history", "memory"]
+EvidenceNeed = Literal["screen", "participant", "chat_history"]
 StateQuestionField = Literal[
     "none", "attendance", "participant_count", "presenter", "screen_title", "own_action_status"
 ]
@@ -88,9 +88,10 @@ _JUDGE_RULES = (
     "shown. Use screen when the answer depends on what is being shared or shown; "
     "participant only when it depends on a specific participant's camera or appearance, "
     "not who is attending or how many people are present; chat_history "
-    "when it asks about earlier chat; memory when it asks about the owner's earlier "
-    "facts, preferences or meetings. Leave it empty for greetings, action requests, state "
-    "questions, and answers available from the conversation.\n"
+    "when it asks about earlier chat. Leave it empty for greetings, action requests, "
+    "state questions, answers available from the conversation, and questions about the "
+    "owner's earlier facts, preferences or meetings: recalled memory reaches the reply "
+    "on its own and never needs planning.\n"
     "state_question: when the latest line asks only about meeting state the system can read "
     "directly, name it: attendance for who is here, participant_count for how many people "
     "are here, presenter for who is presenting, screen_title for what is being shared by "

@@ -245,6 +245,35 @@ async def test_a_failing_judge_puts_the_session_in_model_degraded_mode() -> None
     ]
 
 
+def test_recall_lands_in_the_kernel_recall_set() -> None:
+    kernel = port()
+    joined(kernel)
+
+    kernel.recall_observed(query="budget", outcome="found", fact_refs=("edge-1", "edge-2"))
+    kernel.drain()
+
+    assert kernel.state.recall.outcome == "found"
+    assert kernel.state.recall.fact_refs == ("edge-1", "edge-2")
+    assert kernel.state.recall.query == "budget"
+    assert kernel.modes() == frozenset()
+
+
+def test_finals_reach_the_recall_listener_with_the_dialogue_window() -> None:
+    kernel = port()
+    joined(kernel)
+    heard: list[tuple[str, tuple[str, ...]]] = []
+    kernel.on_final(lambda transcript_id, window: heard.append((transcript_id, window)))
+
+    kernel.transcript(final("t1", "what about the budget?"), row("uuid-a", "dev-ayu"))
+    kernel.transcript(final("t2", "and the one from yesterday?"), row("uuid-a", "dev-ayu"))
+    kernel.drain()
+
+    assert heard == [
+        ("t1", ("what about the budget?",)),
+        ("t2", ("what about the budget?", "and the one from yesterday?")),
+    ]
+
+
 def test_unavailable_memory_and_failed_playback_are_degraded_modes() -> None:
     kernel = port()
     joined(kernel)

@@ -369,6 +369,8 @@ async def native_responder(
 async def respond_with_deadline(
     native: NativeResponder, event: TranscriptEvent, settings: Settings
 ) -> str:
+    native.responder.note_final(event)
+    await native.responder.recall_idle()
     native.record.add_transcript(event)
     async with asyncio.timeout(settings.conversation.response_timeout_seconds):
         reply = await native.responder.respond([event], lambda: None)
@@ -397,6 +399,8 @@ async def stream_with_deadline(
     request_id: str,
 ) -> tuple[list[str], float]:
     responder = native.responder
+    responder.note_final(event)
+    await responder.recall_idle()
     native.record.add_transcript(event)
     started = time.monotonic()
     sentences: list[str] = []

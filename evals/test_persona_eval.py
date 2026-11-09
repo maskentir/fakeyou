@@ -16,7 +16,11 @@ from evals._replay import session_memory
 from evals._trust import case_storage
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.agent import create_meeting_agent
-from fakeyou.memory.memory import RecallScope, create_memory_prefetch_middleware
+from fakeyou.memory.memory import (
+    RecallScope,
+    create_memory_recall_middleware,
+    create_recall_listener,
+)
 from fakeyou.memory.persona import PersonaProfile
 from fakeyou.orchestration.persona_prompt import build_persona_prompt
 from fakeyou.orchestration.providers import create_chat_model
@@ -48,9 +52,7 @@ def scenario_owner_model(scenario: dict[str, str]) -> FrozenOwnerModel:
 def participant_asks(text: str) -> HumanMessage:
     return HumanMessage(
         content=text,
-        additional_kwargs={
-            "meeting_event": {"participant_id": "unknown", "evidence_needs": ["memory"]}
-        },
+        additional_kwargs={"meeting_event": {"participant_id": "unknown", "evidence_needs": []}},
     )
 
 
@@ -61,21 +63,26 @@ async def answer_with_memory(
     thread_id: str,
     owner_model: FrozenOwnerModel | None = None,
 ) -> dict[str, Any]:
+    listener = create_recall_listener(
+        memory,
+        scope=RecallScope(EXAMPLE_PROFILE.memory_group, (EXAMPLE_PROFILE.display_name,)),
+    )
     agent = create_meeting_agent(
         model,
         persona=build_persona_prompt(EXAMPLE_PROFILE, owner_model=owner_model),
-        middleware=[
-            create_memory_prefetch_middleware(
-                memory,
-                scope=RecallScope(EXAMPLE_PROFILE.memory_group, (EXAMPLE_PROFILE.display_name,)),
-            )
-        ],
+        middleware=[create_memory_recall_middleware(listener)],
         checkpointer=InMemorySaver(),
     )
-    result: dict[str, Any] = await agent.ainvoke(
-        {"messages": [participant_asks(question)]},
-        {"configurable": {"thread_id": thread_id}, "recursion_limit": 8},
-    )
+    asks = participant_asks(question).model_copy(update={"id": thread_id})
+    listener.observe_final(thread_id, (question,))
+    await listener.idle()
+    try:
+        result: dict[str, Any] = await agent.ainvoke(
+            {"messages": [asks]},
+            {"configurable": {"thread_id": thread_id}, "recursion_limit": 8},
+        )
+    finally:
+        await listener.close()
     return result
 
 

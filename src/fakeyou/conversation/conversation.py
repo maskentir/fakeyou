@@ -700,6 +700,12 @@ async def stream_sentences(
         SPEECH_MARK.reset(marked)
 
 
+class RecallFeed(Protocol):
+    def observe_final(self, transcript_id: str, window: Sequence[str]) -> None: ...
+
+    async def idle(self) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class MeetingResponder:
     agent: MeetingAgent
@@ -715,6 +721,7 @@ class MeetingResponder:
     evidence: TurnEvidence = field(default_factory=TurnEvidence)
     critic: ContributionCritic | None = None
     critic_threshold: float = 0.7
+    recall_feed: RecallFeed | None = None
 
     def __post_init__(self) -> None:
         if self.max_sentences <= 0:
@@ -726,6 +733,16 @@ class MeetingResponder:
         if self.control is None:
             return self.max_sentences
         return self.control.limit(self.max_sentences)
+
+    def note_final(self, event: TranscriptEvent) -> None:
+        if self.recall_feed is None or not event.finalized:
+            return
+        window = (*recent_room_lines(self.history.entries(), limit=7), event.text)
+        self.recall_feed.observe_final(event.id, window)
+
+    async def recall_idle(self) -> None:
+        if self.recall_feed is not None:
+            await self.recall_feed.idle()
 
     def messages(self, events: Sequence[TranscriptEvent]) -> list[BaseMessage]:
         earlier = history_messages(

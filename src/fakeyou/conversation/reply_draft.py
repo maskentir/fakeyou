@@ -12,7 +12,6 @@ from fakeyou.observability.journal import JournalSink
 
 DropReason = Literal["key_mismatch", "not_admitted", "not_ready", "superseded", "unused", "closed"]
 DRAFT_REQUEST = "draft"
-REQUEST_NEUTRAL_NEEDS = frozenset({"memory"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,7 +29,7 @@ class DraftKey:
         return cls(
             tuple(event.id for event in batch),
             reply_event.text,
-            tuple(need for need in reply_event.evidence_needs if need not in REQUEST_NEUTRAL_NEEDS),
+            tuple(reply_event.evidence_needs),
             reply_event.owner_claim,
             history,
         )
