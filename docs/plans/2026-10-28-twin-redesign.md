@@ -3084,6 +3084,18 @@ milik kita.
 Gate: replay oue-4 menyampaikan kontribusi proactive yang relevan saat
 diskusi tentang tim owner; tidak ada proactive saat orang bicara.
 
+Status (C6a): `AttentionPrefilter` dan trigger pergantian layar di
+runtime dihapus. Bacaan layar masuk `MomentDetector.observe_screen`
+lewat kandidat embedding dan judge yang sama dengan jalur ucapan,
+didup per ref+teks. Quota tidak lagi dihitung saat delivery attempt:
+FloorActor melaporkan kontribusi hanya bila deferred attention turn
+benar-benar mengucapkan kalimat (`observe_contribution_spoken`), dan
+runtime menghitung jendela 600 detik dari waktu terucap itu. Sisa C6b:
+kandidat dari state kernel penuh (recall set dan commitment yang
+disebut belum masuk registry kandidat), penghapusan
+`offer_attention`/`_deliver_attention` sebagai shim runtime, dan gate
+replay oue-4 yang journal-nya belum tersedia lokal.
+
 Revisi riset (2026-11-10, menggantikan revisi riset sebelumnya di seksi
 ini): recall dua jalur. `entity_types`/`edge_types` Graphiti bersifat
 advisory, bukan enforced: di `graphiti_core` 0.30.2

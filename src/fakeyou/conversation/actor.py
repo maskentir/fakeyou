@@ -249,6 +249,8 @@ class FloorActor:
         self._reply = ReplyOptions()
         self._observer: TransitionObserver | None = None
         self._spoken: Callable[[str], None] | None = None
+        self._contribution_spoken: Callable[[str], None] | None = None
+        self._sentences_spoken = 0
         self._phase: ConversationPhase = "listening"
         self._floor = SpeechFloor(clock=clock)
         self._queue = PendingFinals()
@@ -529,6 +531,9 @@ class FloorActor:
     def observe_spoken(self, observer: Callable[[str], None]) -> None:
         self._spoken = observer
 
+    def observe_contribution_spoken(self, observer: Callable[[str], None]) -> None:
+        self._contribution_spoken = observer
+
     def observe(self, observer: TransitionObserver) -> None:
         self._observer = observer
 
@@ -553,6 +558,7 @@ class FloorActor:
         )
 
     def _note_spoken(self, sentence: str) -> None:
+        self._sentences_spoken += 1
         self._quiet.note_activity()
         if self._spoken is not None:
             self._spoken(sentence)
@@ -624,7 +630,15 @@ class FloorActor:
             turn = self._next_deferred(channel)
             if turn is None:
                 break
+            sentences_before = self._sentences_spoken
             delivered = await run_deferred_turn(self, self._speech, turn)
+            if (
+                delivered
+                and turn.event.source == "meeting_attention"
+                and self._sentences_spoken > sentences_before
+                and self._contribution_spoken is not None
+            ):
+                self._contribution_spoken(turn.event.id)
             if not delivered and not self._closed and not self._deferred.retry(turn):
                 self._journal.record(
                     "deferred_turn_dropped",

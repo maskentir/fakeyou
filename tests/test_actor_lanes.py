@@ -354,6 +354,36 @@ async def test_a_voice_interjection_waits_for_a_quiet_floor() -> None:
     await turns.close()
 
 
+async def test_a_spoken_contribution_is_reported_once_it_reaches_the_room() -> None:
+    turns, audio = lanes(FixedResponder("The beta date looks wrong."))
+    spoken: list[str] = []
+    turns.observe_contribution_spoken(spoken.append)
+
+    turns.actor.receive_attention(
+        meeting_input("a1", "attention screen#2", "meeting_attention"), channel="voice"
+    )
+    await settle(turns)
+
+    assert audio.spoken == ["The beta date looks wrong."]
+    assert spoken == ["a1"]
+    await turns.close()
+
+
+async def test_a_contribution_that_says_nothing_is_not_reported_as_spoken() -> None:
+    turns, audio = lanes(FixedResponder(""))
+    spoken: list[str] = []
+    turns.observe_contribution_spoken(spoken.append)
+
+    turns.actor.receive_attention(
+        meeting_input("a1", "attention screen#2", "meeting_attention"), channel="voice"
+    )
+    await settle(turns)
+
+    assert audio.spoken == []
+    assert spoken == []
+    await turns.close()
+
+
 async def test_a_voice_interjection_never_talks_over_someone() -> None:
     journal = RecordingJournal()
     turns, audio = lanes(

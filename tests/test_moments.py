@@ -178,3 +178,39 @@ async def test_without_an_embedder_no_moments_are_detected() -> None:
     await detector.prepare()
 
     assert await detector.observe(_event("t1", QUESTION), now=100.0) is None
+
+
+async def test_a_screen_reading_reaches_the_same_judge_as_speech() -> None:
+    judgement = MomentJudgement(moment="fact_opportunity", source_ref="om-beta", confidence=0.9)
+    judge = _Judge(judgement)
+    detector = _detector(judgement, judge)
+    await detector.prepare()
+
+    context = await detector.observe_screen(ref="screen#2", text=QUESTION, now=100.0)
+
+    assert context is not None
+    assert context.suggested_source_ref == "om-beta"
+    assert judge.calls == 1
+
+
+async def test_the_same_screen_reading_is_judged_only_once() -> None:
+    judgement = MomentJudgement(moment="fact_opportunity", source_ref="om-beta", confidence=0.9)
+    judge = _Judge(judgement)
+    detector = _detector(judgement, judge)
+    await detector.prepare()
+
+    await detector.observe_screen(ref="screen#2", text=QUESTION, now=100.0)
+    again = await detector.observe_screen(ref="screen#2", text=QUESTION, now=101.0)
+
+    assert again is None
+    assert judge.calls == 1
+
+
+async def test_a_screen_reading_without_candidates_never_reaches_the_judge() -> None:
+    judgement = MomentJudgement(moment="fact_opportunity", source_ref="om-beta", confidence=0.9)
+    judge = _Judge(judgement)
+    detector = _detector(judgement, judge)
+    await detector.prepare()
+
+    assert await detector.observe_screen(ref="screen#3", text="unrelated", now=100.0) is None
+    assert judge.calls == 0
