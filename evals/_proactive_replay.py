@@ -20,7 +20,6 @@ from fakeyou.memory.persona import PersonaProfile, owner_names
 from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.observability.journal import Journal
 from fakeyou.orchestration.providers import create_embedder, create_turn_judge_model
-from fakeyou.perception.attention import AttentionPrefilter
 from fakeyou.persistence.brief import MeetingBrief
 from fakeyou.persistence.owner_model import FrozenOwnerModel
 from fakeyou.persistence.record import MeetingRecord
@@ -233,13 +232,14 @@ async def run_proactive_scenario(
     journal = Journal(config.meeting_id, emit=lines.append, echo=False)
     moment_detector = detector or build_detector(fixture, profile, settings, journal)
     await moment_detector.prepare()
-    prefilter = AttentionPrefilter(max_per_window=attention.max_interjections_per_10min)
+    spoken_at: list[float] = []
 
     async def deliver(context: AttentionContext, turns: Any, now: float) -> None:
-        if not prefilter.allow(now):
+        recent = [spoken for spoken in spoken_at if now - spoken < 600.0]
+        if len(recent) >= attention.max_interjections_per_10min:
             return
-        prefilter.take(now)
         outcome.offers += 1
+        turns.observe_contribution_spoken(lambda _event_id: spoken_at.append(now))
         turns.actor.receive_attention(_attention_event(scenario, context), channel="voice")
         await _settle(turns)
 

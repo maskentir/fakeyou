@@ -101,7 +101,6 @@ from fakeyou.orchestration.lifecycle import (
 from fakeyou.orchestration.perception import PerceptionStack
 from fakeyou.orchestration.preflight import ProbeResult, run_preflight
 from fakeyou.orchestration.presence import PROTOCOL_STALE_SECONDS, AloneClock
-from fakeyou.perception.attention import AttentionPrefilter
 from fakeyou.perception.percepts import ChatLine, ScreenSegment
 from fakeyou.perception.roster import MeetRoster
 from fakeyou.perception.sensors import (
@@ -236,8 +235,8 @@ class MeetingWorker:
     join_started: float | None = None
     presence: AloneClock = field(init=False)
     end_screen: str | None = None
-    attention: AttentionPrefilter = field(init=False)
-    attention_screen: str | None = field(init=False, default=None)
+    attention_spoken_at: list[float] = field(init=False, default_factory=list)
+    moment_tasks: set[asyncio.Task[None]] = field(init=False, default_factory=set)
     attention_chat: str | None = field(init=False, default=None)
     _events_watched: bool = False
     _shared_roster_listener: Callable[[MeetRoster], None] | None = None
@@ -245,7 +244,8 @@ class MeetingWorker:
 
     def __post_init__(self) -> None:
         self.presence = AloneClock(leave_after_seconds=self.config.alone_leave_seconds)
-        self.attention = AttentionPrefilter(max_per_window=self.config.attention_max_interjections)
+        if self.conversation is not None:
+            self.conversation.observe_contribution_spoken(self.note_contribution_spoken)
         self.begin(
             initial_lifecycle_state(
                 self.config.owner_id, self.config.twin_id, self.config.meeting_id
@@ -623,28 +623,15 @@ class MeetingWorker:
         self.page.on("response", self.perception.sensors.on_response)
         self.perception_sync_watched = True
 
-    def attention_trigger(self) -> AttentionContext | None:
-        perception = self.perception
-        if perception is None:
-            return None
-        snapshot = perception.timeline.snapshot()
-        screen = snapshot.current_screen
-        if screen is None or screen.reading is None:
-            return None
-        reading = screen.reading
-        key = f"{screen.ref}:{reading.title}"
-        if key == self.attention_screen:
-            return None
-        self.attention_screen = key
-        title = reading.title or "a slide"
-        points = reading.key_points if reading.is_meeting_content else []
-        detail = "; ".join(point for point in points[:2])
-        seen = f"{title}: {detail}" if detail else title
-        return AttentionContext(
-            kind="screen",
-            trigger_text=f"The shared screen is now {seen}.",
-            trigger_event_id=screen.ref,
-        )
+    def _attention_quota_open(self, now: float) -> bool:
+        self.attention_spoken_at = [
+            spoken for spoken in self.attention_spoken_at if now - spoken < 600.0
+        ]
+        return len(self.attention_spoken_at) < self.config.attention_max_interjections
+
+    def note_contribution_spoken(self, event_id: str) -> None:
+        del event_id
+        self.attention_spoken_at.append(self.monotonic())
 
     def _deliver_attention(self, context: AttentionContext, *, source: str) -> bool:
         conversation = self.conversation
@@ -653,9 +640,8 @@ class MeetingWorker:
         if conversation.is_busy:
             return False
         now = self.monotonic()
-        if not self.attention.allow(now):
+        if not self._attention_quota_open(now):
             return False
-        self.attention.take(now)
         self.record(
             "attention_observed",
             source=source,
@@ -684,17 +670,12 @@ class MeetingWorker:
         if conversation.is_busy:
             return
         now = self.monotonic()
-        if not self.attention.allow(now):
+        if not self._attention_quota_open(now):
             return
         if self.moments is not None:
             due = self.moments.take_ready(now=now)
             if due is not None:
                 self._deliver_attention(due, source="agent")
-                return
-        trigger = self.attention_trigger()
-        if trigger is None:
-            return
-        self._deliver_attention(trigger, source="perception")
 
     def watch_meeting_events(self) -> None:
         perception = self.perception
@@ -711,10 +692,31 @@ class MeetingWorker:
 
     def _on_screen(self, segment: ScreenSegment) -> None:
         perception = self.perception
-        if self.kernel is None or perception is None:
+        if perception is None:
             return
-        if segment.ref == perception.timeline.snapshot().current_ref:
+        if segment.ref != perception.timeline.snapshot().current_ref:
+            return
+        if self.kernel is not None:
             self.kernel.screen(segment)
+        if self.moments is not None and segment.reading is not None:
+            reading = segment.reading
+            points = reading.key_points if reading.is_meeting_content else []
+            text = "; ".join(part for part in (reading.title, *points[:2]) if part)
+            if text:
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    return
+                task = loop.create_task(
+                    self._observe_screen_moment(segment.ref, text),
+                    name=f"screen-moment-{segment.ref}",
+                )
+                self.moment_tasks.add(task)
+                task.add_done_callback(self.moment_tasks.discard)
+
+    async def _observe_screen_moment(self, ref: str, text: str) -> None:
+        if self.moments is not None:
+            await self.moments.observe_screen(ref=ref, text=text, now=self.monotonic())
 
     def _on_chat_line(self, line: ChatLine) -> None:
         heard = None if line.own or line.backlog else _chat_event(line)

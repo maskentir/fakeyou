@@ -150,6 +150,7 @@ class MomentDetector:
     _ready: deque[AttentionContext] = field(default_factory=deque, init=False)
     _fired_events: set[str] = field(default_factory=set, init=False)
     _fired_refs: set[str] = field(default_factory=set, init=False)
+    _seen_screens: set[str] = field(default_factory=set, init=False)
 
     async def prepare(self) -> None:
         if self._prepared:
@@ -202,9 +203,31 @@ class MomentDetector:
             return False
         return event.id not in self._fired_events
 
+    async def observe_screen(self, *, ref: str, text: str, now: float) -> AttentionContext | None:
+        key = f"{ref}:{text}"
+        if key in self._seen_screens:
+            return None
+        self._seen_screens.add(key)
+        return await self.observe(
+            TranscriptEvent(
+                id=f"screen-moment-{ref}",
+                timestamp="",
+                source="meeting_attention",
+                text=text,
+                finalized=True,
+                participant_id="screen",
+                speaker_evidence_id=None,
+            ),
+            now=now,
+        )
+
     async def observe(self, event: TranscriptEvent, *, now: float) -> AttentionContext | None:
         self._recent.append((event.participant_id, event.text))
-        if self._pending is not None and event.participant_id != self._pending.speaker_id:
+        if (
+            self._pending is not None
+            and event.source != "meeting_attention"
+            and event.participant_id != self._pending.speaker_id
+        ):
             self._pending = None
         if not self._passes_gate(event):
             return None

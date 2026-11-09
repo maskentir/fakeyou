@@ -1,5 +1,5 @@
 import dataclasses
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import field
 from pathlib import Path
 from typing import Annotated, Any, Protocol, runtime_checkable
@@ -98,6 +98,8 @@ class MeetingConversation(Protocol):
     def receive_chat(self, event: TranscriptEvent) -> bool: ...
 
     def receive_attention(self, event: TranscriptEvent, *, channel: ReplyChannel) -> bool: ...
+
+    def observe_contribution_spoken(self, observer: Callable[[str], None]) -> None: ...
 
     def bind(self, session: MeetingAudio) -> None: ...
 

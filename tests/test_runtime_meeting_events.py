@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
 
+from fakeyou.foundation.transcript import AttentionContext
 from fakeyou.meet.meet import DEFAULT_MEET_SIGNALS
 from fakeyou.orchestration.kernel_port import HeardChat, KernelPort, TurnSignal
 from fakeyou.orchestration.runtime import MeetingWorker
@@ -47,6 +48,29 @@ def _screen(
     shown = timeline.show_screen(keyframe(slide_jpeg(title)), None)
     timeline.read_screen(shown.segment.ref, reading(title, key_points=key_points, kind=kind))
     return shown.segment
+
+
+class _ReadyMoments:
+    def take_ready(self, *, now: float) -> AttentionContext:
+        del now
+        return AttentionContext(
+            kind="fact_opportunity",
+            trigger_text="When does the beta launch?",
+            trigger_event_id="t1",
+        )
+
+
+class _RecordingMoments:
+    def __init__(self) -> None:
+        self.screens: list[tuple[str, str]] = []
+
+    async def observe_screen(self, *, ref: str, text: str, now: float) -> None:
+        del now
+        self.screens.append((ref, text))
+
+    def take_ready(self, *, now: float) -> None:
+        del now
+        return None
 
 
 async def _closed() -> None:
@@ -119,7 +143,7 @@ async def test_the_twin_own_chat_is_not_answered(journal: RecordingJournal) -> N
     ]
 
 
-async def test_the_twin_is_offered_the_room_and_the_rate_limit_holds(
+async def test_a_screen_alone_is_never_offered_to_the_twin(
     journal: RecordingJournal,
 ) -> None:
     clock = FakeClock()
@@ -134,24 +158,26 @@ async def test_the_twin_is_offered_the_room_and_the_rate_limit_holds(
     await worker.offer_attention()
 
     conversation = cast(FakeConversation, worker.conversation)
-    assert len(conversation.attention) == 1
-    assert journal.events("attention_observed")
+    assert conversation.attention == []
+    assert journal.events("attention_observed") == []
 
 
-async def test_the_same_screen_is_never_offered_twice(journal: RecordingJournal) -> None:
+async def test_the_quota_counts_only_contributions_that_were_spoken(
+    journal: RecordingJournal,
+) -> None:
     clock = FakeClock()
     timeline = MeetingTimeline(journal=journal)
     worker = _worker(
-        clock, journal, timeline, attention_enabled=True, attention_max_interjections=5
+        clock, journal, timeline, attention_enabled=True, attention_max_interjections=1
     )
+    worker.moments = cast(Any, _ReadyMoments())
 
-    _screen(timeline, "Beta Date", key_points=("the beta date looks wrong",))
     await worker.offer_attention()
     await worker.offer_attention()
+    worker.note_contribution_spoken("attention-1")
     await worker.offer_attention()
 
-    assert len(cast(FakeConversation, worker.conversation).attention) == 1
-    assert len(journal.events("attention_observed")) == 1
+    assert len(cast(FakeConversation, worker.conversation).attention) == 2
 
 
 async def test_a_chat_line_is_never_read_out_loud(journal: RecordingJournal) -> None:
@@ -165,19 +191,22 @@ async def test_a_chat_line_is_never_read_out_loud(journal: RecordingJournal) -> 
     assert cast(FakeConversation, worker.conversation).attention == []
 
 
-async def test_the_offer_names_the_screen_without_asking_a_question(
+async def test_a_screen_reading_is_forwarded_to_the_moment_detector(
     journal: RecordingJournal,
 ) -> None:
     clock = FakeClock()
     timeline = MeetingTimeline(journal=journal)
     worker = _worker(clock, journal, timeline, attention_enabled=True)
+    moments = _RecordingMoments()
+    worker.moments = cast(Any, moments)
+    worker.watch_meeting_events()
 
     _screen(timeline, "Beta Date", key_points=("the beta date looks wrong",))
-    await worker.offer_attention()
+    await asyncio.gather(*worker.moment_tasks)
 
-    [offered] = cast(FakeConversation, worker.conversation).attention
-    assert "Beta Date" in offered
-    assert "?" not in offered
+    [(_ref, text)] = moments.screens
+    assert "Beta Date" in text
+    assert "the beta date looks wrong" in text
 
 
 async def test_nothing_to_say_means_no_interjection(journal: RecordingJournal) -> None:
@@ -190,19 +219,24 @@ async def test_nothing_to_say_means_no_interjection(journal: RecordingJournal) -
     assert cast(FakeConversation, worker.conversation).attention == []
 
 
-async def test_a_non_meeting_screen_is_offered_by_title_only(journal: RecordingJournal) -> None:
+async def test_a_non_meeting_screen_is_forwarded_by_title_only(
+    journal: RecordingJournal,
+) -> None:
     clock = FakeClock()
     timeline = MeetingTimeline(journal=journal)
     worker = _worker(clock, journal, timeline, attention_enabled=True)
+    moments = _RecordingMoments()
+    worker.moments = cast(Any, moments)
+    worker.watch_meeting_events()
 
     _screen(
         timeline, "Cartesia Usage", key_points=("Receipt 1450-6289 Rp899,900",), kind="dashboard"
     )
-    await worker.offer_attention()
+    await asyncio.gather(*worker.moment_tasks)
 
-    [offered] = cast(FakeConversation, worker.conversation).attention
-    assert "Cartesia Usage" in offered
-    assert "1450-6289" not in offered
+    texts = [text for _ref, text in moments.screens if "Cartesia Usage" in text]
+    assert texts
+    assert all("1450-6289" not in text for text in texts)
 
 
 async def test_the_current_screen_reading_reaches_the_kernel(journal: RecordingJournal) -> None:

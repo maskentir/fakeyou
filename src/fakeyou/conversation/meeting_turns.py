@@ -119,6 +119,9 @@ class MeetingTurns:
     def receive_attention(self, event: TranscriptEvent, *, channel: ReplyChannel) -> bool:
         return self.actor.receive_attention(event, channel=channel)
 
+    def observe_contribution_spoken(self, observer: Callable[[str], None]) -> None:
+        self.actor.observe_contribution_spoken(observer)
+
     def bind(self, session: MeetingAudio) -> None:
         self.actor.bind(session)
 
