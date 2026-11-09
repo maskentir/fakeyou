@@ -338,6 +338,9 @@ async def _open_join_conversation(
                     run.voice_activity.others_speaking if run.voice_activity is not None else None
                 ),
                 presence=run.kernel.presence if run.kernel is not None else None,
+                on_recall=lambda refs: (
+                    run.moments.note_recalled(refs) if run.moments is not None else None
+                ),
             ),
             diagnostics=Diagnostics(faults=run.faults, journal=run.journal),
         )

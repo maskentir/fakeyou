@@ -262,6 +262,7 @@ class TurnBehavior:
     kernel: KernelPort | None = None
     others_speaking: Callable[[], bool] | None = None
     presence: Callable[[], PresenceFact] | None = None
+    on_recall: Callable[[Mapping[str, RecalledFact]], None] | None = None
 
 
 def build_turn_judge(
@@ -463,6 +464,8 @@ class _ConversationBuilder:
         self, _transcript_id: str, query: str, outcome: str, refs: Mapping[str, RecalledFact]
     ) -> None:
         self._evidence.note_memory(refs)
+        if self._behavior.on_recall is not None:
+            self._behavior.on_recall(refs)
         if self._behavior.kernel is not None:
             self._behavior.kernel.recall_observed(
                 query=query,
