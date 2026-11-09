@@ -3210,9 +3210,18 @@ Status (D3a): skalar salinan `attention_enabled` dan
 lewat sub-model `attention` dan default sesi non-join tetap nonaktif.
 Status (D3b): sembilan skalar timing meeting di `SessionConfig`
 digantikan sub-model `meeting` (`MeetingSettings`); override CLI
-lobby/durasi lewat `model_copy(update=...)`. Penghapusan
-`SessionConfig`/`JoinRequest` utuh menunggu pemetaan bertahap per
-sub-model berikutnya (audio health, browser, preflight).
+lobby/durasi lewat `model_copy(update=...)`.
+Status (D3c): sisa skalar salinan settings di `SessionConfig` (deaf
+window/grace, budget preflight, batas drain, batas bukti partisipan,
+warmup/headless/license browser, per-stream) digantikan sub-model
+`audio_health`, `preflight`, `audio`, `browser`, dan `conversation`;
+license key kini tetap `SecretStr` sampai batas `BrowserLaunch`.
+Yang tersisa di `SessionConfig` adalah identitas sesi dan flag/path
+per sesi (`browser_profile_dir`, kebijakan/bukti partisipan,
+`perception_enabled`, `meet_actions_enabled`, `resume`), bukan salinan
+settings. Penghapusan `SessionConfig`/`JoinRequest` utuh dinilai
+setelah ini: keduanya kini pembawa identitas + sub-model, bukan
+salinan field.
 
 ### D4: Worker job di Postgres
 

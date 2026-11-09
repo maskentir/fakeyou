@@ -86,18 +86,12 @@ def build_session_config(request: JoinRequest) -> SessionConfig:
             settings.paths.browser_profile_dir, twin_id=twin_id, meeting_id=meeting_id
         ),
         meeting=settings.meeting.model_copy(update=meeting_overrides),
-        warmup_browser=settings.browser.warmup,
-        deaf_window_seconds=settings.audio_health.deaf_window_seconds,
-        deaf_grace_seconds=settings.audio_health.deaf_grace_seconds,
+        audio_health=settings.audio_health,
         attention=settings.perception.attention,
-        preflight_budget_seconds=settings.preflight.budget_seconds,
-        headless=resolved_headless,
-        license_key=settings.browser.license_key.get_secret_value()
-        if settings.browser.license_key
-        else None,
-        drain_max_consecutive_failures=settings.audio.drain_max_consecutive_failures,
-        drain_failure_journal_every=settings.audio.drain_failure_journal_every,
-        participant_evidence_max_bytes=settings.conversation.participant_evidence_max_bytes,
+        preflight=settings.preflight,
+        audio=settings.audio,
+        browser=settings.browser.model_copy(update={"headless": resolved_headless}),
+        conversation=settings.conversation,
         participant_policy_enabled=request.participant_policy_enabled,
         participant_evidence_enabled=request.participant_evidence_enabled,
         resume=request.resume,
@@ -169,7 +163,6 @@ def prepare_session_paths(config: SessionConfig, settings: Settings) -> tuple[Se
     config = replace(
         config,
         participant_evidence_path=layout.participants,
-        per_stream_enabled=settings.conversation.per_stream_enabled,
         perception_enabled=settings.perception.enabled,
     )
     return config, record_path

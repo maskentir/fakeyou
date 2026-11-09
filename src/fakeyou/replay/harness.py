@@ -286,7 +286,7 @@ async def _replay(
                 sinks=TranscriptSinks(journal=journal, record=record, kernel=kernel),
                 binder=SlotBinder(),
                 voice_activity=None,
-                options=DrainOptions(per_stream_enabled=config.per_stream_enabled),
+                options=DrainOptions(per_stream_enabled=config.conversation.per_stream_enabled),
             )
             judge = settings.turn_judge
             feed = TurnFeed(
@@ -294,7 +294,7 @@ async def _replay(
                 journal=journal,
                 early=(
                     EarlyCommit(judge.commit_hold_seconds, drain.early_event)
-                    if judge.early_commit_enabled and not config.per_stream_enabled
+                    if judge.early_commit_enabled and not config.conversation.per_stream_enabled
                     else None
                 ),
             )

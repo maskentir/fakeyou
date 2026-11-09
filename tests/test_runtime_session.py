@@ -8,7 +8,12 @@ from typing import Any, NoReturn
 import pytest
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.config.settings import MeetingSettings
+from fakeyou.config.settings import (
+    AudioHealthSettings,
+    BrowserSettings,
+    MeetingSettings,
+    PreflightSettings,
+)
 from fakeyou.conversation.session import ConversationError, SessionResult
 from fakeyou.meet.meet import CallObservation
 from fakeyou.observability.journal import Journal
@@ -54,7 +59,9 @@ async def test_run_meeting_session_aborts_join_when_stop_requested() -> None:
     stop = asyncio.Event()
     stop.set()
 
-    result = await run_session(session_config(headless=True), browser, FakeClock(), stop)
+    result = await run_session(
+        session_config(browser=BrowserSettings(headless=True)), browser, FakeClock(), stop
+    )
 
     assert result.phase == "ended"
     assert result.terminal_reason == "stopped_by_owner"
@@ -427,14 +434,20 @@ def test_session_rejects_invalid_identity(field: str, value: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "field",
-    ["deaf_window_seconds", "deaf_grace_seconds", "preflight_budget_seconds"],
+    ("model", "field"),
+    [
+        (AudioHealthSettings, "deaf_window_seconds"),
+        (AudioHealthSettings, "deaf_grace_seconds"),
+        (PreflightSettings, "budget_seconds"),
+    ],
 )
 @pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf")])
-def test_session_rejects_invalid_timing(field: str, value: float | int) -> None:
+def test_session_submodels_reject_invalid_timing(
+    model: Any, field: str, value: float | int
+) -> None:
     expected = "finite number" if isinstance(value, float) else "greater than 0"
     with pytest.raises(ValueError, match=expected):
-        session_config(**{field: value})
+        model.model_validate({field: value})
 
 
 @pytest.mark.parametrize(
