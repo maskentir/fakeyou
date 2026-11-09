@@ -5,7 +5,6 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 from fakeyou.config.settings import AttentionSettings
-from fakeyou.foundation.transcript import AttentionContext
 from fakeyou.meet.meet import DEFAULT_MEET_SIGNALS
 from fakeyou.orchestration.kernel_port import HeardChat, KernelPort, TurnSignal
 from fakeyou.orchestration.runtime import MeetingWorker
@@ -49,16 +48,6 @@ def _screen(
     shown = timeline.show_screen(keyframe(slide_jpeg(title)), None)
     timeline.read_screen(shown.segment.ref, reading(title, key_points=key_points, kind=kind))
     return shown.segment
-
-
-class _ReadyMoments:
-    def take_ready(self, *, now: float) -> AttentionContext:
-        del now
-        return AttentionContext(
-            kind="fact_opportunity",
-            trigger_text="When does the beta launch?",
-            trigger_event_id="t1",
-        )
 
 
 class _RecordingMoments:
@@ -157,34 +146,11 @@ async def test_a_screen_alone_is_never_offered_to_the_twin(
     )
 
     _screen(timeline, "Beta Date", key_points=("the beta date looks wrong",))
-    await worker.offer_attention()
     _screen(timeline, "Beta Date Two", key_points=("the beta date still looks wrong",))
-    await worker.offer_attention()
 
     conversation = cast(FakeConversation, worker.conversation)
     assert conversation.attention == []
     assert journal.events("attention_observed") == []
-
-
-async def test_the_quota_counts_only_contributions_that_were_spoken(
-    journal: RecordingJournal,
-) -> None:
-    clock = FakeClock()
-    timeline = MeetingTimeline(journal=journal)
-    worker = _worker(
-        clock,
-        journal,
-        timeline,
-        attention=AttentionSettings(enabled=True, max_interjections_per_10min=1),
-    )
-    worker.moments = cast(Any, _ReadyMoments())
-
-    await worker.offer_attention()
-    await worker.offer_attention()
-    worker.note_contribution_spoken("attention-1")
-    await worker.offer_attention()
-
-    assert len(cast(FakeConversation, worker.conversation).attention) == 2
 
 
 async def test_a_chat_line_is_never_read_out_loud(journal: RecordingJournal) -> None:
@@ -193,7 +159,6 @@ async def test_a_chat_line_is_never_read_out_loud(journal: RecordingJournal) -> 
     worker = _worker(clock, journal, timeline, attention=AttentionSettings(enabled=True))
 
     _chat(timeline, "the beta date looks wrong")
-    await worker.offer_attention()
 
     assert cast(FakeConversation, worker.conversation).attention == []
 
@@ -214,16 +179,6 @@ async def test_a_screen_reading_is_forwarded_to_the_moment_detector(
     [(_ref, text)] = moments.screens
     assert "Beta Date" in text
     assert "the beta date looks wrong" in text
-
-
-async def test_nothing_to_say_means_no_interjection(journal: RecordingJournal) -> None:
-    clock = FakeClock()
-    timeline = MeetingTimeline(journal=journal)
-    worker = _worker(clock, journal, timeline, attention=AttentionSettings(enabled=True))
-
-    await worker.offer_attention()
-
-    assert cast(FakeConversation, worker.conversation).attention == []
 
 
 async def test_a_non_meeting_screen_is_forwarded_by_title_only(

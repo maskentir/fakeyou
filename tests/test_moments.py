@@ -70,6 +70,39 @@ def _detector(judgement: MomentJudgement, judge: _Judge | None = None) -> Moment
     )
 
 
+async def test_a_pending_question_signals_readiness_and_its_maturation_time() -> None:
+    detector = _detector(
+        MomentJudgement(moment="unanswered_question", source_ref="om-beta", confidence=0.9)
+    )
+    signalled: list[bool] = []
+    detector.on_ready = lambda: signalled.append(True)
+    await detector.prepare()
+
+    assert await detector.observe(_event("t1", QUESTION), now=100.0) is None
+
+    assert signalled == [True]
+    assert detector.has_ready() is True
+    assert detector.ready_at() == 115.0
+    assert detector.take_ready(now=115.0) is not None
+    assert detector.has_ready() is False
+    assert detector.ready_at() is None
+
+
+async def test_an_immediate_moment_signals_readiness_without_a_maturation_time() -> None:
+    detector = _detector(
+        MomentJudgement(moment="fact_opportunity", source_ref="om-beta", confidence=0.9)
+    )
+    signalled: list[bool] = []
+    detector.on_ready = lambda: signalled.append(True)
+    await detector.prepare()
+
+    assert await detector.observe(_event("t1", QUESTION), now=100.0) is not None
+
+    assert signalled == [True]
+    assert detector.has_ready() is True
+    assert detector.ready_at() is None
+
+
 async def test_an_unanswered_question_fires_only_after_the_wait() -> None:
     detector = _detector(
         MomentJudgement(moment="unanswered_question", source_ref="om-beta", confidence=0.9)

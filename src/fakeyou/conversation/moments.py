@@ -141,6 +141,7 @@ class MomentDetector:
     moment_confidence: float = 0.8
     unanswered_seconds: float = 15.0
     journal: Journal | None = None
+    on_ready: Callable[[], None] | None = None
     _vectors: list[tuple[str, str, str, list[float]]] = field(default_factory=list, init=False)
     _prepared: bool = field(default=False, init=False)
     _recent: deque[tuple[str, str]] = field(
@@ -291,11 +292,25 @@ class MomentDetector:
         )
         if judgement.moment == "unanswered_question":
             self._pending = _Pending(context=context, speaker_id=event.participant_id, asked_at=now)
+            self._signal_ready()
             return None
         self._fired_events.add(event.id)
         self._fired_refs.add(ref)
         self._ready.append(context)
+        self._signal_ready()
         return context
+
+    def _signal_ready(self) -> None:
+        if self.on_ready is not None:
+            self.on_ready()
+
+    def ready_at(self) -> float | None:
+        if self._pending is None:
+            return None
+        return self._pending.asked_at + self.unanswered_seconds
+
+    def has_ready(self) -> bool:
+        return bool(self._ready) or self._pending is not None
 
     def take_ready(self, *, now: float) -> AttentionContext | None:
         if self._ready:

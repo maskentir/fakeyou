@@ -375,6 +375,9 @@ async def _open_moment_detector(prepared: PreparedJoin, run: _JoinRun) -> None:
     )
     await detector.prepare()
     run.moments = detector
+    run.conversation.bind_moments(
+        detector, max_interjections_per_10min=attention.max_interjections_per_10min
+    )
 
 
 def _log_playback_event(run: _JoinRun, event: PlaybackEvent) -> None:
