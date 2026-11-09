@@ -41,7 +41,7 @@ from fakeyou.foundation.invariants import (
     MEETING_SINK_NAME,
 )
 from fakeyou.foundation.taxonomy import PublicPhase, TerminalReason
-from fakeyou.foundation.transcript import AttentionContext, TranscriptEvent, attention_line
+from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.meet.browser import BrowserLaunch, open_direct_page, stable_fingerprint_seed
 from fakeyou.meet.meet import (
     DEFAULT_MEET_SIGNALS,
@@ -235,17 +235,13 @@ class MeetingWorker:
     join_started: float | None = None
     presence: AloneClock = field(init=False)
     end_screen: str | None = None
-    attention_spoken_at: list[float] = field(init=False, default_factory=list)
     moment_tasks: set[asyncio.Task[None]] = field(init=False, default_factory=set)
-    attention_chat: str | None = field(init=False, default=None)
     _events_watched: bool = False
     _shared_roster_listener: Callable[[MeetRoster], None] | None = None
     _roster_watched: bool = False
 
     def __post_init__(self) -> None:
         self.presence = AloneClock(leave_after_seconds=self.config.meeting.alone_leave_seconds)
-        if self.conversation is not None:
-            self.conversation.observe_contribution_spoken(self.note_contribution_spoken)
         self.begin(
             initial_lifecycle_state(
                 self.config.owner_id, self.config.twin_id, self.config.meeting_id
@@ -622,60 +618,6 @@ class MeetingWorker:
             return
         self.page.on("response", self.perception.sensors.on_response)
         self.perception_sync_watched = True
-
-    def _attention_quota_open(self, now: float) -> bool:
-        self.attention_spoken_at = [
-            spoken for spoken in self.attention_spoken_at if now - spoken < 600.0
-        ]
-        return len(self.attention_spoken_at) < self.config.attention.max_interjections_per_10min
-
-    def note_contribution_spoken(self, event_id: str) -> None:
-        del event_id
-        self.attention_spoken_at.append(self.monotonic())
-
-    def _deliver_attention(self, context: AttentionContext, *, source: str) -> bool:
-        conversation = self.conversation
-        if conversation is None or not self.config.attention.enabled:
-            return False
-        if conversation.is_busy:
-            return False
-        now = self.monotonic()
-        if not self._attention_quota_open(now):
-            return False
-        self.record(
-            "attention_observed",
-            source=source,
-            chars=len(context.trigger_text),
-            kind=context.kind,
-        )
-        conversation.receive_attention(
-            TranscriptEvent(
-                id=f"attention-{now:.3f}",
-                timestamp=datetime.now(UTC).isoformat(),
-                source="meeting_attention",
-                text=attention_line(context),
-                finalized=True,
-                participant_id="unknown",
-                speaker_evidence_id=None,
-                attention=context,
-            ),
-            channel="voice",
-        )
-        return True
-
-    async def offer_attention(self) -> None:
-        conversation = self.conversation
-        if conversation is None or not self.config.attention.enabled:
-            return
-        if conversation.is_busy:
-            return
-        now = self.monotonic()
-        if not self._attention_quota_open(now):
-            return
-        if self.moments is not None:
-            due = self.moments.take_ready(now=now)
-            if due is not None:
-                self._deliver_attention(due, source="agent")
 
     def watch_meeting_events(self) -> None:
         perception = self.perception
@@ -1058,7 +1000,6 @@ class MeetingWorker:
             if self.browser_lost():
                 return await self.finish("browser_failed", "system_fault", "the browser was lost")
             await self._service_conversation()
-            await self.offer_attention()
             remote, finished = await self.check_presence(scan)
             if finished is not None:
                 return finished

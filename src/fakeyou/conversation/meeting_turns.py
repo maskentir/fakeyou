@@ -22,6 +22,7 @@ from fakeyou.conversation.conversation import (
 )
 from fakeyou.conversation.meeting_messages import MeetingHistory, NoHistory
 from fakeyou.conversation.model_responder import ReplierStreamResponder, ReplierWholeResponder
+from fakeyou.conversation.moments import MomentDetector
 from fakeyou.conversation.participation_graph import JudgeThresholds, TurnJudging
 from fakeyou.conversation.reply_draft import HeldEffects
 from fakeyou.conversation.reply_planner import TurnLanguage
@@ -119,8 +120,8 @@ class MeetingTurns:
     def receive_attention(self, event: TranscriptEvent, *, channel: ReplyChannel) -> bool:
         return self.actor.receive_attention(event, channel=channel)
 
-    def observe_contribution_spoken(self, observer: Callable[[str], None]) -> None:
-        self.actor.observe_contribution_spoken(observer)
+    def bind_moments(self, detector: MomentDetector, *, max_interjections_per_10min: int) -> None:
+        self.actor.bind_moments(detector, max_interjections_per_10min=max_interjections_per_10min)
 
     def bind(self, session: MeetingAudio) -> None:
         self.actor.bind(session)

@@ -237,9 +237,11 @@ async def run_proactive_scenario(
         if len(recent) >= attention.max_interjections_per_10min:
             return
         outcome.offers += 1
-        turns.observe_contribution_spoken(lambda _event_id: spoken_at.append(now))
+        spoken_before = len(audio.spoken)
         turns.actor.receive_attention(_attention_event(scenario, context), channel="voice")
         await _settle(turns)
+        if len(audio.spoken) > spoken_before:
+            spoken_at.append(now)
 
     with (
         TemporaryDirectory() as folder,

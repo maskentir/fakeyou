@@ -3,6 +3,7 @@ import json
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from difflib import SequenceMatcher
 from functools import partial
 from typing import Any, Literal, Self
@@ -10,6 +11,7 @@ from typing import Any, Literal, Self
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.control import ReplyControl
 from fakeyou.conversation.floor import SpeechFloor
+from fakeyou.conversation.moments import MomentDetector
 from fakeyou.conversation.participation_decision import ParticipationDecision
 from fakeyou.conversation.participation_graph import JudgeThresholds, TurnJudging, decision_of
 from fakeyou.conversation.reply_draft import ReplyDrafts
@@ -63,7 +65,7 @@ from fakeyou.foundation.participation import (
 )
 from fakeyou.foundation.resources import read_package_text
 from fakeyou.foundation.speakers import UNIDENTIFIED_PARTICIPANT
-from fakeyou.foundation.transcript import TranscriptEvent, transcript_stamp
+from fakeyou.foundation.transcript import TranscriptEvent, attention_line, transcript_stamp
 from fakeyou.foundation.triggers import ReplyChannel
 from fakeyou.observability.faults import ConsumerSink, FaultReporter, capture_error, guard_observer
 from fakeyou.observability.journal import Journal, JournalSink
@@ -249,7 +251,9 @@ class FloorActor:
         self._reply = ReplyOptions()
         self._observer: TransitionObserver | None = None
         self._spoken: Callable[[str], None] | None = None
-        self._contribution_spoken: Callable[[str], None] | None = None
+        self._moments: MomentDetector | None = None
+        self._moment_quota = 0
+        self._contributions_at: list[float] = []
         self._sentences_spoken = 0
         self._phase: ConversationPhase = "listening"
         self._floor = SpeechFloor(clock=clock)
@@ -531,8 +535,53 @@ class FloorActor:
     def observe_spoken(self, observer: Callable[[str], None]) -> None:
         self._spoken = observer
 
-    def observe_contribution_spoken(self, observer: Callable[[str], None]) -> None:
-        self._contribution_spoken = observer
+    def bind_moments(self, detector: MomentDetector, *, max_interjections_per_10min: int) -> None:
+        self._moments = detector
+        self._moment_quota = max_interjections_per_10min
+        detector.on_ready = self._moments_ready
+        self._moments_ready()
+
+    def _moments_ready(self) -> None:
+        self._pull_moment()
+        self._arm_wakeup()
+
+    def _moment_quota_open(self, now: float) -> bool:
+        self._contributions_at = [
+            spoken for spoken in self._contributions_at if now - spoken < 600.0
+        ]
+        return len(self._contributions_at) < self._moment_quota
+
+    def _pull_moment(self) -> bool:
+        detector = self._moments
+        if detector is None or self._session is None or not self.accepts_ingress:
+            return False
+        if self.is_busy:
+            return False
+        now = self._clock()
+        if not self._moment_quota_open(now):
+            return False
+        due = detector.take_ready(now=now)
+        if due is None:
+            return False
+        self._journal.record(
+            "attention_observed",
+            source="agent",
+            chars=len(due.trigger_text),
+            kind=due.kind,
+        )
+        return self.receive_attention(
+            TranscriptEvent(
+                id=f"attention-{now:.3f}",
+                timestamp=datetime.now(UTC).isoformat(),
+                source="meeting_attention",
+                text=attention_line(due),
+                finalized=True,
+                participant_id="unknown",
+                speaker_evidence_id=None,
+                attention=due,
+            ),
+            channel="voice",
+        )
 
     def observe(self, observer: TransitionObserver) -> None:
         self._observer = observer
@@ -636,9 +685,8 @@ class FloorActor:
                 delivered
                 and turn.event.source == "meeting_attention"
                 and self._sentences_spoken > sentences_before
-                and self._contribution_spoken is not None
             ):
-                self._contribution_spoken(turn.event.id)
+                self._contributions_at.append(self._clock())
             if not delivered and not self._closed and not self._deferred.retry(turn):
                 self._journal.record(
                     "deferred_turn_dropped",
@@ -685,14 +733,36 @@ class FloorActor:
         if self._wakeup is not None:
             self._wakeup.cancel()
             self._wakeup = None
-        if self._closed or not self._deferred.pending:
+        if self._closed:
             return
-        remaining = self._deferred_options.quiet_gap_seconds - self._quiet.quiet_for()
-        expiry = self._deferred.earliest_expiry()
-        delay = max(WAKEUP_FLOOR_SECONDS, remaining)
-        if expiry is not None:
-            delay = min(delay, max(WAKEUP_FLOOR_SECONDS, expiry - self._clock()))
-        self._wakeup = asyncio.get_running_loop().call_later(delay, self.start_pending)
+        delays: list[float] = []
+        if self._deferred.pending:
+            remaining = self._deferred_options.quiet_gap_seconds - self._quiet.quiet_for()
+            expiry = self._deferred.earliest_expiry()
+            delay = max(WAKEUP_FLOOR_SECONDS, remaining)
+            if expiry is not None:
+                delay = min(delay, max(WAKEUP_FLOOR_SECONDS, expiry - self._clock()))
+            delays.append(delay)
+        if self._moments is not None and self._moment_quota > 0 and self._moments.has_ready():
+            now = self._clock()
+            if not self._moment_quota_open(now) and self._contributions_at:
+                delays.append(max(WAKEUP_FLOOR_SECONDS, self._contributions_at[0] + 600.0 - now))
+            else:
+                ready_at = self._moments.ready_at()
+                delays.append(
+                    WAKEUP_FLOOR_SECONDS
+                    if ready_at is None
+                    else max(WAKEUP_FLOOR_SECONDS, ready_at - now)
+                )
+        if not delays:
+            return
+        self._wakeup = asyncio.get_running_loop().call_later(min(delays), self._on_wakeup)
+
+    def _on_wakeup(self) -> None:
+        self._wakeup = None
+        self._pull_moment()
+        self.start_pending()
+        self._arm_wakeup()
 
     def fail(self, cause: Exception) -> None:
         if self._failure is None:

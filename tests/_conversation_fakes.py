@@ -98,9 +98,6 @@ class FakeConversation:
         self.attention.append(event.text)
         return True
 
-    def observe_contribution_spoken(self, observer: Callable[[str], None]) -> None:
-        del observer
-
     def bind(self, session: MeetingAudio) -> None:
         if self.closed:
             raise ConversationError("meeting conversation is closed")

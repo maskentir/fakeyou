@@ -1,7 +1,8 @@
 import asyncio
+import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
-from typing import Any, override
+from typing import Any, cast, override
 
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.meeting_turns import (
@@ -10,10 +11,11 @@ from fakeyou.conversation.meeting_turns import (
     TurnTiming,
     build_meeting_turns,
 )
+from fakeyou.conversation.moments import MomentDetector
 from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_graph import PlannedTurn
 from fakeyou.conversation.turn_judge import JudgeWindow, TurnJudgement
-from fakeyou.foundation.transcript import EventSource, TranscriptEvent
+from fakeyou.foundation.transcript import AttentionContext, EventSource, TranscriptEvent
 from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.session.commands import CommandOutcome, CommandSpec
 from fakeyou.session.intent import Reading, intent_of
@@ -113,6 +115,25 @@ def meeting_input(event_id: str, text: str, source: EventSource) -> TranscriptEv
         participant_id="device-budi",
         speaker_evidence_id=None,
     )
+
+
+class ReadyMoments:
+    def __init__(self, *triggers: str) -> None:
+        self.contexts = [
+            AttentionContext(kind="fact_opportunity", trigger_text=trigger, trigger_event_id="t1")
+            for trigger in triggers
+        ]
+        self.on_ready: Any = None
+
+    def take_ready(self, *, now: float) -> AttentionContext | None:
+        del now
+        return self.contexts.pop(0) if self.contexts else None
+
+    def has_ready(self) -> bool:
+        return bool(self.contexts)
+
+    def ready_at(self) -> None:
+        return None
 
 
 def lanes(
@@ -354,33 +375,69 @@ async def test_a_voice_interjection_waits_for_a_quiet_floor() -> None:
     await turns.close()
 
 
-async def test_a_spoken_contribution_is_reported_once_it_reaches_the_room() -> None:
-    turns, audio = lanes(FixedResponder("The beta date looks wrong."))
-    spoken: list[str] = []
-    turns.observe_contribution_spoken(spoken.append)
+class MaturingMoments:
+    def __init__(self) -> None:
+        self.matures_at = time.monotonic() + 0.3
+        self.on_ready: Any = None
 
-    turns.actor.receive_attention(
-        meeting_input("a1", "attention screen#2", "meeting_attention"), channel="voice"
-    )
+    def take_ready(self, *, now: float) -> AttentionContext | None:
+        if now < self.matures_at:
+            return None
+        return AttentionContext(
+            kind="unanswered_question",
+            trigger_text="When does the beta launch?",
+            trigger_event_id="t1",
+        )
+
+    def has_ready(self) -> bool:
+        return True
+
+    def ready_at(self) -> float:
+        return self.matures_at
+
+
+async def test_a_maturing_moment_is_delivered_by_the_actor_wakeup() -> None:
+    turns, audio = lanes(FixedResponder("The beta date looks wrong."))
+    moments = MaturingMoments()
+
+    turns.bind_moments(cast(MomentDetector, moments), max_interjections_per_10min=3)
+    for _ in range(100):
+        if audio.spoken:
+            break
+        await asyncio.sleep(0.02)
     await settle(turns)
 
     assert audio.spoken == ["The beta date looks wrong."]
-    assert spoken == ["a1"]
     await turns.close()
 
 
-async def test_a_contribution_that_says_nothing_is_not_reported_as_spoken() -> None:
-    turns, audio = lanes(FixedResponder(""))
-    spoken: list[str] = []
-    turns.observe_contribution_spoken(spoken.append)
+async def test_a_spoken_contribution_consumes_the_interjection_quota() -> None:
+    turns, audio = lanes(FixedResponder("The beta date looks wrong."))
+    moments = ReadyMoments("When does the beta launch?", "Who owns the rollout?")
 
-    turns.actor.receive_attention(
-        meeting_input("a1", "attention screen#2", "meeting_attention"), channel="voice"
-    )
+    turns.bind_moments(cast(MomentDetector, moments), max_interjections_per_10min=1)
+    await settle(turns)
+    moments.on_ready()
+    await settle(turns)
+
+    assert audio.spoken == ["The beta date looks wrong."]
+    assert len(moments.contexts) == 1
+    await turns.close()
+
+
+async def test_a_contribution_that_says_nothing_does_not_consume_the_quota() -> None:
+    journal = RecordingJournal()
+    turns, audio = lanes(FixedResponder(""), journal=journal)
+    moments = ReadyMoments("When does the beta launch?", "Who owns the rollout?")
+
+    turns.bind_moments(cast(MomentDetector, moments), max_interjections_per_10min=1)
+    await settle(turns)
+    moments.on_ready()
     await settle(turns)
 
     assert audio.spoken == []
-    assert spoken == []
+    assert moments.contexts == []
+    assert len(journal.events("attention_observed")) == 2
     await turns.close()
 
 

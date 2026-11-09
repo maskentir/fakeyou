@@ -3095,10 +3095,17 @@ runtime menghitung jendela 600 detik dari waktu terucap itu.
 Status (C6b): recall set dari `RecallListener` masuk kandidat lewat
 `MomentDetector.note_recalled` (sumber `memory`, embedding malas saat
 kandidat berikutnya dibangun, dedup per ref); commitment dari meeting
-lalu ikut lewat jalur typed yang sama. Sisa: kandidat commitment yang
-baru disebut di dialog berjalan belum diekstrak terstruktur,
-penghapusan `offer_attention`/`_deliver_attention` sebagai shim
-runtime, dan gate replay oue-4 yang journal-nya belum tersedia lokal.
+lalu ikut lewat jalur typed yang sama.
+Status (C6c): penyampaian kandidat pindah dari runtime ke kernel.
+`offer_attention`/`_deliver_attention` dan hitung quota di
+`MeetingWorker` dihapus; `FloorActor` menarik kandidat dari
+`MomentDetector` lewat `bind_moments` (detektor memberi sinyal
+`on_ready`, pertanyaan belum terjawab matang lewat wakeup actor di
+`ready_at`, quota 600 detik dihitung actor hanya dari kontribusi yang
+benar-benar terucap). Runtime hanya meneruskan bacaan layar sebagai
+input detektor. Sisa C6: kandidat commitment yang baru disebut di
+dialog berjalan belum diekstrak terstruktur, dan gate replay oue-4
+yang journal-nya belum tersedia lokal.
 
 Revisi riset (2026-11-10, menggantikan revisi riset sebelumnya di seksi
 ini): recall dua jalur. `entity_types`/`edge_types` Graphiti bersifat
