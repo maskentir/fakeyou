@@ -9,6 +9,8 @@ from graphiti_core import Graphiti
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import IngestionSettings, Settings
+from fakeyou.debrief.debrief import read_debrief
+from fakeyou.debrief.debrief_schema import DebriefValidationError
 from fakeyou.diarization.diarize_service import diarize_run
 from fakeyou.memory.ingest_status import (
     IngestOutcome,
@@ -29,8 +31,9 @@ from fakeyou.memory.ingestion import (
 )
 from fakeyou.memory.operator_access import OperatorAccess
 from fakeyou.memory.persona import PersonaProfile, load_operator_persona, require_persona_group
+from fakeyou.memory.typed_lane import assertions_from_items, write_typed_assertions
 from fakeyou.observability.diagnostics import Diagnostics
-from fakeyou.observability.faults import FaultReporter
+from fakeyou.observability.faults import FaultReporter, capture_error
 from fakeyou.observability.journal import Journal, JournalFile, journal_path
 from fakeyou.observability.provider_faults import ProviderFault, classify_exception
 from fakeyou.persistence.ingestion_status import (
@@ -317,13 +320,39 @@ async def _ingest_records(attempt: _Attempt, memory: Graphiti, stop: asyncio.Eve
     )
     run = IngestRun(attempt.access.settings.memory.ingestion, stop)
     with attempt.ports.stop_signals(stop, attempt.journal):
-        return await ingest_until_stopped(
+        result = await ingest_until_stopped(
             memory,
             job,
             run=run,
             journal=attempt.journal,
             faults=attempt.faults,
         )
+    await _publish_typed_assertions(attempt, memory)
+    return result
+
+
+async def _publish_typed_assertions(attempt: _Attempt, memory: Graphiti) -> None:
+    try:
+        report = read_debrief(attempt.record_path)
+    except DebriefValidationError:
+        return
+    if not report.items:
+        return
+    written, error = await capture_error(
+        lambda: write_typed_assertions(
+            memory,
+            group_id=attempt.profile.memory_group,
+            meeting_id=attempt.request.meeting_id,
+            at=report.generated_at,
+            items=assertions_from_items(report.items),
+        )
+    )
+    if error is not None:
+        attempt.faults.record(classify_exception("memory_ingest", error))
+        return
+    attempt.journal.record(
+        "typed_assertions_recorded", source="memory_ingest", assertions=len(written or ())
+    )
 
 
 def _episode_rejected(attempt: _Attempt, error: ValueError, prefix: RecordPrefix) -> bool:

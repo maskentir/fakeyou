@@ -29,6 +29,7 @@ from fakeyou.foundation.provenance import (
     SourceKind,
     render_evidence,
 )
+from fakeyou.memory.ontology import TYPED_EDGE_TYPES
 from fakeyou.memory.persona import memory_group_for
 from fakeyou.observability.faults import capture_error
 
@@ -139,9 +140,13 @@ async def search_edges(
         current, everything = await pair(memory, query, group_id=group_id, recall=recall)
     seen = {edge.uuid for edge in current}
     return [
-        *current,
+        *typed_first(current),
         *(edge for edge in everything if edge.uuid not in seen and invalidated(edge)),
     ]
+
+
+def typed_first(edges: Sequence[EntityEdge]) -> list[EntityEdge]:
+    return sorted(edges, key=lambda edge: getattr(edge, "name", None) not in TYPED_EDGE_TYPES)
 
 
 def _evidence_kind(source_description: str) -> SourceKind:
