@@ -432,7 +432,7 @@ class AttentionSettings(Section):
     transcript_moments: bool = True
     unanswered_seconds: PositiveSeconds = 15.0
     moment_confidence: float = Field(default=0.8, gt=0, lt=1)
-    grounding_confidence: float = Field(default=0.7, gt=0, lt=1)
+    critic_confidence: float = Field(default=0.7, gt=0, lt=1)
     similarity_threshold: float = Field(default=0.15, gt=0, lt=1)
 
 
