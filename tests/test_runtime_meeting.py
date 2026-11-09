@@ -6,6 +6,7 @@ import pytest
 from playwright.async_api import Page
 
 from fakeyou.config.identifiers import SessionId
+from fakeyou.config.settings import MeetingSettings
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.meet.browser import BrowserLaunch, open_direct_page
 from fakeyou.meet.meet import enable_meeting_microphone
@@ -45,8 +46,7 @@ async def test_worker_joins_and_leaves_a_real_browser_fixture() -> None:
         twin_name="Fixture Twin",
         warmup_browser=False,
         headless=True,
-        session_duration_seconds=0.2,
-        monitor_interval_seconds=0.1,
+        meeting=MeetingSettings(session_duration_seconds=0.2, monitor_poll_seconds=0.1),
     )
 
     result = await run_meeting_session(config, SessionWiring(open_page=open_fixture))

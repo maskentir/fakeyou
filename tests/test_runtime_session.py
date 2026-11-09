@@ -8,6 +8,7 @@ from typing import Any, NoReturn
 import pytest
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
+from fakeyou.config.settings import MeetingSettings
 from fakeyou.conversation.session import ConversationError, SessionResult
 from fakeyou.meet.meet import CallObservation
 from fakeyou.observability.journal import Journal
@@ -79,7 +80,9 @@ async def test_run_meeting_session_enforces_duration_limit() -> None:
     browser = FakePageSession(meet_page([IN_CALL, IN_CALL, IN_CALL, IN_CALL, IN_CALL, ENDED]))
 
     result = await run_session(
-        session_config(session_duration_seconds=5.0, monitor_interval_seconds=2.0),
+        session_config(
+            meeting=MeetingSettings(session_duration_seconds=5.0, monitor_poll_seconds=2.0)
+        ),
         browser,
         FakeClock(),
     )
@@ -138,7 +141,9 @@ async def test_run_meeting_session_enforces_duration_limit_while_disconnected() 
     browser = FakePageSession(page)
 
     result = await run_session(
-        session_config(session_duration_seconds=5.0, monitor_interval_seconds=2.0),
+        session_config(
+            meeting=MeetingSettings(session_duration_seconds=5.0, monitor_poll_seconds=2.0)
+        ),
         browser,
         FakeClock(),
     )
@@ -158,7 +163,10 @@ async def test_a_failed_leave_keeps_the_owner_stop_as_the_reason() -> None:
     browser = FakePageSession(page)
 
     result = await run_session(
-        session_config(leave_timeout_seconds=3.0), browser, FakeClock(), stop
+        session_config(meeting=MeetingSettings(leave_timeout_seconds=3.0)),
+        browser,
+        FakeClock(),
+        stop,
     )
 
     assert result.phase == "ended"
@@ -420,22 +428,30 @@ def test_session_rejects_invalid_identity(field: str, value: str) -> None:
 
 @pytest.mark.parametrize(
     "field",
-    [
-        "lobby_timeout_seconds",
-        "join_poll_interval_seconds",
-        "session_duration_seconds",
-        "monitor_interval_seconds",
-        "leave_timeout_seconds",
-        "deaf_window_seconds",
-        "deaf_grace_seconds",
-        "preflight_budget_seconds",
-    ],
+    ["deaf_window_seconds", "deaf_grace_seconds", "preflight_budget_seconds"],
 )
 @pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf")])
 def test_session_rejects_invalid_timing(field: str, value: float | int) -> None:
     expected = "finite number" if isinstance(value, float) else "greater than 0"
     with pytest.raises(ValueError, match=expected):
         session_config(**{field: value})
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "lobby_timeout_seconds",
+        "join_poll_seconds",
+        "session_duration_seconds",
+        "monitor_poll_seconds",
+        "leave_timeout_seconds",
+    ],
+)
+@pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf")])
+def test_meeting_settings_reject_invalid_timing(field: str, value: float | int) -> None:
+    expected = "finite number" if isinstance(value, float) else "greater than 0"
+    with pytest.raises(ValueError, match=expected):
+        MeetingSettings.model_validate({field: value})
 
 
 async def test_monitor_poll_should_persist_through_the_supplied_journal(tmp_path: Path) -> None:
@@ -480,7 +496,7 @@ async def test_monitor_poll_should_persist_through_the_supplied_journal(tmp_path
             [LOBBY] * 15,
             [],
             {},
-            {"lobby_timeout_seconds": 5.0, "join_poll_interval_seconds": 2.0},
+            {"meeting": MeetingSettings(lobby_timeout_seconds=5.0, join_poll_seconds=2.0)},
             "lobby_timeout_reached",
             "",
         ),

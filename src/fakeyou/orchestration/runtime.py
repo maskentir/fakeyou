@@ -243,7 +243,7 @@ class MeetingWorker:
     _roster_watched: bool = False
 
     def __post_init__(self) -> None:
-        self.presence = AloneClock(leave_after_seconds=self.config.alone_leave_seconds)
+        self.presence = AloneClock(leave_after_seconds=self.config.meeting.alone_leave_seconds)
         if self.conversation is not None:
             self.conversation.observe_contribution_spoken(self.note_contribution_spoken)
         self.begin(
@@ -296,8 +296,8 @@ class MeetingWorker:
         return GuestJoinRequest(
             link=self.config.link,
             twin_name=self.config.twin_name,
-            lobby_timeout_seconds=self.config.lobby_timeout_seconds,
-            poll_interval_seconds=self.config.join_poll_interval_seconds,
+            lobby_timeout_seconds=self.config.meeting.lobby_timeout_seconds,
+            poll_interval_seconds=self.config.meeting.join_poll_seconds,
         )
 
     def _probe_scripts(self) -> tuple[str, ...]:
@@ -464,14 +464,14 @@ class MeetingWorker:
             return self._commit()
         try:
             async with asyncio.timeout(
-                min(LEAVE_BUDGET_SECONDS, self.config.leave_timeout_seconds)
+                min(LEAVE_BUDGET_SECONDS, self.config.meeting.leave_timeout_seconds)
             ):
                 left = await leave_meeting(
                     self.page,
                     self.signals,
                     self.sleep,
                     self.monotonic,
-                    self.config.leave_timeout_seconds,
+                    self.config.meeting.leave_timeout_seconds,
                 )
         except (PlaywrightError, TimeoutError) as error:
             if self.faults is not None:
@@ -973,7 +973,9 @@ class MeetingWorker:
     async def _record_scan_events(
         self, scan: MonitorScan, checked: WatchdogCheck, now: float
     ) -> str | None:
-        scan.next_scan = now + checked.next_check_seconds * self.config.monitor_interval_seconds / 5
+        scan.next_scan = (
+            now + checked.next_check_seconds * self.config.meeting.monitor_poll_seconds / 5
+        )
         scan.remote_participants = (
             max(0, checked.participant_count - 1) if checked.participant_count is not None else None
         )
@@ -1040,7 +1042,7 @@ class MeetingWorker:
         return await self.apply_observation(checked), False
 
     async def _monitor_loop(self, admitted_at: float) -> str:
-        deadline = admitted_at + self.config.session_duration_seconds
+        deadline = admitted_at + self.config.meeting.session_duration_seconds
         watchdog = UIWatchdog(
             self.page, signals=self.signals, observe=self.observe_call, monotonic=self.monotonic
         )
@@ -1370,9 +1372,9 @@ async def _launch_session_browser(drive: _Drive, epoch: TeardownStack) -> str:
             lifecycle,
             worker,
             retry=JoinRetry(
-                max_attempts=config.join_max_attempts,
-                base_seconds=config.join_retry_base_seconds,
-                cap_seconds=config.join_retry_cap_seconds,
+                max_attempts=config.meeting.join_max_attempts,
+                base_seconds=config.meeting.join_retry_base_seconds,
+                cap_seconds=config.meeting.join_retry_cap_seconds,
             ),
             sleep=hooks.sleep,
         )

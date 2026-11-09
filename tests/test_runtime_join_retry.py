@@ -3,6 +3,7 @@ from typing import Any, cast
 
 import pytest
 
+from fakeyou.config.settings import MeetingSettings
 from fakeyou.conversation.state import LifecycleState
 from fakeyou.meet.meet import DEFAULT_MEET_SIGNALS, JoinResult
 from fakeyou.orchestration.lifecycle import JoinAttempt, initial_lifecycle_state
@@ -173,7 +174,9 @@ async def test_an_admit_after_six_minutes_lands_without_a_second_knock() -> None
     clock = FakeClock()
 
     result = await run_meeting_session(
-        session_config(lobby_timeout_seconds=600.0, join_poll_interval_seconds=30.0),
+        session_config(
+            meeting=MeetingSettings(lobby_timeout_seconds=600.0, join_poll_seconds=30.0)
+        ),
         SessionWiring(
             open_page=browser.open, sleep=clock.sleep, monotonic=clock.monotonic, journal=journal
         ),
@@ -194,7 +197,9 @@ async def test_a_lobby_timeout_ends_after_a_single_knock() -> None:
 
     result = await run_meeting_session(
         session_config(
-            lobby_timeout_seconds=5.0, join_poll_interval_seconds=2.0, join_max_attempts=3
+            meeting=MeetingSettings(
+                lobby_timeout_seconds=5.0, join_poll_seconds=2.0, join_max_attempts=3
+            )
         ),
         SessionWiring(
             open_page=browser.open, sleep=clock.sleep, monotonic=clock.monotonic, journal=journal

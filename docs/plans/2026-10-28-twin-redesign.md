@@ -3208,8 +3208,11 @@ dengan `model_copy(update=...)`, secret Kubernetes lewat `secrets_dir`.
 Status (D3a): skalar salinan `attention_enabled` dan
 `attention_max_interjections` di `SessionConfig` dihapus; semua pembaca
 lewat sub-model `attention` dan default sesi non-join tetap nonaktif.
-Penghapusan `SessionConfig`/`JoinRequest` utuh menunggu pemetaan
-bertahap per sub-model agar tidak mencampur perubahan perilaku.
+Status (D3b): sembilan skalar timing meeting di `SessionConfig`
+digantikan sub-model `meeting` (`MeetingSettings`); override CLI
+lobby/durasi lewat `model_copy(update=...)`. Penghapusan
+`SessionConfig`/`JoinRequest` utuh menunggu pemetaan bertahap per
+sub-model berikutnya (audio health, browser, preflight).
 
 ### D4: Worker job di Postgres
 
