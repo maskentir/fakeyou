@@ -47,8 +47,8 @@ async def test_join_builds_session_config_and_prints_result(
     assert config.owner_id == "owner-1"
     assert config.twin_id == "twin-1"
     assert config.meeting_id == "meeting-1"
-    assert config.lobby_timeout_seconds == 60.0
-    assert config.session_duration_seconds == 600.0
+    assert config.meeting.lobby_timeout_seconds == 60.0
+    assert config.meeting.session_duration_seconds == 600.0
     assert config.browser_profile_dir == Path("/tmp/custom-profile")
     assert config.headless is True
     assert "stop" in captured["kwargs"]
@@ -118,8 +118,8 @@ async def test_join_falls_back_to_settings_and_generates_meeting_id(
         config.browser_profile_dir
         == settings.paths.browser_profile_dir / "settings-twin" / config.meeting_id
     )
-    assert config.lobby_timeout_seconds == 300.0
-    assert config.session_duration_seconds == 7200.0
+    assert config.meeting.lobby_timeout_seconds == 300.0
+    assert config.meeting.session_duration_seconds == 7200.0
     assert len(config.meeting_id) == 12
     assert f'"meeting_id": "{config.meeting_id}"' in capsys.readouterr().out
 

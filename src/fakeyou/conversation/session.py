@@ -8,7 +8,7 @@ from pydantic import ConfigDict, Field
 from pydantic.dataclasses import dataclass
 
 from fakeyou.config.identifiers import SessionIdField
-from fakeyou.config.settings import DEFAULTS, AttentionSettings
+from fakeyou.config.settings import DEFAULTS, AttentionSettings, MeetingSettings
 from fakeyou.foundation.invariants import PositiveSeconds, TwinName
 from fakeyou.foundation.taxonomy import PublicPhase, TerminalReason
 from fakeyou.foundation.transcript import TranscriptEvent
@@ -119,17 +119,9 @@ class SessionConfig:
     meeting_id: SessionIdField
     link: str
     twin_name: TwinName
-    lobby_timeout_seconds: PositiveSeconds = DEFAULTS.meeting.lobby_timeout_seconds
-    join_poll_interval_seconds: PositiveSeconds = DEFAULTS.meeting.join_poll_seconds
-    join_max_attempts: Annotated[int, Field(ge=1)] = DEFAULTS.meeting.join_max_attempts
-    join_retry_base_seconds: PositiveSeconds = DEFAULTS.meeting.join_retry_base_seconds
-    join_retry_cap_seconds: PositiveSeconds = DEFAULTS.meeting.join_retry_cap_seconds
-    session_duration_seconds: PositiveSeconds = DEFAULTS.meeting.session_duration_seconds
-    monitor_interval_seconds: PositiveSeconds = DEFAULTS.meeting.monitor_poll_seconds
-    leave_timeout_seconds: PositiveSeconds = DEFAULTS.meeting.leave_timeout_seconds
+    meeting: MeetingSettings = field(default_factory=MeetingSettings)
     deaf_window_seconds: PositiveSeconds = DEFAULTS.audio_health.deaf_window_seconds
     deaf_grace_seconds: PositiveSeconds = DEFAULTS.audio_health.deaf_grace_seconds
-    alone_leave_seconds: PositiveSeconds = DEFAULTS.meeting.alone_leave_seconds
     preflight_budget_seconds: PositiveSeconds = DEFAULTS.preflight.budget_seconds
     drain_max_consecutive_failures: Annotated[int, Field(ge=1)] = (
         DEFAULTS.audio.drain_max_consecutive_failures

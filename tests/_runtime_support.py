@@ -8,6 +8,7 @@ import pytest
 
 import fakeyou.orchestration.runtime as runtime
 from fakeyou.config.identifiers import SessionId
+from fakeyou.config.settings import MeetingSettings
 from fakeyou.conversation.session import SessionConfig, SessionResult
 from fakeyou.conversation.state import LifecycleState
 from fakeyou.meet.meet import CallObservation, JoinResult, LeaveResult
@@ -33,9 +34,10 @@ def session_config(**overrides: Any) -> SessionConfig:
         "meeting_id": "meeting-1",
         "link": LINK,
         "twin_name": "Twin",
-        **INSTANT_JOIN_RETRY,
     }
     values.update(overrides)
+    base = cast(MeetingSettings, values.pop("meeting", MeetingSettings()))
+    values["meeting"] = MeetingSettings.model_validate({**base.model_dump(), **INSTANT_JOIN_RETRY})
     return SessionConfig(**values)
 
 

@@ -69,6 +69,11 @@ def build_session_config(request: JoinRequest) -> SessionConfig:
         request.identity.twin_id or settings.identity.twin_id, field="--twin-id"
     )
     resolved_headless = settings.browser.headless if request.headless is None else request.headless
+    meeting_overrides: dict[str, float] = {}
+    if request.lobby_timeout is not None:
+        meeting_overrides["lobby_timeout_seconds"] = request.lobby_timeout
+    if request.duration is not None:
+        meeting_overrides["session_duration_seconds"] = request.duration
     return SessionConfig(
         owner_id=owner_id,
         twin_id=twin_id,
@@ -80,22 +85,10 @@ def build_session_config(request: JoinRequest) -> SessionConfig:
         else meeting_profile_dir(
             settings.paths.browser_profile_dir, twin_id=twin_id, meeting_id=meeting_id
         ),
-        lobby_timeout_seconds=request.lobby_timeout
-        if request.lobby_timeout is not None
-        else settings.meeting.lobby_timeout_seconds,
-        session_duration_seconds=request.duration
-        if request.duration is not None
-        else settings.meeting.session_duration_seconds,
-        join_poll_interval_seconds=settings.meeting.join_poll_seconds,
-        join_max_attempts=settings.meeting.join_max_attempts,
-        join_retry_base_seconds=settings.meeting.join_retry_base_seconds,
-        join_retry_cap_seconds=settings.meeting.join_retry_cap_seconds,
-        monitor_interval_seconds=settings.meeting.monitor_poll_seconds,
-        leave_timeout_seconds=settings.meeting.leave_timeout_seconds,
+        meeting=settings.meeting.model_copy(update=meeting_overrides),
         warmup_browser=settings.browser.warmup,
         deaf_window_seconds=settings.audio_health.deaf_window_seconds,
         deaf_grace_seconds=settings.audio_health.deaf_grace_seconds,
-        alone_leave_seconds=settings.meeting.alone_leave_seconds,
         attention=settings.perception.attention,
         preflight_budget_seconds=settings.preflight.budget_seconds,
         headless=resolved_headless,

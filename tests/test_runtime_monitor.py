@@ -251,7 +251,7 @@ async def test_the_twin_leaves_an_empty_meeting_without_audio_while_the_dom_fail
     monkeypatch.setattr(worker, "finish", finish)
     scan = MonitorScan(next_scan=clock.now, remote_participants=None, presence_at=clock.now)
     finished = None
-    for _ in range(int(worker.config.alone_leave_seconds // 15) + 2):
+    for _ in range(int(worker.config.meeting.alone_leave_seconds // 15) + 2):
         sensors.heartbeats += 1
         _remote, finished = await worker.check_presence(scan)
         if finished is not None:
@@ -280,7 +280,7 @@ async def test_the_dom_seeing_people_keeps_the_twin_in_and_records_drift(
     sensors = _Sensors()
     worker.perception = cast(Any, SimpleNamespace(sensors=sensors, close=_closed))
     scan = MonitorScan(next_scan=clock.now, remote_participants=2, presence_at=clock.now)
-    for _ in range(int(worker.config.alone_leave_seconds // 15) + 2):
+    for _ in range(int(worker.config.meeting.alone_leave_seconds // 15) + 2):
         sensors.heartbeats += 1
         scan.presence_at = clock.now
         _remote, finished = await worker.check_presence(scan)

@@ -10,6 +10,7 @@ import pytest
 import fakeyou.orchestration.runtime as runtime
 from fakeyou.audio.audio import MeetingAudioError
 from fakeyou.config.identifiers import SessionId
+from fakeyou.config.settings import MeetingSettings
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.meet.meet import CallObservation, JoinResult
 from fakeyou.observability.faults import FaultReporter
@@ -234,8 +235,7 @@ async def test_session_duration_counts_from_admission(
         SessionId("meeting"),
         "https://meet.google.com/abc-defg-hij",
         "Twin",
-        session_duration_seconds=100.0,
-        monitor_interval_seconds=10.0,
+        meeting=MeetingSettings(session_duration_seconds=100.0, monitor_poll_seconds=10.0),
     )
     result = await runtime.run_meeting_session(
         config,
