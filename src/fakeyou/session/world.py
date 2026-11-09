@@ -10,6 +10,8 @@ from fakeyou.session.contracts import (
     OwnerControlObserved,
     ParticipantCountObserved,
     PlaybackObserved,
+    RecallObserved,
+    RecallOutcome,
     RosterObserved,
     ScreenObserved,
     SessionEvent,
@@ -110,6 +112,13 @@ class DialogueState:
 
 
 @dataclass(frozen=True, slots=True)
+class RecallState:
+    query: str = ""
+    outcome: RecallOutcome | None = None
+    fact_refs: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class AgendaState:
     paused: bool = False
     owner_leave: bool = False
@@ -139,6 +148,7 @@ class SessionState:
     seq: int = 0
     world: WorldState = field(default_factory=WorldState)
     dialogue: DialogueState = field(default_factory=DialogueState)
+    recall: RecallState = field(default_factory=RecallState)
     agenda: AgendaState = field(default_factory=AgendaState)
     health: HealthState = field(default_factory=HealthState)
     revisions: Revisions = field(default_factory=Revisions)
@@ -425,6 +435,15 @@ def _observe(state: SessionState, seq: int, event: SessionEvent, limits: Limits)
             return _screen(state, seq, observation)
         case OwnerControlObserved():
             return _owner_control(state, observation)
+        case RecallObserved():
+            return replace(
+                state,
+                recall=RecallState(
+                    query=observation.query,
+                    outcome=observation.outcome,
+                    fact_refs=observation.fact_refs,
+                ),
+            )
         case VoiceActivityObserved() | TurnEndObserved():
             return state
         case _:

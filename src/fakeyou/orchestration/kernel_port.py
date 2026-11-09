@@ -28,6 +28,8 @@ from fakeyou.session.contracts import (
     ParticipantCountObserved,
     PlaybackObserved,
     PlaybackPhase,
+    RecallObserved,
+    RecallOutcome,
     RosterObserved,
     ScreenObserved,
     SessionEvent,
@@ -54,6 +56,7 @@ _PLAYBACK_PHASES: dict[str, PlaybackPhase] = {
 
 
 TURN_PAYLOAD_LIMIT = 512
+FINAL_WINDOW_LINES = 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,8 +146,10 @@ class KernelPort:
         self._health: dict[Source, SourceStatus] = {}
         self._turn_payloads: OrderedDict[str, TurnSignal] = OrderedDict()
         self._turn_consumers: list[TurnConsumer] = []
+        self._final_listeners: list[Callable[[str, tuple[str, ...]], None]] = []
         kernel.subscribe(self._note_modes)
         kernel.subscribe(self._forward_turn)
+        kernel.subscribe(self._note_final)
         self._mailbox = mailbox or Mailbox()
         self._clock = clock
         self._browser_epoch = 0
@@ -421,6 +426,28 @@ class KernelPort:
 
     def memory_outcome(self, outcome: str) -> None:
         self.source_health("memory", "down" if outcome == "unavailable" else "healthy")
+
+    def recall_observed(
+        self, *, query: str, outcome: RecallOutcome, fact_refs: tuple[str, ...] = ()
+    ) -> None:
+        self.memory_outcome(outcome)
+        self.observe("memory", RecallObserved(query=query, outcome=outcome, fact_refs=fact_refs))
+
+    def on_final(self, listener: Callable[[str, tuple[str, ...]], None]) -> None:
+        self._final_listeners.append(listener)
+
+    def _note_final(self, state: SessionState, event: SessionEvent) -> None:
+        observation = event.observation
+        if not isinstance(observation, TranscriptObserved) or not observation.final:
+            return
+        window = tuple(line.text for line in state.dialogue.lines[-FINAL_WINDOW_LINES:])
+        for listener in self._final_listeners:
+            guard_observer(
+                partial(listener, observation.transcript_id, window),
+                sink=ConsumerSink(journal=self._journal),
+                source="memory",
+                detail="recall_listener",
+            )
 
     def source_health(self, source: Source, status: SourceStatus) -> None:
         if self._health.get(source) == status:

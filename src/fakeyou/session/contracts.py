@@ -122,6 +122,16 @@ class PlaybackObserved(Contract):
     text: str
 
 
+RecallOutcome = Literal["found", "empty", "unavailable"]
+
+
+class RecallObserved(Contract):
+    kind: Literal["recall"] = "recall"
+    query: str
+    outcome: RecallOutcome
+    fact_refs: tuple[str, ...] = ()
+
+
 class OwnerControlObserved(Contract):
     kind: Literal["owner_control"] = "owner_control"
     command: OwnerCommand
@@ -140,6 +150,7 @@ Observation = Annotated[
     | CallStateObserved
     | SourceHealthObserved
     | PlaybackObserved
+    | RecallObserved
     | OwnerControlObserved,
     Field(discriminator="kind"),
 ]
