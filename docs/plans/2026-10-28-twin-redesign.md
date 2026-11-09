@@ -3151,10 +3151,12 @@ yang sudah ada dan snapshot hanya memuat yang approved, jadi gate
 "approved dipakai meeting berikutnya, ditolak tidak pernah" tinggal
 validasi live. Sisa C7b: replay eval per versi owner model dan bukti
 proposal dari `SearchFilters`/`get_nodes_and_edges_by_episode`.
-Temuan terpisah: live debrief corpus merah juga di main dengan model
-`.env` saat ini (4 dari 8 case `DebriefValidationError`
-claim_not_in_quotes), jadi bukan regresi slice ini; perlu kalibrasi
-model/prompt debrief tersendiri.
+Live debrief corpus sempat merah di main karena model mengisi
+`assignee_claim` dengan participant id dan `due_text` dengan
+timestamp; diperbaiki dengan grounding deterministik di batas
+ekstraksi (klaim yang tidak terkandung di kutipan bukti di-null-kan,
+item tetap dipertahankan) plus larangan eksplisit di prompt — corpus
+kembali 7/7 selesai.
 
 ## Track D: always-on
 

@@ -315,6 +315,19 @@ def _claim_in_quotes(claim: str, quotes: Sequence[str]) -> bool:
     return any(re.search(pattern, quote, re.IGNORECASE) for quote in quotes)
 
 
+def grounded_draft(draft: DebriefDraft) -> DebriefDraft:
+    items = []
+    for item in draft.items:
+        quotes = [reference.quote for reference in item.evidence]
+        changes: dict[str, None] = {}
+        if item.assignee_claim is not None and not _claim_in_quotes(item.assignee_claim, quotes):
+            changes["assignee_claim"] = None
+        if item.due_text is not None and not _claim_in_quotes(item.due_text, quotes):
+            changes["due_text"] = None
+        items.append(item.model_copy(update=changes) if changes else item)
+    return draft.model_copy(update={"items": tuple(items)})
+
+
 def validate_draft(
     draft: DebriefDraft, *, sources: Mapping[str, SourceEntry], brief: MeetingBrief | None
 ) -> None:

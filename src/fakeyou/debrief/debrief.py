@@ -66,6 +66,9 @@ _EXTRACTION_RULES = (
     "preserving the named assignee as assignee_claim; it never asserts work completion. Use "
     "action_item/proposed only for tentative suggestions of work. Set assignee_claim to null "
     "when no assignee is explicitly named; unknown speaker metadata is not an assignee name. "
+    "assignee_claim is a person's name exactly as spoken in the cited quote, never a "
+    "participant id or speaker label; due_text copies the spoken due wording exactly, never "
+    "a timestamp or a converted calendar date. "
     "Copy relative task due wording into due_text verbatim without inventing a date anchor. "
     "Do not convert source capture timestamps into dates for undated or forwarded statements.\n"
     "A withdrawn or superseded proposal uses proposal with uncertain and explains the withdrawal "
@@ -195,7 +198,8 @@ async def _extract_chunk_task(job: _DebriefJob, index: int) -> schema.DebriefDra
         else None
     )
     try:
-        draft = await _extract_chunk(job.models, chunk, job.brief)
+        extracted = await _extract_chunk(job.models, chunk, job.brief)
+        draft = sources.grounded_draft(extracted)
         sources.validate_draft(draft, sources={entry.id: entry for entry in chunk}, brief=job.brief)
     except BaseException as error:
         if journal is not None and request_id is not None:
