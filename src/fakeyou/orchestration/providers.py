@@ -53,8 +53,12 @@ def preflight_hosts(
     return tuple(dict.fromkeys(target for target in targets if target))
 
 
-def _init_chat_model(role: ReplySettings, name: ConfigKey) -> BaseChatModel:
+def _init_chat_model(
+    role: ReplySettings, name: ConfigKey, *, temperature: float | None = None
+) -> BaseChatModel:
     options: dict[str, Any] = {"timeout": role.timeout_seconds, "max_retries": role.max_retries}
+    if temperature is not None:
+        options["temperature"] = temperature
     options["base_url"] = role.resolved_base_url
     if (
         isinstance(role, (OpenAIReply, CompatibleReply, GoogleReply))
@@ -88,9 +92,9 @@ def _require_minimal_reasoning(model: BaseChatModel, name: str) -> None:
         )
 
 
-def create_chat_model(settings: Settings) -> BaseChatModel:
+def create_chat_model(settings: Settings, *, temperature: float | None = None) -> BaseChatModel:
     settings.require_roles("reply", "reply_fallback", "reply_strong")
-    return _init_chat_model(settings.reply, ConfigKey.REPLY_API_KEY)
+    return _init_chat_model(settings.reply, ConfigKey.REPLY_API_KEY, temperature=temperature)
 
 
 def create_debrief_chat_model(settings: Settings) -> BaseChatModel:
@@ -139,12 +143,14 @@ def create_perception_chat_model(settings: Settings) -> BaseChatModel:
     return _init_chat_model(role, ConfigKey.PERCEPTION_API_KEY)
 
 
-def create_turn_judge_model(settings: Settings) -> BaseChatModel:
+def create_turn_judge_model(
+    settings: Settings, *, temperature: float | None = None
+) -> BaseChatModel:
     role = settings.turn_judge.model
     if role is None:
-        return create_chat_model(settings)
+        return create_chat_model(settings, temperature=temperature)
     settings.require_roles("turn_judge")
-    return _init_chat_model(role, ConfigKey.TURN_JUDGE_API_KEY)
+    return _init_chat_model(role, ConfigKey.TURN_JUDGE_API_KEY, temperature=temperature)
 
 
 def session_models(settings: Settings) -> tuple[BaseChatModel | None, ...]:

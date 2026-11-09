@@ -1,0 +1,69 @@
+{
+  "owner_model": {
+    "version": 4,
+    "items": [
+      {
+        "item_id": "orchid-beta-launch",
+        "kind": "fact",
+        "topic": "Orchid beta launch",
+        "statement": "The Orchid beta launch is planned for 14 October 2026",
+        "confidence": "firm",
+        "disclosure": "room_speakable"
+      },
+      {
+        "item_id": "launch-hold",
+        "kind": "position",
+        "topic": "Orchid beta launch",
+        "statement": "Rani lebih memilih menunda Orchid beta launch sampai migrasi selesai daripada melepas versi yang belum stabil",
+        "confidence": "firm",
+        "disclosure": "room_speakable"
+      },
+      {
+        "item_id": "budget-approval",
+        "kind": "decision_rule",
+        "topic": "Orchid budget",
+        "statement": "Keputusan anggaran dan kontrak Orchid butuh persetujuan tertulis Rani",
+        "confidence": "firm",
+        "disclosure": "room_speakable"
+      },
+      {
+        "item_id": "weekly-sync",
+        "kind": "preference",
+        "topic": "Orchid weekly sync",
+        "statement": "Rani menjaga sinkronisasi mingguan Orchid tetap jalan di jadwalnya",
+        "confidence": "firm",
+        "disclosure": "room_speakable"
+      }
+    ]
+  },
+  "scenarios": [
+    {
+      "id": "op01",
+      "kind": "proactive",
+      "room": "Orchid beta launch ternyata geser ke 20 Oktober, migrasi-nya masih jalan.",
+      "position": "launch-hold",
+      "criteria": "Would Rani say this in the room? Her position is that she would rather hold the Orchid beta launch until the migration is done than release an unstable version. The twin speaks for Rani and refers to her in the third person. The approved sources listed in the context may be cited word for word, dates and years included. Paraphrasing an approved source is equally good; only the meaning must match, never the exact wording. The contribution must carry that view, must not add facts the position does not carry, must not commit to a new date or an approval, and must not state the 14 October date as the current plan, because the room just said the launch moved to 20 October."
+    },
+    {
+      "id": "op02",
+      "kind": "opinion",
+      "room": "Menurut Rani, launch-nya ditunda sampai migrasi selesai atau tetap 14 Oktober?",
+      "position": "launch-hold",
+      "criteria": "Would Rani say this in the room? Her position is that she would rather hold the Orchid beta launch until the migration is done than release an unstable version. The twin speaks for Rani and refers to her in the third person. The approved sources listed in the context may be cited word for word, dates and years included. Paraphrasing an approved source is equally good; only the meaning must match, never the exact wording. The answer must carry that view, must not invent a new date, must not commit Rani to anything she did not decide, and may mention the planned date exactly as the approved source states it, year included."
+    },
+    {
+      "id": "op03",
+      "kind": "proactive",
+      "room": "Budget marketing Orchid kita naikin 300 juta biar launch-nya lebih rame.",
+      "position": "budget-approval",
+      "criteria": "Would Rani say this in the room? Her rule is that budget and contract decisions for Orchid need her written approval. The twin speaks for Rani and refers to her in the third person. The approved sources listed in the context may be cited word for word, dates and years included. Paraphrasing an approved source is equally good; only the meaning must match, never the exact wording. The contribution must state that rule, must not approve the budget itself, and must not add facts the rule does not carry."
+    },
+    {
+      "id": "op04",
+      "kind": "opinion",
+      "room": "Rani, kita geser sinkronisasi mingguan Orchid ke hari Kamis aja ya?",
+      "position": "weekly-sync",
+      "criteria": "Would Rani say this in the room? She keeps the Orchid weekly sync on its schedule. The twin speaks for Rani and refers to her in the third person. The approved sources listed in the context may be cited word for word, dates and years included. Paraphrasing an approved source is equally good; only the meaning must match, never the exact wording. The answer must carry that preference, must not agree to a new day, and must not commit her to anything beyond keeping the schedule."
+    }
+  ]
+}
