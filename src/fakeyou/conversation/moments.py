@@ -2,7 +2,7 @@ import asyncio
 import json
 import math
 from collections import deque
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import partial
 from typing import Literal, Protocol
@@ -12,7 +12,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import Runnable
 from pydantic import BaseModel, ConfigDict, Field
 
-from fakeyou.conversation.contribution import SourceRegistry
+from fakeyou.conversation.contribution import RecalledFact, SourceRegistry
 from fakeyou.foundation.participation import is_vocative, mentions_whole_phrase
 from fakeyou.foundation.transcript import AttentionContext, TranscriptEvent
 from fakeyou.observability.faults import capture_error
@@ -151,6 +151,7 @@ class MomentDetector:
     _fired_events: set[str] = field(default_factory=set, init=False)
     _fired_refs: set[str] = field(default_factory=set, init=False)
     _seen_screens: set[str] = field(default_factory=set, init=False)
+    _pending_recalled: dict[str, str] = field(default_factory=dict, init=False)
 
     async def prepare(self) -> None:
         if self._prepared:
@@ -176,7 +177,27 @@ class MomentDetector:
         if self.journal is not None:
             self.journal.record(event, source="agent", **fields)
 
+    def note_recalled(self, refs: Mapping[str, RecalledFact]) -> None:
+        known = {ref for _, ref, _, _ in self._vectors}
+        for ref, fact in refs.items():
+            if ref not in known and fact.text.strip():
+                self._pending_recalled[ref] = fact.text
+
+    async def _embed_recalled(self) -> None:
+        if self.embed is None or not self._pending_recalled:
+            return
+        pending = self._pending_recalled
+        self._pending_recalled = {}
+        vectors, error = await capture_error(partial(self.embed, list(pending.values())))
+        if vectors is None or error is not None or len(vectors) != len(pending):
+            return
+        self._vectors.extend(
+            ("memory", ref, text, vector)
+            for (ref, text), vector in zip(pending.items(), vectors, strict=True)
+        )
+
     async def _candidates(self, text: str) -> list[MomentCandidate]:
+        await self._embed_recalled()
         if self.embed is None or not self._vectors:
             return []
         vectors, error = await capture_error(partial(self.embed, [text]))

@@ -256,8 +256,15 @@ async def join_persona_conversation(
             )
             await kwargs["open_audio"].keywords["callbacks"].on_transcript(update)
         await kwargs["kernel"].settled()
+
+        async def settled() -> None:
+            await loop.actor.wait_idle()
+            recall_idle = getattr(loop.responder, "recall_idle", None)
+            if recall_idle is not None:
+                await recall_idle()
+
         await asyncio.wait_for(
-            loop.actor.wait_idle() if settle is None else settle(),
+            settled() if settle is None else settle(),
             timeout=SETTLE_TIMEOUT_SECONDS,
         )
         outcome["phase"] = loop.actor.phase

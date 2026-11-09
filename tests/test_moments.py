@@ -1,7 +1,8 @@
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from typing import override
 
-from fakeyou.conversation.contribution import OwnerModelSource, source_registry
+from fakeyou.conversation.contribution import OwnerModelSource, RecalledFact, source_registry
 from fakeyou.conversation.moments import MomentCandidate, MomentDetector, MomentJudgement
 from fakeyou.foundation.transcript import TranscriptEvent
 
@@ -204,6 +205,46 @@ async def test_the_same_screen_reading_is_judged_only_once() -> None:
 
     assert again is None
     assert judge.calls == 1
+
+
+async def test_a_recalled_fact_becomes_a_moment_candidate_once_it_lands() -> None:
+    judgement = MomentJudgement(moment="fact_opportunity", source_ref="mem-1", confidence=0.9)
+    judge = _Judge(judgement)
+    detector = _detector(judgement, judge)
+    await detector.prepare()
+
+    assert await detector.observe(_event("t1", "unrelated"), now=100.0) is None
+    detector.note_recalled({"mem-1": RecalledFact(FACT)})
+    context = await detector.observe(_event("t2", QUESTION), now=101.0)
+
+    assert context is not None
+    assert context.suggested_source == "memory"
+    assert context.suggested_source_ref == "mem-1"
+
+
+async def test_the_same_recalled_fact_is_embedded_only_once() -> None:
+    embedded: list[str] = []
+
+    class _CountingEmbedder(_Embedder):
+        @override
+        async def __call__(self, texts: Sequence[str]) -> list[list[float]]:
+            embedded.extend(texts)
+            return await super().__call__(texts)
+
+    judgement = MomentJudgement(moment="none", confidence=0.9)
+    detector = MomentDetector(
+        registry=source_registry(),
+        judge=_Judge(judgement),
+        embed=_CountingEmbedder({FACT: [1.0, 0.0], QUESTION: [0.95, 0.05]}),
+        similarity_threshold=0.5,
+    )
+
+    detector.note_recalled({"mem-1": RecalledFact(FACT)})
+    await detector.observe(_event("t1", QUESTION), now=100.0)
+    detector.note_recalled({"mem-1": RecalledFact(FACT)})
+    await detector.observe(_event("t2", QUESTION), now=101.0)
+
+    assert embedded.count(FACT) == 1
 
 
 async def test_a_screen_reading_without_candidates_never_reaches_the_judge() -> None:
