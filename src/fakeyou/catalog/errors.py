@@ -171,6 +171,7 @@ class ErrorCode(StrEnum):
     DEBRIEF_MERGED_TOO_MANY_ITEMS = "debrief.merged_too_many_items"
     DEBRIEF_MERGED_FINDING_TOO_MANY_REFS = "debrief.merged_finding_too_many_refs"
     DEBRIEF_MERGED_TOO_MANY_FINDINGS = "debrief.merged_too_many_findings"
+    DEBRIEF_MERGED_TOO_MANY_PROPOSALS = "debrief.merged_too_many_proposals"
     DEBRIEF_REPORT_SOURCE_METADATA_ABSENT = "debrief.report_source_metadata_absent"
     DEBRIEF_CANONICAL_INVALID = "debrief.canonical_invalid"
     DEBRIEF_SOURCE_COUNT_MISMATCH = "debrief.source_count_mismatch"
@@ -647,6 +648,9 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
         "merged finding exceeds 10 evidence references"
     ),
     ErrorCode.DEBRIEF_MERGED_TOO_MANY_FINDINGS: ErrorSpec("merged debrief exceeds 40 findings"),
+    ErrorCode.DEBRIEF_MERGED_TOO_MANY_PROPOSALS: ErrorSpec(
+        "merged debrief exceeds 20 owner model proposals"
+    ),
     ErrorCode.DEBRIEF_REPORT_SOURCE_METADATA_ABSENT: ErrorSpec(
         "report evidence source metadata is absent"
     ),

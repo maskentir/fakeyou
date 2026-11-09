@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -10,7 +10,7 @@ from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import IngestionSettings, Settings
 from fakeyou.debrief.debrief import read_debrief
-from fakeyou.debrief.debrief_schema import DebriefValidationError
+from fakeyou.debrief.debrief_schema import DebriefReport, DebriefValidationError
 from fakeyou.diarization.diarize_service import diarize_run
 from fakeyou.memory.ingest_status import (
     IngestOutcome,
@@ -62,6 +62,7 @@ class IngestPorts:
     stop_signals: Callable[[asyncio.Event, Journal], AbstractContextManager[None]]
     publish: Callable[[IngestSummary], None]
     report: Callable[[FakeYouError], None]
+    propose_owner_model: Callable[[DebriefReport], Awaitable[int]] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -331,11 +332,25 @@ async def _ingest_records(attempt: _Attempt, memory: Graphiti, stop: asyncio.Eve
     return result
 
 
+async def _publish_owner_model_proposals(attempt: _Attempt, report: DebriefReport) -> None:
+    propose = attempt.ports.propose_owner_model
+    if propose is None or not report.owner_model_proposals:
+        return
+    written, error = await capture_error(lambda: propose(report))
+    if error is not None:
+        attempt.faults.record(classify_exception("memory_ingest", error))
+        return
+    attempt.journal.record(
+        "owner_model_proposals_recorded", source="memory_ingest", proposals=written or 0
+    )
+
+
 async def _publish_typed_assertions(attempt: _Attempt, memory: Graphiti) -> None:
     try:
         report = read_debrief(attempt.record_path)
     except DebriefValidationError:
         return
+    await _publish_owner_model_proposals(attempt, report)
     if not report.items:
         return
     written, error = await capture_error(

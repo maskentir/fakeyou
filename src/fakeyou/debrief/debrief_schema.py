@@ -73,11 +73,21 @@ class ObjectiveFinding(BaseModel):
         return self
 
 
+class OwnerModelProposal(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+
+    kind: Literal["position", "preference", "decision_rule", "style_example", "fact"]
+    topic: Annotated[str, StringConstraints(min_length=1, max_length=200)]
+    statement: Annotated[str, StringConstraints(min_length=1, max_length=1000)]
+    evidence: Annotated[tuple[EvidenceRef, ...], Field(min_length=1, max_length=10)]
+
+
 class DebriefDraft(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
     items: Annotated[tuple[DebriefItem, ...], Field(max_length=100)]
     findings: Annotated[tuple[ObjectiveFinding, ...], Field(max_length=40)]
+    owner_model_proposals: Annotated[tuple[OwnerModelProposal, ...], Field(max_length=20)] = ()
 
 
 class EvidenceSource(BaseModel):
@@ -109,6 +119,7 @@ class DebriefReport(BaseModel):
     review_status: Literal["unreviewed"]
     items: Annotated[tuple[DebriefItem, ...], Field(max_length=100)]
     findings: Annotated[tuple[ObjectiveFinding, ...], Field(max_length=40)]
+    owner_model_proposals: Annotated[tuple[OwnerModelProposal, ...], Field(max_length=20)] = ()
     evidence_sources: tuple[EvidenceSource, ...]
     source_limitations: tuple[str, ...]
 
