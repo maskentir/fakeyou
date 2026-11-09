@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
 
@@ -94,6 +95,34 @@ class MeetingView(ViewPart):
 
     def as_text(self) -> str:
         return VIEW_PREFIX + self.model_dump_json(exclude_none=True)
+
+
+@dataclass(frozen=True, slots=True)
+class ScreenFact:
+    text: str
+    presenter: str | None = None
+
+
+def _screen_text(screen: ViewScreen) -> str:
+    figures = [f"{figure.label} {figure.value}" for figure in screen.figures or ()]
+    parts = [
+        screen.title or "",
+        screen.text or "",
+        *(screen.key_points or ()),
+        *figures,
+        *(screen.visuals or ()),
+        *(screen.people or ()),
+    ]
+    return "\n".join(part for part in parts if part)
+
+
+def screen_facts(view: MeetingView) -> dict[str, ScreenFact]:
+    screens = [view.screen_now] if view.screen_now else []
+    return {
+        screen.ref: ScreenFact(text, screen.presenter)
+        for screen in [*screens, *view.earlier_screens]
+        if (text := _screen_text(screen))
+    }
 
 
 def _seconds(now: datetime, moment: datetime) -> int:

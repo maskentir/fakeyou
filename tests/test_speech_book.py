@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from fakeyou.conversation.contribution import OwnerModelSource, RecalledFact, source_registry
 from fakeyou.conversation.reply_planner import SpeechGate, planned_reply
 from fakeyou.conversation.speech_book import BookSource, TurnEvidence, fact_book
+from fakeyou.perception.view import ScreenFact
 from fakeyou.session.speech import ClaimHeader, check_claim
 from tests._conversation_support import claim, plan_reply
 
@@ -31,10 +32,13 @@ def gate(
     proactive: bool = False,
     memory: Mapping[str, RecalledFact] | None = None,
     persona_knowledge: bool = True,
+    screens: Mapping[str, ScreenFact] | None = None,
 ) -> SpeechGate:
     source = BookSource(REGISTRY, permissions, persona_knowledge)
     return SpeechGate(
-        lambda: fact_book(source, heard=TRIGGER, observed="", memory=memory or {}),
+        lambda: fact_book(
+            source, heard=TRIGGER, observed="", memory=memory or {}, screens=screens or {}
+        ),
         proactive=proactive,
     )
 
@@ -297,6 +301,53 @@ def test_a_number_is_grounded_only_by_the_refs_of_its_own_claim() -> None:
     assert planned_reply(
         grounded_in_order, max_sentences=2, language="en", speech_gate=gate()
     ).text == ("The demo is on Friday the 9th. The beta launches on 14 October.")
+
+
+SCREEN_FACTS = {
+    "screen#1": ScreenFact("Revenue Rows row 42: Q3 revenue 4.2 million", "Budi"),
+    "screen#2": ScreenFact("Pricing Plans Pro 299 per month", None),
+}
+
+
+def read_screen(text: str, speech_gate: SpeechGate, ref: str = "screen#1") -> str:
+    return spoken(plan_reply(claim(text, ref, basis="screen")), speech_gate)
+
+
+def test_a_screen_claim_citing_the_screen_it_reads_is_spoken() -> None:
+    text = "Row 42 shows Q3 revenue of 4.2 million."
+
+    assert read_screen(text, gate(screens=SCREEN_FACTS)) == text
+    assert read_screen(text, gate()) == "I'm not sure about that, so I'd rather not guess."
+
+
+def test_a_screen_number_must_come_from_the_cited_screen() -> None:
+    assert read_screen("Row 42 shows Q3 revenue of 9.9 million.", gate(screens=SCREEN_FACTS)) == (
+        "I'm not sure about that, so I'd rather not guess."
+    )
+    assert read_screen(
+        "The Pro plan is 299 per month.", gate(screens=SCREEN_FACTS), ref="screen#1"
+    ) == ("I'm not sure about that, so I'd rather not guess.")
+
+
+def test_screen_entries_carry_the_presenter() -> None:
+    book = fact_book(
+        BookSource(REGISTRY, EVERYTHING), heard="", observed="", memory={}, screens=SCREEN_FACTS
+    )
+
+    assert book.entries["screen#1"].namespace == "screen"
+    assert book.entries["screen#1"].attributed_to == "Budi"
+    assert book.entries["screen#2"].attributed_to is None
+
+
+def test_screens_are_kept_across_turns() -> None:
+    evidence = TurnEvidence()
+    evidence.note_screens({"screen#1": ScreenFact("Launch Timeline beta 14 October", "Budi")})
+    evidence.note_screens({"screen#2": ScreenFact("Pricing Plans Pro 299", None)})
+
+    assert evidence.screens() == {
+        "screen#1": ScreenFact("Launch Timeline beta 14 October", "Budi"),
+        "screen#2": ScreenFact("Pricing Plans Pro 299", None),
+    }
 
 
 def test_a_rejected_later_claim_is_dropped_whole() -> None:

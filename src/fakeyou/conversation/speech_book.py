@@ -3,17 +3,20 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 
 from fakeyou.conversation.contribution import RecalledFact, SourceRegistry
+from fakeyou.perception.view import ScreenFact
 from fakeyou.session.facts import Disclosure
 from fakeyou.session.speech import BookEntry, EntryKind, FactBook
 
 KEPT_TURNS = 16
 KEPT_MEMORY_FACTS = 64
+KEPT_SCREENS = 16
 
 
 @dataclass(slots=True)
 class TurnEvidence:
     _observed: OrderedDict[str, list[str]] = field(default_factory=OrderedDict)
     _memory: OrderedDict[str, RecalledFact] = field(default_factory=OrderedDict)
+    _screens: OrderedDict[str, ScreenFact] = field(default_factory=OrderedDict)
 
     def note_observed(self, transcript_id: str, text: str) -> None:
         self._observed.setdefault(transcript_id, []).append(text)
@@ -32,6 +35,16 @@ class TurnEvidence:
 
     def memory(self) -> Mapping[str, RecalledFact]:
         return dict(self._memory)
+
+    def note_screens(self, screens: Mapping[str, ScreenFact]) -> None:
+        for ref, fact in screens.items():
+            self._screens[ref] = fact
+            self._screens.move_to_end(ref)
+        while len(self._screens) > KEPT_SCREENS:
+            self._screens.popitem(last=False)
+
+    def screens(self) -> Mapping[str, ScreenFact]:
+        return dict(self._screens)
 
 
 def _bound[T](items: OrderedDict[str, T]) -> None:
@@ -89,10 +102,20 @@ def _entries(source: BookSource, memory: Mapping[str, RecalledFact]) -> Iterator
 
 
 def fact_book(
-    source: BookSource, *, heard: str, observed: str, memory: Mapping[str, RecalledFact]
+    source: BookSource,
+    *,
+    heard: str,
+    observed: str,
+    memory: Mapping[str, RecalledFact],
+    screens: Mapping[str, ScreenFact] | None = None,
 ) -> FactBook:
+    entries = {entry.fact_id: entry for entry in _entries(source, memory)}
+    for ref, fact in (screens or {}).items():
+        entries[ref] = BookEntry(
+            ref, fact.text, "screen", "room_speakable", attributed_to=fact.presenter
+        )
     return FactBook(
-        entries={entry.fact_id: entry for entry in _entries(source, memory)},
+        entries=entries,
         heard=f"{heard}\n{observed}".strip(),
         internal=tuple(source.registry.objectives.values()),
     )
