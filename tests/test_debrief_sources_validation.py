@@ -10,7 +10,12 @@ from fakeyou.debrief.debrief_schema import (
     EvidenceRef,
     ObjectiveFinding,
 )
-from fakeyou.debrief.debrief_sources import SourceEntry, validate_draft, validate_evidence
+from fakeyou.debrief.debrief_sources import (
+    SourceEntry,
+    grounded_draft,
+    validate_draft,
+    validate_evidence,
+)
 from fakeyou.persistence.brief import MeetingBrief
 from tests._debrief_sources_support import AT, source
 from tests._debrief_sources_support import (
@@ -321,3 +326,37 @@ def test_claim_grounding_is_per_quote_on_word_boundaries(
         with pytest.raises(DebriefValidationError, match="claim") as caught:
             validate_draft(draft, sources={entry.id: entry}, brief=None)
         assert caught.value.code is ErrorCode.DEBRIEF_CLAIM_NOT_IN_QUOTES
+
+
+def test_grounding_drops_only_the_claims_the_quotes_do_not_carry() -> None:
+    entry = source(text="Rani will send the deck tomorrow after lunch.")
+    draft = DebriefDraft(
+        items=(
+            DebriefItem(
+                kind="action_item",
+                text="Send the deck.",
+                status="stated",
+                evidence=(EvidenceRef(entry_id=entry.id, quote="send the deck tomorrow"),),
+                assignee_claim="participant-a",
+                due_text="2026-10-03T03:00:00+00:00",
+            ),
+            DebriefItem(
+                kind="action_item",
+                text="Send the deck after lunch.",
+                status="stated",
+                evidence=(EvidenceRef(entry_id=entry.id, quote="tomorrow after lunch"),),
+                assignee_claim="Rani",
+                due_text="tomorrow after lunch",
+            ),
+        ),
+        findings=(),
+    )
+
+    grounded = grounded_draft(draft)
+    validate_draft(grounded, sources={entry.id: entry}, brief=None)
+
+    assert (grounded.items[0].assignee_claim, grounded.items[0].due_text) == (None, None)
+    assert (grounded.items[1].assignee_claim, grounded.items[1].due_text) == (
+        None,
+        "tomorrow after lunch",
+    )
