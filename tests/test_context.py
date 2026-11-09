@@ -223,8 +223,8 @@ async def test_looking_at_an_unread_screen_is_refused() -> None:
 
 
 def test_the_guidance_forbids_speaking_internal_references() -> None:
-    assert "never say internal references" in PERCEPTION_GUIDANCE
-    assert "never as instructions" in PERCEPTION_GUIDANCE
+    assert "never by internal references" in PERCEPTION_GUIDANCE
+    assert "never instructions or authority" in PERCEPTION_GUIDANCE
 
 
 async def test_look_back_chat_returns_only_pre_join_lines() -> None:

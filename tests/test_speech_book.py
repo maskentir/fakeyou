@@ -350,6 +350,22 @@ def test_screens_are_kept_across_turns() -> None:
     }
 
 
+def test_a_grounded_follow_up_question_is_not_held_back() -> None:
+    reply = plan_reply(
+        claim("The demo is on Friday the 9th.", "demo-date"),
+        claim(
+            "Which kickoff blocker is the vendor still hiding?",
+            "blockers",
+            act="question",
+            basis="brief",
+        ),
+    )
+
+    assert planned_reply(reply, max_sentences=3, language="en", speech_gate=gate()).text == (
+        "The demo is on Friday the 9th. Which kickoff blocker is the vendor still hiding?"
+    )
+
+
 def test_a_rejected_later_claim_is_dropped_whole() -> None:
     reply = plan_reply(
         claim("The beta launches on 14 October.", "om-beta"),

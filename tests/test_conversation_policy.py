@@ -12,7 +12,6 @@ from pydantic import SecretStr
 from fakeyou.api.schemas import SessionCreate, SessionSnapshot
 from fakeyou.conversation.agent import (
     DEFAULT_PERSONA,
-    ENDING_RULE,
     MEETING_GUIDANCE,
     SPOKEN_LANGUAGE_GUIDANCE,
     create_meeting_agent,
@@ -529,7 +528,7 @@ def test_persona_prompt_without_profile_is_the_default_meeting_prompt(
     language: PersonaLanguage,
 ) -> None:
     prompt = build_persona_prompt(None, language=language)
-    assert prompt == f"{MEETING_GUIDANCE} {SPOKEN_LANGUAGE_GUIDANCE[language]}\n\n{ENDING_RULE}"
+    assert prompt == f"{MEETING_GUIDANCE} {SPOKEN_LANGUAGE_GUIDANCE[language]}"
     assert build_persona_prompt(None, language="id") == DEFAULT_PERSONA
 
 
