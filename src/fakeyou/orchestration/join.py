@@ -463,8 +463,8 @@ def _build_audio_factory(
     audio_diagnostics = Diagnostics(faults=run.faults, journal=run.journal)
     audio_policy = StreamPolicy(
         timing=DeafTiming(
-            deaf_window_seconds=prepared.config.deaf_window_seconds,
-            deaf_grace_seconds=prepared.config.deaf_grace_seconds,
+            deaf_window_seconds=prepared.config.audio_health.deaf_window_seconds,
+            deaf_grace_seconds=prepared.config.audio_health.deaf_grace_seconds,
         ),
         speech=SpeechPipelineSettings(
             stt_settings=prepared.request.settings.stt,
@@ -518,7 +518,7 @@ async def _drive_join_session(
                 reply=prepared.request.conversation_enabled,
                 memory=prepared.request.memory,
             ),
-            "preflight_budget_seconds": prepared.config.preflight_budget_seconds,
+            "preflight_budget_seconds": prepared.config.preflight.budget_seconds,
         }
         if prepared.request.audio_enabled
         else {}

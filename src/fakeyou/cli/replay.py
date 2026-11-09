@@ -51,7 +51,7 @@ def replay_meeting(
         link="https://meet.google.com/replay-only",
         twin_name=behavior.twin_names[0] if behavior.twin_names else settings.identity.twin_name,
         participant_policy_enabled=behavior.participant_policy_enabled,
-        per_stream_enabled=settings.conversation.per_stream_enabled,
+        conversation=settings.conversation,
     )
     with tempfile.TemporaryDirectory() as scratch:
         options = ReplayOptions(

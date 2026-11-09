@@ -2,14 +2,22 @@ import dataclasses
 from collections.abc import Callable, Sequence
 from dataclasses import field
 from pathlib import Path
-from typing import Annotated, Any, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict
 from pydantic.dataclasses import dataclass
 
 from fakeyou.config.identifiers import SessionIdField
-from fakeyou.config.settings import DEFAULTS, AttentionSettings, MeetingSettings
-from fakeyou.foundation.invariants import PositiveSeconds, TwinName
+from fakeyou.config.settings import (
+    AttentionSettings,
+    AudioHealthSettings,
+    AudioSettings,
+    BrowserSettings,
+    ConversationSettings,
+    MeetingSettings,
+    PreflightSettings,
+)
+from fakeyou.foundation.invariants import TwinName
 from fakeyou.foundation.taxonomy import PublicPhase, TerminalReason
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.foundation.triggers import ReplyChannel
@@ -120,26 +128,15 @@ class SessionConfig:
     link: str
     twin_name: TwinName
     meeting: MeetingSettings = field(default_factory=MeetingSettings)
-    deaf_window_seconds: PositiveSeconds = DEFAULTS.audio_health.deaf_window_seconds
-    deaf_grace_seconds: PositiveSeconds = DEFAULTS.audio_health.deaf_grace_seconds
-    preflight_budget_seconds: PositiveSeconds = DEFAULTS.preflight.budget_seconds
-    drain_max_consecutive_failures: Annotated[int, Field(ge=1)] = (
-        DEFAULTS.audio.drain_max_consecutive_failures
-    )
-    drain_failure_journal_every: Annotated[int, Field(ge=1)] = (
-        DEFAULTS.audio.drain_failure_journal_every
-    )
-    participant_evidence_max_bytes: Annotated[int, Field(ge=1)] = (
-        DEFAULTS.conversation.participant_evidence_max_bytes
-    )
+    audio_health: AudioHealthSettings = field(default_factory=AudioHealthSettings)
+    preflight: PreflightSettings = field(default_factory=PreflightSettings)
+    audio: AudioSettings = field(default_factory=AudioSettings)
+    browser: BrowserSettings = field(default_factory=BrowserSettings)
+    conversation: ConversationSettings = field(default_factory=ConversationSettings)
     browser_profile_dir: Path | None = None
-    warmup_browser: bool = DEFAULTS.browser.warmup
-    headless: bool = DEFAULTS.browser.headless
-    license_key: str | None = field(default=None, repr=False)
     participant_policy_enabled: bool = True
     participant_evidence_enabled: bool = False
     participant_evidence_path: Path | None = None
-    per_stream_enabled: bool = False
     meet_actions_enabled: bool = False
     perception_enabled: bool = False
     attention: AttentionSettings = field(default_factory=lambda: AttentionSettings(enabled=False))

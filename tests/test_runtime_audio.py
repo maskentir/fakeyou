@@ -367,7 +367,10 @@ async def test_capture_drain_starts_before_initial_speech(
         echo=False,
     )
     open_audio = partial(open_audio, FakeAudio(session.events), started=True)
-    config = replace(session.config, per_stream_enabled=True)
+    config = replace(
+        session.config,
+        conversation=session.config.conversation.model_copy(update={"per_stream_enabled": True}),
+    )
 
     result = await runtime.run_meeting_session(
         config,

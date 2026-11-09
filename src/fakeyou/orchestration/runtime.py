@@ -303,7 +303,7 @@ class MeetingWorker:
     def _probe_scripts(self) -> tuple[str, ...]:
         return (
             ((load_voice_activity_script(),) if self.voice_activity is not None else ())
-            + ((load_capture_script(),) if self.config.per_stream_enabled else ())
+            + ((load_capture_script(),) if self.config.conversation.per_stream_enabled else ())
             + ((load_perception_script(),) if self.perception is not None else ())
         )
 
@@ -414,7 +414,7 @@ class MeetingWorker:
             )
         self.record("microphone_enabled", source="runtime")
         audio.raise_if_failed()
-        await self._start_capture_guarded(enabled=self.config.per_stream_enabled)
+        await self._start_capture_guarded(enabled=self.config.conversation.per_stream_enabled)
         if self.initial_speech:
             await until_stopped(audio.speak(self.initial_speech), self.stop)
             self.initial_speech = None
@@ -529,7 +529,7 @@ class MeetingWorker:
             evidence_path,
             epoch=epoch,
             method=QUERY_METHOD_MINING,
-            max_bytes=self.config.participant_evidence_max_bytes,
+            max_bytes=self.config.conversation.participant_evidence_max_bytes,
             faults=faults,
         )
 
@@ -602,8 +602,8 @@ class MeetingWorker:
             self.page,
             self.capture_registry,
             polling=DrainPolling(
-                max_consecutive_failures=self.config.drain_max_consecutive_failures,
-                failure_journal_every=self.config.drain_failure_journal_every,
+                max_consecutive_failures=self.config.audio.drain_max_consecutive_failures,
+                failure_journal_every=self.config.audio.drain_failure_journal_every,
             ),
             sinks=ConsumerSink(faults=self.faults, journal=self.journal),
             twin_name=self.config.twin_name,
@@ -817,7 +817,7 @@ class MeetingWorker:
     async def run_monitor(self, admitted_at: float) -> str:
         try:
             await self._start_guarded(self.start_participant_observer, "participant_observer")
-            await self._start_capture_guarded(enabled=self.config.per_stream_enabled)
+            await self._start_capture_guarded(enabled=self.config.conversation.per_stream_enabled)
             await self._start_guarded(self.start_voice_activity, "voice_activity")
             await self._start_guarded(self.start_perception, "perception_drain")
             return await self._monitor_loop(admitted_at)
@@ -1234,11 +1234,15 @@ async def _open_session_page(
         resources.enter_async_context(
             open_page(
                 launch=BrowserLaunch(
-                    headless=config.headless,
-                    license_key=config.license_key,
+                    headless=config.browser.headless,
+                    license_key=(
+                        config.browser.license_key.get_secret_value()
+                        if config.browser.license_key
+                        else None
+                    ),
                     fingerprint_seed=stable_fingerprint_seed(config.twin_id),
                     profile_dir=config.browser_profile_dir,
-                    warmup=config.warmup_browser,
+                    warmup=config.browser.warmup,
                 ),
                 **(
                     {
@@ -1405,7 +1409,7 @@ async def _prepare_session(
     budget = (
         hooks.preflight_budget_seconds
         if hooks.preflight_budget_seconds is not None
-        else config.preflight_budget_seconds
+        else config.preflight.budget_seconds
     )
     preflight = _resolve_preflight(hooks.preflight, hooks.preflight_hosts, budget)
     ended = await _run_preflight_phase(lifecycle, stop_event, hooks.faults, preflight, budget)

@@ -50,7 +50,7 @@ async def test_join_builds_session_config_and_prints_result(
     assert config.meeting.lobby_timeout_seconds == 60.0
     assert config.meeting.session_duration_seconds == 600.0
     assert config.browser_profile_dir == Path("/tmp/custom-profile")
-    assert config.headless is True
+    assert config.browser.headless is True
     assert "stop" in captured["kwargs"]
     printed = capsys.readouterr().out
     assert '"meeting_id": "meeting-1"' in printed
@@ -306,19 +306,19 @@ async def test_join_headless_override(
         meeting_id=None,
         headless=False,
     )
-    assert captured["config"].headless is False
+    assert captured["config"].browser.headless is False
     settings.browser.headless = False
     await join(
         "https://meet.google.com/abc-defg-hij",
         meeting_id=None,
         headless=True,
     )
-    assert captured["config"].headless is True
+    assert captured["config"].browser.headless is True
     await join(
         "https://meet.google.com/abc-defg-hij",
         meeting_id=None,
     )
-    assert captured["config"].headless is False
+    assert captured["config"].browser.headless is False
 
 
 def test_join_owner_id_flag(monkeypatch: pytest.MonkeyPatch) -> None:
