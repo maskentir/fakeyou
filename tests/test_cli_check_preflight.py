@@ -420,7 +420,7 @@ async def test_conversation_adds_model_fallback_middleware_when_configured(
         twin_id="t",
         meeting_id="m",
         participant_policy_enabled=False,
-        attention_enabled=False,
+        attention=SimpleNamespace(enabled=False),
     )
 
     async with assembly.open_conversation(
@@ -468,7 +468,7 @@ async def test_open_conversation_wires_sentence_streaming_flag(
         twin_id="t",
         meeting_id="m",
         participant_policy_enabled=False,
-        attention_enabled=False,
+        attention=SimpleNamespace(enabled=False),
     )
 
     async with assembly.open_conversation(

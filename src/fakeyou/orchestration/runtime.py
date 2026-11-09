@@ -627,7 +627,7 @@ class MeetingWorker:
         self.attention_spoken_at = [
             spoken for spoken in self.attention_spoken_at if now - spoken < 600.0
         ]
-        return len(self.attention_spoken_at) < self.config.attention_max_interjections
+        return len(self.attention_spoken_at) < self.config.attention.max_interjections_per_10min
 
     def note_contribution_spoken(self, event_id: str) -> None:
         del event_id
@@ -635,7 +635,7 @@ class MeetingWorker:
 
     def _deliver_attention(self, context: AttentionContext, *, source: str) -> bool:
         conversation = self.conversation
-        if conversation is None or not self.config.attention_enabled:
+        if conversation is None or not self.config.attention.enabled:
             return False
         if conversation.is_busy:
             return False
@@ -665,7 +665,7 @@ class MeetingWorker:
 
     async def offer_attention(self) -> None:
         conversation = self.conversation
-        if conversation is None or not self.config.attention_enabled:
+        if conversation is None or not self.config.attention.enabled:
             return
         if conversation.is_busy:
             return

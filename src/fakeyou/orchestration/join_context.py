@@ -96,8 +96,6 @@ def build_session_config(request: JoinRequest) -> SessionConfig:
         deaf_window_seconds=settings.audio_health.deaf_window_seconds,
         deaf_grace_seconds=settings.audio_health.deaf_grace_seconds,
         alone_leave_seconds=settings.meeting.alone_leave_seconds,
-        attention_enabled=settings.perception.attention.enabled,
-        attention_max_interjections=settings.perception.attention.max_interjections_per_10min,
         attention=settings.perception.attention,
         preflight_budget_seconds=settings.preflight.budget_seconds,
         headless=resolved_headless,

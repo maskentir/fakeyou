@@ -150,9 +150,7 @@ class SessionConfig:
     per_stream_enabled: bool = False
     meet_actions_enabled: bool = False
     perception_enabled: bool = False
-    attention_enabled: bool = False
-    attention_max_interjections: int = 2
-    attention: AttentionSettings = field(default_factory=AttentionSettings)
+    attention: AttentionSettings = field(default_factory=lambda: AttentionSettings(enabled=False))
     resume: bool = False
 
 

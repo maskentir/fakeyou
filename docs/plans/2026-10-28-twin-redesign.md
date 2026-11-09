@@ -3205,6 +3205,12 @@ yang disalin tangan antar lapisan.
 Revisi riset: sub-model `Settings` dioper langsung, override per meeting
 dengan `model_copy(update=...)`, secret Kubernetes lewat `secrets_dir`.
 
+Status (D3a): skalar salinan `attention_enabled` dan
+`attention_max_interjections` di `SessionConfig` dihapus; semua pembaca
+lewat sub-model `attention` dan default sesi non-join tetap nonaktif.
+Penghapusan `SessionConfig`/`JoinRequest` utuh menunggu pemetaan
+bertahap per sub-model agar tidak mencampur perubahan perilaku.
+
 ### D4: Worker job di Postgres
 
 - Worker debrief, ingestion, dan reembed memakai procrastinate (retry dengan
