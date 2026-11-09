@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import codecs
+import hashlib
 import json
 import math
 import os
@@ -117,6 +118,16 @@ class _Score:
     @property
     def index(self) -> int:
         return -self.earlier
+
+
+def _token_vector(text: str, dimensions: int) -> list[float]:
+    vector = [0.0] * dimensions
+    for token in WORD.findall(text.lower()):
+        digest = hashlib.sha256(token.encode()).digest()
+        index = int.from_bytes(digest[:4]) % dimensions
+        vector[index] += 1.0 if digest[4] % 2 == 0 else -1.0
+    norm = math.sqrt(sum(value * value for value in vector))
+    return [value / norm for value in vector] if norm else vector
 
 
 def _similarity(left: str, right: str, *, tail: int | None = None) -> float:
@@ -358,6 +369,16 @@ class ProviderDoubles:
                 ),
                 "tts": CartesiaTTS(api_key=SecretStr(DOUBLE_KEY), base_url=self.base_url),
                 "tts_fallback": None,
+                "memory": settings.memory.model_copy(
+                    update={
+                        "embedder": settings.memory.embedder.model_copy(
+                            update={
+                                "base_url": self.base_url + "/v1",
+                                "api_key": SecretStr(DOUBLE_KEY),
+                            }
+                        )
+                    }
+                ),
                 "stt": settings.stt.model_copy(
                     update={
                         "url": secure_scheme(self.base_url) + "/stt",
@@ -373,10 +394,32 @@ class ProviderDoubles:
     def app(self) -> Starlette:
         return Starlette(
             routes=[
+                Route("/v1/embeddings", self._embeddings, methods=["POST"]),
                 Route("/v1beta/models/{call:path}", self._gemini, methods=["POST"]),
                 WebSocketRoute("/tts/websocket", self._cartesia),
                 WebSocketRoute("/stt", self._muse),
             ]
+        )
+
+    async def _embeddings(self, request: Request) -> Response:
+        payload = await request.json()
+        inputs = payload.get("input") or []
+        if isinstance(inputs, str):
+            inputs = [inputs]
+        dimensions = int(payload.get("dimensions") or 1024)
+        return JSONResponse(
+            {
+                "object": "list",
+                "data": [
+                    {
+                        "object": "embedding",
+                        "index": index,
+                        "embedding": _token_vector(str(text), dimensions),
+                    }
+                    for index, text in enumerate(inputs)
+                ],
+                "model": payload.get("model", "double"),
+            }
         )
 
     async def _gemini(self, request: Request) -> Response:

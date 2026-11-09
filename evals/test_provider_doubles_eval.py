@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from evals._provider_doubles import Cassette, RequestKey
+from evals._provider_doubles import Cassette, RequestKey, _token_vector
 
 JUDGE = "You decide whether the twin should take the floor."
 EARLIER = "Ayu: " + "the slides look fine and the checklist is on track. " * 6
@@ -9,6 +9,17 @@ QUESTION = "Harun: Twin, please raise your hand"
 
 def _entry(focus: str, verdict: str) -> dict[str, str]:
     return {"route": "judge", "system": JUDGE, "focus": focus, "verdict": verdict}
+
+
+def test_the_embedding_double_is_deterministic_and_orders_shared_words_first() -> None:
+    slide = _token_vector("Beta launch is scheduled for 21 October 2026", 1024)
+    brief = _token_vector("The Orchid beta launch is planned for 14 October 2026", 1024)
+    other = _token_vector("Quarterly revenue grew in the northern region", 1024)
+
+    assert slide == _token_vector("Beta launch is scheduled for 21 October 2026", 1024)
+    related = sum(left * right for left, right in zip(slide, brief, strict=True))
+    unrelated = sum(left * right for left, right in zip(slide, other, strict=True))
+    assert related > 0.15 > unrelated
 
 
 def test_repeated_requests_take_recorded_answers_in_order(tmp_path: Path) -> None:
