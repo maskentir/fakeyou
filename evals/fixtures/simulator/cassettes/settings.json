@@ -108,9 +108,9 @@
   },
   "perception": {
     "attention": {
+      "critic_confidence": 0.7,
       "enabled": true,
       "floor_gap_seconds": 1.2,
-      "grounding_confidence": 0.7,
       "max_interjections_per_10min": 2,
       "moment_confidence": 0.8,
       "similarity_threshold": 0.15,
