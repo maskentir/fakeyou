@@ -2,14 +2,9 @@ import json
 from dataclasses import dataclass
 
 from fakeyou.config.settings import DEFAULTS
-from fakeyou.conversation.agent import (
-    ENDING_RULE,
-    MEETING_GUIDANCE,
-    SPOKEN_LANGUAGE_GUIDANCE,
-)
+from fakeyou.conversation.agent import MEETING_GUIDANCE, SPOKEN_LANGUAGE_GUIDANCE
 from fakeyou.memory.persona import (
     AFTER_MEETING_RULE,
-    ATTENTION_RULE,
     BRIEF_PROMPT_FIELDS,
     BRIEF_RULES,
     CONFIDENCE_RULE,
@@ -45,7 +40,6 @@ class _PromptParts:
     provenance: str = ""
     natural_speech: str = ""
     confidence: str = ""
-    confidentiality: str = ""
     perception: str = ""
 
 
@@ -104,7 +98,6 @@ def _prompt_parts(
                 IDENTITY_RULE,
                 DISCLOSURE_RULES[profile.ai_disclosure],
                 CONFIDENTIALITY_RULE,
-                ATTENTION_RULE,
                 TOOL_ECONOMY_RULE,
                 AFTER_MEETING_RULE,
                 KNOWN_FACT_RULES[scope],
@@ -124,7 +117,6 @@ def _prompt_parts(
         provenance=PROVENANCE_RULE if recall else "",
         natural_speech=NATURAL_SPEECH_RULE,
         confidence=CONFIDENCE_RULE,
-        confidentiality=CONFIDENTIALITY_RULE,
         perception=perception_guidance,
     )
 
@@ -155,6 +147,5 @@ def build_persona_prompt(
         parts.provenance,
         parts.natural_speech,
         parts.confidence,
-        ENDING_RULE,
         parts.perception,
     )

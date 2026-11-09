@@ -210,7 +210,6 @@ class ReplyPlanner:
         self._replacement: str | None = None
         self._lead: int | None = None
         self._waiting: list[SpeechPiece] = []
-        self._held: str | None = None
         self._short_spoken = False
         self._spoken = 0
         self._reported = False
@@ -324,11 +323,6 @@ class ReplyPlanner:
         for claim in sorted(self._review_pieces):
             spoken.extend(self._release_review(claim))
         spoken.extend(line for piece in waiting for line in self._admit(piece.text))
-        if self._held is not None:
-            held, self._held = self._held, None
-            if not (self.intent == "answer" and self._spoken):
-                self._spoken += 1
-                spoken.append(held)
         spoken.extend(self._fallback())
         self._report()
         return spoken
@@ -340,16 +334,8 @@ class ReplyPlanner:
             self._short_spoken = True
             self._spoken += 1
             return [sentence]
-        if self.explicit and self.intent == "answer" and sentence.rstrip().endswith("?"):
-            self._held = sentence
-            return []
-        spoken: list[str] = []
-        if self._held is not None:
-            spoken.append(self._held)
-            self._held = None
-        spoken.append(sentence)
-        self._spoken += len(spoken)
-        return spoken
+        self._spoken += 1
+        return [sentence]
 
     def _judge(self, gate: SpeechGate, sentence: str, claim: int) -> SpeechVerdict:
         if not gate.verify:
@@ -368,7 +354,6 @@ class ReplyPlanner:
         if self._blocked is not None:
             return
         self._blocked = verdict
-        self._held = None
         self._waiting = []
         if self._on_gate is not None:
             self._on_gate(verdict, claim)

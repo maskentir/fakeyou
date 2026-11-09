@@ -3,11 +3,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import InMemorySaver
 
-from fakeyou.conversation.agent import (
-    DEFAULT_PERSONA,
-    ENDING_RULE,
-    create_meeting_agent,
-)
+from fakeyou.conversation.agent import DEFAULT_PERSONA, create_meeting_agent
 from fakeyou.db.checkpoint import open_checkpointer
 from tests._conversation_fakes import ToolCallingFakeModel
 
@@ -65,6 +61,5 @@ async def test_agent_reopens_postgres_checkpoint_for_same_thread(
     assert contents == ["keep this", "remembered", "continue", "reopened"]
 
 
-def test_default_persona_ends_with_the_ending_rule() -> None:
-    assert DEFAULT_PERSONA.endswith(ENDING_RULE)
-    assert "Never end with a question or an offer" in ENDING_RULE
+def test_default_persona_has_no_ending_rule() -> None:
+    assert "Ending rule" not in DEFAULT_PERSONA

@@ -170,12 +170,12 @@ def test_a_decline_plan_speaks_one_sentence() -> None:
     assert planned.text == "I cannot approve that."
 
 
-def test_an_answer_plan_drops_the_closing_question() -> None:
+def test_an_answer_plan_keeps_the_closing_question() -> None:
     planned = planned_reply(
         plan("The launch is on 14 October. Anything else?"), max_sentences=2, language="en"
     )
 
-    assert planned.text == "The launch is on 14 October."
+    assert planned.text == "The launch is on 14 October. Anything else?"
 
 
 def test_an_answer_plan_keeps_the_question_when_it_is_all_there_is() -> None:

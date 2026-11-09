@@ -269,7 +269,7 @@ async def test_an_ack_plan_speaks_one_sentence(journal: RecordingJournal) -> Non
     await loop.actor.close()
 
 
-async def test_an_answer_plan_drops_the_closing_question(journal: RecordingJournal) -> None:
+async def test_an_answer_plan_keeps_the_closing_question(journal: RecordingJournal) -> None:
     agent = ScriptedAgent(
         [
             (
@@ -283,7 +283,7 @@ async def test_an_answer_plan_drops_the_closing_question(journal: RecordingJourn
     loop = streamed_loop(agent, audio, journal, language="en")
     await loop.actor.receive_final(event("t1", "Is the launch still on 14 October?"))
     await loop.actor.wait_idle()
-    assert audio.spoken == ["The launch is on 14 October."]
+    assert audio.spoken == ["The launch is on 14 October.", "Anything else?"]
     assert "intent" not in " ".join(audio.spoken)
     await loop.actor.close()
 
