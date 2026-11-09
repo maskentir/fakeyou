@@ -5,11 +5,13 @@ from fakeyou.perception.percepts import CameraGlance, IncomingChat
 from fakeyou.perception.timeline import MeetingTimeline
 from fakeyou.perception.view import (
     VIEW_PREFIX,
+    ScreenFact,
     build_view,
     fit_view,
     render_view,
     resolve_participant,
     resolve_screen,
+    screen_facts,
 )
 from tests._perception_fakes import START, reading, shown_timeline
 
@@ -47,6 +49,18 @@ def test_the_view_shows_the_current_screen_and_earlier_ones_by_recency() -> None
     assert view.earlier_screens[1].figures[0].value == "17 March 2027"
     assert view.earlier_screens[0].seconds_ago == 60
     assert view.screen_now.presenter == "Ayu"
+
+
+def test_screen_facts_carry_the_reading_and_the_presenter() -> None:
+    view = build_view(_read_all(shown_timeline(TIMELINE, PRICING, ROADMAP)).snapshot(), now=NOW)
+
+    facts = screen_facts(view)
+
+    assert facts["screen#1"] == ScreenFact(
+        "Launch Timeline\nAlpha 12 January 2027. Beta 17 March 2027.\nBeta 17 March 2027", "Ayu"
+    )
+    assert facts["screen#3"].presenter == "Ayu"
+    assert screen_facts(build_view(shown_timeline(TIMELINE).snapshot(), now=NOW)) == {}
 
 
 def test_a_pending_screen_says_so_and_carries_no_reading() -> None:

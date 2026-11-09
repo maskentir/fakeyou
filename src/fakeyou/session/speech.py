@@ -37,6 +37,7 @@ CITED_NAMESPACES: Mapping[ClaimBasis, Namespace] = {
     "owner_model": "owner_model",
     "memory": "memory",
     "brief": "brief",
+    "screen": "screen",
 }
 SOURCED_BASES: frozenset[ClaimBasis] = frozenset({"owner_model", "memory", "brief", "screen"})
 OWNER_STANCES: frozenset[EntryKind] = frozenset({"position", "preference", "decision_rule"})
@@ -70,6 +71,7 @@ class BookEntry:
     confidence: Confidence = "firm"
     owner_spoken: bool = False
     times: tuple[datetime, ...] = ()
+    attributed_to: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,15 +104,16 @@ class ClaimHeader(BaseModel):
         description=(
             "Where this claim comes from. owner_model, memory, brief: the owner model items, "
             "recalled memory facts or brief items in refs, and only that kind. meeting_live: "
-            "something said or shown in this meeting. screen: what is on the shared screen. "
-            "inference: your own conclusion. none: nothing outside yourself, only for meta."
+            "something said in this meeting. screen: what is on the shared screen, with that "
+            "screen in refs. inference: your own conclusion. none: nothing outside yourself, "
+            "only for meta."
         )
     )
     refs: tuple[str, ...] = Field(
         description=(
-            "The id of every owner model item (om-<id>), recalled memory fact or brief item this "
-            "claim states or relies on, all of the kind its basis names. Empty for any other "
-            "basis."
+            "The id of every owner model item (om-<id>), recalled memory fact, brief item or "
+            "shared screen (screen#<n>, as named in the meeting view) this claim states or "
+            "relies on, all of the kind its basis names. Empty for any other basis."
         )
     )
     certainty: ClaimCertainty = Field(

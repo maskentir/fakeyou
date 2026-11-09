@@ -18,9 +18,11 @@ from fakeyou.perception.roster import MeetingState
 from fakeyou.perception.timeline import MeetingTimeline, TimelineSnapshot
 from fakeyou.perception.view import (
     MeetingView,
+    ScreenFact,
     render_view,
     resolve_participant,
     resolve_screen,
+    screen_facts,
 )
 
 OBSERVE_MEETING = "observe_meeting"
@@ -217,10 +219,12 @@ class PerceptionContextMiddleware(AgentMiddleware[Any, Any, Any]):
         *,
         journal: Journal | None = None,
         on_observed: Callable[[str, str], None] | None = None,
+        on_screens: Callable[[dict[str, ScreenFact]], None] | None = None,
     ) -> None:
         self._context = context
         self._journal = journal or Journal("", echo=False)
         self._on_observed = on_observed
+        self._on_screens = on_screens
 
     @override
     async def awrap_model_call(
@@ -247,6 +251,8 @@ class PerceptionContextMiddleware(AgentMiddleware[Any, Any, Any]):
             content = json.dumps(evidence, ensure_ascii=False, separators=(",", ":"))
             appended.extend(_synthetic(MEETING_EVIDENCE, content, "meeting_evidence"))
         trigger_id = trigger[-1].id
+        if self._on_screens is not None:
+            self._on_screens(screen_facts(view))
         if self._on_observed is not None and trigger_id:
             for message in appended:
                 if isinstance(message, ToolMessage):
@@ -270,5 +276,8 @@ def create_perception_middleware(
     *,
     journal: Journal | None = None,
     on_observed: Callable[[str, str], None] | None = None,
+    on_screens: Callable[[dict[str, ScreenFact]], None] | None = None,
 ) -> AgentMiddleware[Any, Any, Any]:
-    return PerceptionContextMiddleware(context, journal=journal, on_observed=on_observed)
+    return PerceptionContextMiddleware(
+        context, journal=journal, on_observed=on_observed, on_screens=on_screens
+    )
