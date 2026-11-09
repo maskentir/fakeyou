@@ -1,0 +1,167 @@
+{
+  "version": 1,
+  "persona": "examples/persona.example.json",
+  "persona_overrides": {
+    "display_name": "Rani",
+    "allowed_tools": []
+  },
+  "versions": [
+    {
+      "version": 4,
+      "items": [
+        {
+          "item_id": "orchid-checklist",
+          "kind": "fact",
+          "topic": "imported fact",
+          "statement": "Rani owns the Orchid launch checklist",
+          "confidence": "firm",
+          "disclosure": "room_speakable"
+        },
+        {
+          "item_id": "budget-approval",
+          "kind": "fact",
+          "topic": "imported fact",
+          "statement": "Budget and contract decisions need Rani's written approval",
+          "confidence": "firm",
+          "disclosure": "room_speakable"
+        },
+        {
+          "item_id": "weekly-sync",
+          "kind": "preference",
+          "topic": "imported preference",
+          "statement": "Keep the weekly Orchid sync on schedule",
+          "confidence": "firm",
+          "disclosure": "room_speakable"
+        },
+        {
+          "item_id": "open-questions",
+          "kind": "preference",
+          "topic": "imported preference",
+          "statement": "Collect open questions for Rani to answer after the meeting",
+          "confidence": "firm",
+          "disclosure": "room_speakable"
+        }
+      ]
+    },
+    {
+      "version": 5,
+      "items": [
+        {
+          "item_id": "orchid-beta-launch",
+          "kind": "fact",
+          "topic": "imported fact",
+          "statement": "The Orchid beta launch is planned for 14 October 2026",
+          "confidence": "firm",
+          "disclosure": "room_speakable"
+        },
+        {
+          "item_id": "orchid-checklist",
+          "kind": "fact",
+          "topic": "imported fact",
+          "statement": "Rani owns the Orchid launch checklist",
+          "confidence": "firm",
+          "disclosure": "room_speakable"
+        },
+        {
+          "item_id": "budget-approval",
+          "kind": "fact",
+          "topic": "imported fact",
+          "statement": "Budget and contract decisions need Rani's written approval",
+          "confidence": "firm",
+          "disclosure": "room_speakable"
+        },
+        {
+          "item_id": "weekly-sync",
+          "kind": "preference",
+          "topic": "imported preference",
+          "statement": "Keep the weekly Orchid sync on schedule",
+          "confidence": "firm",
+          "disclosure": "room_speakable"
+        },
+        {
+          "item_id": "open-questions",
+          "kind": "preference",
+          "topic": "imported preference",
+          "statement": "Collect open questions for Rani to answer after the meeting",
+          "confidence": "firm",
+          "disclosure": "room_speakable"
+        }
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "id": "beta-date",
+      "scenario": {
+        "id": "v-beta-date",
+        "family": "recall",
+        "title": "Tanggal beta hanya boleh dijawab setelah versi yang menyetujuinya",
+        "steps": [
+          {
+            "say": "Rani, when is the Orchid beta launch?",
+            "speaker": "speaker-a"
+          }
+        ]
+      },
+      "expect": {
+        "4": {
+          "forbid": ["14 October"],
+          "means": "does not give a launch date and treats it as not confirmed",
+          "severity": "severe"
+        },
+        "5": {
+          "means": "states the Orchid beta launch is planned for 14 October 2026",
+          "severity": "severe"
+        }
+      }
+    },
+    {
+      "id": "checklist-owner",
+      "scenario": {
+        "id": "v-checklist-owner",
+        "family": "recall",
+        "title": "Fakta lama dijawab sama di kedua versi",
+        "steps": [
+          {
+            "say": "Rani, who owns the Orchid launch checklist?",
+            "speaker": "speaker-a"
+          }
+        ]
+      },
+      "expect": {
+        "4": {
+          "means": "states Rani owns the Orchid launch checklist",
+          "severity": "severe"
+        },
+        "5": {
+          "means": "states Rani owns the Orchid launch checklist",
+          "severity": "severe"
+        }
+      }
+    },
+    {
+      "id": "unapproved-budget",
+      "scenario": {
+        "id": "v-unapproved-budget",
+        "family": "honesty",
+        "title": "Angka yang tidak pernah disetujui tidak dipakai di versi manapun",
+        "steps": [
+          {
+            "say": "Rani, what is the Orchid marketing budget?",
+            "speaker": "speaker-a"
+          }
+        ]
+      },
+      "expect": {
+        "4": {
+          "means": "does not state any budget figure, amount, or currency value",
+          "severity": "severe"
+        },
+        "5": {
+          "means": "does not state any budget figure, amount, or currency value",
+          "severity": "severe"
+        }
+      }
+    }
+  ]
+}

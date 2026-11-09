@@ -540,3 +540,156 @@ async def judge_disagreements(judge: Judge, labels: Sequence[JudgeLabel]) -> lis
         for label, verdict in zip(labels, verdicts, strict=True)
         if verdict.met != label.met
     ]
+
+
+class VersionedCase(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str
+    scenario: Scenario
+    expect: dict[int, Expectation]
+
+
+class VersionedFixture(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    version: int
+    persona: str
+    persona_overrides: dict[str, Any] = {}
+    versions: tuple[FrozenOwnerModel, ...]
+    cases: tuple[VersionedCase, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class VersionDelta:
+    case: str
+    before_version: int
+    after_version: int
+    said: str
+    before_reply: str
+    after_reply: str
+    before_passed: bool
+    after_passed: bool
+
+    @property
+    def reply_changed(self) -> bool:
+        return self.before_reply != self.after_reply
+
+
+@dataclass(slots=True)
+class VersionReplayReport:
+    outcomes: dict[int, dict[str, list[StepOutcome]]]
+
+    def graded(self) -> list[StepOutcome]:
+        return [
+            outcome
+            for by_case in self.outcomes.values()
+            for outcomes in by_case.values()
+            for outcome in outcomes
+            if outcome.checks
+        ]
+
+    def severe_failures(self) -> list[StepOutcome]:
+        return [o for o in self.graded() if o.severity == "severe" and not o.passed]
+
+    def deltas(self) -> list[VersionDelta]:
+        versions = sorted(self.outcomes)
+        found: list[VersionDelta] = []
+        for before_version, after_version in zip(versions, versions[1:], strict=False):
+            before = self.outcomes[before_version]
+            after = self.outcomes[after_version]
+            for case in sorted(before.keys() & after.keys()):
+                for before_outcome, after_outcome in zip(before[case], after[case], strict=True):
+                    found.append(
+                        VersionDelta(
+                            case=case,
+                            before_version=before_version,
+                            after_version=after_version,
+                            said=before_outcome.said,
+                            before_reply=before_outcome.reply,
+                            after_reply=after_outcome.reply,
+                            before_passed=before_outcome.passed,
+                            after_passed=after_outcome.passed,
+                        )
+                    )
+        return found
+
+    def as_json(self) -> dict[str, Any]:
+        return {
+            "versions": {
+                str(version): {
+                    case: [
+                        {
+                            "said": o.said,
+                            "reply": o.reply,
+                            "checks": o.checks,
+                            "reasons": o.reasons,
+                            "severity": o.severity,
+                        }
+                        for o in outcomes
+                    ]
+                    for case, outcomes in sorted(by_case.items())
+                }
+                for version, by_case in sorted(self.outcomes.items())
+            },
+            "deltas": [
+                {
+                    "case": delta.case,
+                    "before_version": delta.before_version,
+                    "after_version": delta.after_version,
+                    "said": delta.said,
+                    "before_reply": delta.before_reply,
+                    "after_reply": delta.after_reply,
+                    "before_passed": delta.before_passed,
+                    "after_passed": delta.after_passed,
+                    "reply_changed": delta.reply_changed,
+                }
+                for delta in self.deltas()
+            ],
+        }
+
+
+VERSIONS_FIXTURE = ROOT / "evals" / "fixtures" / "owner-model-versions.json"
+
+
+def load_versioned_cases(path: Path = VERSIONS_FIXTURE) -> VersionedFixture:
+    fixture = VersionedFixture.model_validate_json(path.read_text(encoding="utf-8"))
+    versions = [owner_model.version for owner_model in fixture.versions]
+    if versions != sorted(set(versions)) or len(versions) < 2:
+        raise ValueError("owner model versions must be at least two, unique, and ascending")
+    for case in fixture.cases:
+        if len(case.scenario.steps) != 1:
+            raise ValueError(f"versioned case {case.id} must have exactly one step")
+        if set(case.expect) != set(versions):
+            raise ValueError(f"versioned case {case.id} must expect every version")
+    return fixture
+
+
+def versioned_profile(fixture: VersionedFixture) -> PersonaProfile:
+    return scenario_profile(
+        ScenarioFixture(
+            version=fixture.version,
+            persona=fixture.persona,
+            persona_overrides=fixture.persona_overrides,
+            owner_model=fixture.versions[-1],
+            scenarios=(),
+        )
+    )
+
+
+async def replay_owner_model_versions(
+    fixture: VersionedFixture, settings: Settings, judge: Judge
+) -> VersionReplayReport:
+    profile = versioned_profile(fixture)
+    outcomes: dict[int, dict[str, list[StepOutcome]]] = {}
+    for owner_model in fixture.versions:
+        by_case: dict[str, list[StepOutcome]] = {}
+        for case in fixture.cases:
+            step = case.scenario.steps[0].model_copy(
+                update={"expect": case.expect[owner_model.version]}
+            )
+            scenario = case.scenario.model_copy(update={"steps": (step,)})
+            played = await run_scenario(scenario, profile, settings, owner_model)
+            by_case[case.id] = await grade(scenario, played, judge, profile.language)
+        outcomes[owner_model.version] = by_case
+    return VersionReplayReport(outcomes)
