@@ -3141,6 +3141,21 @@ Revisi riset: bukti proposal diambil dengan `SearchFilters` dan
 `get_nodes_and_edges_by_episode`. Approval, versi, dan replay per versi
 tetap workflow Postgres kita. `build_communities` tidak dipakai.
 
+Status (C7a): draft debrief memuat `owner_model_proposals` (posisi,
+preferensi, aturan, koreksi fakta; wajib evidence exact, divalidasi
+seperti item). Ingest menerbitkannya sebagai revisi `proposed`
+bersumber `debrief` lewat port worker (dedup terhadap proposal dan
+snapshot approved; disclosure `owner_only`, confidence `leaning`,
+reason memuat kutipan bukti). Approval menaikkan versi lewat workflow
+yang sudah ada dan snapshot hanya memuat yang approved, jadi gate
+"approved dipakai meeting berikutnya, ditolak tidak pernah" tinggal
+validasi live. Sisa C7b: replay eval per versi owner model dan bukti
+proposal dari `SearchFilters`/`get_nodes_and_edges_by_episode`.
+Temuan terpisah: live debrief corpus merah juga di main dengan model
+`.env` saat ini (4 dari 8 case `DebriefValidationError`
+claim_not_in_quotes), jadi bukan regresi slice ini; perlu kalibrasi
+model/prompt debrief tersendiri.
+
 ## Track D: always-on
 
 ### D1: Desired state dan calendar

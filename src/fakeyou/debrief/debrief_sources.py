@@ -322,6 +322,8 @@ def validate_draft(
         draft = DebriefDraft.model_validate(draft.model_dump())
     except ValidationError:
         raise DebriefValidationError(ErrorCode.DEBRIEF_DRAFT_INVALID) from None
+    for proposal in draft.owner_model_proposals:
+        validate_evidence(proposal.evidence, sources)
     for item in draft.items:
         validate_evidence(item.evidence, sources)
         quotes = [reference.quote for reference in item.evidence]

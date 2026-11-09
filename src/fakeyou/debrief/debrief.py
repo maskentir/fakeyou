@@ -88,7 +88,14 @@ _EXTRACTION_RULES = (
     "can recur across chunks. Before returning native output, check every substantive source "
     "contribution is retained, authority requests and withdrawals use the meanings above, "
     "and each item has exact source evidence. Do not drop contradictory evidence or mark model "
-    "summaries verified. The output remains unreviewed."
+    "summaries verified. The output remains unreviewed.\n"
+    "owner_model_proposals: durable learnings for the owner's model that this meeting surfaced: "
+    "a position, preference, decision rule or corrected fact that will still matter in later "
+    "meetings, each with exact evidence. A proposal is a candidate for the owner's review, "
+    "never an approved fact: phrase the statement as the claimed learning and let the evidence "
+    "carry attribution. Propose only when a source states the owner's stance or corrects one; "
+    "routine task work, scheduling and one-off requests are not learnings. Return an empty "
+    "list when the meeting surfaced none."
 )
 
 
@@ -249,7 +256,11 @@ async def generate_debrief(
         for identifier in _finding_ids(brief)
         if identifier not in present
     )
-    return schema.DebriefDraft(items=merged.items, findings=(*merged.findings, *missing))
+    return schema.DebriefDraft(
+        items=merged.items,
+        findings=(*merged.findings, *missing),
+        owner_model_proposals=merged.owner_model_proposals,
+    )
 
 
 def _finding_priority(finding: schema.ObjectiveFinding) -> int:
@@ -258,6 +269,19 @@ def _finding_priority(finding: schema.ObjectiveFinding) -> int:
     if finding.status == "addressed":
         return 2
     return 1 if finding.status == "open" else 0
+
+
+def _merged_proposals(
+    drafts: Sequence[schema.DebriefDraft],
+) -> tuple[schema.OwnerModelProposal, ...]:
+    proposals: list[schema.OwnerModelProposal] = []
+    for draft in drafts:
+        for proposal in draft.owner_model_proposals:
+            if proposal not in proposals:
+                proposals.append(proposal)
+                if len(proposals) > 20:
+                    raise schema.DebriefValidationError(ErrorCode.DEBRIEF_MERGED_TOO_MANY_PROPOSALS)
+    return tuple(proposals)
 
 
 def merge_drafts(drafts: Sequence[schema.DebriefDraft]) -> schema.DebriefDraft:
@@ -283,7 +307,11 @@ def merge_drafts(drafts: Sequence[schema.DebriefDraft]) -> schema.DebriefDraft:
             )
     if len(findings) > 40:
         raise schema.DebriefValidationError(ErrorCode.DEBRIEF_MERGED_TOO_MANY_FINDINGS)
-    return schema.DebriefDraft(items=tuple(items), findings=tuple(findings.values()))
+    return schema.DebriefDraft(
+        items=tuple(items),
+        findings=tuple(findings.values()),
+        owner_model_proposals=_merged_proposals(drafts),
+    )
 
 
 def _labels() -> dict[str, str]:
@@ -463,7 +491,11 @@ def _validate_report(
     brief: MeetingBrief | None,
 ) -> None:
     source_index = {entry.id: entry for entry in snapshot.sources}
-    draft = schema.DebriefDraft(items=report.items, findings=report.findings)
+    draft = schema.DebriefDraft(
+        items=report.items,
+        findings=report.findings,
+        owner_model_proposals=report.owner_model_proposals,
+    )
     sources.validate_draft(draft, sources=source_index, brief=brief)
     if report.source_count != len(snapshot.sources):
         raise schema.DebriefValidationError(ErrorCode.DEBRIEF_SOURCE_COUNT_MISMATCH)

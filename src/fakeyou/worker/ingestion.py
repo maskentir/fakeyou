@@ -12,6 +12,10 @@ from graphiti_core import Graphiti
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import is_identifier, parse_session_id
 from fakeyou.config.settings import Settings
+from fakeyou.db.engine import configured_url
+from fakeyou.db.owner_model import TwinScope, create_owner_model
+from fakeyou.debrief.debrief_schema import DebriefReport
+from fakeyou.debrief.proposals import publish_proposals
 from fakeyou.memory.ingest_job import (
     IngestionJob,
     handle_ingestion_job,
@@ -97,6 +101,21 @@ def _readable_meeting(fields: Mapping[str, str]) -> str | None:
 
 def _without_stop_signals(_stop: asyncio.Event, _journal: Journal) -> AbstractContextManager[None]:
     return nullcontext()
+
+
+async def _propose_owner_model(settings: Settings, report: DebriefReport) -> int:
+    if configured_url(settings) is None:
+        return 0
+    store = create_owner_model(settings)
+    try:
+        return await publish_proposals(
+            store,
+            TwinScope(owner_id=report.owner_id, twin_id=report.twin_id),
+            report,
+            at=datetime.now(UTC),
+        )
+    finally:
+        await store.close()
 
 
 def _log_summary(summary: IngestSummary) -> None:
@@ -268,7 +287,10 @@ class IngestionConsumer:
             job,
             access=await self._access(job.meeting_id),
             ports=IngestPorts(
-                stop_signals=_without_stop_signals, publish=_log_summary, report=reported.append
+                stop_signals=_without_stop_signals,
+                publish=_log_summary,
+                report=reported.append,
+                propose_owner_model=partial(_propose_owner_model, self._deps.settings),
             ),
             ack=self._transport.create_entry_ack(INGESTION_STREAM, INGESTION_GROUP, job.job_id),
         )

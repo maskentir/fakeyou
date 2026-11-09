@@ -294,6 +294,11 @@ def _build_report(
 ) -> DebriefReport:
     cited = {reference.entry_id for item in draft.items for reference in item.evidence}
     cited.update(reference.entry_id for finding in draft.findings for reference in finding.evidence)
+    cited.update(
+        reference.entry_id
+        for proposal in draft.owner_model_proposals
+        for reference in proposal.evidence
+    )
     settings = attempt.request.settings
     operator = attempt.request.operator
     return DebriefReport(
@@ -313,6 +318,7 @@ def _build_report(
         review_status="unreviewed",
         items=draft.items,
         findings=draft.findings,
+        owner_model_proposals=draft.owner_model_proposals,
         evidence_sources=tuple(
             EvidenceSource(
                 id=entry.id,
