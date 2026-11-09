@@ -221,8 +221,6 @@ async def run_proactive_scenario(
         meeting_id=SessionId(f"proactive-{scenario.id}"),
         link="https://meet.google.com/eval-only",
         twin_name=profile.display_name,
-        attention_enabled=True,
-        attention_max_interjections=attention.max_interjections_per_10min,
         attention=attention,
     )
     outcome = ProactiveOutcome(

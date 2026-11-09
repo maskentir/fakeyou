@@ -610,7 +610,7 @@ async def open_conversation(
         builder.add_speaker_attribution()
         responder = builder.build_responder(
             builder.build_agent(model),
-            builder.build_contributor(model) if config.attention_enabled else None,
+            builder.build_contributor(model) if config.attention.enabled else None,
             LazyCritic(builder.build_critic),
         )
         turns = builder.build_turns(

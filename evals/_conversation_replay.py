@@ -236,7 +236,7 @@ async def run_scenario(
         meeting_id=SessionId(f"replay-{scenario.id}"),
         link="https://meet.google.com/eval-only",
         twin_name=profile.display_name,
-        attention_enabled=settings.perception.attention.enabled,
+        attention=settings.perception.attention,
     )
     outcomes: list[StepOutcome] = []
     lines: list[str] = []

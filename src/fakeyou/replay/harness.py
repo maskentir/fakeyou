@@ -300,7 +300,7 @@ async def _replay(
             )
             feed.attach(kernel)
             try:
-                inputs = schedule(fixture, attention=config.attention_enabled)
+                inputs = schedule(fixture, attention=config.attention.enabled)
                 await _feed(inputs, _Sinks(drain, turns, journal, kernel))
                 await kernel.settled()
                 await turns.actor.wait_idle()
