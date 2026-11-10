@@ -3103,8 +3103,32 @@ Status (C6c): penyampaian kandidat pindah dari runtime ke kernel.
 `on_ready`, pertanyaan belum terjawab matang lewat wakeup actor di
 `ready_at`, quota 600 detik dihitung actor hanya dari kontribusi yang
 benar-benar terucap). Runtime hanya meneruskan bacaan layar sebagai
-input detektor. Sisa C6: kandidat commitment yang baru disebut di
-dialog berjalan belum diekstrak terstruktur, dan gate replay oue-4
+input detektor.
+
+Selesai (C6 commitment dialog berjalan): commitment yang baru disebut
+di dialog menjadi kind momen baru `commitment_mentioned` — baris yang
+menyatakan, mengatribusikan, atau mengasumsikan commitment owner
+sebagai sudah ada ("So Rani will send the numbers Friday"), dibedakan
+dari `owner_task` (ruang menugaskan hal baru dan menunggu penerimaan).
+Batas yang disadari: nama owner di awal kalimat dianggap sapaan oleh
+heuristik vokatif yang sudah ada dan mengalir ke jalur reply langsung,
+jadi gerbang ini menangkap penyebutan di tengah kalimat.
+Kandidat momen hari ini digerbang embedding terhadap registry, jadi
+baris commitment tanpa sumber dekat tidak pernah sampai ke judge;
+gerbang deterministik ditambah: baris final yang menyebut nama owner
+sebagai frasa utuh (bukan vokatif — alamat langsung tetap jalur
+reply) layak di-judge walau tanpa kandidat embedding. Ekstraksi
+terstrukturnya adalah `MomentJudgement` itu sendiri (kind + ref +
+confidence, tercatat sebagai `moment_detected`); objek commitment
+persisten (siapa/apa/kapan) tetap milik debrief pasca-meeting sesuai
+disiplin source of truth — tidak ada penulisan graf spekulatif di
+tengah meeting. `source_ref` boleh null khusus kind ini (commitment
+tanpa dukungan sumber: twin menandai belum terkonfirmasi), atau
+menunjuk kandidat yang mendukung/bertentangan. Ucapan tetap lewat
+composer/gate/critic yang sama; gate `owner_commitment` yang sudah
+ada mencegah twin menyetujui commitment tanpa basis. Dedup per teks
+commitment ternormalisasi agar pengulangan kalimat yang sama tidak
+memicu interjeksi berulang. Sisa C6 setelah ini: gate replay oue-4
 yang journal-nya belum tersedia lokal.
 
 Revisi riset (2026-11-10, menggantikan revisi riset sebelumnya di seksi

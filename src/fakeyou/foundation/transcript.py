@@ -10,7 +10,12 @@ from fakeyou.foundation.timeparse import assume_utc, parse_iso_datetime
 EventSource = Literal["meeting_audio", "meeting_chat", "meeting_attention"]
 
 AttentionKind = Literal[
-    "screen", "unanswered_question", "owner_task", "decision_vs_brief", "fact_opportunity"
+    "screen",
+    "unanswered_question",
+    "owner_task",
+    "decision_vs_brief",
+    "fact_opportunity",
+    "commitment_mentioned",
 ]
 
 
@@ -39,11 +44,12 @@ def spoken_part(text: str) -> str:
 
 
 def attention_line(context: AttentionContext) -> str:
+    opening = f"[Nobody asked you anything. This looks like a {context.kind} moment."
     if context.suggested_source_ref is None or context.source_text is None:
-        return context.trigger_text
+        return f"{context.trigger_text}\n{opening}]"
     return (
         f"{context.trigger_text}\n"
-        f"[Nobody asked you anything. This looks like a {context.kind} moment. "
+        f"{opening} "
         f"A source you know may be relevant - {context.suggested_source} "
         f"{context.suggested_source_ref}: {context.source_text}]"
     )

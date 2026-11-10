@@ -288,3 +288,79 @@ async def test_a_screen_reading_without_candidates_never_reaches_the_judge() -> 
 
     assert await detector.observe_screen(ref="screen#3", text="unrelated", now=100.0) is None
     assert judge.calls == 0
+
+
+COMMITMENT = "So Rani will send the vendor numbers on Friday."
+
+
+async def test_a_commitment_about_the_owner_reaches_the_judge_without_candidates() -> None:
+    judgement = MomentJudgement(moment="commitment_mentioned", source_ref=None, confidence=0.9)
+    judge = _Judge(judgement)
+    detector = _detector(judgement, judge)
+    await detector.prepare()
+
+    context = await detector.observe(_event("t1", COMMITMENT), now=100.0)
+
+    assert judge.calls == 1
+    assert context is not None
+    assert context.kind == "commitment_mentioned"
+    assert context.suggested_source_ref is None
+    assert context.source_text is None
+    assert context.trigger_text == COMMITMENT
+
+
+async def test_a_line_about_someone_else_without_candidates_never_reaches_the_judge() -> None:
+    judgement = MomentJudgement(moment="commitment_mentioned", source_ref=None, confidence=0.9)
+    judge = _Judge(judgement)
+    detector = _detector(judgement, judge)
+    await detector.prepare()
+
+    assert await detector.observe(_event("t1", "Budi will send the numbers."), now=100.0) is None
+    assert judge.calls == 0
+
+
+async def test_a_commitment_can_rest_on_a_candidate_source() -> None:
+    judgement = MomentJudgement(moment="commitment_mentioned", source_ref="om-beta", confidence=0.9)
+    detector = _detector(judgement)
+    await detector.prepare()
+
+    context = await detector.observe(_event("t1", QUESTION), now=100.0)
+
+    assert context is not None
+    assert context.kind == "commitment_mentioned"
+    assert context.suggested_source_ref == "om-beta"
+    assert context.source_text == FACT
+
+
+async def test_the_same_commitment_restated_does_not_fire_twice() -> None:
+    judgement = MomentJudgement(moment="commitment_mentioned", source_ref=None, confidence=0.9)
+    detector = _detector(judgement)
+    await detector.prepare()
+
+    first = await detector.observe(_event("t1", COMMITMENT), now=100.0)
+    second = await detector.observe(
+        _event("t2", "  so rani will send the vendor numbers   on Friday. "), now=110.0
+    )
+
+    assert first is not None
+    assert second is None
+
+
+async def test_a_source_backed_kind_still_needs_its_source_ref() -> None:
+    judgement = MomentJudgement(moment="fact_opportunity", source_ref=None, confidence=0.9)
+    detector = _detector(judgement)
+    await detector.prepare()
+
+    assert await detector.observe(_event("t1", COMMITMENT), now=100.0) is None
+
+
+async def test_a_commitment_asked_of_the_twin_directly_is_never_a_moment() -> None:
+    judgement = MomentJudgement(moment="commitment_mentioned", source_ref=None, confidence=0.9)
+    judge = _Judge(judgement)
+    detector = _detector(judgement, judge)
+    await detector.prepare()
+
+    asked = "Rani, will you send the vendor numbers on Friday?"
+
+    assert await detector.observe(_event("t1", asked), now=100.0) is None
+    assert judge.calls == 0
