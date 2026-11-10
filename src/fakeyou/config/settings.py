@@ -145,6 +145,21 @@ class DatabaseSettings(Section):
     keepalive_idle_seconds: PositiveSeconds = 30.0
 
 
+class SessionsSettings(Section):
+    launcher: Literal["worker", "kubernetes"] = "worker"
+    namespace: str = "fakeyou"
+    image: str | None = None
+    env_from_secret: str | None = None
+    env_from_configmap: str | None = None
+    poll_seconds: PositiveSeconds = 5.0
+    job_ttl_seconds: int = Field(default=3600, ge=0)
+    deadline_margin_seconds: int = Field(default=600, ge=0)
+    cpu_request: str = "1"
+    memory_request: str = "2Gi"
+    cpu_limit: str = "2"
+    memory_limit: str = "4Gi"
+
+
 class StorageSettings(Section):
     bucket: str | None = None
     endpoint_url: OptionalURL = None
@@ -504,6 +519,7 @@ class Configuration(Section):
     paths: PathSettings = Field(default_factory=PathSettings)
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     storage: StorageSettings = Field(default_factory=StorageSettings)
+    sessions: SessionsSettings = Field(default_factory=SessionsSettings)
     speech: SpeechSettings = Field(default_factory=SpeechSettings)
     reply: ReplySettings = Field(default_factory=OpenAIReply)
     reply_fallback: ReplySettings | None = None

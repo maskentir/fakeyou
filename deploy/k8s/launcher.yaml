@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fakeyou-launcher
+  namespace: fakeyou
+  labels:
+    app: fakeyou-launcher
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: fakeyou-launcher
+  template:
+    metadata:
+      labels:
+        app: fakeyou-launcher
+    spec:
+      serviceAccountName: fakeyou-launcher
+      containers:
+        - name: launcher
+          # Same worker image as the session Jobs; set FAKEYOU_SESSIONS__IMAGE
+          # to this image so launched Jobs run identical bits.
+          image: fakeyou-meeting-worker:local
+          command: ["python", "-m", "fakeyou.worker", "launcher"]
+          envFrom:
+            - secretRef:
+                name: fakeyou-secrets
+            - configMapRef:
+                name: fakeyou-config
+          env:
+            - name: FAKEYOU_SESSIONS__LAUNCHER
+              value: kubernetes
+          resources:
+            requests:
+              cpu: "100m"
+              memory: 256Mi
+            limits:
+              cpu: "500m"
+              memory: 512Mi

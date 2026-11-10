@@ -19,13 +19,15 @@ from fakeyou.transport.streams import StreamTransport
 from fakeyou.worker.consumer import SnapshotStore, WorkerConsumer, WorkerDeps
 from fakeyou.worker.debrief import DebriefDeps, DebriefWorker, debrief_models
 from fakeyou.worker.ingestion import IngestionDeps, IngestionWorker
+from fakeyou.worker.launcher import LauncherDeps, SessionLauncher, create_session_jobs
 from fakeyou.worker.reembed import ReembedDeps, ReembedWorker, TwinDirectory
 
 SESSIONS_ROLE = "sessions"
+LAUNCHER_ROLE = "launcher"
 INGESTION_ROLE = "ingestion"
 DEBRIEF_ROLE = "debrief"
 REEMBED_ROLE = "reembed"
-ROLES = (SESSIONS_ROLE, INGESTION_ROLE, DEBRIEF_ROLE, REEMBED_ROLE)
+ROLES = (SESSIONS_ROLE, LAUNCHER_ROLE, INGESTION_ROLE, DEBRIEF_ROLE, REEMBED_ROLE)
 
 
 class LongRunning(Protocol):
@@ -66,7 +68,7 @@ def verify_role_models(role: str, settings: Settings) -> None:
         debrief_models(settings)
 
 
-async def serve(role: str) -> None:
+async def serve(role: str, *, meeting_id: str | None = None) -> None:
     settings = Settings()
     ports = JoinPorts(
         run_session=run_meeting_session,
@@ -74,7 +76,7 @@ async def serve(role: str) -> None:
     )
     verify_role_models(role, settings)
     await verify_boot_dependencies(settings, ports)
-    if role == SESSIONS_ROLE:
+    if role in (SESSIONS_ROLE, LAUNCHER_ROLE):
         await verify_session_schema(settings)
     transport = StreamTransport.from_settings(settings)
     shutdown = asyncio.Event()
@@ -98,7 +100,14 @@ async def serve(role: str) -> None:
         )
         consumers = _role_consumers(role, shared)
         with stop_signal_handlers(shutdown):
-            await run_consumers(*consumers)
+            if meeting_id is not None:
+                consumer = consumers[0]
+                assert isinstance(consumer, WorkerConsumer)
+                claimed = await consumer.run_once(meeting_id=meeting_id)
+                if claimed is not None:
+                    await consumer.wait_session()
+            else:
+                await run_consumers(*consumers)
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,6 +171,17 @@ def role_consumers(role: str, shared: _Shared) -> list[LongRunning]:
                 queue,
             )
         ]
+    if role == LAUNCHER_ROLE:
+        return [
+            SessionLauncher(
+                LauncherDeps(
+                    settings=shared.settings,
+                    status=shared.status,
+                    jobs=create_session_jobs(shared.settings),
+                    shutdown=shared.shutdown,
+                )
+            )
+        ]
     if role == REEMBED_ROLE:
         queue = create_job_queue(shared.settings)
         shared.exits.push_async_callback(queue.close)
@@ -186,8 +206,11 @@ def _role_consumers(role: str, shared: _Shared) -> list[LongRunning]:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="fakeyou.worker")
     parser.add_argument("role", choices=ROLES)
+    parser.add_argument("--meeting", default=None)
     arguments = parser.parse_args(argv)
-    asyncio.run(serve(arguments.role))
+    if arguments.meeting is not None and arguments.role != SESSIONS_ROLE:
+        parser.error("--meeting is only valid for the sessions role")
+    asyncio.run(serve(arguments.role, meeting_id=arguments.meeting))
 
 
 if __name__ == "__main__":

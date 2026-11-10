@@ -120,12 +120,20 @@ class MemorySessionStatus:
         self.payloads.pop(meeting_id, None)
 
     async def claim(
-        self, worker_id: str, attempt_id: str, lease_seconds: float
+        self,
+        worker_id: str,
+        attempt_id: str,
+        lease_seconds: float,
+        *,
+        meeting_id: str | None = None,
     ) -> SessionStatus | None:
         del lease_seconds
-        for meeting_id, status in sorted(self.rows.items(), key=lambda item: item[1].updated_at):
-            free = self.leases.get(meeting_id) is None or meeting_id in self.expired
+        for candidate_id, status in sorted(self.rows.items(), key=lambda item: item[1].updated_at):
+            if meeting_id is not None and candidate_id != meeting_id:
+                continue
+            free = self.leases.get(candidate_id) is None or candidate_id in self.expired
             if status.desired_state in ("joined", "stopped") and not status.terminal and free:
+                meeting_id = candidate_id
                 self.leases[meeting_id] = worker_id
                 self.expired.discard(meeting_id)
                 claimed = replace(
@@ -137,6 +145,17 @@ class MemorySessionStatus:
                 self.rows[meeting_id] = claimed
                 return claimed
         return None
+
+    async def claimable(self) -> list[SessionStatus]:
+        return [
+            status
+            for meeting_id, status in sorted(
+                self.rows.items(), key=lambda item: (item[1].updated_at, item[0])
+            )
+            if status.desired_state in ("joined", "stopped")
+            and not status.terminal
+            and (self.leases.get(meeting_id) is None or meeting_id in self.expired)
+        ]
 
     async def renew(
         self, meeting_id: str, worker_id: str, attempt_id: str, lease_seconds: float

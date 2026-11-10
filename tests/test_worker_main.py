@@ -99,7 +99,7 @@ async def test_reembed_role_runs_only_the_reembed_worker(
 async def test_no_role_runs_more_than_one_consumer(
     monkeypatch: pytest.MonkeyPatch, role: str
 ) -> None:
-    assert worker_main.ROLES == ("sessions", "ingestion", "debrief", "reembed")
+    assert worker_main.ROLES == ("sessions", "launcher", "ingestion", "debrief", "reembed")
     assert len(await _started_roles(monkeypatch, role)) == 1
 
 

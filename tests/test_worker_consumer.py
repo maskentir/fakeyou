@@ -561,6 +561,21 @@ class FakeObjectStore:
         return None
 
 
+async def test_run_once_for_one_meeting_claims_only_that_meeting(harness: Harness) -> None:
+    await harness.seed("m-2")
+    await harness.enqueue("m-1", "join")
+    await harness.enqueue("m-2", "join")
+
+    assert await harness.consumer.run_once(meeting_id="m-2") == "m-2"
+    await harness.double.started.wait()
+
+    first = await harness.status.get("m-1")
+    assert first is not None
+    assert first.attempt_id is None
+    harness.double.release.set()
+    await harness.consumer.wait_session()
+
+
 async def test_a_takeover_restores_the_record_from_segments_and_flushes_new_ones(
     harness: Harness,
 ) -> None:

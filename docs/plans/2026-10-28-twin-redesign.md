@@ -3318,8 +3318,25 @@ yang belum terunggah selalu diunggah dari 0 pada push pertama.
 Settings `storage` baru (6 leaf, total 195); tanpa bucket,
 `create_object_store` mengembalikan None dan perilaku sama dengan
 sebelumnya. Verifikasi live terhadap MinIO/S3 asli belum dilakukan
-(hanya fake store + takeover test di consumer). Sisa D2: D2c Job per
-sesi, D2d trace.
+(hanya fake store + takeover test di consumer).
+
+Status (D2c): selesai di kode + manifest; belum dibuktikan di
+cluster. `claim(..., meeting_id=...)` + `claimable()` di repository;
+worker `sessions --meeting <id>` mengklaim tepat satu baris, menjalankan
+satu attempt, lalu exit. Role worker baru `launcher`
+(`worker/launcher.py`): reconcile baris claimable — sesi `joined`
+tanpa Job aktif dibuatkan Job (`build_job`: `backoffLimit: 0`,
+`activeDeadlineSeconds` dari lobby+durasi snapshot + margin,
+`ttlSecondsAfterFinished`, label meeting, envFrom secret/configmap,
+resources dari settings `sessions` baru — 12 leaf, total 207); sesi
+`stopped` sebelum join ditutup langsung oleh launcher lewat klaim +
+StatusWriter. Pengambilalihan tetap lease A2: pod mati → lease
+kedaluwarsa → Job baru (nama per attempt) → restore segmen D2b.
+Manifest `deploy/k8s/` (namespace, ServiceAccount + Role jobs
+create/list/get, Deployment launcher) tervalidasi parse + Job dict
+lolos deserialisasi model client resmi; belum ada cluster untuk
+smoke (kind tidak berjalan lokal) dan gate dua meeting bersamaan +
+kill pod menunggu sesi live. Sisa D2: D2d trace.
 
 ### D3: Config yang menyusut
 

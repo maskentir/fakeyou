@@ -78,8 +78,15 @@ class SessionStatusRepository(Protocol):
     async def discard(self, meeting_id: str) -> None: ...
 
     async def claim(
-        self, worker_id: str, attempt_id: str, lease_seconds: float
+        self,
+        worker_id: str,
+        attempt_id: str,
+        lease_seconds: float,
+        *,
+        meeting_id: str | None = None,
     ) -> SessionStatus | None: ...
+
+    async def claimable(self) -> list[SessionStatus]: ...
 
     async def renew(
         self, meeting_id: str, worker_id: str, attempt_id: str, lease_seconds: float
@@ -228,18 +235,26 @@ class SessionStatusStore:
         )
 
     async def claim(
-        self, worker_id: str, attempt_id: str, lease_seconds: float
+        self,
+        worker_id: str,
+        attempt_id: str,
+        lease_seconds: float,
+        *,
+        meeting_id: str | None = None,
     ) -> SessionStatus | None:
+        wanted = [
+            meeting_sessions.c.desired_state.in_(("joined", "stopped")),
+            meeting_sessions.c.phase.not_in(sorted(TERMINAL_PHASES)),
+            or_(
+                meeting_sessions.c.lease_expires_at.is_(None),
+                meeting_sessions.c.lease_expires_at < func.now(),
+            ),
+        ]
+        if meeting_id is not None:
+            wanted.append(meeting_sessions.c.meeting_id == meeting_id)
         free = (
             select(meeting_sessions.c.meeting_id)
-            .where(
-                meeting_sessions.c.desired_state.in_(("joined", "stopped")),
-                meeting_sessions.c.phase.not_in(sorted(TERMINAL_PHASES)),
-                or_(
-                    meeting_sessions.c.lease_expires_at.is_(None),
-                    meeting_sessions.c.lease_expires_at < func.now(),
-                ),
-            )
+            .where(*wanted)
             .order_by(meeting_sessions.c.updated_at, meeting_sessions.c.meeting_id)
             .limit(1)
             .with_for_update(skip_locked=True)
@@ -256,6 +271,24 @@ class SessionStatusStore:
             )
             .returning(meeting_sessions)
         )
+
+    async def claimable(self) -> list[SessionStatus]:
+        statement = (
+            select(meeting_sessions)
+            .where(
+                meeting_sessions.c.desired_state.in_(("joined", "stopped")),
+                meeting_sessions.c.phase.not_in(sorted(TERMINAL_PHASES)),
+                or_(
+                    meeting_sessions.c.lease_expires_at.is_(None),
+                    meeting_sessions.c.lease_expires_at < func.now(),
+                ),
+            )
+            .order_by(meeting_sessions.c.updated_at, meeting_sessions.c.meeting_id)
+        )
+        with _reachable():
+            async with self._engine.connect() as connection:
+                rows = (await connection.execute(statement)).mappings().all()
+        return [_status(row) for row in rows]
 
     async def renew(
         self, meeting_id: str, worker_id: str, attempt_id: str, lease_seconds: float
