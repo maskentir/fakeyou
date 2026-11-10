@@ -80,7 +80,7 @@ def test_a_report_without_proposals_still_parses(record_path: Path) -> None:
     assert report.owner_model_proposals == ()
 
 
-def test_proposals_map_to_entries_with_the_evidence_quote_as_reason(record_path: Path) -> None:
+def test_proposals_map_to_entries_with_structured_evidence(record_path: Path) -> None:
     report = report_for(record_path, owner_model_proposals=[proposal()])
 
     [entry] = entries_from_proposals(report)
@@ -90,9 +90,11 @@ def test_proposals_map_to_entries_with_the_evidence_quote_as_reason(record_path:
     assert entry.statement == "The beta launches on 14 October, not 21 October."
     assert entry.confidence == "leaning"
     assert entry.disclosure == "owner_only"
-    assert entry.reason is not None
-    assert "deadline" in entry.reason
-    assert "b2-meeting" in entry.reason
+    assert entry.reason == "debrief b2-meeting"
+    assert entry.meeting_id == "b2-meeting"
+    assert [(item.entry_id, item.quote) for item in entry.evidence] == [
+        (ref().entry_id, ref().quote)
+    ]
 
 
 def test_merge_drafts_carries_proposals_once() -> None:

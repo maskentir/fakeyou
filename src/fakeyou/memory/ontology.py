@@ -22,3 +22,12 @@ ASSERTION_LABEL = "CoreAssertion"
 
 def edge_type_for(kind: AssertionKind) -> str:
     return EDGE_TYPES[kind]
+
+
+_KIND_BY_EDGE_TYPE: dict[str, AssertionKind] = {
+    edge_type: kind for kind, edge_type in EDGE_TYPES.items()
+}
+
+
+def kind_for_edge_type(edge_type: str) -> AssertionKind | None:
+    return _KIND_BY_EDGE_TYPE.get(edge_type)

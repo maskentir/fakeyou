@@ -8,6 +8,7 @@ from fakeyou.api.auth import Principal, require_owner
 from fakeyou.api.status import status_now
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import IDENTIFIER_BODY
+from fakeyou.config.settings import Settings
 from fakeyou.db.owner_model import (
     ItemDisclosure,
     OwnerModelEntry,
@@ -15,10 +16,19 @@ from fakeyou.db.owner_model import (
     OwnerModelRepository,
     OwnerModelRevision,
     OwnerModelStore,
+    RevisionEvidence,
     RevisionSource,
     RevisionStatus,
     TwinScope,
 )
+from fakeyou.memory.ontology import AssertionKind
+from fakeyou.memory.persona import memory_group_for
+from fakeyou.memory.typed_lane import (
+    TypedAssertion,
+    assertions_from_edges,
+    typed_episode_uuid,
+)
+from fakeyou.orchestration.providers import open_persona_memory
 from fakeyou.session.facts import Confidence, OwnerModelKind
 
 _IDENTIFIER = rf"^{IDENTIFIER_BODY}$"
@@ -53,6 +63,17 @@ class OwnerModelItemBody(BaseModel):
         )
 
 
+class RevisionEvidenceView(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    entry_id: str
+    quote: str
+
+    @classmethod
+    def of(cls, evidence: RevisionEvidence) -> "RevisionEvidenceView":
+        return cls(entry_id=evidence.entry_id, quote=evidence.quote)
+
+
 class OwnerModelRevisionView(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -66,6 +87,8 @@ class OwnerModelRevisionView(BaseModel):
     confidence: Confidence
     disclosure: ItemDisclosure
     valid_at: datetime | None
+    meeting_id: str | None
+    evidence: list[RevisionEvidenceView]
     source: RevisionSource
     status: RevisionStatus
     model_version: int | None
@@ -86,12 +109,48 @@ class OwnerModelRevisionView(BaseModel):
             confidence=entry.confidence,
             disclosure=entry.disclosure,
             valid_at=entry.valid_at,
+            meeting_id=entry.meeting_id,
+            evidence=[RevisionEvidenceView.of(item) for item in entry.evidence],
             source=revision.source,
             status=revision.status,
             model_version=revision.model_version,
             created_at=revision.created_at,
             decided_at=revision.decided_at,
         )
+
+
+class TypedAssertionView(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: AssertionKind
+    text: str
+    status: str
+    evidence: list[RevisionEvidenceView]
+    assignee: str | None
+    due_text: str | None
+
+    @classmethod
+    def of(cls, assertion: TypedAssertion) -> "TypedAssertionView":
+        return cls(
+            kind=assertion.kind,
+            text=assertion.text,
+            status=assertion.status,
+            evidence=[
+                RevisionEvidenceView(entry_id=item.entry_id, quote=item.quote)
+                for item in assertion.evidence
+            ],
+            assignee=assertion.assignee,
+            due_text=assertion.due_text,
+        )
+
+
+class ProposalEvidenceView(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    revision_id: str
+    meeting_id: str | None
+    quotes: list[RevisionEvidenceView]
+    assertions: list[TypedAssertionView]
 
 
 class OwnerModelImportBody(BaseModel):
@@ -209,6 +268,39 @@ async def list_owner_model_proposals(
 ) -> list[OwnerModelRevisionView]:
     proposals = await repository.proposals(_scope(principal, twin_id))
     return [OwnerModelRevisionView.of(revision) for revision in proposals]
+
+
+@router.get("/proposals/{revision_id}/evidence", response_model=ProposalEvidenceView)
+async def read_proposal_evidence(
+    twin_id: _TwinId,
+    revision_id: _RevisionId,
+    principal: _Owner,
+    repository: _Repository,
+    request: Request,
+) -> ProposalEvidenceView:
+    scope = _scope(principal, twin_id)
+    revision = await repository.get_revision(scope, revision_id)
+    if revision is None:
+        raise FakeYouError(ErrorCode.API_NOT_FOUND)
+    entry = revision.entry
+    assertions: list[TypedAssertionView] = []
+    if entry.meeting_id is not None:
+        settings = cast(Settings, request.app.state.settings)
+        episode_uuid = typed_episode_uuid(
+            memory_group_for(scope.owner_id, scope.twin_id), entry.meeting_id
+        )
+        async with open_persona_memory(settings) as memory:
+            found = await memory.get_nodes_and_edges_by_episode([episode_uuid])
+        assertions = [
+            TypedAssertionView.of(assertion)
+            for assertion in assertions_from_edges(found.edges, episode_uuid)
+        ]
+    return ProposalEvidenceView(
+        revision_id=revision.revision_id,
+        meeting_id=entry.meeting_id,
+        quotes=[RevisionEvidenceView.of(item) for item in entry.evidence],
+        assertions=assertions,
+    )
 
 
 @router.post("/proposals/{revision_id}/approve", response_model=OwnerModelRevisionView)

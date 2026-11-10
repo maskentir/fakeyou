@@ -9,7 +9,13 @@ from graphiti_core.nodes import EntityNode, EpisodicNode
 from fakeyou.debrief.debrief_schema import DebriefItem
 from fakeyou.memory.evidence import typed_first
 from fakeyou.memory.ontology import PACK_VERSION, TYPED_EDGE_TYPES, edge_type_for
-from fakeyou.memory.typed_lane import TypedAssertion, TypedEvidence, build_assertions
+from fakeyou.memory.typed_lane import (
+    TypedAssertion,
+    TypedEvidence,
+    assertions_from_edges,
+    build_assertions,
+    typed_episode_uuid,
+)
 
 AT = datetime(2026, 10, 1, 9, tzinfo=UTC)
 
@@ -140,3 +146,32 @@ def test_typed_edges_rank_before_untyped_edges_without_reordering_within_a_lane(
     untyped_two = _edge("MENTIONED", "Budi joined the meeting")
 
     assert typed_first([untyped_one, typed, untyped_two]) == [typed, untyped_one, untyped_two]
+
+
+def test_assertions_roundtrip_through_the_typed_episode_edges() -> None:
+    item = assertion(
+        evidence=(
+            TypedEvidence("entry-1", "the launch moved to 14 October"),
+            TypedEvidence("entry-2", "not 21 October"),
+        ),
+        assignee="maya",
+        due_text="friday",
+    )
+    episode, _nodes, edges = build_assertions(
+        group_id="team_alpha", meeting_id="m1", at=AT, items=[item]
+    )
+
+    assert episode.uuid == typed_episode_uuid("team_alpha", "m1")
+    assert assertions_from_edges(edges, episode.uuid) == (item,)
+    assert assertions_from_edges(edges, typed_episode_uuid("team_alpha", "m2")) == ()
+
+
+def test_edges_from_other_packs_or_untyped_names_are_not_assertions() -> None:
+    _episode, _nodes, edges = build_assertions(
+        group_id="g", meeting_id="m1", at=AT, items=[assertion()]
+    )
+    [edge] = edges
+    foreign = edge.model_copy(update={"attributes": {**edge.attributes, "pack": "other/v9"}})
+    untyped = edge.model_copy(update={"name": "RELATES_TO"})
+
+    assert assertions_from_edges([foreign, untyped], edge.episodes[0]) == ()

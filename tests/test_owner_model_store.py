@@ -10,6 +10,7 @@ from fakeyou.db.owner_model import (
     OwnerModelEntry,
     OwnerModelSnapshot,
     OwnerModelStore,
+    RevisionEvidence,
     TwinScope,
 )
 
@@ -372,3 +373,27 @@ async def test_concurrent_imports_of_one_persona_add_it_once(
     assert sorted(len(result.added) for result in results) == [0, 0, 0, 2]
     assert sorted(len(result.skipped) for result in results) == [0, 2, 2, 2]
     assert (await store.snapshot(SCOPE)).version == 2
+
+
+async def test_a_proposal_keeps_its_meeting_and_evidence_and_reads_back_by_id(
+    migrated_async_engine: AsyncEngine,
+) -> None:
+    store = OwnerModelStore(migrated_async_engine)
+    entry = OwnerModelEntry(
+        "position",
+        "beta launch date",
+        "The beta launches on 14 October.",
+        meeting_id="b2-meeting",
+        evidence=(
+            RevisionEvidence(entry_id="transcript:e1", quote="deadline"),
+            RevisionEvidence(entry_id="transcript:e2", quote="14 October"),
+        ),
+    )
+
+    proposed = await store.add(SCOPE, entry, "debrief", NOW)
+
+    assert proposed.entry == entry
+    assert await store.get_revision(SCOPE, proposed.revision_id) == proposed
+    assert [item.entry for item in await store.proposals(SCOPE)] == [entry]
+    assert await store.get_revision(OTHER, proposed.revision_id) is None
+    assert await store.get_revision(SCOPE, "missing") is None

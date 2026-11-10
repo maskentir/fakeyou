@@ -36,6 +36,15 @@ class TwinScope:
 
 
 @dataclass(frozen=True, slots=True)
+class RevisionEvidence:
+    entry_id: str
+    quote: str
+
+    def as_json(self) -> dict[str, str]:
+        return {"entry_id": self.entry_id, "quote": self.quote}
+
+
+@dataclass(frozen=True, slots=True)
 class OwnerModelEntry:
     kind: OwnerModelKind
     topic: str
@@ -44,6 +53,8 @@ class OwnerModelEntry:
     disclosure: ItemDisclosure = "room_speakable"
     reason: str | None = None
     valid_at: datetime | None = None
+    meeting_id: str | None = None
+    evidence: tuple[RevisionEvidence, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +115,10 @@ class OwnerModelRepository(Protocol):
 
     async def proposals(self, scope: TwinScope) -> list[OwnerModelRevision]: ...
 
+    async def get_revision(
+        self, scope: TwinScope, revision_id: str
+    ) -> OwnerModelRevision | None: ...
+
     async def history(self, scope: TwinScope, item_id: str) -> list[OwnerModelRevision]: ...
 
 
@@ -121,6 +136,11 @@ def _revision(row: RowMapping) -> OwnerModelRevision:
             disclosure=cast(ItemDisclosure, row["disclosure"]),
             reason=row["reason"],
             valid_at=row["valid_at"],
+            meeting_id=row["meeting_id"],
+            evidence=tuple(
+                RevisionEvidence(entry_id=item["entry_id"], quote=item["quote"])
+                for item in row["evidence"] or ()
+            ),
         ),
         source=cast(RevisionSource, row["source"]),
         status=cast(RevisionStatus, row["status"]),
@@ -305,6 +325,21 @@ class OwnerModelStore:
                 ).mappings()
                 return [_revision(row) for row in rows]
 
+    async def get_revision(self, scope: TwinScope, revision_id: str) -> OwnerModelRevision | None:
+        table = owner_model_revisions
+        with _reachable():
+            async with self._engine.connect() as connection:
+                row = (
+                    (
+                        await connection.execute(
+                            _in_scope(scope).where(table.c.revision_id == revision_id)
+                        )
+                    )
+                    .mappings()
+                    .first()
+                )
+                return _revision(row) if row is not None else None
+
     async def history(self, scope: TwinScope, item_id: str) -> list[OwnerModelRevision]:
         with _reachable():
             async with self._engine.connect() as connection:
@@ -439,6 +474,8 @@ async def _insert(
                     confidence=entry.confidence,
                     disclosure=entry.disclosure,
                     valid_at=entry.valid_at,
+                    meeting_id=entry.meeting_id,
+                    evidence=[item.as_json() for item in entry.evidence] or None,
                     source=row.source,
                     status=decision.status,
                     model_version=decision.version,

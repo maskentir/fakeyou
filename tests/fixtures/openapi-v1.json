@@ -76,6 +76,9 @@
     "/v1/twins/{twin_id}/owner-model/proposals/{revision_id}/approve": [
       "post"
     ],
+    "/v1/twins/{twin_id}/owner-model/proposals/{revision_id}/evidence": [
+      "get"
+    ],
     "/v1/twins/{twin_id}/owner-model/proposals/{revision_id}/reject": [
       "post"
     ],
@@ -105,9 +108,12 @@
     "OwnerModelRevisionView",
     "OwnerModelView",
     "PersonaProfile",
+    "ProposalEvidenceView",
+    "RevisionEvidenceView",
     "SessionCreate",
     "SessionView",
     "SkippedImportView",
+    "TypedAssertionView",
     "ValidationError"
   ]
 }

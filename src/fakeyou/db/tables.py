@@ -17,6 +17,7 @@ from sqlalchemy import (
     UniqueConstraint,
     false,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 
 metadata = MetaData()
 
@@ -73,6 +74,8 @@ owner_model_revisions = Table(
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("decided_at", DateTime(timezone=True), nullable=True),
     Column("valid_at", DateTime(timezone=True), nullable=True),
+    Column("meeting_id", Text, nullable=True),
+    Column("evidence", JSONB, nullable=True),
     UniqueConstraint("item_id", "revision", name="owner_model_item_revision"),
     UniqueConstraint("owner_id", "twin_id", "model_version", name="owner_model_version"),
     Index("owner_model_scope", "owner_id", "twin_id"),
