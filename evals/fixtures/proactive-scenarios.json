@@ -68,6 +68,8 @@
     {"id": "p07", "kind": "control", "duration_seconds": 900, "expect": {"speak": false}, "steps": [{"say": "Traffic was awful this morning, took me an hour.", "speaker": "device-ayu", "at": 0}, {"say": "Same here, the toll road was completely stuck.", "speaker": "device-budi", "at": 20}]},
     {"id": "p08", "kind": "control", "duration_seconds": 900, "expect": {"speak": false}, "steps": [{"say": "Habis ini makan siang di mana enaknya?", "speaker": "device-ayu", "at": 0}, {"say": "Warung sebelah kantor aja, parkirnya gampang.", "speaker": "device-budi", "at": 15}]},
     {"id": "p09", "kind": "fact_opportunity", "duration_seconds": 600, "expect": {"speak": true, "kind": "fact_opportunity"}, "steps": [{"say": "Kita masih belum jelas siapa yang memegang checklist launching Orchid.", "speaker": "device-ayu", "at": 0}]},
-    {"id": "p10", "kind": "control", "duration_seconds": 600, "expect": {"speak": false}, "steps": [{"say": "When does the Orchid beta launch?", "speaker": "device-ayu", "at": 0}, {"say": "14 October, as planned.", "speaker": "device-budi", "at": 5}]}
+    {"id": "p10", "kind": "control", "duration_seconds": 600, "expect": {"speak": false}, "steps": [{"say": "When does the Orchid beta launch?", "speaker": "device-ayu", "at": 0}, {"say": "14 October, as planned.", "speaker": "device-budi", "at": 5}]},
+    {"id": "p11", "kind": "commitment_mentioned", "duration_seconds": 600, "expect": {"speak": true, "kind": "commitment_mentioned"}, "steps": [{"say": "Good, so Rani will approve the vendor budget tomorrow.", "speaker": "device-ayu", "at": 0}]},
+    {"id": "p12", "kind": "control", "duration_seconds": 600, "expect": {"speak": false}, "steps": [{"say": "Good, so Budi will book the venue tomorrow.", "speaker": "device-ayu", "at": 0}]}
   ]
 }

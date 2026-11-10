@@ -19,7 +19,12 @@ from fakeyou.observability.faults import capture_error
 from fakeyou.observability.journal import Journal
 
 MomentKind = Literal[
-    "none", "unanswered_question", "owner_task", "decision_vs_brief", "fact_opportunity"
+    "none",
+    "unanswered_question",
+    "owner_task",
+    "decision_vs_brief",
+    "fact_opportunity",
+    "commitment_mentioned",
 ]
 EmbedTexts = Callable[[Sequence[str]], Awaitable[list[list[float]]]]
 _MAX_CANDIDATES = 3
@@ -32,14 +37,19 @@ _JUDGE_RULES = (
     "model items and meeting brief items) that are semantically close to the latest line.\n"
     "moment: unanswered_question when the latest line asks the room something a candidate "
     "source can answer and nobody has answered yet; owner_task only when the room assigns "
-    "or expects a concrete action from the owner, not merely when the topic touches "
-    "something the owner owns; decision_vs_brief when the room settles on a value, date or "
-    "plan that conflicts with what a candidate source states, whichever source it is; "
-    "fact_opportunity when the discussion would materially benefit from a fact in a "
-    "candidate source that the room has not stated; none otherwise. A line addressed "
-    "to the twin by name is never a moment: the twin answers those directly.\n"
+    "or expects a new concrete action from the owner and waits for it to be taken on, not "
+    "merely when the topic touches something the owner owns; decision_vs_brief when the "
+    "room settles on a value, date or plan that conflicts with what a candidate source "
+    "states, whichever source it is; fact_opportunity when the discussion would materially "
+    "benefit from a fact in a candidate source that the room has not stated; "
+    "commitment_mentioned when the latest line states, attributes or assumes a commitment "
+    "by the owner as already made - the owner will deliver, send, handle or decide "
+    "something - whether or not a candidate source covers it, and never when the "
+    "commitment belongs to someone else; none otherwise. A line addressed to the twin by "
+    "name is never a moment: the twin answers those directly.\n"
     "source_ref: the id of the candidate source item the moment rests on, copied exactly, "
-    "or null when the moment is none.\n"
+    "or null when the moment is none or a commitment_mentioned that no candidate source "
+    "covers.\n"
     "confidence: how sure you are that interrupting here helps rather than annoys, 0 to 1. "
     "Most lines are not moments; when in doubt choose none."
 )
@@ -151,6 +161,7 @@ class MomentDetector:
     _ready: deque[AttentionContext] = field(default_factory=deque, init=False)
     _fired_events: set[str] = field(default_factory=set, init=False)
     _fired_refs: set[str] = field(default_factory=set, init=False)
+    _fired_commitments: set[str] = field(default_factory=set, init=False)
     _seen_screens: set[str] = field(default_factory=set, init=False)
     _pending_recalled: dict[str, str] = field(default_factory=dict, init=False)
 
@@ -217,6 +228,9 @@ class MomentDetector:
             text, self.owner_names
         )
 
+    def _mentions_owner(self, text: str) -> bool:
+        return any(mentions_whole_phrase(text, name) for name in self.owner_names)
+
     def _passes_gate(self, event: TranscriptEvent) -> bool:
         if not event.finalized or not event.text.strip():
             return False
@@ -254,7 +268,7 @@ class MomentDetector:
         if not self._passes_gate(event):
             return None
         candidates = await self._candidates(event.text)
-        if not candidates:
+        if not candidates and not self._mentions_owner(event.text):
             return None
         judgement, error = await capture_error(
             partial(
@@ -270,18 +284,17 @@ class MomentDetector:
         if judgement.confidence < self.moment_confidence:
             return None
         ref = judgement.source_ref
-        if ref is None or ref not in {candidate.ref for candidate in candidates}:
+        resolved, candidate = self._resolve(judgement, candidates, event.text)
+        if not resolved:
             return None
-        if ref in self._fired_refs:
-            return None
-        candidate = next(item for item in candidates if item.ref == ref)
+        commitment_key = " ".join(event.text.casefold().split())
         context = AttentionContext(
             kind=judgement.moment,
             trigger_text=event.text,
             trigger_event_id=event.id,
             suggested_source_ref=ref,
-            suggested_source=candidate.source,
-            source_text=candidate.text,
+            suggested_source=candidate.source if candidate is not None else None,
+            source_text=candidate.text if candidate is not None else None,
         )
         self._note(
             "moment_detected",
@@ -295,10 +308,31 @@ class MomentDetector:
             self._signal_ready()
             return None
         self._fired_events.add(event.id)
-        self._fired_refs.add(ref)
+        if ref is not None:
+            self._fired_refs.add(ref)
+        if judgement.moment == "commitment_mentioned":
+            self._fired_commitments.add(commitment_key)
         self._ready.append(context)
         self._signal_ready()
         return context
+
+    def _resolve(
+        self,
+        judgement: MomentJudgement,
+        candidates: Sequence[MomentCandidate],
+        text: str,
+    ) -> tuple[bool, MomentCandidate | None]:
+        ref = judgement.source_ref
+        by_ref = {candidate.ref: candidate for candidate in candidates}
+        if ref is not None and (ref not in by_ref or ref in self._fired_refs):
+            return False, None
+        if ref is None and judgement.moment != "commitment_mentioned":
+            return False, None
+        if judgement.moment == "commitment_mentioned":
+            key = " ".join(text.casefold().split())
+            if key in self._fired_commitments:
+                return False, None
+        return True, by_ref[ref] if ref is not None else None
 
     def _signal_ready(self) -> None:
         if self.on_ready is not None:
