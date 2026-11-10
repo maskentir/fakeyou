@@ -24,7 +24,7 @@ dependencies = [
     "langgraph-checkpoint-postgres>=3,<4",
     "mcp>=1.26,<2",
     "numpy>=2.5,<3",
-    "openai==3.19.2",
+    "openai==3.46.0",
     "pillow>=13,<14",
     "loudness>=0.2,<1",
     "onnxruntime~=1.24.3",
