@@ -217,8 +217,8 @@ class ApiEventsHarness(ApiHarness):
         self.settings = settings
         self.seeded = SeededTransport()
         self.transport = self.seeded
-        self.store = SessionStore(settings.paths.record_dir)
         self.status = MemorySessionStatus()
+        self.store = SessionStore(self.status)
         self.app = create_app(
             settings,
             ApiDeps(
@@ -246,10 +246,12 @@ class ApiEventsHarness(ApiHarness):
         phase: PublicPhase = "created",
         terminal_reason: TerminalReason | None = None,
     ) -> None:
-        if self.store.load(meeting_id) is None:
+        if await self.store.load(meeting_id) is None:
             create = SessionCreate.model_validate({**SESSION_PAYLOAD, "meeting_id": meeting_id})
-            self.store.save_new(build_snapshot(create, meeting_id=meeting_id, at=AT))
-            await self.status.create(meeting_id, create.owner_id, STATUS_AT)
+            snapshot = build_snapshot(create, meeting_id=meeting_id, at=AT)
+            await self.status.create(
+                meeting_id, create.owner_id, STATUS_AT, payload=snapshot.model_dump(mode="json")
+            )
         if phase != "created" or terminal_reason is not None:
             await self.status.record_phase(
                 meeting_id, PhaseUpdate(phase, STATUS_AT, terminal_reason=terminal_reason)

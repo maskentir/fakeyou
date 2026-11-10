@@ -273,7 +273,7 @@ async def test_the_cli_session_commands_are_accepted_by_the_real_api(settings: S
     app = create_app(
         settings,
         ApiDeps(
-            snapshot_store=lambda: SessionStore(settings.paths.record_dir),
+            snapshot_store=lambda: SessionStore(repository),
         ),
     )
     app.dependency_overrides[session_status] = lambda: repository

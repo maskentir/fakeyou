@@ -339,7 +339,7 @@ def unused_checkpointer(*_args: object, **_kwargs: object) -> Any:
 
 
 class SnapshotReader(Protocol):
-    def load(self, meeting_id: str) -> SessionSnapshot: ...
+    async def load(self, meeting_id: str) -> SessionSnapshot | None: ...
 
 
 class Harness:
@@ -347,9 +347,9 @@ class Harness:
         self.settings = settings
         self.client = FakeClient()
         self.transport = StreamTransport(cast(Redis, self.client), stream_max_len=1000)
-        self.session_store = SessionStore(settings.paths.record_dir)
-        self.store: SnapshotReader = cast(SnapshotReader, self.session_store)
         self.status = MemorySessionStatus()
+        self.session_store = SessionStore(self.status)
+        self.store: SnapshotReader = cast(SnapshotReader, self.session_store)
         self.jobs = build_job_queue(InMemoryConnector())
         self.double = SessionDouble()
         self.ports = JoinPorts(
@@ -398,8 +398,9 @@ class Harness:
             meeting_id=meeting_id,
             at=AT,
         )
-        self.session_store.save_new(snapshot)
-        await self.status.create(meeting_id, "owner-1", STATUS_AT)
+        await self.status.create(
+            meeting_id, "owner-1", STATUS_AT, payload=snapshot.model_dump(mode="json")
+        )
 
     async def phase(self, meeting_id: str) -> str | None:
         status = await self.status.get(meeting_id)
@@ -769,7 +770,8 @@ class IngestionHarness:
         self.settings = settings
         self.client = FakeClient()
         self.transport = StreamTransport(cast(Redis, self.client), stream_max_len=1000)
-        self.store = SessionStore(settings.paths.record_dir)
+        self.status = MemorySessionStatus()
+        self.store = SessionStore(self.status)
         self.handler = IngestionHandlerDouble(settings.paths.record_dir, self.client.log)
         self.shutdown = asyncio.Event()
         self.jobs_queue = build_job_queue(InMemoryConnector())
@@ -801,7 +803,8 @@ class IngestionHarness:
             conversation=True,
             persona=persona,
         )
-        self.store.save_new(build_snapshot(create, meeting_id=meeting_id, at=AT))
+        snapshot = build_snapshot(create, meeting_id=meeting_id, at=AT)
+        self.status.seed(snapshot.model_dump(mode="json"), STATUS_AT)
         return persona
 
     def persist(self, meeting_id: str, state: str) -> None:
@@ -1094,7 +1097,8 @@ async def test_ingestion_job_for_a_session_started_with_keys_fails_without_them(
 ) -> None:
     ingestion = IngestionHarness(settings)
     create = SessionCreate(link=LINK, owner_id="owner-1", twin_id="twin-1")
-    ingestion.store.save_new(build_snapshot(create, meeting_id="m-2", at=AT, keys_supplied=True))
+    snapshot = build_snapshot(create, meeting_id="m-2", at=AT, keys_supplied=True)
+    ingestion.status.seed(snapshot.model_dump(mode="json"), STATUS_AT)
     consumer = ingestion.build()
     entry_id = await ingestion.submit("m-2")
 

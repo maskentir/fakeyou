@@ -36,6 +36,7 @@ from fakeyou.worker.documents import (
     session_dir,
     write_session_document,
     write_session_persona,
+    write_session_snapshot,
 )
 from fakeyou.worker.keys import apply_role_overrides
 from fakeyou.worker.status_writer import StatusWriter
@@ -113,9 +114,11 @@ class Snapshot(Protocol):
     @property
     def participant_evidence_enabled(self) -> bool: ...
 
+    def model_dump_json(self) -> str: ...
+
 
 class SnapshotStore(Protocol):
-    def load(self, meeting_id: str) -> Snapshot | None: ...
+    async def load(self, meeting_id: str) -> Snapshot | None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,6 +139,7 @@ def _now_iso() -> str:
 
 def join_request_for(snapshot: Snapshot, settings: Settings, *, resume: bool) -> JoinRequest:
     record_dir = settings.paths.record_dir
+    write_session_snapshot(record_dir, snapshot.meeting_id, snapshot.model_dump_json())
     persona_path = (
         write_session_persona(record_dir, snapshot.meeting_id, snapshot.persona)
         if snapshot.persona is not None
@@ -244,7 +248,7 @@ class WorkerConsumer:
         if status is None:
             return None
         claim = _Claim(status.meeting_id, attempt_id)
-        snapshot = self._store.load(claim.meeting_id)
+        snapshot = await self._store.load(claim.meeting_id)
         if status.desired_state == "stopped":
             await self._close(claim, "ended", "stopped_by_owner", "stopped before the twin joined")
             return None

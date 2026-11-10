@@ -15,7 +15,7 @@ from fakeyou.api.schemas import (
     JobView,
     SessionSnapshot,
 )
-from fakeyou.api.sessions import SessionStore, now_iso
+from fakeyou.api.sessions import SessionStore, now_iso, snapshot_store
 from fakeyou.api.status import queued_jobs, require_jobs, session_status
 from fakeyou.api.transport import shared_stream_transport
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
@@ -57,13 +57,6 @@ def _deps(request: Request) -> "ApiDeps":
     return cast("ApiDeps", request.app.state.deps)
 
 
-def _snapshot_store(request: Request) -> SessionStore:
-    factory = _deps(request).snapshot_store
-    if factory is not None:
-        return cast(SessionStore, factory())
-    return SessionStore(_settings(request).paths.record_dir)
-
-
 def _job_transport(request: Request) -> JobTransport:
     factory = _deps(request).transport
     if factory is not None:
@@ -102,17 +95,21 @@ def _owner_id(principal: Principal) -> str:
     return principal.owner_id
 
 
-def _owned_snapshot(request: Request, meeting_id: str, principal: Principal) -> SessionSnapshot:
-    snapshot = _snapshot_store(request).load(meeting_id)
+async def _owned_snapshot(
+    store: SessionStore, meeting_id: str, principal: Principal
+) -> SessionSnapshot:
+    snapshot = await store.load(meeting_id)
     if snapshot is None or snapshot.owner_id != _owner_id(principal):
         raise FakeYouError(ErrorCode.API_NOT_FOUND)
     return snapshot
 
 
-def _twin_persona(request: Request, twin_id: str, owner_id: str) -> tuple[str, PersonaProfile]:
+async def _twin_persona(
+    store: SessionStore, twin_id: str, owner_id: str
+) -> tuple[str, PersonaProfile]:
     owned = [
         (snapshot.meeting_id, snapshot.persona)
-        for snapshot in _snapshot_store(request).list_for(owner_id)
+        for snapshot in await store.list_for(owner_id)
         if snapshot.twin_id == twin_id and snapshot.persona is not None
     ]
     if not owned:
@@ -174,17 +171,24 @@ def _job_view(job_id: str, *, kind: str, meeting_id: str, state: IngestionState)
 router = APIRouter(tags=["memory"])
 
 _Owner = Annotated[Principal, Depends(require_owner)]
+_Snapshots = Annotated[SessionStore, Depends(snapshot_store)]
+
+
+async def _owned(meeting_id: str, principal: _Owner, store: _Snapshots) -> SessionSnapshot:
+    return await _owned_snapshot(store, meeting_id, principal)
+
+
+_Owned = Annotated[SessionSnapshot, Depends(_owned)]
 
 
 @router.post("/v1/sessions/{meeting_id}/ingestions", status_code=202, response_model=JobView)
 async def submit_ingestion(
     meeting_id: str,
     payload: IngestionSubmit,
-    principal: _Owner,
     request: Request,
+    _snapshot: _Owned,
     queue: Annotated[JobQueue | None, Depends(queued_jobs)],
 ) -> JobView:
-    _owned_snapshot(request, meeting_id, principal)
     await stage_overrides(_job_transport(request), meeting_id, request.headers)
     job_id = await require_jobs(queue).defer_ingest(meeting_id=meeting_id, kind=payload.kind)
     return _job_view(str(job_id), kind=payload.kind, meeting_id=meeting_id, state="pending")
@@ -193,10 +197,9 @@ async def submit_ingestion(
 @router.get("/v1/sessions/{meeting_id}/ingestion", response_model=IngestionView)
 async def read_ingestion(
     meeting_id: str,
-    principal: _Owner,
     request: Request,
+    _snapshot: _Owned,
 ) -> IngestionView:
-    _owned_snapshot(request, meeting_id, principal)
     return _ingestion_view(_persisted_state(request, meeting_id))
 
 
@@ -205,6 +208,7 @@ async def read_job(
     job_id: str,
     principal: _Owner,
     request: Request,
+    store: _Snapshots,
     queue: Annotated[JobQueue | None, Depends(queued_jobs)],
 ) -> JobView:
     if not job_id.isdigit():
@@ -215,7 +219,7 @@ async def read_job(
     if queued.task == INGEST_TASK:
         meeting_id = str(queued.args.get("meeting_id", ""))
         kind = str(queued.args.get("kind", ""))
-        _owned_snapshot(request, meeting_id, principal)
+        await _owned_snapshot(store, meeting_id, principal)
         if kind not in INGEST_KINDS:
             raise FakeYouError(ErrorCode.API_NOT_FOUND)
         return _job_view(
@@ -229,19 +233,19 @@ async def read_job(
     owner_id = _owner_id(principal)
     if queued.args.get("owner_id") != owner_id:
         raise FakeYouError(ErrorCode.API_NOT_FOUND)
-    _twin_persona(request, str(queued.args.get("twin_id", "")), owner_id)
+    await _twin_persona(store, str(queued.args.get("twin_id", "")), owner_id)
     return _queued_job_view(queued)
 
 
 @router.post("/v1/sessions/{meeting_id}/forget", response_model=ForgetView)
 async def forget_meeting(
-    meeting_id: str,
     payload: ForgetMeeting,
     principal: _Owner,
     request: Request,
+    snapshot: _Owned,
     repository: Annotated[SessionStatusRepository, Depends(session_status)],
 ) -> ForgetView:
-    snapshot = _owned_snapshot(request, meeting_id, principal)
+    meeting_id = snapshot.meeting_id
     status = await repository.get(meeting_id)
     if status is not None and not status.terminal:
         raise FakeYouError(ErrorCode.MEMORY_FORGET_SESSION_LIVE, meeting_id=meeting_id)
@@ -276,10 +280,11 @@ async def submit_reembedding(
     twin_id: str,
     principal: _Owner,
     request: Request,
+    store: _Snapshots,
     queue: Annotated[JobQueue | None, Depends(queued_jobs)],
 ) -> JobView:
     owner_id = _owner_id(principal)
-    _twin_persona(request, twin_id, owner_id)
+    await _twin_persona(store, twin_id, owner_id)
     await stage_overrides(_job_transport(request), f"twin:{twin_id}", request.headers)
     job_id = await require_jobs(queue).defer_reembed(owner_id=owner_id, twin_id=twin_id)
     return JobView(

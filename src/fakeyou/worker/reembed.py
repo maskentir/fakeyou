@@ -47,9 +47,9 @@ class TwinSnapshot(Protocol):
 
 
 class TwinDirectory(Protocol):
-    def load(self, meeting_id: str) -> object | None: ...
+    async def load(self, meeting_id: str) -> object | None: ...
 
-    def list_for(self, owner_id: str) -> list[TwinSnapshot]: ...
+    async def list_for(self, owner_id: str) -> list[TwinSnapshot]: ...
 
 
 class ReembedHandler(Protocol):
@@ -71,7 +71,7 @@ async def build_reembed_access(deps: ReembedDeps, job: ReembedJob) -> OperatorAc
         deps.transport, deps.settings, f"twin:{job.twin_id}", required=False
     )
     persona_path = None
-    for snapshot in deps.store.list_for(job.owner_id):
+    for snapshot in await deps.store.list_for(job.owner_id):
         if snapshot.twin_id == job.twin_id and snapshot.persona is not None:
             persona_path = write_session_persona(
                 settings.paths.record_dir, snapshot.meeting_id, snapshot.persona

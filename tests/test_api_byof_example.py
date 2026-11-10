@@ -9,6 +9,7 @@ from typing import override
 import httpx2
 import pytest
 
+from fakeyou.api.sessions import SessionStore
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.db.session_status import DesiredState, PhaseUpdate, SessionStatus
@@ -101,6 +102,7 @@ async def api(settings: Settings) -> AsyncIterator[ApiEventsHarness]:
     harness.seeded = SeededTransport()
     harness.transport = harness.seeded
     harness.status = _FinishingStatus(finish_session)
+    harness.store = SessionStore(harness.status)
     try:
         yield harness
     finally:

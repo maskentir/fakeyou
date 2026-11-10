@@ -73,8 +73,8 @@ class ApiHarness:
         settings.identity.twin_id = SessionId("demo_twin")
         self.settings = settings
         self.transport = RecordingTransport()
-        self.store = SessionStore(settings.paths.record_dir)
         self.status = MemorySessionStatus()
+        self.store = SessionStore(self.status)
         self.app = create_app(
             settings,
             ApiDeps(
@@ -134,8 +134,10 @@ class ApiHarness:
         session_id = meeting_id if meeting_id is not None else uuid4().hex
         payload = {**SESSION_PAYLOAD, "meeting_id": session_id}
         create = SessionCreate.model_validate(payload)
-        self.store.save_new(build_snapshot(create, meeting_id=session_id, at=AT))
-        await self.status.create(session_id, create.owner_id, STATUS_AT)
+        snapshot = build_snapshot(create, meeting_id=session_id, at=AT)
+        await self.status.create(
+            session_id, create.owner_id, STATUS_AT, payload=snapshot.model_dump(mode="json")
+        )
         await self.status.record_phase(
             session_id, PhaseUpdate(phase, STATUS_AT, terminal_reason=terminal_reason)
         )
@@ -163,8 +165,10 @@ async def _seed_foreign_session(api: ApiHarness, meeting_id: str) -> None:
             "twin_id": "other_twin",
         }
     )
-    api.store.save_new(build_snapshot(create, meeting_id=meeting_id, at=AT))
-    await api.status.create(meeting_id, "other_owner", STATUS_AT)
+    snapshot = build_snapshot(create, meeting_id=meeting_id, at=AT)
+    await api.status.create(
+        meeting_id, "other_owner", STATUS_AT, payload=snapshot.model_dump(mode="json")
+    )
 
 
 def _property_names(node: object) -> set[str]:
@@ -189,7 +193,7 @@ async def test_create_freezes_snapshot_and_join_records_the_wish(api: ApiHarness
     assert len(body["snapshot_sha256"]) == 64
     assert "persona" not in body
     assert "path" not in created.text
-    stored = api.store.load(body["meeting_id"])
+    stored = await api.store.load(body["meeting_id"])
     assert stored is not None
     assert stored.snapshot_sha256 == body["snapshot_sha256"]
     assert (await api.post(f"/v1/sessions/{body['meeting_id']}/join")).status_code == 202
@@ -215,7 +219,7 @@ async def test_create_freezes_the_twin_owner_model_into_the_snapshot(api: ApiHar
 
     created = await api.post("/v1/sessions", json=SESSION_PAYLOAD)
 
-    stored = api.store.load(created.json()["meeting_id"])
+    stored = await api.store.load(created.json()["meeting_id"])
     assert stored is not None
     assert api.owner_model.scopes == [TwinScope("demo_owner", "demo_twin")]
     assert stored.owner_model == FrozenOwnerModel.model_validate(
@@ -428,15 +432,15 @@ async def test_a_stopped_session_can_still_be_resumed_to_finish(api: ApiHarness)
     assert resumed.status_code == 202
 
 
-async def test_a_session_whose_snapshot_cannot_be_written_leaves_no_status(
+async def test_a_session_whose_create_fails_leaves_no_status(
     api: ApiHarness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def full_disk(_snapshot: object) -> None:
-        raise OSError("disk full")
+    async def broken_store(*_args: object, **_kwargs: object) -> None:
+        raise OSError("database gone")
 
-    monkeypatch.setattr(api.store, "save_new", full_disk)
+    monkeypatch.setattr(api.status, "create", broken_store)
 
-    with pytest.raises(OSError, match="disk full"):
+    with pytest.raises(OSError, match="database gone"):
         await api.post("/v1/sessions", json={**SESSION_PAYLOAD, "meeting_id": "m-disk"})
 
     assert await api.status.get("m-disk") is None

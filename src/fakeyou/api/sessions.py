@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import json
-import os
 from collections.abc import Mapping
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Protocol, cast
 from uuid import uuid4
 
@@ -26,15 +23,10 @@ from fakeyou.config.identifiers import parse_session_id
 from fakeyou.config.settings import Settings
 from fakeyou.db.owner_model import OwnerModelRepository, TwinScope
 from fakeyou.db.session_status import DesiredState, SessionStatus, SessionStatusRepository
-from fakeyou.foundation.digest import canonical_json_digest
-from fakeyou.persistence.files import write_atomically
-from fakeyou.persistence.layout import MeetingDir
 from fakeyou.persistence.owner_model import FrozenOwnerModel
 
 if TYPE_CHECKING:
     from fakeyou.api.app import ApiDeps
-
-SESSION_FILE_NAME = "session.json"
 
 
 def now_iso() -> str:
@@ -47,56 +39,20 @@ class CommandTransport(Protocol):
     ) -> None: ...
 
 
-def _encode(snapshot: SessionSnapshot) -> bytes:
-    payload = json.dumps(snapshot.model_dump(mode="json"), sort_keys=True, ensure_ascii=True)
-    return (payload + "\n").encode("utf-8")
-
-
-def _payload_digest(snapshot: SessionSnapshot) -> str:
-    payload = snapshot.model_dump(mode="json")
-    payload.pop("snapshot_sha256")
-    return canonical_json_digest(payload)
-
-
 class SessionStore:
-    def __init__(self, record_dir: Path) -> None:
-        self._record_dir = record_dir
+    def __init__(self, repository: SessionStatusRepository) -> None:
+        self._repository = repository
 
-    def _session_path(self, meeting_id: str) -> Path:
-        parsed = parse_session_id(meeting_id, field="meeting_id")
-        return MeetingDir(self._record_dir, parsed).dir / SESSION_FILE_NAME
+    async def load(self, meeting_id: str) -> SessionSnapshot | None:
+        parse_session_id(meeting_id, field="meeting_id")
+        payload = await self._repository.payload(meeting_id)
+        return SessionSnapshot.model_validate(payload) if payload is not None else None
 
-    def save_new(self, snapshot: SessionSnapshot) -> None:
-        path = self._session_path(snapshot.meeting_id)
-        data = _encode(snapshot)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        reservation = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        os.close(reservation)
-        try:
-            write_atomically(path, data)
-        except OSError:
-            path.unlink(missing_ok=True)
-            raise
-
-    def load(self, meeting_id: str) -> SessionSnapshot | None:
-        path = self._session_path(meeting_id)
-        try:
-            raw = path.read_bytes()
-        except FileNotFoundError:
-            return None
-        return SessionSnapshot.model_validate_json(raw)
-
-    def list_for(self, owner_id: str) -> list[SessionSnapshot]:
-        if not self._record_dir.is_dir():
-            return []
-        snapshots: list[SessionSnapshot] = []
-        for entry in sorted(self._record_dir.iterdir()):
-            session_file = entry / SESSION_FILE_NAME
-            if not entry.is_dir() or not session_file.is_file():
-                continue
-            snapshot = SessionSnapshot.model_validate_json(session_file.read_bytes())
-            if snapshot.owner_id == owner_id:
-                snapshots.append(snapshot)
+    async def list_for(self, owner_id: str) -> list[SessionSnapshot]:
+        snapshots = [
+            SessionSnapshot.model_validate(payload)
+            for payload in await self._repository.payloads_for(owner_id)
+        ]
         return sorted(snapshots, key=lambda snapshot: (snapshot.created_at, snapshot.meeting_id))
 
 
@@ -108,11 +64,14 @@ def _deps(request: Request) -> ApiDeps:
     return cast("ApiDeps", request.app.state.deps)
 
 
-def _snapshot_store(request: Request) -> SessionStore:
+async def snapshot_store(
+    request: Request,
+    repository: Annotated[SessionStatusRepository, Depends(session_status)],
+) -> SessionStore:
     factory = _deps(request).snapshot_store
     if factory is not None:
         return cast(SessionStore, factory())
-    return SessionStore(_settings(request).paths.record_dir)
+    return SessionStore(repository)
 
 
 def _command_transport(request: Request) -> CommandTransport:
@@ -137,11 +96,11 @@ def _owner_id(principal: Principal) -> str:
 
 async def _owned_session(
     repository: SessionStatusRepository,
-    request: Request,
+    store: SessionStore,
     meeting_id: str,
     principal: Principal,
 ) -> tuple[SessionSnapshot, SessionStatus]:
-    snapshot = _snapshot_store(request).load(meeting_id)
+    snapshot = await store.load(meeting_id)
     status = await repository.get(meeting_id)
     if snapshot is None or status is None or status.owner_id != _owner_id(principal):
         raise FakeYouError(ErrorCode.API_NOT_FOUND)
@@ -186,6 +145,7 @@ router = APIRouter(prefix="/v1/sessions", tags=["sessions"])
 _Owner = Annotated[Principal, Depends(require_owner)]
 _Repository = Annotated[SessionStatusRepository, Depends(session_status)]
 _OwnerModel = Annotated[OwnerModelRepository, Depends(owner_model)]
+_Snapshots = Annotated[SessionStore, Depends(snapshot_store)]
 
 
 @router.post("", status_code=201, response_model=SessionView)
@@ -212,16 +172,11 @@ async def start_session(
         keys_supplied=bool(overrides),
         owner_model=FrozenOwnerModel.of(frozen),
     )
-    status = await repository.create(meeting_id, owner_id, status_now())
+    status = await repository.create(
+        meeting_id, owner_id, status_now(), payload=snapshot.model_dump(mode="json")
+    )
     if status is None:
         raise _refuse_existing(await repository.get(meeting_id), meeting_id)
-    try:
-        _snapshot_store(request).save_new(snapshot)
-    except OSError as error:
-        await repository.discard(meeting_id)
-        if isinstance(error, FileExistsError):
-            raise _refuse_existing(None, meeting_id) from None
-        raise
     if overrides:
         await stage_overrides(_command_transport(request), meeting_id, request.headers)
     return _view(snapshot, status)
@@ -231,10 +186,10 @@ async def start_session(
 async def join_session(
     meeting_id: str,
     principal: _Owner,
-    request: Request,
     repository: _Repository,
+    store: _Snapshots,
 ) -> SessionView:
-    snapshot, status = await _owned_session(repository, request, meeting_id, principal)
+    snapshot, status = await _owned_session(repository, store, meeting_id, principal)
     if status.terminal or status.desired_state == "joined":
         raise _refuse_existing(status, meeting_id)
     wanted = await _desire(repository, meeting_id, "joined")
@@ -245,11 +200,11 @@ async def join_session(
 async def stop_session(
     meeting_id: str,
     principal: _Owner,
-    request: Request,
     response: Response,
     repository: _Repository,
+    store: _Snapshots,
 ) -> SessionView:
-    snapshot, status = await _owned_session(repository, request, meeting_id, principal)
+    snapshot, status = await _owned_session(repository, store, meeting_id, principal)
     if status.terminal:
         response.status_code = 200
         return _view(snapshot, status)
@@ -265,10 +220,10 @@ async def stop_session(
 async def resume_session(
     meeting_id: str,
     principal: _Owner,
-    request: Request,
     repository: _Repository,
+    store: _Snapshots,
 ) -> SessionView:
-    snapshot, status = await _owned_session(repository, request, meeting_id, principal)
+    snapshot, status = await _owned_session(repository, store, meeting_id, principal)
     if status.terminal:
         raise FakeYouError(ErrorCode.MEETING_ALREADY_ENDED, meeting_id=meeting_id)
     if status.desired_state == "created":
@@ -280,24 +235,23 @@ async def resume_session(
 async def read_session(
     meeting_id: str,
     principal: _Owner,
-    request: Request,
     repository: _Repository,
+    store: _Snapshots,
 ) -> SessionView:
-    return _view(*await _owned_session(repository, request, meeting_id, principal))
+    return _view(*await _owned_session(repository, store, meeting_id, principal))
 
 
 @router.get("", response_model=list[SessionView])
 async def list_sessions(
     principal: _Owner,
-    request: Request,
     repository: _Repository,
+    store: _Snapshots,
 ) -> list[SessionView]:
     owner_id = _owner_id(principal)
     statuses = await repository.list_for(owner_id)
-    store = _snapshot_store(request)
     views: list[SessionView] = []
     for status in statuses:
-        snapshot = store.load(status.meeting_id)
+        snapshot = await store.load(status.meeting_id)
         if snapshot is not None:
             views.append(_view(snapshot, status))
     return views
