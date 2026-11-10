@@ -3,16 +3,18 @@ from collections.abc import Callable
 from typing import Any, cast
 
 import pytest
+from procrastinate.testing import InMemoryConnector
 from pydantic import SecretStr
 
 import fakeyou.worker.__main__ as worker_main
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import GoogleReply, ReasoningEffort, Settings
+from fakeyou.db.jobs import build_job_queue
 from fakeyou.transport.streams import StreamTransport
 from fakeyou.worker.consumer import WorkerConsumer
 from fakeyou.worker.debrief import DebriefConsumer
 from fakeyou.worker.ingestion import IngestionConsumer
-from fakeyou.worker.reembed import ReembedConsumer
+from fakeyou.worker.reembed import ReembedWorker
 from tests._session_status_fakes import MemorySessionStatus
 
 
@@ -55,6 +57,9 @@ async def _started_roles(
     monkeypatch.setattr(worker_main, "verify_session_schema", schema_is_current)
     monkeypatch.setattr(worker_main, "create_session_status", lambda _settings: _ClosableStatus())
     monkeypatch.setattr(StreamTransport, "from_settings", lambda _settings: _ClosableTransport())
+    monkeypatch.setattr(
+        worker_main, "create_job_queue", lambda _settings: build_job_queue(InMemoryConnector())
+    )
     await asyncio.wait_for(worker_main.serve(role), timeout=10)
     return started
 
@@ -84,10 +89,10 @@ async def test_debrief_role_runs_only_the_debrief_consumer(
 
 
 @pytest.mark.usefixtures("settings")
-async def test_reembed_role_runs_only_the_reembed_consumer(
+async def test_reembed_role_runs_only_the_reembed_worker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    assert await _started_roles(monkeypatch, "reembed") == [ReembedConsumer]
+    assert await _started_roles(monkeypatch, "reembed") == [ReembedWorker]
 
 
 @pytest.mark.parametrize("role", ["sessions", "ingestion", "debrief", "reembed"])

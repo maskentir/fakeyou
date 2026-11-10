@@ -15,7 +15,7 @@ from fakeyou.persistence.ingestion_status import (
     write_status,
 )
 from fakeyou.persistence.layout import MeetingDir
-from fakeyou.transport.schemas import INGESTION_STREAM, REEMBED_STREAM
+from fakeyou.transport.schemas import INGESTION_STREAM
 from tests.test_api_sessions import (
     AT,
     SESSION_PAYLOAD,
@@ -328,7 +328,7 @@ async def test_forget_meeting_rejects_an_unreadable_keep_record(api: MemoryHarne
     assert response.status_code == 400
 
 
-async def test_reembedding_queues_a_job_on_the_amended_stream(api: MemoryHarness) -> None:
+async def test_reembedding_queues_a_job_in_postgres(api: MemoryHarness) -> None:
     api.seed_twin("m-1")
 
     response = await api.post("/v1/twins/demo_twin/reembeddings", json={})
@@ -336,13 +336,25 @@ async def test_reembedding_queues_a_job_on_the_amended_stream(api: MemoryHarness
     assert response.status_code == 202
     body = response.json()
     assert body["kind"] == "reembed"
-    stream, fields = api.transport.jobs[-1]
-    assert stream == REEMBED_STREAM
-    assert fields["type"] == "reembed_job"
-    assert fields["twin_id"] == "demo_twin"
-    assert fields["owner_id"] == "demo_owner"
-    assert (REEMBED_STREAM, body["job_id"]) in api.transport.entries
     assert body["status"] == "queued"
+    queued = await api.jobs.fetch(int(body["job_id"]))
+    assert queued is not None
+    assert queued.task == "reembed_twin"
+    assert queued.args == {"owner_id": "demo_owner", "twin_id": "demo_twin"}
+
+    polled = (await api.get(f"/v1/jobs/{body['job_id']}")).json()
+    assert polled["kind"] == "reembed"
+    assert polled["status"] == "queued"
+    assert polled["completed"] is False
+
+
+async def test_a_queued_job_of_another_owner_is_not_found(api: MemoryHarness) -> None:
+    api.seed_twin("m-1")
+    queued = await api.jobs.defer_reembed(owner_id="other_owner", twin_id="other_twin")
+
+    response = await api.get(f"/v1/jobs/{queued}")
+
+    assert response.status_code == 404
 
 
 async def test_reembedding_for_another_twin_is_not_found(api: MemoryHarness) -> None:

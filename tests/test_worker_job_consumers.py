@@ -3,32 +3,29 @@ from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import cast
 
-import pytest
+from procrastinate.testing import InMemoryConnector
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
+from fakeyou.db.jobs import JobQueue, build_job_queue
 from fakeyou.debrief.debrief_service import DebriefOutcome
 from fakeyou.memory.operator_access import OperatorAccess
-from fakeyou.transport.schemas import DEBRIEF_STREAM, REEMBED_STREAM, encode_reembed_job
+from fakeyou.transport.schemas import DEBRIEF_STREAM
 from fakeyou.transport.streams import PendingDelivery, StreamTransport
 from fakeyou.worker.consumer import SnapshotStore
 from fakeyou.worker.debrief import (
-    DEBRIEF_GROUP,
     DebriefConsumer,
     DebriefDeps,
     DebriefHandler,
     DebriefJob,
-    parse_debrief_job,
 )
 from fakeyou.worker.reembed import (
-    REEMBED_GROUP,
-    ReembedConsumer,
     ReembedDeps,
     ReembedHandler,
+    ReembedWorker,
     TwinDirectory,
     TwinSnapshot,
-    parse_reembed_job,
 )
 from tests._persistence_fakes import RecordingJournal
 
@@ -39,9 +36,6 @@ DEBRIEF_JOB = {
     "meeting_id": "m1",
     "force": "false",
 }
-REEMBED_JOB = encode_reembed_job(
-    at="2026-10-18T10:00:00+00:00", owner_id="owner-a", twin_id="twin-a"
-)
 
 
 class StreamDouble:
@@ -144,187 +138,93 @@ def _debrief_consumer(
     )
 
 
-def _reembed_consumer(
+def _reembed_worker(
     settings: Settings,
     stream: StreamDouble,
     handler: ReembedHandler,
     journal: RecordingJournal | None = None,
-) -> ReembedConsumer:
-    return ReembedConsumer(
+) -> tuple[ReembedWorker, JobQueue]:
+    queue = build_job_queue(InMemoryConnector())
+    worker = ReembedWorker(
         ReembedDeps(
             settings=settings,
             transport=cast(StreamTransport, stream),
             store=cast(TwinDirectory, EmptyStore()),
             shutdown=asyncio.Event(),
-            worker_id="worker-a",
             handler=handler,
             journal=journal,
-        )
+        ),
+        queue,
     )
+    return worker, queue
 
 
-def test_reembed_job_payload_matches_the_frozen_amendment() -> None:
-    assert REEMBED_JOB == {
-        "v": "1",
-        "type": "reembed_job",
-        "at": "2026-10-18T10:00:00+00:00",
-        "owner_id": "owner-a",
-        "twin_id": "twin-a",
-    }
-    assert REEMBED_STREAM == "fakeyou:jobs:reembed"
-    assert REEMBED_GROUP == "reembed-workers"
-    assert DEBRIEF_GROUP == "debrief-workers"
-
-
-def test_reembed_job_rejects_an_unknown_type() -> None:
-    with pytest.raises(ValueError, match="unknown reembed job type"):
-        encode_reembed_job(at="now", owner_id="o", twin_id="t", type="rebuild_job")
-
-
-def test_parse_reembed_job_reads_owner_and_twin() -> None:
-    job = parse_reembed_job(REEMBED_JOB)
-
-    assert (job.owner_id, job.twin_id) == ("owner-a", "twin-a")
-
-
-@pytest.mark.parametrize("missing", ["owner_id", "twin_id"])
-def test_parse_reembed_job_rejects_a_payload_without_an_identity(missing: str) -> None:
-    fields = {key: value for key, value in REEMBED_JOB.items() if key != missing}
-
-    with pytest.raises(ValueError, match=f"unreadable {missing}"):
-        parse_reembed_job(fields)
-
-
-@pytest.mark.parametrize("force", ["true", "false"])
-def test_parse_debrief_job_reads_force_from_the_frozen_string(force: str) -> None:
-    assert parse_debrief_job({**DEBRIEF_JOB, "force": force}).force == (force == "true")
-
-
-@pytest.mark.parametrize("meeting_id", ["", "not a id", "m-1/x"])
-def test_parse_debrief_job_rejects_an_unreadable_meeting(meeting_id: str) -> None:
-    with pytest.raises(ValueError, match="unreadable meeting id"):
-        parse_debrief_job({**DEBRIEF_JOB, "meeting_id": meeting_id})
-
-
-async def test_debrief_consumer_acks_only_after_the_handler_returns(
-    settings: Settings,
-) -> None:
-    stream = StreamDouble()
-    settled: list[str] = []
-
-    async def handler(
-        job: DebriefJob, *, ack: Callable[[], Awaitable[None]], **_kwargs: object
-    ) -> DebriefOutcome:
-        settled.append(job.meeting_id)
-        await ack()
-        return _outcome(job.meeting_id)
-
-    stream.seed(DEBRIEF_STREAM, "0-0", DEBRIEF_JOB)
-
-    await _debrief_consumer(settings, stream, handler).run_once()
-
-    assert settled == ["m1"]
-    assert stream.acked == [(DEBRIEF_STREAM, DEBRIEF_GROUP, "0-0")]
-    assert stream.events == []
-
-
-async def test_debrief_consumer_never_acks_a_failing_handler(settings: Settings) -> None:
-    stream = StreamDouble()
-
-    async def handler(
-        job: DebriefJob, *, ack: Callable[[], Awaitable[None]], **_kwargs: object
-    ) -> DebriefOutcome:
-        del job, ack
-        raise FakeYouError(ErrorCode.DEBRIEF_FAILED, reason="no such note")
-
-    stream.seed(DEBRIEF_STREAM, "0-0", DEBRIEF_JOB)
-
-    await _debrief_consumer(settings, stream, handler).run_once()
-
-    assert stream.acked == []
-    assert stream.details == ["debrief_job_failed"]
-
-
-async def test_debrief_consumer_faults_an_unparseable_entry_without_acking(
-    settings: Settings,
-) -> None:
-    stream = StreamDouble()
-    settled: list[str] = []
-
-    async def handler(job: DebriefJob, **_kwargs: object) -> DebriefOutcome:
-        settled.append(job.meeting_id)
-        return _outcome(job.meeting_id)
-
-    stream.seed(DEBRIEF_STREAM, "0-0", {**DEBRIEF_JOB, "force": "maybe"})
-
-    await _debrief_consumer(settings, stream, handler).run_once()
-
-    assert settled == []
-    assert stream.acked == []
-    assert stream.details == ["debrief_job_invalid"]
-
-
-async def test_reembed_consumer_runs_the_twin_and_acks_it(settings: Settings) -> None:
+async def test_reembed_worker_runs_the_twin_from_the_job_queue(settings: Settings) -> None:
     stream = StreamDouble()
     runs: list[str] = []
 
-    async def handler(
-        access: OperatorAccess, *, ack: Callable[[], Awaitable[None]], **_kwargs: object
-    ) -> str:
+    async def handler(access: OperatorAccess, **_kwargs: object) -> str:
         runs.append(access.identity.twin_id or "")
-        await ack()
         return "twin-a"
 
-    stream.seed(REEMBED_STREAM, "0-0", REEMBED_JOB)
+    worker, queue = _reembed_worker(settings, stream, handler)
+    job_id = await queue.defer_reembed(owner_id="owner-a", twin_id="twin-a")
 
-    await _reembed_consumer(settings, stream, handler).run_once()
+    await worker.run_once()
 
     assert runs == ["twin-a"]
-    assert stream.acked == [(REEMBED_STREAM, REEMBED_GROUP, "0-0")]
+    fetched = await queue.fetch(job_id)
+    assert fetched is not None
+    assert fetched.status == "succeeded"
     assert stream.events == []
 
 
-async def test_reembed_consumer_drops_a_second_job_for_the_same_twin(
+async def test_reembed_jobs_for_the_same_twin_never_run_at_the_same_time(
     settings: Settings,
 ) -> None:
     stream = StreamDouble()
-    runs: list[str] = []
+    active: list[int] = []
+    peak = 0
 
-    async def handler(
-        access: OperatorAccess, *, ack: Callable[[], Awaitable[None]], **_kwargs: object
-    ) -> str:
-        runs.append(access.identity.twin_id or "")
-        await asyncio.sleep(0)
-        await ack()
-        return "twin-a"
+    async def handler(access: OperatorAccess, **_kwargs: object) -> str:
+        nonlocal peak
+        active.append(1)
+        peak = max(peak, len(active))
+        await asyncio.sleep(0.01)
+        active.pop()
+        return access.identity.twin_id or ""
 
-    stream.seed(REEMBED_STREAM, "0-0", REEMBED_JOB)
-    stream.seed(REEMBED_STREAM, "0-1", REEMBED_JOB)
-    consumer = _reembed_consumer(settings, stream, handler)
+    worker, queue = _reembed_worker(settings, stream, handler)
+    first = await queue.defer_reembed(owner_id="owner-a", twin_id="twin-a")
+    second = await queue.defer_reembed(owner_id="owner-a", twin_id="twin-a")
 
-    await asyncio.gather(consumer.run_once(), consumer.run_once())
+    await worker.run_once()
 
-    assert runs == ["twin-a"]
-    assert [entry for _stream, _group, entry in stream.acked] == ["0-0"]
+    assert peak == 1
+    for job_id in (first, second):
+        fetched = await queue.fetch(job_id)
+        assert fetched is not None
+        assert fetched.status == "succeeded"
 
 
-async def test_reembed_consumer_faults_and_does_not_ack_a_failing_run(
+async def test_reembed_worker_faults_and_keeps_a_failing_run_for_retry(
     settings: Settings,
 ) -> None:
     stream = StreamDouble()
 
-    async def handler(
-        access: OperatorAccess, *, ack: Callable[[], Awaitable[None]], **_kwargs: object
-    ) -> str:
-        del access, ack
+    async def handler(access: OperatorAccess, **_kwargs: object) -> str:
+        del access
         raise FakeYouError(ErrorCode.MEMORY_FORGET_SESSION_LIVE, meeting_id="m1")
 
     journal = RecordingJournal()
-    stream.seed(REEMBED_STREAM, "0-0", REEMBED_JOB)
+    worker, queue = _reembed_worker(settings, stream, handler, journal)
+    job_id = await queue.defer_reembed(owner_id="owner-a", twin_id="twin-a")
 
-    await _reembed_consumer(settings, stream, handler, journal).run_once()
+    await worker.run_once()
 
-    assert stream.acked == []
+    fetched = await queue.fetch(job_id)
+    assert fetched is not None
+    assert fetched.status == "todo"
     assert [row["detail"] for row in journal.events("reembed_failed")] == ["reembed_job_failed"]
 
 

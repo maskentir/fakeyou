@@ -3249,6 +3249,19 @@ salinan field.
 Gate: job yang workernya dimatikan diambil ulang; Redis hanya membawa event
 dan secret sekali pakai.
 
+Status (D4a): fondasi + reembed. Skema procrastinate masuk migrasi
+`0006`; `db/jobs.py` menyediakan `JobQueue`. Job reembed didefer API ke
+Postgres dan dijalankan `ReembedWorker` (lock per twin menggantikan
+penolakan job konkuren, retry maks 5 dengan backoff menggantikan batas
+delivery + dead-letter; journal `reembed_failed` dipertahankan).
+Pembacaan status job reembed kini benar-benar bekerja dari baris job —
+sebelumnya `/v1/jobs/{id}` hanya mengenal entry stream ingestion
+sehingga polling CLI reembed selalu 404. Stream reembed Redis dan
+`ReembedConsumer` dihapus; override kunci sekali pakai tetap lewat
+Redis. Sisa D4: debrief, ingestion, lalu hapus machinery stream job
+(`publish_job`, `pending_deliveries`, `claim_entry`, `touch_entry`,
+`unacked_entries`, `read_group`).
+
 ## Urutan PR
 
 Urutan mengikuti ketergantungan: A membuat sesi bisa divalidasi, B membuat

@@ -9,6 +9,7 @@ from types import ModuleType
 from typing import Protocol, cast
 
 from fakeyou.config.settings import Settings
+from fakeyou.db.jobs import create_job_queue
 from fakeyou.db.session_status import create_session_status
 from fakeyou.orchestration.assembly import stop_signal_handlers
 from fakeyou.orchestration.join_types import JoinPorts
@@ -18,7 +19,7 @@ from fakeyou.transport.streams import StreamTransport
 from fakeyou.worker.consumer import SnapshotStore, WorkerConsumer, WorkerDeps
 from fakeyou.worker.debrief import DebriefConsumer, DebriefDeps, debrief_models
 from fakeyou.worker.ingestion import IngestionConsumer, IngestionDeps
-from fakeyou.worker.reembed import ReembedConsumer, ReembedDeps, TwinDirectory
+from fakeyou.worker.reembed import ReembedDeps, ReembedWorker, TwinDirectory
 
 SESSIONS_ROLE = "sessions"
 INGESTION_ROLE = "ingestion"
@@ -147,15 +148,17 @@ def role_consumers(role: str, shared: _Shared) -> list[LongRunning]:
             )
         ]
     if role == REEMBED_ROLE:
+        queue = create_job_queue(shared.settings)
+        shared.exits.push_async_callback(queue.close)
         return [
-            ReembedConsumer(
+            ReembedWorker(
                 ReembedDeps(
                     settings=shared.settings,
                     transport=shared.transport,
                     store=shared.store,
                     shutdown=shared.shutdown,
-                    worker_id=shared.worker_id,
-                )
+                ),
+                queue,
             )
         ]
     raise ValueError(f"unknown worker role: {role!r}")
