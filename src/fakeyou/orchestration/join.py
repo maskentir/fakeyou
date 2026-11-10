@@ -156,6 +156,7 @@ def _open_join_resources(
             journal_path(prepared.request.settings.paths.journal_dir, prepared.config.meeting_id)
         ),
     )
+    journal.trace_id = prepared.request.trace_id
     resources.callback(journal.close)
     faults = FaultReporter(journal=journal)
     ingest_requested, ingestion_outcome, record_error = _write_pending_status(prepared, faults)

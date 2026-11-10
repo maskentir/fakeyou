@@ -23,6 +23,7 @@ from fakeyou.config.identifiers import parse_session_id
 from fakeyou.config.settings import Settings
 from fakeyou.db.owner_model import OwnerModelRepository, TwinScope
 from fakeyou.db.session_status import DesiredState, SessionStatus, SessionStatusRepository
+from fakeyou.observability.trace import mint_trace_id, trace_id_from
 from fakeyou.persistence.owner_model import FrozenOwnerModel
 
 if TYPE_CHECKING:
@@ -116,6 +117,7 @@ def _view(snapshot: SessionSnapshot, status: SessionStatus) -> SessionView:
         owner_id=snapshot.owner_id,
         twin_id=snapshot.twin_id,
         created_at=snapshot.created_at,
+        trace_id=snapshot.trace_id,
         terminal_reason=status.terminal_reason,
         detail=status.detail,
     )
@@ -171,7 +173,7 @@ async def start_session(
         at=_now(request),
         keys_supplied=bool(overrides),
         owner_model=FrozenOwnerModel.of(frozen),
-    )
+    ).with_trace_id(trace_id_from(request.headers) or mint_trace_id())
     status = await repository.create(
         meeting_id, owner_id, status_now(), payload=snapshot.model_dump(mode="json")
     )

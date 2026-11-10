@@ -52,6 +52,17 @@ def test_record_carries_meeting_id_timestamp_and_fields() -> None:
     assert row["duration_ms"] == 12.5
     assert row["chars"] == 5
     assert row["bytes_out"] == 480
+    assert "trace_id" not in row
+
+
+def test_record_carries_the_trace_id_once_set() -> None:
+    lines: list[str] = []
+    journal = Journal("meeting-1", emit=lines.append)
+    journal.trace_id = "4bf92f3577b34da6a3ce929d0e0e4736"
+
+    journal.record("session_started", source="runtime")
+
+    assert json.loads(lines[0])["trace_id"] == "4bf92f3577b34da6a3ce929d0e0e4736"
 
 
 def test_raising_emit_is_swallowed() -> None:

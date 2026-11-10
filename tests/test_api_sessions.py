@@ -185,6 +185,29 @@ def _property_names(node: object) -> set[str]:
     return names
 
 
+async def test_create_carries_the_inbound_trace_and_mints_one_when_absent(
+    api: ApiHarness,
+) -> None:
+    trace_id = "4bf92f3577b34da6a3ce929d0e0e4736"
+    carried = await api.post(
+        "/v1/sessions",
+        json=SESSION_PAYLOAD,
+        headers={"traceparent": f"00-{trace_id}-00f067aa0ba902b7-01"},
+    )
+    minted = await api.post(
+        "/v1/sessions", json={**SESSION_PAYLOAD, "meeting_id": "brief-demo-1004"}
+    )
+
+    assert carried.json()["trace_id"] == trace_id
+    stored = await api.store.load(carried.json()["meeting_id"])
+    assert stored is not None
+    assert stored.trace_id == trace_id
+    minted_id = minted.json()["trace_id"]
+    assert isinstance(minted_id, str)
+    assert len(minted_id) == 32
+    assert minted_id != trace_id
+
+
 async def test_create_freezes_snapshot_and_join_records_the_wish(api: ApiHarness) -> None:
     created = await api.post("/v1/sessions", json=SESSION_PAYLOAD)
     assert created.status_code == 201
@@ -330,6 +353,7 @@ async def test_session_responses_carry_no_paths_or_settings(api: ApiHarness) -> 
         "owner_id",
         "twin_id",
         "created_at",
+        "trace_id",
         "terminal_reason",
         "detail",
     }

@@ -3336,7 +3336,21 @@ Manifest `deploy/k8s/` (namespace, ServiceAccount + Role jobs
 create/list/get, Deployment launcher) tervalidasi parse + Job dict
 lolos deserialisasi model client resmi; belum ada cluster untuk
 smoke (kind tidak berjalan lokal) dan gate dua meeting bersamaan +
-kill pod menunggu sesi live. Sisa D2: D2d trace.
+kill pod menunggu sesi live.
+
+Status (D2d): selesai untuk propagasi konteks. `observability/trace.py`
+memakai API propagasi OpenTelemetry (W3C traceparent): API create
+menerima `traceparent` masuk atau mencetak trace id baru, disimpan di
+snapshot (`with_trace_id` menghitung ulang digest) dan diekspos di
+`SessionView`. Worker membawa trace id snapshot ke `JoinRequest`,
+journal sesi mencap `trace_id` di setiap baris, event sesi yang
+dipublish consumer ikut membawa `trace_id`, dan launcher menaruh
+`TRACEPARENT` (span baru, trace sama) di env Job. Fallback membaca
+env ambient di worker sengaja ditolak (snapshot otoritatif; env
+proses bisa bocor dari konteks lain). Tidak ada exporter/collector
+OTel di slice ini — latency lintas proses dibaca dari journal
+bertanda trace yang sama. Dengan ini D2 tuntas di kode; gate live
+(dua pod bersamaan, kill pod, MinIO asli) tetap terbuka.
 
 ### D3: Config yang menyusut
 

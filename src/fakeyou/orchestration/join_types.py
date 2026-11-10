@@ -41,6 +41,7 @@ class JoinRequest:
     resume: bool = False
     on_phase: Callable[[PublicPhase], None] | None = None
     attempt_id: str = field(default_factory=lambda: uuid4().hex)
+    trace_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

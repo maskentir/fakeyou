@@ -16,6 +16,7 @@ from kubernetes.client.exceptions import ApiException
 from fakeyou.config.settings import Settings
 from fakeyou.db.session_status import SessionStatus, SessionStatusRepository
 from fakeyou.observability.faults import capture_error
+from fakeyou.observability.trace import TRACEPARENT_ENV, is_trace_id, traceparent_for
 from fakeyou.worker.consumer import SESSION_LEASE_SECONDS
 from fakeyou.worker.status_writer import StatusWriter
 
@@ -102,6 +103,9 @@ def build_job(
     }
     if env_from:
         container["envFrom"] = env_from
+    trace_id = payload.get("trace_id") if payload is not None else None
+    if isinstance(trace_id, str) and is_trace_id(trace_id):
+        container["env"] = [{"name": TRACEPARENT_ENV, "value": traceparent_for(trace_id)}]
     return {
         "apiVersion": "batch/v1",
         "kind": "Job",
