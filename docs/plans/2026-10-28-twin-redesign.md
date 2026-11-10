@@ -3267,6 +3267,18 @@ meeting, retry maks 5); `DebriefWorker` menjalankan handler yang sama
 dan fault tetap diterbitkan sebagai event `fault` di stream meeting.
 Stream debrief Redis, `DebriefConsumer`, dan payload beku debrief
 dihapus. Sisa D4: ingestion, lalu hapus machinery stream job.
+Status (D4c): ingestion menutup migrasi. `IngestionWorker` menjalankan
+handler yang sama di antrean Postgres (lock per meeting, retry maks 5
+pengiriman); status job tetap dibaca dari file status ingestion
+lewat `settled_job.id` yang kini id job Postgres. Sweep startup
+mendefer ulang meeting `pending` tanpa job antre. Machinery stream
+job di `StreamTransport` dihapus seluruhnya (`publish_job`,
+group/pending/claim/touch/ack/read_entry); Redis kini hanya membawa
+event meeting dan override kunci sekali pakai, sesuai gate. Temuan
+saat migrasi: `RetryStrategy.max_attempts` menghitung retry, bukan
+total eksekusi, jadi batas 5 pengiriman dipetakan ke
+`max_attempts = 4`; `context` task adalah argumen posisional pertama
+dengan `pass_context=True`.
 
 ## Urutan PR
 

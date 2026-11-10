@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 
 import pytest
+from procrastinate import RetryStrategy
 from procrastinate.testing import InMemoryConnector
 from redis.asyncio import Redis
 from redis.exceptions import ConnectionError as RedisConnectionError
@@ -19,7 +20,7 @@ from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.session import SessionConfig, SessionResult
-from fakeyou.db.jobs import build_job_queue
+from fakeyou.db.jobs import INGEST_QUEUE, INGEST_TASK, QueuedJob, build_job_queue
 from fakeyou.db.session_status import DesiredState, PhaseUpdate, SessionStatus
 from fakeyou.foundation.taxonomy import PublicPhase, TerminalReason
 from fakeyou.memory.ingest_job import IngestionJob, handle_ingestion_job
@@ -39,7 +40,6 @@ from fakeyou.persistence.ingestion_status import (
 )
 from fakeyou.persistence.layout import MeetingDir, meeting_profile_dir
 from fakeyou.persistence.owner_model import FrozenOwnerModel
-from fakeyou.transport.schemas import INGESTION_STREAM, encode_ingestion_job
 from fakeyou.transport.streams import StreamTransport
 from fakeyou.worker.__main__ import run_consumers, verify_boot_dependencies
 from fakeyou.worker.consumer import (
@@ -52,10 +52,9 @@ from fakeyou.worker.ingestion import (
     DEAD_LETTER_DETAIL,
     FAILED_JOB_DETAIL,
     INGESTION_DELIVERY_LIMIT,
-    INGESTION_GROUP,
     INVALID_JOB_DETAIL,
-    IngestionConsumer,
     IngestionDeps,
+    IngestionWorker,
 )
 from tests._session_status_fakes import MemorySessionStatus
 
@@ -732,7 +731,6 @@ class IngestionHandlerDouble:
         self.record_dir = record_dir
         self.log = log
         self.calls: list[tuple[IngestionJob, OperatorAccess]] = []
-        self.acks = True
         self.failure: Exception | None = None
         self.report: FakeYouError | None = None
         self.release: asyncio.Event | None = None
@@ -743,7 +741,6 @@ class IngestionHandlerDouble:
         *,
         access: OperatorAccess,
         ports: IngestPorts,
-        ack: Callable[[], Awaitable[None]],
     ) -> IngestSummary:
         self.calls.append((job, access))
         if self.release is not None:
@@ -764,10 +761,7 @@ class IngestionHandlerDouble:
             ),
         )
         self.log.append("status")
-        summary = _summary(job.meeting_id, state="completed", completed=True, stored=True)
-        if self.acks:
-            await ack()
-        return summary
+        return _summary(job.meeting_id, state="completed", completed=True, stored=True)
 
 
 class IngestionHarness:
@@ -778,21 +772,24 @@ class IngestionHarness:
         self.store = SessionStore(settings.paths.record_dir)
         self.handler = IngestionHandlerDouble(settings.paths.record_dir, self.client.log)
         self.shutdown = asyncio.Event()
+        self.jobs_queue = build_job_queue(InMemoryConnector())
         self.consumer = self.build()
 
-    def build(self, **overrides: Any) -> IngestionConsumer:
+    def build(self, **overrides: Any) -> IngestionWorker:
         values: dict[str, Any] = {
             "settings": self.settings,
             "transport": self.transport,
             "store": self.store,
             "open_memory": unused_memory,
             "shutdown": self.shutdown,
-            "worker_id": "worker-a",
             "handler": self.handler,
-            "reconnect_pause_seconds": 0.0,
             **overrides,
         }
-        return IngestionConsumer(IngestionDeps(**values))
+        return IngestionWorker(
+            IngestionDeps(**values),
+            self.jobs_queue,
+            retry=RetryStrategy(max_attempts=INGESTION_DELIVERY_LIMIT - 1),
+        )
 
     def seed(self, meeting_id: str) -> PersonaProfile:
         persona = PersonaProfile.model_validate(PERSONA_DATA)
@@ -814,20 +811,29 @@ class IngestionHarness:
         )
 
     async def submit(self, meeting: str, kind: str = "ingest", **overrides: str) -> str:
-        fields = {**encode_ingestion_job(meeting_id=meeting, kind="ingest", at=AT), **overrides}
-        fields["kind"] = kind
-        return await self.transport.publish_job(INGESTION_STREAM, fields)
+        await self.jobs_queue.open()
+        task = self.jobs_queue.app.configure_task(
+            INGEST_TASK, queue=INGEST_QUEUE, lock=f"ingest:{meeting}"
+        )
+        job_id = await task.defer_async(meeting_id=overrides.get("meeting_id", meeting), kind=kind)
+        return str(job_id)
 
-    def pending(self) -> list[PendingEntry]:
-        return self.client.pending_for(INGESTION_STREAM, INGESTION_GROUP)
+    async def pending(self) -> list[QueuedJob]:
+        queued = await self.jobs_queue.jobs_for(INGEST_TASK)
+        return [job for job in queued if job.status in {"todo", "doing"}]
 
     def recorded(self, meeting_id: str) -> tuple[str, str | None, SettledJob | None] | None:
         path = MeetingDir(self.settings.paths.record_dir, SessionId(meeting_id)).ingestion
         status = read_status(path)
         return None if status is None else (status.status, status.reason, status.settled_job)
 
-    def jobs(self) -> list[dict[str, str]]:
-        return [fields for _entry_id, fields in self.client.streams.get(INGESTION_STREAM, [])]
+    async def jobs(self) -> list[QueuedJob]:
+        return await self.jobs_queue.jobs_for(INGEST_TASK)
+
+    async def make_due(self) -> None:
+        connector = cast(InMemoryConnector, self.jobs_queue.app.connector)
+        for job in connector.jobs.values():
+            job["scheduled_at"] = None
 
 
 @pytest.fixture
@@ -835,18 +841,16 @@ def ingestion(settings: Settings) -> IngestionHarness:
     return IngestionHarness(settings)
 
 
-async def test_ingestion_job_is_acked_only_by_the_handler_after_its_status(
+async def test_ingestion_job_succeeds_once_its_status_is_persisted(
     ingestion: IngestionHarness,
 ) -> None:
     persona = ingestion.seed("m-1")
     entry_id = await ingestion.submit("m-1")
 
-    summary = await ingestion.consumer.run_once()
+    await ingestion.consumer.run_once()
 
-    assert summary is not None
-    assert summary.succeeded is True
-    assert ingestion.client.log == ["status", f"ack:{entry_id}"]
-    assert ingestion.pending() == []
+    assert ingestion.client.log == ["status"]
+    assert await ingestion.pending() == []
     [(job, access)] = ingestion.handler.calls
     assert job == IngestionJob(meeting_id="m-1", kind="ingest", job_id=entry_id)
     assert access.identity.owner_id == "owner-1"
@@ -856,20 +860,28 @@ async def test_ingestion_job_is_acked_only_by_the_handler_after_its_status(
     assert ingestion.client.events == []
 
 
-async def test_handler_that_does_not_ack_leaves_the_entry_pending(
+async def test_unstored_summary_is_retried_then_dead_lettered(
     ingestion: IngestionHarness,
 ) -> None:
     ingestion.seed("m-1")
     entry_id = await ingestion.submit("m-1")
-    ingestion.handler.acks = False
+    ingestion.handler.report = FakeYouError(
+        ErrorCode.INGESTION_STATUS_CORRUPT, path="ingestion.json", reason="bad json"
+    )
 
     await ingestion.consumer.run_once()
 
-    assert ingestion.client.log == ["status"]
-    assert [(entry.entry_id, entry.deliveries) for entry in ingestion.pending()] == [(entry_id, 1)]
+    assert ingestion.client.log == []
+    assert await ingestion.pending() == []
+    fetched = await ingestion.jobs_queue.fetch(int(entry_id))
+    assert fetched is not None
+    assert fetched.status == "failed"
+    recorded = ingestion.recorded("m-1")
+    assert recorded is not None
+    assert recorded[0:2] == ("failed", DEAD_LETTER_DETAIL)
 
 
-async def test_terminal_unsuccessful_summary_is_acked_without_reading_as_success(
+async def test_terminal_unsuccessful_summary_settles_without_reading_as_success(
     ingestion: IngestionHarness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ingestion.seed("m-1")
@@ -889,27 +901,27 @@ async def test_terminal_unsuccessful_summary_is_acked_without_reading_as_success
     monkeypatch.setattr("fakeyou.memory.ingest_job.run_recorded_ingest", failed_ingest)
     consumer = ingestion.build(handler=handle_ingestion_job)
 
-    summary = await consumer.run_once()
+    await consumer.run_once()
 
-    assert summary is not None
-    assert summary.state == "failed"
-    assert summary.succeeded is False
-    assert ingestion.client.log == ["status", f"ack:{entry_id}"]
-    assert ingestion.pending() == []
+    assert ingestion.client.log == ["status"]
+    assert await ingestion.pending() == []
+    fetched = await ingestion.jobs_queue.fetch(int(entry_id))
+    assert fetched is not None
+    assert fetched.status == "succeeded"
+    assert ingestion.recorded("m-1") == ("failed", None, None)
     assert ingestion.client.events == []
 
 
-async def test_invalid_entry_is_not_acked_and_faults_its_meeting(
+async def test_invalid_job_is_dropped_and_faults_its_meeting(
     ingestion: IngestionHarness,
 ) -> None:
     ingestion.seed("m-1")
     entry_id = await ingestion.submit("m-1", kind="reembed")
 
-    assert await ingestion.consumer.run_once() is None
+    await ingestion.consumer.run_once()
 
     assert ingestion.handler.calls == []
-    assert [entry.entry_id for entry in ingestion.pending()] == [entry_id]
-    assert ingestion.client.acks == []
+    assert await ingestion.pending() == []
     [fault] = ingestion.client.events
     assert fault["type"] == "fault"
     assert fault["meeting_id"] == "m-1"
@@ -922,32 +934,29 @@ async def test_invalid_entry_is_not_acked_and_faults_its_meeting(
     )
 
 
-async def test_invalid_entry_without_a_readable_meeting_publishes_no_event(
+async def test_invalid_job_without_a_readable_meeting_publishes_no_event(
     ingestion: IngestionHarness,
 ) -> None:
-    entry_id = await ingestion.submit("m-1", meeting_id="not a meeting/../id")
+    await ingestion.submit("m-1", meeting_id="not a meeting/../id")
 
-    assert await ingestion.consumer.run_once() is None
+    await ingestion.consumer.run_once()
 
     assert ingestion.client.events == []
-    assert [entry.entry_id for entry in ingestion.pending()] == [entry_id]
+    assert await ingestion.pending() == []
 
 
-async def test_redelivery_is_capped_then_acked_with_a_terminal_fault(
+async def test_retries_are_capped_then_dead_lettered_with_a_terminal_fault(
     ingestion: IngestionHarness,
 ) -> None:
     ingestion.seed("m-1")
     entry_id = await ingestion.submit("m-1")
     ingestion.handler.failure = RuntimeError("extraction exploded")
 
-    for _ in range(INGESTION_DELIVERY_LIMIT + 1):
-        await ingestion.consumer.run_once()
-        ingestion.client.age(30_000)
-    assert await ingestion.consumer.run_once() is None
+    await ingestion.consumer.run_once()
 
     assert len(ingestion.handler.calls) == INGESTION_DELIVERY_LIMIT
-    assert ingestion.pending() == []
-    assert ingestion.client.log == [f"ack:{entry_id}"]
+    assert await ingestion.pending() == []
+    assert ingestion.client.log == []
     details = [event["detail"] for event in ingestion.client.events]
     assert details == [FAILED_JOB_DETAIL] * INGESTION_DELIVERY_LIMIT + [DEAD_LETTER_DETAIL]
     assert ingestion.client.events[0]["error_type"] == "RuntimeError"
@@ -960,7 +969,7 @@ async def test_redelivery_is_capped_then_acked_with_a_terminal_fault(
     )
 
 
-async def test_failed_delivery_awaiting_a_retry_leaves_its_job_pending_then_completes(
+async def test_a_retry_keeps_the_previous_status_until_the_run_lands(
     ingestion: IngestionHarness,
 ) -> None:
     ingestion.seed("m-1")
@@ -974,19 +983,21 @@ async def test_failed_delivery_awaiting_a_retry_leaves_its_job_pending_then_comp
     )
     write_status(path, before)
     entry_id = await ingestion.submit("m-1")
-    ingestion.handler.failure = RuntimeError("extraction exploded")
+    seen_during_retries: list[IngestionStatus | None] = []
 
-    assert await ingestion.consumer.run_once() is None
+    async def flaky(
+        job: IngestionJob, *, access: OperatorAccess, ports: IngestPorts
+    ) -> IngestSummary:
+        if not seen_during_retries:
+            seen_during_retries.append(read_status(path))
+            raise RuntimeError("extraction exploded")
+        return await ingestion.handler(job, access=access, ports=ports)
 
-    assert read_status(path) == before
-    assert ingestion.client.acks == []
+    ingestion.consumer = ingestion.build(handler=flaky)
 
-    ingestion.handler.failure = None
-    ingestion.client.age(30_000)
-    summary = await ingestion.consumer.run_once()
+    await ingestion.consumer.run_once()
 
-    assert summary is not None
-    assert summary.succeeded is True
+    assert seen_during_retries == [before]
     assert ingestion.recorded("m-1") == (
         "completed",
         None,
@@ -1000,25 +1011,20 @@ async def test_dead_letter_waits_for_a_running_job_to_release_the_record(
     ingestion.seed("m-1")
     entry_id = await ingestion.submit("m-1")
     ingestion.handler.failure = RuntimeError("extraction exploded")
-    for _ in range(INGESTION_DELIVERY_LIMIT):
-        await ingestion.consumer.run_once()
-        ingestion.client.age(30_000)
     record = MeetingDir(ingestion.settings.paths.record_dir, SessionId("m-1")).record
 
     with record_lock(record, purpose="ingestion"):
         await ingestion.consumer.run_once()
         assert ingestion.recorded("m-1") is None
-        assert [entry.entry_id for entry in ingestion.pending()] == [entry_id]
+        assert [job.id for job in await ingestion.pending()] != [int(entry_id)]
 
-    ingestion.client.age(30_000)
+    await ingestion.make_due()
     await ingestion.consumer.run_once()
 
-    assert ingestion.pending() == []
-    assert ingestion.recorded("m-1") == (
-        "failed",
-        DEAD_LETTER_DETAIL,
-        SettledJob(id=entry_id, outcome="failed"),
-    )
+    assert await ingestion.pending() == []
+    recorded = ingestion.recorded("m-1")
+    assert recorded is not None
+    assert recorded[0:2] == ("failed", DEAD_LETTER_DETAIL)
 
 
 async def test_failure_of_a_meeting_without_status_or_session_writes_nothing(
@@ -1026,7 +1032,7 @@ async def test_failure_of_a_meeting_without_status_or_session_writes_nothing(
 ) -> None:
     await ingestion.submit("m-1", kind="reembed")
 
-    assert await ingestion.consumer.run_once() is None
+    await ingestion.consumer.run_once()
 
     assert ingestion.recorded("m-1") is None
 
@@ -1040,11 +1046,13 @@ async def test_reported_errors_become_named_fault_events(ingestion: IngestionHar
 
     await ingestion.consumer.run_once()
 
-    assert [event["detail"] for event in ingestion.client.events] == ["ingestion.status_corrupt"]
-    assert ingestion.client.acks == []
+    assert [event["detail"] for event in ingestion.client.events] == [
+        "ingestion.status_corrupt",
+        FAILED_JOB_DETAIL,
+    ] * INGESTION_DELIVERY_LIMIT + [DEAD_LETTER_DETAIL]
 
 
-async def test_start_requeues_one_ingest_job_per_pending_meeting_without_unacked_entries(
+async def test_start_requeues_one_ingest_job_per_pending_meeting_without_a_queued_job(
     ingestion: IngestionHarness,
 ) -> None:
     for meeting_id, state in (
@@ -1055,58 +1063,13 @@ async def test_start_requeues_one_ingest_job_per_pending_meeting_without_unacked
     ):
         ingestion.persist(meeting_id, state)
     await ingestion.submit("m-3")
-    await ingestion.transport.ensure_group(INGESTION_STREAM, INGESTION_GROUP)
-    await ingestion.transport.read_group(INGESTION_STREAM, INGESTION_GROUP, "worker-z")
     await ingestion.submit("m-2", kind="correct")
     ingestion.shutdown.set()
 
     await ingestion.consumer.run_forever()
 
-    requeued = ingestion.jobs()[2:]
-    assert [{key: value for key, value in job.items() if key != "at"} for job in requeued] == [
-        {"v": "1", "type": "ingestion_job", "meeting_id": "m-1", "kind": "ingest"}
-    ]
-    assert datetime.fromisoformat(requeued[0]["at"]).tzinfo is not None
-
-
-async def test_redis_reconnect_scans_pending_meetings_again(
-    ingestion: IngestionHarness, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    scans: list[Path] = []
-
-    def scan(record_root: Path) -> list[str]:
-        scans.append(record_root)
-        if len(scans) == 2:
-            ingestion.shutdown.set()
-        return []
-
-    monkeypatch.setattr("fakeyou.worker.ingestion.pending_ingestion_meetings", scan)
-    ingestion.client.failing_reads = 1
-
-    await ingestion.consumer.run_forever()
-
-    assert scans == [ingestion.settings.paths.record_dir] * 2
-
-
-async def test_long_jobs_keep_their_entry_claimed_without_counting_deliveries(
-    ingestion: IngestionHarness,
-) -> None:
-    ingestion.settings.transport.redis.lease_seconds = 0.03
-    consumer = ingestion.build()
-    ingestion.seed("m-1")
-    await ingestion.submit("m-1")
-    ingestion.handler.release = asyncio.Event()
-
-    running = asyncio.create_task(consumer.run_once())
-    for _ in range(200):
-        if any(call[0] == "xclaim" and call[4] is True for call in ingestion.client.calls):
-            break
-        await asyncio.sleep(0.005)
-    ingestion.handler.release.set()
-    await running
-
-    assert any(call[0] == "xclaim" and call[4] is True for call in ingestion.client.calls)
-    assert ingestion.pending() == []
+    queued = {(job.args["meeting_id"], job.args["kind"]) for job in await ingestion.jobs()}
+    assert queued == {("m-1", "ingest"), ("m-2", "correct"), ("m-3", "ingest")}
 
 
 async def test_ingestion_job_takes_the_keys_staged_for_its_meeting(settings: Settings) -> None:
@@ -1138,7 +1101,9 @@ async def test_ingestion_job_for_a_session_started_with_keys_fails_without_them(
     await consumer.run_once()
 
     assert ingestion.handler.calls == []
-    assert ingestion.client.acks != []
+    fetched = await ingestion.jobs_queue.fetch(int(entry_id))
+    assert fetched is not None
+    assert fetched.status == "succeeded"
     recorded = read_status(MeetingDir(settings.paths.record_dir, SessionId("m-2")).ingestion)
     assert recorded is not None
     assert recorded.status == "failed"
@@ -1192,10 +1157,8 @@ async def test_settling_a_session_queues_the_pending_ingestion_job(
     harness.persist("m-1", "pending")
     await harness.finish_session(phase="ended", terminal_reason="stopped_by_owner")
 
-    jobs = harness.client.streams.get(INGESTION_STREAM, [])
-    assert [fields.get("kind") for _id, fields in jobs] == ["ingest"]
-    assert [fields.get("meeting_id") for _id, fields in jobs] == ["m-1"]
-    assert [fields.get("type") for _id, fields in jobs] == ["ingestion_job"]
+    jobs = await harness.jobs.jobs_for("ingest_meeting")
+    assert [job.args for job in jobs] == [{"meeting_id": "m-1", "kind": "ingest"}]
 
 
 async def test_settling_a_session_without_a_pending_ingestion_queues_nothing(
@@ -1205,7 +1168,7 @@ async def test_settling_a_session_without_a_pending_ingestion_queues_nothing(
     assert await harness.consumer.run_once() == "m-1"
     await harness.finish_session(phase="ended", terminal_reason="stopped_by_owner")
 
-    assert harness.client.streams.get(INGESTION_STREAM, []) == []
+    assert await harness.jobs.jobs_for("ingest_meeting") == []
 
 
 async def test_settling_a_session_with_an_ingested_meeting_queues_nothing(
@@ -1216,7 +1179,7 @@ async def test_settling_a_session_with_an_ingested_meeting_queues_nothing(
     harness.persist("m-1", "completed")
     await harness.finish_session(phase="ended", terminal_reason="stopped_by_owner")
 
-    assert harness.client.streams.get(INGESTION_STREAM, []) == []
+    assert await harness.jobs.jobs_for("ingest_meeting") == []
 
 
 async def test_the_debrief_is_queued_when_the_meeting_ends(harness: Harness) -> None:

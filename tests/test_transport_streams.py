@@ -1,18 +1,16 @@
 from collections.abc import Mapping
 from fnmatch import fnmatchcase
 from typing import cast
-from uuid import uuid4
 
 import pytest
-from pydantic import SecretStr
 from redis.asyncio import Redis
 from redis.exceptions import ResponseError
 
 from fakeyou.catalog.config import ConfigKey
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import Settings
-from fakeyou.transport.schemas import INGESTION_STREAM, event_stream
-from fakeyou.transport.streams import PendingDelivery, StreamTransport
+from fakeyou.transport.schemas import event_stream
+from fakeyou.transport.streams import StreamTransport
 
 AT = "2026-10-16T09:00:00+00:00"
 
@@ -217,86 +215,6 @@ async def test_publish_event_validates_and_trims() -> None:
         )
 
 
-async def test_publish_job_trims_approximately() -> None:
-    transport, calls = fake_transport(stream_max_len=7)
-    await transport.publish_job(INGESTION_STREAM, {"v": "1", "type": "ingestion_job"})
-    assert calls == [("xadd", "fakeyou:jobs:ingestion", 7, True)]
-
-
-async def test_ensure_group_swallows_only_busygroup() -> None:
-    transport, client = recording_transport()
-    stream = "fakeyou:jobs:ingestion"
-    await transport.ensure_group(stream, "workers")
-    await transport.ensure_group(stream, "workers")
-    assert client.calls[-1] == ("xgroup_create", stream, "workers", "0", True)
-    client.next_error = ResponseError("LOADING Redis is loading the dataset in memory")
-    with pytest.raises(ResponseError, match="LOADING"):
-        await transport.ensure_group(stream, "workers")
-
-
-async def test_pending_deliveries_report_the_redis_delivery_count() -> None:
-    transport, client = recording_transport()
-    group = "ingestion-workers"
-    client.pending[(INGESTION_STREAM, group)] = [("3-0", {"kind": "ingest"}), ("4-0", {})]
-    client.deliveries = {"3-0": 5, "4-0": 2}
-
-    pending = await transport.pending_deliveries(INGESTION_STREAM, group, min_idle_ms=30000)
-
-    assert pending == [PendingDelivery("3-0", 5), PendingDelivery("4-0", 2)]
-    assert client.calls == [("xpending_range", INGESTION_STREAM, group, "-", "+", 100, 30000)]
-
-
-async def test_claim_entry_claims_one_id_and_returns_its_fields() -> None:
-    transport, client = recording_transport()
-    group = "ingestion-workers"
-    client.pending[(INGESTION_STREAM, group)] = [("3-0", {"kind": "ingest"})]
-
-    claimed = await transport.claim_entry(
-        INGESTION_STREAM, group, "worker-b", "3-0", min_idle_ms=30000
-    )
-    missing = await transport.claim_entry(
-        INGESTION_STREAM, group, "worker-b", "9-0", min_idle_ms=30000
-    )
-
-    assert claimed == {"kind": "ingest"}
-    assert missing is None
-    assert client.calls[0] == ("xclaim", INGESTION_STREAM, group, "worker-b", 30000, ["3-0"])
-
-
-async def test_touch_entry_resets_idle_without_counting_a_delivery() -> None:
-    transport, client = recording_transport()
-    group = "ingestion-workers"
-    client.pending[(INGESTION_STREAM, group)] = [("3-0", {"kind": "ingest"})]
-
-    await transport.touch_entry(INGESTION_STREAM, group, "worker-a", "3-0")
-
-    assert client.calls == [("xclaim", INGESTION_STREAM, group, "worker-a", 0, ["3-0"], "justid")]
-
-
-async def test_unacked_entries_cover_pending_and_undelivered_entries() -> None:
-    transport, client = recording_transport()
-    group = "ingestion-workers"
-    delivered = ("1-0", {"meeting_id": "m-1"})
-    acked = ("2-0", {"meeting_id": "m-2"})
-    fresh = ("3-0", {"meeting_id": "m-3"})
-    client.streams[INGESTION_STREAM] = [delivered, acked, fresh]
-    client.groups.add((INGESTION_STREAM, group))
-    client.pending[(INGESTION_STREAM, group)] = [delivered]
-    client.last_delivered[(INGESTION_STREAM, group)] = "2-0"
-
-    assert await transport.unacked_entries(INGESTION_STREAM, group) == [delivered, fresh]
-
-
-async def test_entry_ack_closure_acks_exactly_its_entry() -> None:
-    transport, client = recording_transport()
-
-    ack = transport.create_entry_ack(INGESTION_STREAM, "ingestion-workers", "3-0")
-
-    assert client.calls == []
-    await ack()
-    assert client.calls == [("xack", INGESTION_STREAM, "ingestion-workers", "3-0")]
-
-
 async def test_read_events_is_exclusive_after_the_given_id() -> None:
     transport, client = recording_transport()
     stream = event_stream("m-4")
@@ -309,23 +227,6 @@ async def test_read_events_is_exclusive_after_the_given_id() -> None:
     assert client.calls == [("xrange", stream, "(1-0", "+", 50)]
 
 
-async def test_read_entry_returns_only_the_exact_id_or_none() -> None:
-    transport, client = recording_transport()
-    stream = "fakeyou:jobs:ingestion"
-    client.streams[stream] = [
-        ("1-0", {"v": "1", "type": "ingestion_job", "kind": "ingest"}),
-        ("10-0", {"v": "1", "type": "ingestion_job", "kind": "correct"}),
-    ]
-    assert await transport.read_entry(stream, "10-0") == {
-        "v": "1",
-        "type": "ingestion_job",
-        "kind": "correct",
-    }
-    assert await transport.read_entry(stream, "2-0") is None
-    assert await transport.read_entry("fakeyou:jobs:debrief", "1-0") is None
-    assert client.calls[-1] == ("xrange", "fakeyou:jobs:debrief", "1-0", "1-0", 1)
-
-
 async def test_aclose_closes_the_underlying_client() -> None:
     transport, client = recording_transport()
     await transport.aclose()
@@ -336,39 +237,3 @@ def test_from_settings_requires_the_configured_redis_url(settings: Settings) -> 
     with pytest.raises(FakeYouError, match=ConfigKey.TRANSPORT_REDIS_URL) as caught:
         StreamTransport.from_settings(settings)
     assert caught.value.code is ErrorCode.CONFIG_SECRET_MISSING
-
-
-@pytest.mark.container
-async def test_container_transport_counts_deliveries_and_lists_unacked_jobs(
-    settings: Settings, redis_endpoint: str
-) -> None:
-    settings.transport.redis.url = SecretStr(redis_endpoint)
-    transport = StreamTransport.from_settings(settings)
-    stream = f"fakeyou:jobs:ingestion-{uuid4().hex[:10]}"
-    group = "ingestion-workers"
-    first = {"v": "1", "type": "ingestion_job", "at": AT, "meeting_id": "m-1", "kind": "ingest"}
-    second = {**first, "meeting_id": "m-2"}
-    try:
-        first_id = await transport.publish_job(stream, first)
-        await transport.ensure_group(stream, group)
-        assert await transport.read_group(stream, group, "worker-a", count=1, block_ms=100) == [
-            (first_id, first)
-        ]
-        second_id = await transport.publish_job(stream, second)
-        assert await transport.pending_deliveries(stream, group, min_idle_ms=0) == [
-            PendingDelivery(first_id, 1)
-        ]
-        claimed = await transport.claim_entry(stream, group, "worker-b", first_id, min_idle_ms=0)
-        assert claimed == first
-        await transport.touch_entry(stream, group, "worker-b", first_id)
-        assert await transport.pending_deliveries(stream, group, min_idle_ms=0) == [
-            PendingDelivery(first_id, 2)
-        ]
-        assert await transport.unacked_entries(stream, group) == [
-            (first_id, first),
-            (second_id, second),
-        ]
-        await transport.create_entry_ack(stream, group, first_id)()
-        assert await transport.unacked_entries(stream, group) == [(second_id, second)]
-    finally:
-        await transport.aclose()

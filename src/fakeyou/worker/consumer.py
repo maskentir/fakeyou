@@ -30,10 +30,6 @@ from fakeyou.persistence.ingestion_status import read_status
 from fakeyou.persistence.layout import RECORD_FILE_NAME, MeetingDir, meeting_profile_dir
 from fakeyou.persistence.lease import LeaseError
 from fakeyou.persistence.owner_model import FrozenOwnerModel
-from fakeyou.transport.schemas import (
-    INGESTION_STREAM,
-    encode_ingestion_job,
-)
 from fakeyou.transport.streams import StreamTransport
 from fakeyou.worker.documents import (
     BRIEF_FILE_NAME,
@@ -456,10 +452,7 @@ class WorkerConsumer:
         )
         if status is None or status.status != "pending":
             return
-        await self._transport.publish_job(
-            INGESTION_STREAM,
-            encode_ingestion_job(meeting_id=meeting_id, kind="ingest", at=_now_iso()),
-        )
+        await self._deps.jobs.defer_ingest(meeting_id=meeting_id, kind="ingest")
 
     async def _queue_debrief(self, meeting_id: str) -> None:
         record = self._settings.paths.record_dir

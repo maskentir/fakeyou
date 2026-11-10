@@ -6,6 +6,7 @@ from pathlib import Path
 
 import httpx2
 import pytest
+from procrastinate.testing import InMemoryConnector
 from pydantic import SecretStr
 
 from fakeyou.api.app import ApiDeps, create_app
@@ -14,9 +15,10 @@ from fakeyou.api.owner_model import owner_model
 from fakeyou.api.ratelimit import RateLimiter
 from fakeyou.api.schemas import SessionCreate, build_snapshot
 from fakeyou.api.sessions import SessionStore
-from fakeyou.api.status import session_status
+from fakeyou.api.status import queued_jobs, session_status
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import Settings
+from fakeyou.db.jobs import JobQueue, build_job_queue
 from tests._sanitize_support import SYNTHETIC_MARKERS, assert_no_synthetic_markers
 from tests._session_status_fakes import MemoryOwnerModel, MemorySessionStatus
 
@@ -59,7 +61,7 @@ async def _client(
     owner: str | None = None,
     admin: str | None = None,
     limit: int | None = None,
-    transport: object | None = None,
+    jobs: JobQueue | None = None,
 ) -> AsyncIterator[httpx2.AsyncClient]:
     if owner is not None:
         settings.api.owner_token = SecretStr(owner)
@@ -67,14 +69,14 @@ async def _client(
         settings.api.admin_token = SecretStr(admin)
     if limit is not None:
         settings.api.rate_limit_per_minute = limit
-    transport_factory = None if transport is None else (lambda: transport)
     status = MemorySessionStatus()
     app = create_app(
         settings,
-        ApiDeps(test_routes=True, transport=transport_factory),
+        ApiDeps(test_routes=True),
     )
     app.dependency_overrides[session_status] = lambda: status
     app.dependency_overrides[owner_model] = lambda: MemoryOwnerModel()
+    app.dependency_overrides[queued_jobs] = lambda: jobs
     async with httpx2.AsyncClient(
         transport=httpx2.ASGITransport(app=app), base_url="http://testserver"
     ) as client:
@@ -261,14 +263,6 @@ async def test_list_sessions_rate_limit_returns_429(settings: Settings) -> None:
     assert second.json()["error"]["code"] == "api.rate_limited"
 
 
-class _JobEntryTransport:
-    def __init__(self, entry: dict[str, str]) -> None:
-        self._entry = entry
-
-    async def read_entry(self, _stream: str, entry_id: str) -> dict[str, str] | None:
-        return self._entry if entry_id == "1-0" else None
-
-
 async def test_job_of_another_owner_is_not_found_through_the_auth_matrix(
     settings: Settings,
 ) -> None:
@@ -283,12 +277,11 @@ async def test_job_of_another_owner_is_not_found_through_the_auth_matrix(
     SessionStore(settings.paths.record_dir).save_new(
         build_snapshot(create, meeting_id="m-1", at=AT)
     )
-    entry = {"v": "1", "type": "ingestion_job", "at": AT, "meeting_id": "m-1", "kind": "ingest"}
-    async with _client(
-        settings, owner="owner-secret", transport=_JobEntryTransport(entry)
-    ) as client:
+    jobs = build_job_queue(InMemoryConnector())
+    job_id = await jobs.defer_ingest(meeting_id="m-1", kind="ingest")
+    async with _client(settings, owner="owner-secret", jobs=jobs) as client:
         response = await client.get(
-            "/v1/jobs/1-0", headers={"Authorization": "Bearer owner-secret"}
+            f"/v1/jobs/{job_id}", headers={"Authorization": "Bearer owner-secret"}
         )
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "api.not_found"

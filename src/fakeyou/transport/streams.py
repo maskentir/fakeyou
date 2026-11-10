@@ -1,12 +1,9 @@
 import json
-from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
-from functools import partial
+from collections.abc import Mapping
 from typing import Any, cast
 
 from redis.asyncio import Redis
 from redis.exceptions import ConnectionError as RedisConnectionError
-from redis.exceptions import ResponseError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 from redis.typing import EncodableT, FieldT
 
@@ -14,16 +11,8 @@ from fakeyou.catalog.config import ConfigKey
 from fakeyou.config.settings import Settings, require_secret
 from fakeyou.transport.schemas import event_stream, validate_event
 
-_CLAIM_BATCH = 100
 OVERRIDE_TTL_SECONDS = 120.0
-_FIRST_ENTRY_ID = "0-0"
 CONNECTION_ERRORS: tuple[type[Exception], ...] = (RedisConnectionError, RedisTimeoutError)
-
-
-@dataclass(frozen=True, slots=True)
-class PendingDelivery:
-    entry_id: str
-    deliveries: int
 
 
 def _overrides_key(scope: str) -> str:
@@ -50,9 +39,6 @@ class StreamTransport:
         validated = validate_event(fields, meeting_id=meeting_id)
         return await self._publish(event_stream(meeting_id), validated)
 
-    async def publish_job(self, stream: str, fields: Mapping[str, str]) -> str:
-        return await self._publish(stream, fields)
-
     async def store_overrides(
         self, scope: str, overrides: Mapping[str, str], *, ttl_seconds: float
     ) -> None:
@@ -69,76 +55,6 @@ class StreamTransport:
         document: dict[str, str] = json.loads(raw)
         return document
 
-    async def ensure_group(self, stream: str, group: str) -> None:
-        try:
-            await self._client.xgroup_create(stream, group, id="0", mkstream=True)
-        except ResponseError as error:
-            if "BUSYGROUP" not in str(error):
-                raise
-
-    async def read_group(
-        self,
-        stream: str,
-        group: str,
-        consumer: str,
-        *,
-        count: int = 1,
-        block_ms: int = 5000,
-    ) -> list[tuple[str, dict[str, str]]]:
-        response = await self._client.xreadgroup(
-            group, consumer, {stream: ">"}, count=count, block=block_ms
-        )
-        if not response:
-            return []
-        return _entry_pairs(response[0][1])
-
-    async def ack(self, stream: str, group: str, entry_id: str) -> None:
-        await self._client.xack(stream, group, entry_id)
-
-    async def pending_deliveries(
-        self, stream: str, group: str, *, min_idle_ms: int
-    ) -> list[PendingDelivery]:
-        pending = await self._client.xpending_range(
-            stream, group, "-", "+", _CLAIM_BATCH, idle=min_idle_ms
-        )
-        return [
-            PendingDelivery(str(entry["message_id"]), int(entry["times_delivered"]))
-            for entry in pending
-        ]
-
-    async def claim_entry(
-        self, stream: str, group: str, consumer: str, entry_id: str, *, min_idle_ms: int
-    ) -> dict[str, str] | None:
-        claimed = await self._client.xclaim(stream, group, consumer, min_idle_ms, [entry_id])
-        for found_id, fields in _entry_pairs(claimed):
-            if found_id == entry_id:
-                return fields
-        return None
-
-    async def touch_entry(self, stream: str, group: str, consumer: str, entry_id: str) -> None:
-        await self._client.xclaim(stream, group, consumer, 0, [entry_id], justid=True)
-
-    async def unacked_entries(self, stream: str, group: str) -> list[tuple[str, dict[str, str]]]:
-        groups = await self._client.xinfo_groups(stream)
-        last_delivered = next(
-            (str(info["last-delivered-id"]) for info in groups if str(info["name"]) == group),
-            _FIRST_ENTRY_ID,
-        )
-        pending = await self._client.xpending_range(stream, group, "-", "+", self._stream_max_len)
-        unacked: list[tuple[str, dict[str, str]]] = []
-        for entry in pending:
-            entry_id = str(entry["message_id"])
-            fields = await self.read_entry(stream, entry_id)
-            if fields is not None:
-                unacked.append((entry_id, fields))
-        undelivered = await self._client.xrange(stream, min=f"({last_delivered}", max="+")
-        return unacked + _entry_pairs(undelivered)
-
-    def create_entry_ack(
-        self, stream: str, group: str, entry_id: str
-    ) -> Callable[[], Awaitable[None]]:
-        return partial(self.ack, stream, group, entry_id)
-
     async def read_events(
         self, meeting_id: str, *, after: str, count: int = 100
     ) -> list[tuple[str, dict[str, str]]]:
@@ -146,15 +62,6 @@ class StreamTransport:
             event_stream(meeting_id), min=f"({after}", max="+", count=count
         )
         return _entry_pairs(entries)
-
-    async def read_entry(self, stream: str, entry_id: str) -> dict[str, str] | None:
-        entries = _entry_pairs(
-            await self._client.xrange(stream, min=entry_id, max=entry_id, count=1)
-        )
-        for found_id, fields in entries:
-            if found_id == entry_id:
-                return fields
-        return None
 
     async def aclose(self) -> None:
         await self._client.aclose()

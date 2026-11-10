@@ -6,20 +6,17 @@ from typing import Any
 
 import pytest
 
-from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.memory.ingest_job import (
     IngestionJob,
     handle_ingestion_job,
-    parse_ingestion_job,
-    pending_ingestion_meetings,
 )
 from fakeyou.memory.ingest_service import IngestPorts
 from fakeyou.memory.ingest_status import IngestSummary, settle_correction
 from fakeyou.memory.ingestion import correction_episode_name
 from fakeyou.memory.operator_access import OperatorAccess
-from fakeyou.memory.persona import OperatorIdentity, PersonaProfile
+from fakeyou.memory.persona import OperatorIdentity
 from fakeyou.observability.faults import FaultReporter
 from fakeyou.observability.journal import Journal
 from fakeyou.persistence.ingestion_status import (
@@ -33,14 +30,6 @@ from fakeyou.persistence.record import meeting_record_path
 from tests._cli_support import write_persona, write_record
 from tests._ingestion_support import CORRECTED_AT, correction_record
 from tests._memory_fakes import make_graphiti
-
-JOB_FIELDS = {
-    "v": "1",
-    "type": "ingestion_job",
-    "at": "2026-10-16T09:00:00Z",
-    "meeting_id": "meeting-9",
-    "kind": "ingest",
-}
 
 
 @asynccontextmanager
@@ -65,33 +54,26 @@ def _access(settings: Settings, tmp_path: Path, memory: Any) -> OperatorAccess:
     )
 
 
-async def _noop_ack() -> None:
-    return None
-
-
 def _status_file(settings: Settings, meeting_id: str) -> Path:
     return status_path(meeting_record_path(settings.paths.record_dir, SessionId(meeting_id)))
 
 
-async def test_ingest_job_acks_only_after_persisted_status(
+async def test_ingest_job_returns_only_after_persisted_status(
     settings: Settings, tmp_path: Path
 ) -> None:
     write_record(settings, "meeting-9")
     status_file = _status_file(settings, "meeting-9")
-    acked: list[bool] = []
-
-    async def ack() -> None:
-        status = read_status(status_file)
-        acked.append(status is not None and status.status == "completed")
 
     summary = await handle_ingestion_job(
-        parse_ingestion_job(JOB_FIELDS, job_id="1-0"),
+        IngestionJob(meeting_id="meeting-9", kind="ingest", job_id="7"),
         access=_access(settings, tmp_path, make_graphiti()),
         ports=_ports(),
-        ack=ack,
     )
 
-    assert acked == [True]
+    status = read_status(status_file)
+    assert status is not None
+    assert status.status == "completed"
+    assert status.settled_job == SettledJob(id="7", outcome="completed")
     assert (summary.completed, summary.succeeded, summary.stored) == (True, True, True)
 
 
@@ -101,8 +83,8 @@ async def test_duplicate_job_adds_no_second_episode(settings: Settings, tmp_path
     access = _access(settings, tmp_path, memory)
     job = IngestionJob(meeting_id="meeting-9", kind="ingest", job_id="1-0")
 
-    await handle_ingestion_job(job, access=access, ports=_ports(), ack=_noop_ack)
-    await handle_ingestion_job(job, access=access, ports=_ports(), ack=_noop_ack)
+    await handle_ingestion_job(job, access=access, ports=_ports())
+    await handle_ingestion_job(job, access=access, ports=_ports())
 
     assert [episode["name"] for episode in memory.added] == ["meeting-9:w00000"]
 
@@ -117,35 +99,27 @@ async def test_handler_forwards_exactly_the_published_summary(
         IngestionJob(meeting_id="meeting-9", kind="ingest", job_id="1-0"),
         access=_access(settings, tmp_path, make_graphiti()),
         ports=_ports(published),
-        ack=_noop_ack,
     )
 
     assert published == [summary]
     assert summary.meeting_id == "meeting-9"
 
 
-async def test_incomplete_ingest_with_a_persisted_status_is_acked_but_not_succeeded(
+async def test_incomplete_ingest_with_a_persisted_status_is_settled_but_not_succeeded(
     settings: Settings, tmp_path: Path
 ) -> None:
     write_record(settings, "meeting-9")
     memory = make_graphiti()
     memory.errors[0] = RuntimeError("provider down")
-    acks: list[str] = []
-
-    async def ack() -> None:
-        acks.append("ack")
-
     summary = await handle_ingestion_job(
         IngestionJob(meeting_id="meeting-9", kind="ingest", job_id="1-0"),
         access=_access(settings, tmp_path, memory),
         ports=_ports(),
-        ack=ack,
     )
 
     status = read_status(_status_file(settings, "meeting-9"))
     assert status is not None
     assert status.status == "failed"
-    assert acks == ["ack"]
     assert (summary.completed, summary.succeeded, summary.stored) == (False, False, True)
 
 
@@ -156,28 +130,21 @@ async def test_correct_job_writes_only_corrected_episodes(
     memory = make_graphiti(episode_prefix="uuid-", edges=[])
     access = _access(settings, tmp_path, memory)
     await handle_ingestion_job(
-        IngestionJob(meeting_id="meeting-1", kind="ingest", job_id="1-0"),
+        IngestionJob(meeting_id="meeting-1", kind="ingest", job_id="7"),
         access=access,
         ports=_ports(),
-        ack=_noop_ack,
     )
     ingested = read_status(_status_file(settings, "meeting-1"))
     assert ingested is not None
     assert (ingested.status, ingested.settled_job) == (
         "completed",
-        SettledJob(id="1-0", outcome="completed"),
+        SettledJob(id="7", outcome="completed"),
     )
     before = [episode["name"] for episode in memory.added]
-    acks: list[str] = []
-
-    async def ack() -> None:
-        acks.append("ack")
-
     summary = await handle_ingestion_job(
-        IngestionJob(meeting_id="meeting-1", kind="correct", job_id="2-0"),
+        IngestionJob(meeting_id="meeting-1", kind="correct", job_id="8"),
         access=access,
         ports=_ports(),
-        ack=ack,
     )
 
     added = [episode["name"] for episode in memory.added][len(before) :]
@@ -185,13 +152,12 @@ async def test_correct_job_writes_only_corrected_episodes(
     assert added == [correction_episode_name("meeting-1", 1)]
     assert (summary.windows, summary.ingested) == (1, 1)
     assert (summary.completed, summary.succeeded, summary.stored) == (True, True, True)
-    assert acks == ["ack"]
     status = read_status(_status_file(settings, "meeting-1"))
     assert status is not None
     assert status.corrected_at == CORRECTED_AT.isoformat()
     assert (status.status, status.settled_job, status.episode_uuids) == (
         "completed",
-        SettledJob(id="2-0", outcome="completed"),
+        SettledJob(id="8", outcome="completed"),
         ingested.episode_uuids,
     )
 
@@ -216,7 +182,7 @@ def _ingested_status(status_file: Path) -> IngestionStatus:
         group_id="g",
         status="completed",
         episode_uuids={0: "uuid-a"},
-        settled_job=SettledJob(id="1-0", outcome="completed"),
+        settled_job=SettledJob(id="7", outcome="completed"),
     )
     write_status(status_file, status)
     return status
@@ -231,14 +197,14 @@ def test_settled_failed_correction_fails_its_job_and_keeps_the_meeting_state(
     summary = settle_correction(
         status_file,
         _correction_summary(succeeded=False, stored=True),
-        job_id="2-0",
+        job_id="8",
         group_id="g",
         faults=FaultReporter(journal=Journal("meeting-1")),
     )
 
     status = read_status(status_file)
     assert status is not None
-    assert status.settled_job == SettledJob(id="2-0", outcome="failed")
+    assert status.settled_job == SettledJob(id="8", outcome="failed")
     assert (status.status, status.episode_uuids) == ("completed", {0: "uuid-a"})
     assert (summary.state, summary.succeeded, summary.stored) == ("completed", False, True)
 
@@ -250,7 +216,7 @@ def test_unstored_correction_leaves_its_job_pending_for_the_retry(tmp_path: Path
     settle_correction(
         status_file,
         _correction_summary(succeeded=False, stored=False),
-        job_id="2-0",
+        job_id="8",
         group_id="g",
         faults=FaultReporter(journal=Journal("meeting-1")),
     )
@@ -263,65 +229,48 @@ async def test_correct_job_without_a_bundle_is_recorded_as_nothing_to_do(
 ) -> None:
     write_record(settings, "meeting-9")
     memory = make_graphiti()
-    acks: list[str] = []
-
-    async def ack() -> None:
-        acks.append("ack")
 
     summary = await handle_ingestion_job(
-        IngestionJob(meeting_id="meeting-9", kind="correct", job_id="1-0"),
+        IngestionJob(meeting_id="meeting-9", kind="correct", job_id="7"),
         access=_access(settings, tmp_path, memory),
         ports=_ports(),
-        ack=ack,
     )
 
     assert memory.added == []
-    assert acks == ["ack"]
     assert (summary.windows, summary.ingested, summary.stored) == (0, 0, True)
     assert summary.state == "not_requested"
     status = read_status(_status_file(settings, "meeting-9"))
     assert status is not None
     assert status.status == "not_requested"
-    assert status.settled_job == SettledJob(id="1-0", outcome="completed")
+    assert status.settled_job == SettledJob(id="7", outcome="completed")
 
 
-async def test_corrupt_status_is_a_failed_summary_without_ack(
+async def test_corrupt_status_raises_so_the_job_is_retried(
     settings: Settings, tmp_path: Path
 ) -> None:
     write_record(settings, "meeting-9")
     status_file = _status_file(settings, "meeting-9")
     status_file.write_text("{not json", encoding="utf-8")
     memory = make_graphiti()
-    acks: list[str] = []
     published: list[IngestSummary] = []
 
-    async def ack() -> None:
-        acks.append("ack")
-
     for job in (
-        IngestionJob(meeting_id="meeting-9", kind="ingest", job_id="1-0"),
-        IngestionJob(meeting_id="meeting-9", kind="correct", job_id="1-0"),
+        IngestionJob(meeting_id="meeting-9", kind="ingest", job_id="7"),
+        IngestionJob(meeting_id="meeting-9", kind="correct", job_id="7"),
     ):
-        summary = await handle_ingestion_job(
-            job,
-            access=_access(settings, tmp_path, memory),
-            ports=_ports(published),
-            ack=ack,
-        )
-        assert (summary.state, summary.completed, summary.succeeded, summary.stored) == (
-            "failed",
-            False,
-            False,
-            False,
-        )
+        with pytest.raises(RuntimeError, match="unstored summary"):
+            await handle_ingestion_job(
+                job,
+                access=_access(settings, tmp_path, memory),
+                ports=_ports(published),
+            )
 
-    assert acks == []
     assert memory.added == []
     assert status_file.read_text(encoding="utf-8") == "{not json"
-    assert len(published) == 2
+    assert [(item.state, item.stored) for item in published] == [("failed", False)] * 2
 
 
-async def test_handler_raises_and_never_acks_when_no_summary_is_published(
+async def test_handler_raises_when_no_summary_is_published(
     settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import fakeyou.memory.ingest_job as ingest_job_module
@@ -330,121 +279,10 @@ async def test_handler_raises_and_never_acks_when_no_summary_is_published(
         return True
 
     monkeypatch.setattr(ingest_job_module, "run_recorded_ingest", silent)
-    acks: list[str] = []
-
-    async def ack() -> None:
-        acks.append("ack")
 
     with pytest.raises(RuntimeError, match="ingestion job published no summary"):
         await handle_ingestion_job(
-            IngestionJob(meeting_id="meeting-9", kind="ingest", job_id="1-0"),
+            IngestionJob(meeting_id="meeting-9", kind="ingest", job_id="7"),
             access=_access(settings, tmp_path, make_graphiti()),
             ports=_ports(),
-            ack=ack,
         )
-
-    assert acks == []
-
-
-def test_parse_ingestion_job_accepts_the_contract_payload() -> None:
-    assert parse_ingestion_job(JOB_FIELDS, job_id="1-0") == IngestionJob(
-        meeting_id="meeting-9", kind="ingest", job_id="1-0"
-    )
-    assert parse_ingestion_job(JOB_FIELDS | {"kind": "correct"}, job_id="1-0").kind == "correct"
-
-
-@pytest.mark.parametrize(
-    ("change", "field"),
-    [
-        ({"kind": "reembed"}, "kind"),
-        ({"v": "2"}, "v"),
-        ({"type": "debrief_job"}, "type"),
-        ({"meeting_id": "../meeting"}, "meeting_id"),
-        ({"at": "yesterday"}, "at"),
-        ({"group_id": "twin_other"}, "group_id"),
-    ],
-)
-def test_parse_ingestion_job_rejects_fields_by_name(change: dict[str, str], field: str) -> None:
-    with pytest.raises(ValueError, match=field):
-        parse_ingestion_job(JOB_FIELDS | change, job_id="1-0")
-
-
-def test_parse_ingestion_job_rejects_a_missing_field_by_name() -> None:
-    fields = {key: value for key, value in JOB_FIELDS.items() if key != "meeting_id"}
-
-    with pytest.raises(ValueError, match="meeting_id"):
-        parse_ingestion_job(fields, job_id="1-0")
-
-
-def _pending_status(meeting_id: str, status: str) -> IngestionStatus:
-    return IngestionStatus.model_validate(
-        {"meeting_id": meeting_id, "group_id": "twin_group", "status": status}
-    )
-
-
-def test_pending_ingestion_meetings_lists_only_pending_statuses(settings: Settings) -> None:
-    root = settings.paths.record_dir
-    for meeting_id, status in (
-        ("meeting-b", "pending"),
-        ("meeting-a", "pending"),
-        ("meeting-c", "completed"),
-    ):
-        write_status(_status_file(settings, meeting_id), _pending_status(meeting_id, status))
-    (root / "meeting-d").mkdir()
-    (root / "meeting-e.lock").write_text("", encoding="utf-8")
-
-    assert pending_ingestion_meetings(root) == ["meeting-a", "meeting-b"]
-
-
-def test_pending_ingestion_meetings_of_a_missing_root_is_empty(tmp_path: Path) -> None:
-    assert pending_ingestion_meetings(tmp_path / "absent") == []
-
-
-def test_pending_ingestion_meetings_raises_on_a_corrupt_status(settings: Settings) -> None:
-    write_status(_status_file(settings, "meeting-a"), _pending_status("meeting-a", "pending"))
-    corrupt = _status_file(settings, "meeting-b")
-    corrupt.parent.mkdir(parents=True)
-    corrupt.write_text("{", encoding="utf-8")
-
-    with pytest.raises(FakeYouError, match="ingestion status"):
-        pending_ingestion_meetings(settings.paths.record_dir)
-
-
-@pytest.mark.container
-async def test_redis_job_is_acked_once_and_a_redelivered_payload_adds_nothing(
-    settings: Settings, tmp_path: Path, redis_endpoint: str
-) -> None:
-    from redis.asyncio import Redis
-
-    write_record(settings, "meeting-9")
-    memory = make_graphiti()
-    access = _access(settings, tmp_path, memory)
-    profile = PersonaProfile.model_validate_json(write_persona(tmp_path).read_bytes())
-    stream = "fakeyou:jobs:ingestion"
-    group = f"ingestion-test-{profile.twin_id}-{tmp_path.name}"
-    client = Redis.from_url(redis_endpoint, decode_responses=True)
-    try:
-        await client.xgroup_create(stream, group, id="$", mkstream=True)
-        entry_id = await client.xadd(stream, JOB_FIELDS)
-        delivered = await client.xreadgroup(group, "worker-a", {stream: ">"}, count=1)
-        [(_stream, [(read_id, fields)])] = delivered
-
-        async def ack() -> None:
-            await client.xack(stream, group, read_id)
-
-        summary = await handle_ingestion_job(
-            parse_ingestion_job(fields, job_id="1-0"), access=access, ports=_ports(), ack=ack
-        )
-        pending = await client.xpending(stream, group)
-        again = await handle_ingestion_job(
-            parse_ingestion_job(fields, job_id="1-0"), access=access, ports=_ports(), ack=_noop_ack
-        )
-
-        assert read_id == entry_id
-        assert summary.stored is True
-        assert pending["pending"] == 0
-        assert again.stored is True
-        assert [episode["name"] for episode in memory.added] == ["meeting-9:w00000"]
-    finally:
-        await client.xgroup_destroy(stream, group)
-        await client.aclose()

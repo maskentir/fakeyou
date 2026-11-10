@@ -18,7 +18,7 @@ from fakeyou.orchestration.runtime import run_meeting_session
 from fakeyou.transport.streams import StreamTransport
 from fakeyou.worker.consumer import SnapshotStore, WorkerConsumer, WorkerDeps
 from fakeyou.worker.debrief import DebriefDeps, DebriefWorker, debrief_models
-from fakeyou.worker.ingestion import IngestionConsumer, IngestionDeps
+from fakeyou.worker.ingestion import IngestionDeps, IngestionWorker
 from fakeyou.worker.reembed import ReembedDeps, ReembedWorker, TwinDirectory
 
 SESSIONS_ROLE = "sessions"
@@ -126,16 +126,18 @@ def role_consumers(role: str, shared: _Shared) -> list[LongRunning]:
             )
         ]
     if role == INGESTION_ROLE:
+        queue = create_job_queue(shared.settings)
+        shared.exits.push_async_callback(queue.close)
         return [
-            IngestionConsumer(
+            IngestionWorker(
                 IngestionDeps(
                     settings=shared.settings,
                     transport=shared.transport,
                     store=shared.store,
                     open_memory=open_persona_memory,
                     shutdown=shared.shutdown,
-                    worker_id=shared.worker_id,
-                )
+                ),
+                queue,
             )
         ]
     if role == DEBRIEF_ROLE:
