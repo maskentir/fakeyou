@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = "==3.12.*"
 
 [manifest]
@@ -332,16 +332,16 @@ wheels = [
 
 [[package]]
 name = "cloakbrowser"
-version = "0.5.11"
+version = "0.7.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
     { name = "httpx" },
     { name = "playwright" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/bc/d1/657a2cf554241dbc2e2c2e099106462c982dca0fd49464a6b3baa7449751/cloakbrowser-0.5.11.tar.gz", hash = "sha256:198cb298b4992ec6438ee28b51c481c8371edc87ca85852849d76505bd4dbbdb", size = 5759638, upload-time = "2026-09-24T22:06:53.554Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/63/b9/4ca765ff174d849d1e7d644a91f5ba539de9ecbecda928afff15a76c36ee/cloakbrowser-0.7.0.tar.gz", hash = "sha256:85b576251f5f758e2ff7e5d386b0b30d62959ac1698b33b3d84bebd81d658159", size = 5841059, upload-time = "2026-11-01T18:19:56.676Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b3/d5/325526cab1f240c8f2ed02d2de58bab836965a0522b89ad0d5dbb62e66f2/cloakbrowser-0.5.11-py3-none-any.whl", hash = "sha256:0f49392ca317c2393e99526131ad629d33bebb5fbf02be31cb4a49d596eeb752", size = 135959, upload-time = "2026-09-24T22:06:51.973Z" },
+    { url = "https://files.pythonhosted.org/packages/45/9c/192b8f591e5e400146356e633da00be19fb5dda71d2a30abe3698103edf5/cloakbrowser-0.7.0-py3-none-any.whl", hash = "sha256:71def3e5e843a47b4ad4db201b6cc9364844ba949f213e5d5f0d3a7b9d7e162d", size = 137665, upload-time = "2026-11-01T18:19:54.83Z" },
 ]
 
 [[package]]
@@ -604,7 +604,7 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.20,<2" },
     { name = "anthropic", specifier = ">=1.9,<2" },
     { name = "botocore", specifier = ">=1.35,<2" },
-    { name = "cloakbrowser", specifier = "==0.5.11" },
+    { name = "cloakbrowser", specifier = "==0.7.0" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.115,<0.200" },
     { name = "graphiti-core", specifier = "==0.30.2" },
     { name = "httpx", specifier = "==0.28.1" },
