@@ -12,7 +12,6 @@ EVENT_TYPES: tuple[str, ...] = (
 INGESTION_JOB_TYPES: tuple[str, ...] = ("ingest", "correct")
 INGESTION_STREAM = "fakeyou:jobs:ingestion"
 DEBRIEF_STREAM = "fakeyou:jobs:debrief"
-REEMBED_STREAM = "fakeyou:jobs:reembed"
 
 _FORBIDDEN_EVENT_FIELDS = frozenset({"evidence", "api-key"})
 
@@ -34,20 +33,6 @@ def encode_debrief_job(*, meeting_id: str, at: str, force: bool = False) -> dict
         "at": at,
         "meeting_id": meeting_id,
         "force": "true" if force else "false",
-    }
-
-
-def encode_reembed_job(
-    *, at: str, owner_id: str, twin_id: str, type: str = "reembed_job"
-) -> dict[str, str]:
-    if type != "reembed_job":
-        raise ValueError(f"unknown reembed job type: {type!r}")
-    return {
-        "v": "1",
-        "type": "reembed_job",
-        "at": at,
-        "owner_id": owner_id,
-        "twin_id": twin_id,
     }
 
 

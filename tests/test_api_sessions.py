@@ -7,15 +7,18 @@ from uuid import uuid4
 
 import httpx2
 import pytest
+from procrastinate.testing import InMemoryConnector
 from pydantic import SecretStr
 
 from fakeyou.api.app import ApiDeps, create_app
+from fakeyou.api.memory import queued_jobs
 from fakeyou.api.owner_model import owner_model
 from fakeyou.api.schemas import SessionCreate, build_snapshot
 from fakeyou.api.sessions import SessionStore
 from fakeyou.api.status import session_status
 from fakeyou.config.identifiers import SessionId, is_identifier
 from fakeyou.config.settings import Settings
+from fakeyou.db.jobs import build_job_queue
 from fakeyou.db.owner_model import (
     OwnerModelEntry,
     OwnerModelRevision,
@@ -82,6 +85,8 @@ class ApiHarness:
             ),
         )
         self.app.dependency_overrides[session_status] = lambda: self.status
+        self.jobs = build_job_queue(InMemoryConnector())
+        self.app.dependency_overrides[queued_jobs] = lambda: self.jobs
         self.owner_model = MemoryOwnerModel()
         self.app.dependency_overrides[owner_model] = lambda: self.owner_model
         self.client = httpx2.AsyncClient(

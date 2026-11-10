@@ -20,6 +20,7 @@ from fakeyou.api.ratelimit import RateLimiter
 from fakeyou.api.sessions import router as sessions_router
 from fakeyou.catalog.errors import ErrorCode, FakeYouError, render_error
 from fakeyou.config.settings import Settings
+from fakeyou.db.jobs import create_job_queue
 from fakeyou.db.owner_model import create_owner_model
 from fakeyou.db.session_status import create_session_status
 from fakeyou.transport.streams import StreamTransport
@@ -99,6 +100,9 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         owner_model = create_owner_model(settings)
         exits.push_async_callback(owner_model.close)
         app.state.owner_model = owner_model
+        jobs = create_job_queue(settings)
+        exits.push_async_callback(jobs.close)
+        app.state.jobs = jobs
         yield
 
 
@@ -116,6 +120,7 @@ def create_app(settings: Settings, deps: ApiDeps | None = None) -> FastAPI:
     app.state.stream_transport = None
     app.state.session_status = None
     app.state.owner_model = None
+    app.state.jobs = None
     app.state.token_store = TokenStore.from_settings(settings)
     app.state.rate_limiter = RateLimiter(settings.api.rate_limit_per_minute)
 

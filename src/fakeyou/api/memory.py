@@ -22,6 +22,7 @@ from fakeyou.api.transport import shared_stream_transport
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import parse_session_id
 from fakeyou.config.settings import Settings
+from fakeyou.db.jobs import REEMBED_TASK, JobQueue, QueuedJob
 from fakeyou.db.session_status import SessionStatusRepository
 from fakeyou.memory.forget import ForgottenFiles, run_forget
 from fakeyou.memory.operator_access import OperatorAccess
@@ -29,12 +30,7 @@ from fakeyou.memory.persona import OperatorIdentity, PersonaProfile
 from fakeyou.orchestration.providers import open_persona_memory
 from fakeyou.persistence.ingestion_status import IngestionState, IngestionStatus, read_status
 from fakeyou.persistence.layout import MeetingDir
-from fakeyou.transport.schemas import (
-    INGESTION_STREAM,
-    REEMBED_STREAM,
-    encode_ingestion_job,
-    encode_reembed_job,
-)
+from fakeyou.transport.schemas import INGESTION_STREAM, encode_ingestion_job
 from fakeyou.worker.documents import write_session_persona
 
 if TYPE_CHECKING:
@@ -81,6 +77,34 @@ def _job_transport(request: Request) -> JobTransport:
     if factory is not None:
         return cast(JobTransport, factory())
     return cast(JobTransport, shared_stream_transport(request))
+
+
+async def queued_jobs(request: Request) -> JobQueue | None:
+    return cast("JobQueue | None", request.app.state.jobs)
+
+
+def _require_queue(queue: JobQueue | None) -> JobQueue:
+    if queue is None:
+        raise FakeYouError(ErrorCode.DATABASE_URL_MISSING)
+    return queue
+
+
+def _queued_job_view(job: QueuedJob) -> JobView:
+    status = {
+        "todo": "queued",
+        "doing": "running",
+        "succeeded": "completed",
+        "failed": "failed",
+        "aborted": "failed",
+    }.get(job.status, job.status)
+    return JobView(
+        job_id=str(job.id),
+        kind="reembed",
+        meeting_id="",
+        status=status,
+        completed=status in {"completed", "failed"},
+        succeeded=status == "completed",
+    )
 
 
 def _now(request: Request) -> str:
@@ -201,7 +225,17 @@ async def read_job(
     job_id: str,
     principal: _Owner,
     request: Request,
+    queue: Annotated[JobQueue | None, Depends(queued_jobs)],
 ) -> JobView:
+    if job_id.isdigit():
+        queued = await _require_queue(queue).fetch(int(job_id))
+        if queued is None or queued.task != REEMBED_TASK:
+            raise FakeYouError(ErrorCode.API_NOT_FOUND)
+        owner_id = _owner_id(principal)
+        if queued.args.get("owner_id") != owner_id:
+            raise FakeYouError(ErrorCode.API_NOT_FOUND)
+        _twin_persona(request, str(queued.args.get("twin_id", "")), owner_id)
+        return _queued_job_view(queued)
     fields = (
         await _job_transport(request).read_entry(INGESTION_STREAM, job_id)
         if _ENTRY_ID_PATTERN.fullmatch(job_id) is not None
@@ -262,14 +296,14 @@ async def submit_reembedding(
     twin_id: str,
     principal: _Owner,
     request: Request,
+    queue: Annotated[JobQueue | None, Depends(queued_jobs)],
 ) -> JobView:
     owner_id = _owner_id(principal)
     _twin_persona(request, twin_id, owner_id)
-    fields = encode_reembed_job(at=_now(request), owner_id=owner_id, twin_id=twin_id)
     await stage_overrides(_job_transport(request), f"twin:{twin_id}", request.headers)
-    job_id = await _job_transport(request).publish_job(REEMBED_STREAM, fields)
+    job_id = await _require_queue(queue).defer_reembed(owner_id=owner_id, twin_id=twin_id)
     return JobView(
-        job_id=job_id,
+        job_id=str(job_id),
         kind="reembed",
         meeting_id="",
         status="queued",
