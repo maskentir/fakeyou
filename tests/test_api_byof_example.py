@@ -1,6 +1,6 @@
 import importlib.util
 import json
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
 from types import ModuleType
@@ -45,16 +45,6 @@ def example() -> ModuleType:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
-
-
-class _JobRecordingTransport(SeededTransport):
-    def __init__(self) -> None:
-        super().__init__()
-        self.jobs: list[tuple[str, dict[str, str]]] = []
-
-    async def publish_job(self, stream: str, fields: Mapping[str, str]) -> str:
-        self.jobs.append((stream, dict(fields)))
-        return f"{len(self.jobs)}-0"
 
 
 class _FinishingStatus(MemorySessionStatus):
@@ -108,7 +98,7 @@ async def api(settings: Settings) -> AsyncIterator[ApiEventsHarness]:
             encoding="utf-8",
         )
 
-    harness.seeded = _JobRecordingTransport()
+    harness.seeded = SeededTransport()
     harness.transport = harness.seeded
     harness.status = _FinishingStatus(finish_session)
     try:

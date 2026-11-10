@@ -13,7 +13,7 @@ from fakeyou.db.jobs import build_job_queue
 from fakeyou.transport.streams import StreamTransport
 from fakeyou.worker.consumer import WorkerConsumer
 from fakeyou.worker.debrief import DebriefWorker
-from fakeyou.worker.ingestion import IngestionConsumer
+from fakeyou.worker.ingestion import IngestionWorker
 from fakeyou.worker.reembed import ReembedWorker
 from tests._session_status_fakes import MemorySessionStatus
 
@@ -75,10 +75,10 @@ async def test_sessions_role_runs_only_the_session_consumer(
 
 
 @pytest.mark.usefixtures("settings")
-async def test_ingestion_role_runs_only_the_ingestion_consumer(
+async def test_ingestion_role_runs_only_the_ingestion_worker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    assert await _started_roles(monkeypatch, "ingestion") == [IngestionConsumer]
+    assert await _started_roles(monkeypatch, "ingestion") == [IngestionWorker]
 
 
 @pytest.mark.usefixtures("settings")

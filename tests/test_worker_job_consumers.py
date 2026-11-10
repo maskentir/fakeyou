@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 
@@ -11,7 +11,7 @@ from fakeyou.config.settings import Settings
 from fakeyou.db.jobs import JobQueue, build_job_queue
 from fakeyou.debrief.debrief_service import DebriefOutcome
 from fakeyou.memory.operator_access import OperatorAccess
-from fakeyou.transport.streams import PendingDelivery, StreamTransport
+from fakeyou.transport.streams import StreamTransport
 from fakeyou.worker.consumer import SnapshotStore
 from fakeyou.worker.debrief import DebriefDeps, DebriefHandler, DebriefJob, DebriefWorker
 from fakeyou.worker.reembed import (
@@ -26,65 +26,13 @@ from tests._persistence_fakes import RecordingJournal
 
 class StreamDouble:
     def __init__(self) -> None:
-        self.entries: dict[tuple[str, str], dict[str, str]] = {}
-        self.fresh: list[tuple[str, dict[str, str]]] = []
-        self.acked: list[tuple[str, str, str]] = []
         self.events: list[tuple[str, dict[str, str]]] = []
-        self.exhausted: dict[tuple[str, str], int] = {}
-
-    def seed(self, stream: str, entry_id: str, fields: Mapping[str, str]) -> None:
-        self.entries[(stream, entry_id)] = dict(fields)
-        self.fresh.append((entry_id, dict(fields)))
-
-    async def ensure_group(self, _stream: str, _group: str) -> None:
-        return None
-
-    async def pending_deliveries(
-        self, _stream: str, _group: str, *, min_idle_ms: int
-    ) -> list[PendingDelivery]:
-        del min_idle_ms
-        return []
-
-    async def claim_entry(
-        self, stream: str, _group: str, _worker: str, entry_id: str, *, min_idle_ms: int
-    ) -> dict[str, str] | None:
-        del min_idle_ms
-        return self.entries.get((stream, entry_id))
-
-    async def read_group(
-        self, stream: str, _group: str, _worker: str, *, count: int, block_ms: int
-    ) -> list[tuple[str, dict[str, str]]]:
-        del count, block_ms, stream, _group, _worker
-        if not self.fresh:
-            return []
-        return [self.fresh.pop(0)]
-
-    async def read_entry(self, stream: str, entry_id: str) -> dict[str, str] | None:
-        return self.entries.get((stream, entry_id))
-
-    async def ack(self, stream: str, group: str, entry_id: str) -> None:
-        self.acked.append((stream, group, entry_id))
-
-    async def touch_entry(self, _stream: str, _group: str, _worker: str, _entry: str) -> None:
-        return None
 
     async def take_overrides(self, _scope: str) -> dict[str, str]:
         return {}
 
     async def publish_event(self, meeting_id: str, fields: Mapping[str, str]) -> None:
         self.events.append((meeting_id, dict(fields)))
-
-    def create_entry_ack(
-        self, stream: str, group: str, entry_id: str
-    ) -> Callable[[], Awaitable[None]]:
-        async def ack() -> None:
-            await self.ack(stream, group, entry_id)
-
-        return ack
-
-    @property
-    def details(self) -> list[str]:
-        return [fields.get("detail", "") for _meeting, fields in self.events]
 
 
 class EmptyStore:

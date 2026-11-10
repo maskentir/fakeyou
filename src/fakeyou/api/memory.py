@@ -1,4 +1,3 @@
-import re
 from collections.abc import Mapping
 from functools import partial
 from typing import TYPE_CHECKING, Annotated, Literal, Protocol, cast
@@ -22,7 +21,7 @@ from fakeyou.api.transport import shared_stream_transport
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import parse_session_id
 from fakeyou.config.settings import Settings
-from fakeyou.db.jobs import REEMBED_TASK, JobQueue, QueuedJob
+from fakeyou.db.jobs import INGEST_KINDS, INGEST_TASK, REEMBED_TASK, JobQueue, QueuedJob
 from fakeyou.db.session_status import SessionStatusRepository
 from fakeyou.memory.forget import ForgottenFiles, run_forget
 from fakeyou.memory.operator_access import OperatorAccess
@@ -30,25 +29,18 @@ from fakeyou.memory.persona import OperatorIdentity, PersonaProfile
 from fakeyou.orchestration.providers import open_persona_memory
 from fakeyou.persistence.ingestion_status import IngestionState, IngestionStatus, read_status
 from fakeyou.persistence.layout import MeetingDir
-from fakeyou.transport.schemas import INGESTION_STREAM, encode_ingestion_job
 from fakeyou.worker.documents import write_session_persona
 
 if TYPE_CHECKING:
     from fakeyou.api.app import ApiDeps
 
 _TERMINAL_STATES = frozenset({"completed", "failed", "interrupted"})
-_ENTRY_ID_PATTERN = re.compile(r"\d+-\d+")
-_INGESTION_JOB_TYPE = "ingestion_job"
 
 
 class JobTransport(Protocol):
-    async def publish_job(self, stream: str, fields: Mapping[str, str]) -> str: ...
-
     async def store_overrides(
         self, scope: str, overrides: Mapping[str, str], *, ttl_seconds: float
     ) -> None: ...
-
-    async def read_entry(self, stream: str, entry_id: str) -> dict[str, str] | None: ...
 
 
 class IngestionSubmit(BaseModel):
@@ -190,14 +182,12 @@ async def submit_ingestion(
     payload: IngestionSubmit,
     principal: _Owner,
     request: Request,
+    queue: Annotated[JobQueue | None, Depends(queued_jobs)],
 ) -> JobView:
     _owned_snapshot(request, meeting_id, principal)
     await stage_overrides(_job_transport(request), meeting_id, request.headers)
-    job_id = await _job_transport(request).publish_job(
-        INGESTION_STREAM,
-        encode_ingestion_job(meeting_id=meeting_id, kind=payload.kind, at=_now(request)),
-    )
-    return _job_view(job_id, kind=payload.kind, meeting_id=meeting_id, state="pending")
+    job_id = await require_jobs(queue).defer_ingest(meeting_id=meeting_id, kind=payload.kind)
+    return _job_view(str(job_id), kind=payload.kind, meeting_id=meeting_id, state="pending")
 
 
 @router.get("/v1/sessions/{meeting_id}/ingestion", response_model=IngestionView)
@@ -217,30 +207,30 @@ async def read_job(
     request: Request,
     queue: Annotated[JobQueue | None, Depends(queued_jobs)],
 ) -> JobView:
-    if job_id.isdigit():
-        queued = await require_jobs(queue).fetch(int(job_id))
-        if queued is None or queued.task != REEMBED_TASK:
-            raise FakeYouError(ErrorCode.API_NOT_FOUND)
-        owner_id = _owner_id(principal)
-        if queued.args.get("owner_id") != owner_id:
-            raise FakeYouError(ErrorCode.API_NOT_FOUND)
-        _twin_persona(request, str(queued.args.get("twin_id", "")), owner_id)
-        return _queued_job_view(queued)
-    fields = (
-        await _job_transport(request).read_entry(INGESTION_STREAM, job_id)
-        if _ENTRY_ID_PATTERN.fullmatch(job_id) is not None
-        else None
-    )
-    if fields is None or fields.get("type") != _INGESTION_JOB_TYPE:
+    if not job_id.isdigit():
         raise FakeYouError(ErrorCode.API_NOT_FOUND)
-    meeting_id = fields["meeting_id"]
-    _owned_snapshot(request, meeting_id, principal)
-    return _job_view(
-        job_id,
-        kind=fields["kind"],
-        meeting_id=meeting_id,
-        state=_job_state(request, meeting_id, job_id),
-    )
+    queued = await require_jobs(queue).fetch(int(job_id))
+    if queued is None:
+        raise FakeYouError(ErrorCode.API_NOT_FOUND)
+    if queued.task == INGEST_TASK:
+        meeting_id = str(queued.args.get("meeting_id", ""))
+        kind = str(queued.args.get("kind", ""))
+        _owned_snapshot(request, meeting_id, principal)
+        if kind not in INGEST_KINDS:
+            raise FakeYouError(ErrorCode.API_NOT_FOUND)
+        return _job_view(
+            job_id,
+            kind=kind,
+            meeting_id=meeting_id,
+            state=_job_state(request, meeting_id, job_id),
+        )
+    if queued.task != REEMBED_TASK:
+        raise FakeYouError(ErrorCode.API_NOT_FOUND)
+    owner_id = _owner_id(principal)
+    if queued.args.get("owner_id") != owner_id:
+        raise FakeYouError(ErrorCode.API_NOT_FOUND)
+    _twin_persona(request, str(queued.args.get("twin_id", "")), owner_id)
+    return _queued_job_view(queued)
 
 
 @router.post("/v1/sessions/{meeting_id}/forget", response_model=ForgetView)

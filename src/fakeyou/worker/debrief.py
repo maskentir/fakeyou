@@ -113,10 +113,13 @@ class DebriefWorker:
         self._handler = deps.handler or run_debrief_job
         self._transport = deps.transport
         self._queue = queue
-        queue.app.task(
+        queue.task(
+            pass_context=True,
             name=DEBRIEF_TASK,
             queue=DEBRIEF_QUEUE,
-            retry=RetryStrategy(max_attempts=DEBRIEF_DELIVERY_LIMIT, wait=5, exponential_wait=2),
+            retry=RetryStrategy(
+                max_attempts=DEBRIEF_DELIVERY_LIMIT - 1, wait=5, exponential_wait=2
+            ),
         )(self._debrief_meeting)
 
     async def run_forever(self) -> None:
@@ -139,7 +142,7 @@ class DebriefWorker:
         )
 
     async def _debrief_meeting(
-        self, meeting_id: str, *, force: bool, context: JobContext | None = None
+        self, context: JobContext, meeting_id: str, *, force: bool
     ) -> DebriefOutcome | None:
         if not is_identifier(meeting_id):
             await self._fault(meeting_id, INVALID_JOB_DETAIL)
@@ -148,7 +151,7 @@ class DebriefWorker:
         try:
             outcome = await self._handler(job, deps=self._deps)
         except Exception as error:
-            attempts = context.job.attempts if context is not None else 0
+            attempts = context.job.attempts
             detail = (
                 DEAD_LETTER_DETAIL if attempts + 1 >= DEBRIEF_DELIVERY_LIMIT else FAILED_JOB_DETAIL
             )

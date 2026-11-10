@@ -1,5 +1,6 @@
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from procrastinate import App, PsycopgConnector
 from procrastinate.connector import BaseConnector
@@ -11,6 +12,9 @@ REEMBED_QUEUE = "reembed"
 REEMBED_TASK = "reembed_twin"
 DEBRIEF_QUEUE = "debrief"
 DEBRIEF_TASK = "debrief_meeting"
+INGEST_QUEUE = "ingestion"
+INGEST_TASK = "ingest_meeting"
+INGEST_KINDS = ("ingest", "correct")
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +33,12 @@ class JobQueue:
     @property
     def app(self) -> App:
         return self._app
+
+    def task(self, **options: Any) -> Callable[..., Any]:
+        name = options.get("name")
+        if isinstance(name, str):
+            self._app.tasks.pop(name, None)
+        return cast(Callable[..., Any], self._app.task(**options))
 
     async def open(self) -> None:
         if not self._opened:
@@ -53,6 +63,16 @@ class JobQueue:
             DEBRIEF_TASK, queue=DEBRIEF_QUEUE, lock=f"debrief:{meeting_id}"
         )
         return await task.defer_async(meeting_id=meeting_id, force=force)
+
+    async def defer_ingest(self, *, meeting_id: str, kind: str, delay_seconds: float = 0) -> int:
+        if kind not in INGEST_KINDS:
+            raise ValueError(f"unknown ingestion job kind: {kind!r}")
+        await self.open()
+        options: dict[str, Any] = {"queue": INGEST_QUEUE, "lock": f"ingest:{meeting_id}"}
+        if delay_seconds > 0:
+            options["schedule_in"] = {"seconds": delay_seconds}
+        task = self._app.configure_task(INGEST_TASK, **options)
+        return await task.defer_async(meeting_id=meeting_id, kind=kind)
 
     async def jobs_for(self, task: str) -> list[QueuedJob]:
         await self.open()

@@ -95,10 +95,13 @@ class ReembedWorker:
         self._deps = deps
         self._handler = deps.handler or run_reembed_job
         self._queue = queue
-        queue.app.task(
+        queue.task(
+            pass_context=True,
             name=REEMBED_TASK,
             queue=REEMBED_QUEUE,
-            retry=RetryStrategy(max_attempts=REEMBED_DELIVERY_LIMIT, wait=5, exponential_wait=2),
+            retry=RetryStrategy(
+                max_attempts=REEMBED_DELIVERY_LIMIT - 1, wait=5, exponential_wait=2
+            ),
         )(self._reembed_twin)
 
     async def run_forever(self) -> None:
@@ -120,9 +123,7 @@ class ReembedWorker:
             queues=[REEMBED_QUEUE], wait=False, install_signal_handlers=False
         )
 
-    async def _reembed_twin(
-        self, owner_id: str, twin_id: str, context: JobContext | None = None
-    ) -> str:
+    async def _reembed_twin(self, context: JobContext, owner_id: str, twin_id: str) -> str:
         if not is_identifier(owner_id) or not is_identifier(twin_id):
             self._fault(twin_id, INVALID_JOB_DETAIL)
             return twin_id
@@ -130,7 +131,7 @@ class ReembedWorker:
         try:
             return await self._handler(await build_reembed_access(self._deps, job), job=job)
         except Exception as error:
-            attempts = context.job.attempts if context is not None else 0
+            attempts = context.job.attempts
             detail = (
                 DEAD_LETTER_DETAIL if attempts + 1 >= REEMBED_DELIVERY_LIMIT else FAILED_JOB_DETAIL
             )

@@ -9,6 +9,18 @@ from fakeyou.db.jobs import build_job_queue, create_job_queue
 NO_ENV_FILE: dict[str, Any] = {"_env_file": None}
 
 
+async def test_a_deferred_ingest_job_round_trips_with_its_arguments() -> None:
+    queue = build_job_queue(InMemoryConnector())
+
+    job_id = await queue.defer_ingest(meeting_id="m1", kind="correct")
+    fetched = await queue.fetch(job_id)
+
+    assert fetched is not None
+    assert (fetched.task, fetched.status) == ("ingest_meeting", "todo")
+    assert fetched.args == {"meeting_id": "m1", "kind": "correct"}
+    await queue.close()
+
+
 async def test_a_deferred_reembed_job_round_trips_with_its_arguments() -> None:
     queue = build_job_queue(InMemoryConnector())
 

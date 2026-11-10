@@ -10,19 +10,12 @@ EVENT_TYPES: tuple[str, ...] = (
     "session_ended",
 )
 INGESTION_JOB_TYPES: tuple[str, ...] = ("ingest", "correct")
-INGESTION_STREAM = "fakeyou:jobs:ingestion"
 
 _FORBIDDEN_EVENT_FIELDS = frozenset({"evidence", "api-key"})
 
 
 def event_stream(meeting_id: str) -> str:
     return f"fakeyou:meeting:{meeting_id}:events"
-
-
-def encode_ingestion_job(*, meeting_id: str, kind: str, at: str) -> dict[str, str]:
-    if kind not in INGESTION_JOB_TYPES:
-        raise ValueError(f"unknown ingestion job kind: {kind!r}")
-    return {"v": "1", "type": "ingestion_job", "at": at, "meeting_id": meeting_id, "kind": kind}
 
 
 def _forbidden_event_field(name: str) -> bool:

@@ -1,9 +1,8 @@
-from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, ValidationError
+from pydantic import AwareDatetime, BaseModel, ConfigDict
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import SessionIdField, parse_session_id
@@ -38,15 +37,6 @@ class _IngestionJobFields(BaseModel):
     kind: IngestionJobKind
 
 
-def parse_ingestion_job(fields: Mapping[str, str], *, job_id: str) -> IngestionJob:
-    try:
-        parsed = _IngestionJobFields.model_validate(dict(fields))
-    except ValidationError as error:
-        names = sorted({str(item["loc"][0]) for item in error.errors() if item["loc"]})
-        raise ValueError(f"invalid ingestion job field: {', '.join(names)}") from None
-    return IngestionJob(meeting_id=parsed.meeting_id, kind=parsed.kind, job_id=job_id)
-
-
 def _corrupt_status_summary(meeting_id: str) -> IngestSummary:
     return IngestSummary(
         meeting_id=meeting_id,
@@ -66,7 +56,6 @@ async def handle_ingestion_job(
     *,
     access: OperatorAccess,
     ports: IngestPorts,
-    ack: Callable[[], Awaitable[None]],
 ) -> IngestSummary:
     published: list[IngestSummary] = []
 
@@ -87,16 +76,15 @@ async def handle_ingestion_job(
         if error.code is not ErrorCode.INGESTION_STATUS_CORRUPT:
             raise
         ports.report(error)
-        summary = _corrupt_status_summary(job.meeting_id)
-        ports.publish(summary)
-        return summary
+        ports.publish(_corrupt_status_summary(job.meeting_id))
+        raise RuntimeError("ingestion job published an unstored summary") from error
     if not published:
         raise RuntimeError("ingestion job published no summary")
     if len(published) > 1:
         raise RuntimeError("ingestion job published more than one summary")
     [summary] = published
-    if summary.stored:
-        await ack()
+    if not summary.stored:
+        raise RuntimeError("ingestion job published an unstored summary")
     return summary
 
 
