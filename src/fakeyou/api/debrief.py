@@ -8,26 +8,25 @@ from pydantic import BaseModel, ConfigDict
 from fakeyou.api.auth import Principal, require_owner
 from fakeyou.api.overrides import stage_overrides
 from fakeyou.api.schemas import SessionSnapshot
-from fakeyou.api.sessions import SessionStore, now_iso
+from fakeyou.api.sessions import SessionStore
+from fakeyou.api.status import queued_jobs, require_jobs
 from fakeyou.api.transport import shared_stream_transport
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import parse_session_id
 from fakeyou.config.settings import Settings
+from fakeyou.db.jobs import JobQueue
 from fakeyou.debrief.debrief import debrief_report_status, read_debrief
 from fakeyou.debrief.debrief_schema import DebriefValidationError
 from fakeyou.observability.journal import journal_path
 from fakeyou.observability.report import build_session_report, read_journal_with_corrupt
 from fakeyou.observability.scorecard import score_session
 from fakeyou.persistence.record import meeting_record_path
-from fakeyou.transport.schemas import DEBRIEF_STREAM, encode_debrief_job
 
 if TYPE_CHECKING:
     from fakeyou.api.app import ApiDeps
 
 
-class DebriefPublisher(Protocol):
-    async def publish_job(self, stream: str, fields: Mapping[str, str]) -> str: ...
-
+class DebriefOverrides(Protocol):
     async def store_overrides(
         self, scope: str, overrides: Mapping[str, str], *, ttl_seconds: float
     ) -> None: ...
@@ -70,18 +69,11 @@ def _snapshot_store(request: Request) -> SessionStore:
     return SessionStore(_settings(request).paths.record_dir)
 
 
-def _publisher(request: Request) -> DebriefPublisher:
+def _overrides(request: Request) -> DebriefOverrides:
     factory = _deps(request).transport
     if factory is not None:
-        return cast(DebriefPublisher, factory())
-    return cast(DebriefPublisher, shared_stream_transport(request))
-
-
-def _now(request: Request) -> str:
-    factory = _deps(request).now_iso
-    if factory is not None:
-        return factory()
-    return now_iso()
+        return cast(DebriefOverrides, factory())
+    return cast(DebriefOverrides, shared_stream_transport(request))
 
 
 def _owner_id(principal: Principal) -> str:
@@ -104,10 +96,6 @@ def _served_report(record_path: Path) -> dict[str, Any] | None:
         return None
 
 
-def _debrief_job_fields(meeting_id: str, *, force: bool, at: str) -> dict[str, str]:
-    return encode_debrief_job(meeting_id=meeting_id, at=at, force=force)
-
-
 router = APIRouter(prefix="/v1/sessions", tags=["debrief"])
 
 _Owner = Annotated[Principal, Depends(require_owner)]
@@ -119,13 +107,11 @@ async def submit_debrief(
     payload: DebriefSubmit,
     principal: _Owner,
     request: Request,
+    queue: Annotated[JobQueue | None, Depends(queued_jobs)],
 ) -> DebriefQueued:
     _owned_snapshot(request, meeting_id, principal)
-    await stage_overrides(_publisher(request), meeting_id, request.headers)
-    await _publisher(request).publish_job(
-        DEBRIEF_STREAM,
-        _debrief_job_fields(meeting_id, force=payload.force, at=_now(request)),
-    )
+    await stage_overrides(_overrides(request), meeting_id, request.headers)
+    await require_jobs(queue).defer_debrief(meeting_id=meeting_id, force=payload.force)
     return DebriefQueued(meeting_id=meeting_id, status="queued")
 
 

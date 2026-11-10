@@ -11,15 +11,9 @@ from fakeyou.config.settings import Settings
 from fakeyou.db.jobs import JobQueue, build_job_queue
 from fakeyou.debrief.debrief_service import DebriefOutcome
 from fakeyou.memory.operator_access import OperatorAccess
-from fakeyou.transport.schemas import DEBRIEF_STREAM
 from fakeyou.transport.streams import PendingDelivery, StreamTransport
 from fakeyou.worker.consumer import SnapshotStore
-from fakeyou.worker.debrief import (
-    DebriefConsumer,
-    DebriefDeps,
-    DebriefHandler,
-    DebriefJob,
-)
+from fakeyou.worker.debrief import DebriefDeps, DebriefHandler, DebriefJob, DebriefWorker
 from fakeyou.worker.reembed import (
     ReembedDeps,
     ReembedHandler,
@@ -28,14 +22,6 @@ from fakeyou.worker.reembed import (
     TwinSnapshot,
 )
 from tests._persistence_fakes import RecordingJournal
-
-DEBRIEF_JOB = {
-    "v": "1",
-    "type": "debrief_job",
-    "at": "2026-10-18T10:00:00+00:00",
-    "meeting_id": "m1",
-    "force": "false",
-}
 
 
 class StreamDouble:
@@ -123,19 +109,21 @@ def _outcome(meeting_id: str) -> DebriefOutcome:
     )
 
 
-def _debrief_consumer(
+def _debrief_worker(
     settings: Settings, stream: StreamDouble, handler: DebriefHandler
-) -> DebriefConsumer:
-    return DebriefConsumer(
+) -> tuple[DebriefWorker, JobQueue]:
+    queue = build_job_queue(InMemoryConnector())
+    worker = DebriefWorker(
         DebriefDeps(
             settings=settings,
             transport=cast(StreamTransport, stream),
             store=cast(SnapshotStore, EmptyStore()),
             shutdown=asyncio.Event(),
-            worker_id="worker-a",
             handler=handler,
-        )
+        ),
+        queue,
     )
+    return worker, queue
 
 
 def _reembed_worker(
@@ -228,59 +216,57 @@ async def test_reembed_worker_faults_and_keeps_a_failing_run_for_retry(
     assert [row["detail"] for row in journal.events("reembed_failed")] == ["reembed_job_failed"]
 
 
-async def test_debrief_fault_carries_the_domain_error_code(
-    settings: Settings, journal: RecordingJournal
+async def test_debrief_worker_runs_the_meeting_from_the_job_queue(
+    settings: Settings,
 ) -> None:
+    stream = StreamDouble()
+    seen: list[DebriefJob] = []
+
+    async def handler(job: DebriefJob, *, deps: DebriefDeps) -> DebriefOutcome:
+        del deps
+        seen.append(job)
+        return _outcome(job.meeting_id)
+
+    worker, queue = _debrief_worker(settings, stream, handler)
+    job_id = await queue.defer_debrief(meeting_id="m1", force=True)
+
+    await worker.run_once()
+
+    assert seen == [DebriefJob(meeting_id="m1", force=True)]
+    fetched = await queue.fetch(job_id)
+    assert fetched is not None
+    assert fetched.status == "succeeded"
+
+
+async def test_debrief_fault_carries_the_domain_error_code(settings: Settings) -> None:
     stream = StreamDouble()
     stream.events.clear()
 
-    async def handler(
-        job: DebriefJob, *, deps: DebriefDeps, ack: Callable[[], Awaitable[None]]
-    ) -> DebriefOutcome:
-        del job, deps, ack
+    async def handler(job: DebriefJob, *, deps: DebriefDeps) -> DebriefOutcome:
+        del job, deps
         raise FakeYouError(ErrorCode.DEBRIEF_RECORD_MISSING)
 
-    stream.seed(DEBRIEF_STREAM, "0-0", DEBRIEF_JOB)
-    deps = DebriefDeps(
-        settings=settings,
-        transport=cast(StreamTransport, stream),
-        store=cast(SnapshotStore, EmptyStore()),
-        shutdown=asyncio.Event(),
-        worker_id="worker-a",
-        handler=handler,
-        journal=journal,
-    )
+    worker, queue = _debrief_worker(settings, stream, handler)
+    await queue.defer_debrief(meeting_id="m1", force=False)
 
-    await DebriefConsumer(deps).run_once()
+    await worker.run_once()
 
     [failed] = [row for _meeting, row in stream.events if row["detail"] == "debrief_job_failed"]
     assert failed["error_code"] == "debrief.record_missing"
 
 
-async def test_debrief_fault_omits_the_code_for_an_unexpected_error(
-    settings: Settings, journal: RecordingJournal
-) -> None:
+async def test_debrief_fault_omits_the_code_for_an_unexpected_error(settings: Settings) -> None:
     stream = StreamDouble()
     stream.events.clear()
 
-    async def handler(
-        job: DebriefJob, *, deps: DebriefDeps, ack: Callable[[], Awaitable[None]]
-    ) -> DebriefOutcome:
-        del job, deps, ack
+    async def handler(job: DebriefJob, *, deps: DebriefDeps) -> DebriefOutcome:
+        del job, deps
         raise ValueError("boom")
 
-    stream.seed(DEBRIEF_STREAM, "0-0", DEBRIEF_JOB)
-    deps = DebriefDeps(
-        settings=settings,
-        transport=cast(StreamTransport, stream),
-        store=cast(SnapshotStore, EmptyStore()),
-        shutdown=asyncio.Event(),
-        worker_id="worker-a",
-        handler=handler,
-        journal=journal,
-    )
+    worker, queue = _debrief_worker(settings, stream, handler)
+    await queue.defer_debrief(meeting_id="m1", force=False)
 
-    await DebriefConsumer(deps).run_once()
+    await worker.run_once()
 
     [failed] = [row for _meeting, row in stream.events if row["detail"] == "debrief_job_failed"]
     assert failed["error_type"] == "ValueError"

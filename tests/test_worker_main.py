@@ -12,7 +12,7 @@ from fakeyou.config.settings import GoogleReply, ReasoningEffort, Settings
 from fakeyou.db.jobs import build_job_queue
 from fakeyou.transport.streams import StreamTransport
 from fakeyou.worker.consumer import WorkerConsumer
-from fakeyou.worker.debrief import DebriefConsumer
+from fakeyou.worker.debrief import DebriefWorker
 from fakeyou.worker.ingestion import IngestionConsumer
 from fakeyou.worker.reembed import ReembedWorker
 from tests._session_status_fakes import MemorySessionStatus
@@ -82,10 +82,10 @@ async def test_ingestion_role_runs_only_the_ingestion_consumer(
 
 
 @pytest.mark.usefixtures("settings")
-async def test_debrief_role_runs_only_the_debrief_consumer(
+async def test_debrief_role_runs_only_the_debrief_worker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    assert await _started_roles(monkeypatch, "debrief") == [DebriefConsumer]
+    assert await _started_roles(monkeypatch, "debrief") == [DebriefWorker]
 
 
 @pytest.mark.usefixtures("settings")

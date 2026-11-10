@@ -9,6 +9,8 @@ from fakeyou.db.engine import configured_url, require_url
 
 REEMBED_QUEUE = "reembed"
 REEMBED_TASK = "reembed_twin"
+DEBRIEF_QUEUE = "debrief"
+DEBRIEF_TASK = "debrief_meeting"
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +46,27 @@ class JobQueue:
             REEMBED_TASK, queue=REEMBED_QUEUE, lock=f"reembed:{twin_id}"
         )
         return await task.defer_async(owner_id=owner_id, twin_id=twin_id)
+
+    async def defer_debrief(self, *, meeting_id: str, force: bool) -> int:
+        await self.open()
+        task = self._app.configure_task(
+            DEBRIEF_TASK, queue=DEBRIEF_QUEUE, lock=f"debrief:{meeting_id}"
+        )
+        return await task.defer_async(meeting_id=meeting_id, force=force)
+
+    async def jobs_for(self, task: str) -> list[QueuedJob]:
+        await self.open()
+        jobs = await self._app.job_manager.list_jobs_async(task=task)
+        return [
+            QueuedJob(
+                id=job.id,
+                task=job.task_name,
+                status=job.status or "todo",
+                args=dict(job.task_kwargs or {}),
+            )
+            for job in jobs
+            if job.id is not None
+        ]
 
     async def fetch(self, job_id: int) -> QueuedJob | None:
         await self.open()

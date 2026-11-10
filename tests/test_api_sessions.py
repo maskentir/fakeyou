@@ -11,11 +11,10 @@ from procrastinate.testing import InMemoryConnector
 from pydantic import SecretStr
 
 from fakeyou.api.app import ApiDeps, create_app
-from fakeyou.api.memory import queued_jobs
 from fakeyou.api.owner_model import owner_model
 from fakeyou.api.schemas import SessionCreate, build_snapshot
 from fakeyou.api.sessions import SessionStore
-from fakeyou.api.status import session_status
+from fakeyou.api.status import queued_jobs, session_status
 from fakeyou.config.identifiers import SessionId, is_identifier
 from fakeyou.config.settings import Settings
 from fakeyou.db.jobs import build_job_queue

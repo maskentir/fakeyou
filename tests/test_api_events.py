@@ -6,15 +6,17 @@ from typing import Any, cast, override
 
 import httpx2
 import pytest
+from procrastinate.testing import InMemoryConnector
 from pydantic import SecretStr
 
 from fakeyou.api.app import ApiDeps, create_app
 from fakeyou.api.owner_model import owner_model
 from fakeyou.api.schemas import SessionCreate, build_snapshot
 from fakeyou.api.sessions import SessionStore
-from fakeyou.api.status import session_status
+from fakeyou.api.status import queued_jobs, session_status
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
+from fakeyou.db.jobs import build_job_queue
 from fakeyou.db.session_status import PhaseUpdate
 from fakeyou.foundation.taxonomy import PublicPhase, TerminalReason
 from tests._session_status_fakes import MemoryOwnerModel, MemorySessionStatus
@@ -227,6 +229,8 @@ class ApiEventsHarness(ApiHarness):
             ),
         )
         self.app.dependency_overrides[session_status] = lambda: self.status
+        self.jobs = build_job_queue(InMemoryConnector())
+        self.app.dependency_overrides[queued_jobs] = lambda: self.jobs
         self.app.dependency_overrides[owner_model] = lambda: MemoryOwnerModel()
         self.client = httpx2.AsyncClient(
             transport=httpx2.ASGITransport(app=self.app), base_url=BASE_URL

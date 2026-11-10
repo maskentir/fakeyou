@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 
 import pytest
+from procrastinate.testing import InMemoryConnector
 from redis.asyncio import Redis
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import ResponseError
@@ -18,6 +19,7 @@ from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.session import SessionConfig, SessionResult
+from fakeyou.db.jobs import build_job_queue
 from fakeyou.db.session_status import DesiredState, PhaseUpdate, SessionStatus
 from fakeyou.foundation.taxonomy import PublicPhase, TerminalReason
 from fakeyou.memory.ingest_job import IngestionJob, handle_ingestion_job
@@ -37,11 +39,7 @@ from fakeyou.persistence.ingestion_status import (
 )
 from fakeyou.persistence.layout import MeetingDir, meeting_profile_dir
 from fakeyou.persistence.owner_model import FrozenOwnerModel
-from fakeyou.transport.schemas import (
-    DEBRIEF_STREAM,
-    INGESTION_STREAM,
-    encode_ingestion_job,
-)
+from fakeyou.transport.schemas import INGESTION_STREAM, encode_ingestion_job
 from fakeyou.transport.streams import StreamTransport
 from fakeyou.worker.__main__ import run_consumers, verify_boot_dependencies
 from fakeyou.worker.consumer import (
@@ -353,6 +351,7 @@ class Harness:
         self.session_store = SessionStore(settings.paths.record_dir)
         self.store: SnapshotReader = cast(SnapshotReader, self.session_store)
         self.status = MemorySessionStatus()
+        self.jobs = build_job_queue(InMemoryConnector())
         self.double = SessionDouble()
         self.ports = JoinPorts(
             run_session=self.double.run,
@@ -369,6 +368,7 @@ class Harness:
                 store=self.session_store,
                 status=self.status,
                 ports=self.ports,
+                jobs=self.jobs,
                 shutdown=asyncio.Event(),
                 worker_id=worker_id,
             )
@@ -1227,9 +1227,8 @@ async def test_the_debrief_is_queued_when_the_meeting_ends(harness: Harness) -> 
 
     await harness.finish_session(phase="ended", terminal_reason="left_by_owner")
 
-    jobs = [fields for _entry, fields in harness.client.streams.get(DEBRIEF_STREAM, [])]
-    assert [job["meeting_id"] for job in jobs] == ["m-1"]
-    assert jobs[0]["type"] == "debrief_job"
+    jobs = await harness.jobs.jobs_for("debrief_meeting")
+    assert [job.args for job in jobs] == [{"meeting_id": "m-1", "force": False}]
 
 
 async def test_no_debrief_is_queued_without_a_record(harness: Harness) -> None:
@@ -1237,7 +1236,7 @@ async def test_no_debrief_is_queued_without_a_record(harness: Harness) -> None:
     assert await harness.consumer.run_once() == "m-1"
 
     await harness.finish_session(phase="ended", terminal_reason="left_by_owner")
-    assert harness.client.streams.get(DEBRIEF_STREAM, []) == []
+    assert await harness.jobs.jobs_for("debrief_meeting") == []
 
 
 async def test_the_terminal_reason_survives_a_live_phase_that_already_ended(

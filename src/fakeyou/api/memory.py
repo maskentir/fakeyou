@@ -17,7 +17,7 @@ from fakeyou.api.schemas import (
     SessionSnapshot,
 )
 from fakeyou.api.sessions import SessionStore, now_iso
-from fakeyou.api.status import session_status
+from fakeyou.api.status import queued_jobs, require_jobs, session_status
 from fakeyou.api.transport import shared_stream_transport
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import parse_session_id
@@ -77,16 +77,6 @@ def _job_transport(request: Request) -> JobTransport:
     if factory is not None:
         return cast(JobTransport, factory())
     return cast(JobTransport, shared_stream_transport(request))
-
-
-async def queued_jobs(request: Request) -> JobQueue | None:
-    return cast("JobQueue | None", request.app.state.jobs)
-
-
-def _require_queue(queue: JobQueue | None) -> JobQueue:
-    if queue is None:
-        raise FakeYouError(ErrorCode.DATABASE_URL_MISSING)
-    return queue
 
 
 def _queued_job_view(job: QueuedJob) -> JobView:
@@ -228,7 +218,7 @@ async def read_job(
     queue: Annotated[JobQueue | None, Depends(queued_jobs)],
 ) -> JobView:
     if job_id.isdigit():
-        queued = await _require_queue(queue).fetch(int(job_id))
+        queued = await require_jobs(queue).fetch(int(job_id))
         if queued is None or queued.task != REEMBED_TASK:
             raise FakeYouError(ErrorCode.API_NOT_FOUND)
         owner_id = _owner_id(principal)
@@ -301,7 +291,7 @@ async def submit_reembedding(
     owner_id = _owner_id(principal)
     _twin_persona(request, twin_id, owner_id)
     await stage_overrides(_job_transport(request), f"twin:{twin_id}", request.headers)
-    job_id = await _require_queue(queue).defer_reembed(owner_id=owner_id, twin_id=twin_id)
+    job_id = await require_jobs(queue).defer_reembed(owner_id=owner_id, twin_id=twin_id)
     return JobView(
         job_id=str(job_id),
         kind="reembed",

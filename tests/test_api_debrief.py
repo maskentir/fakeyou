@@ -12,11 +12,9 @@ from fakeyou.observability.report import build_session_report, read_journal_with
 from fakeyou.observability.scorecard import score_session
 from fakeyou.persistence.files import write_atomically
 from fakeyou.persistence.layout import MeetingDir
-from fakeyou.transport.schemas import DEBRIEF_STREAM
 from tests._debrief_support import AT as RECORD_AT
 from tests._debrief_support import report_for
 from tests.test_api_memory import MemoryHarness
-from tests.test_api_sessions import AT
 
 NO_REPORT = {"status": "missing", "review_status": "unreviewed", "cached": False, "report": None}
 
@@ -65,20 +63,16 @@ def _seed_debrief(api: MemoryHarness, meeting_id: str) -> Path:
     return record
 
 
-@pytest.mark.parametrize(("force", "wire"), [(True, "true"), (False, "false")])
-async def test_submit_debrief_publishes_the_frozen_payload(
-    api: MemoryHarness, *, force: bool, wire: str
+@pytest.mark.parametrize("force", [True, False])
+async def test_submit_debrief_defers_the_job_in_postgres(
+    api: MemoryHarness, *, force: bool
 ) -> None:
     api.seed_session("m-1")
     response = await api.post("/v1/sessions/m-1/debriefs", json={"force": force})
     assert response.status_code == 202
     assert response.json() == {"meeting_id": "m-1", "status": "queued"}
-    assert api.transport.jobs == [
-        (
-            DEBRIEF_STREAM,
-            {"v": "1", "type": "debrief_job", "at": AT, "meeting_id": "m-1", "force": wire},
-        )
-    ]
+    [queued] = await api.jobs.jobs_for("debrief_meeting")
+    assert queued.args == {"meeting_id": "m-1", "force": force}
 
 
 async def test_submit_debrief_requires_the_force_flag(api: MemoryHarness) -> None:
@@ -86,7 +80,7 @@ async def test_submit_debrief_requires_the_force_flag(api: MemoryHarness) -> Non
     response = await api.post("/v1/sessions/m-1/debriefs", json={})
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "input.invalid"
-    assert api.transport.jobs == []
+    assert await api.jobs.jobs_for("debrief_meeting") == []
 
 
 async def test_debrief_without_an_artifact_is_missing_and_null(api: MemoryHarness) -> None:
@@ -131,7 +125,7 @@ async def test_debrief_routes_hide_other_owner_sessions(api: MemoryHarness) -> N
     assert (await api.post("/v1/sessions/m-2/debriefs", json={"force": True})).status_code == 404
     assert (await api.get("/v1/sessions/m-2/debrief")).status_code == 404
     assert (await api.get("/v1/sessions/m-2/report")).status_code == 404
-    assert api.transport.jobs == []
+    assert await api.jobs.jobs_for("debrief_meeting") == []
 
 
 def _seed_journal(settings: Settings, meeting_id: str) -> None:

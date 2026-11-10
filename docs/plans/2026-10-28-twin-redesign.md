@@ -3261,6 +3261,12 @@ sehingga polling CLI reembed selalu 404. Stream reembed Redis dan
 Redis. Sisa D4: debrief, ingestion, lalu hapus machinery stream job
 (`publish_job`, `pending_deliveries`, `claim_entry`, `touch_entry`,
 `unacked_entries`, `read_group`).
+Status (D4b): debrief ikut pindah. API submit dan antrian pasca-sesi
+di worker sessions mendefer `debrief_meeting` ke Postgres (lock per
+meeting, retry maks 5); `DebriefWorker` menjalankan handler yang sama
+dan fault tetap diterbitkan sebagai event `fault` di stream meeting.
+Stream debrief Redis, `DebriefConsumer`, dan payload beku debrief
+dihapus. Sisa D4: ingestion, lalu hapus machinery stream job.
 
 ## Urutan PR
 
