@@ -2,6 +2,7 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 
 import httpx2
@@ -14,7 +15,6 @@ from fakeyou.api.auth import Principal, TokenStore, require_owned
 from fakeyou.api.owner_model import owner_model
 from fakeyou.api.ratelimit import RateLimiter
 from fakeyou.api.schemas import SessionCreate, build_snapshot
-from fakeyou.api.sessions import SessionStore
 from fakeyou.api.status import queued_jobs, session_status
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.settings import Settings
@@ -60,16 +60,15 @@ async def _client(
     *,
     owner: str | None = None,
     admin: str | None = None,
-    limit: int | None = None,
     jobs: JobQueue | None = None,
+    status: MemorySessionStatus | None = None,
 ) -> AsyncIterator[httpx2.AsyncClient]:
     if owner is not None:
         settings.api.owner_token = SecretStr(owner)
     if admin is not None:
         settings.api.admin_token = SecretStr(admin)
-    if limit is not None:
-        settings.api.rate_limit_per_minute = limit
-    status = MemorySessionStatus()
+    if status is None:
+        status = MemorySessionStatus()
     app = create_app(
         settings,
         ApiDeps(test_routes=True),
@@ -110,7 +109,8 @@ def test_token_store_keeps_only_hashes(settings: Settings) -> None:
 
 
 async def test_rate_limit_returns_429_with_catalog_code(settings: Settings) -> None:
-    async with _client(settings, owner="owner-secret", limit=2) as client:
+    settings.api.rate_limit_per_minute = 2
+    async with _client(settings, owner="owner-secret") as client:
         headers = {"Authorization": "Bearer owner-secret"}
         codes = [
             (await client.get("/v1/test/owner", headers=headers)).status_code for _ in range(3)
@@ -221,10 +221,10 @@ async def test_other_owner_snapshots_are_not_found(
             "twin_id": "someone_else_twin",
         }
     )
-    SessionStore(settings.paths.record_dir).save_new(
-        build_snapshot(create, meeting_id="m-1", at=AT)
-    )
-    async with _client(settings, owner="owner-secret") as client:
+    status = MemorySessionStatus()
+    snapshot = build_snapshot(create, meeting_id="m-1", at=AT)
+    status.seed(snapshot.model_dump(mode="json"), datetime.fromisoformat(AT))
+    async with _client(settings, owner="owner-secret", status=status) as client:
         response = await client.request(
             method.upper(),
             path,
@@ -254,7 +254,8 @@ async def test_broken_json_bodies_are_input_invalid(
 
 
 async def test_list_sessions_rate_limit_returns_429(settings: Settings) -> None:
-    async with _client(settings, owner="owner-secret", limit=1) as client:
+    settings.api.rate_limit_per_minute = 1
+    async with _client(settings, owner="owner-secret") as client:
         headers = {"Authorization": "Bearer owner-secret"}
         first = await client.get("/v1/sessions", headers=headers)
         second = await client.get("/v1/sessions", headers=headers)
@@ -274,12 +275,12 @@ async def test_job_of_another_owner_is_not_found_through_the_auth_matrix(
             "twin_id": "someone_else_twin",
         }
     )
-    SessionStore(settings.paths.record_dir).save_new(
-        build_snapshot(create, meeting_id="m-1", at=AT)
-    )
+    status = MemorySessionStatus()
+    snapshot = build_snapshot(create, meeting_id="m-1", at=AT)
+    status.seed(snapshot.model_dump(mode="json"), datetime.fromisoformat(AT))
     jobs = build_job_queue(InMemoryConnector())
     job_id = await jobs.defer_ingest(meeting_id="m-1", kind="ingest")
-    async with _client(settings, owner="owner-secret", jobs=jobs) as client:
+    async with _client(settings, owner="owner-secret", jobs=jobs, status=status) as client:
         response = await client.get(
             f"/v1/jobs/{job_id}", headers={"Authorization": "Bearer owner-secret"}
         )
@@ -302,11 +303,11 @@ async def test_other_owner_twins_are_not_found(settings: Settings, method: str, 
             "persona": persona,
         }
     )
-    SessionStore(settings.paths.record_dir).save_new(
-        build_snapshot(create, meeting_id="m-1", at=AT)
-    )
+    status = MemorySessionStatus()
+    snapshot = build_snapshot(create, meeting_id="m-1", at=AT)
+    status.seed(snapshot.model_dump(mode="json"), datetime.fromisoformat(AT))
     foreign = path.replace("demo_twin", "someone_else_twin")
-    async with _client(settings, owner="owner-secret") as client:
+    async with _client(settings, owner="owner-secret", status=status) as client:
         response = await client.request(
             method.upper(),
             foreign,

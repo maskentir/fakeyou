@@ -50,12 +50,12 @@ class KeyedSnapshot(Protocol):
 
 
 class SnapshotLoader(Protocol):
-    def load(self, meeting_id: str) -> KeyedSnapshot | None: ...
+    async def load(self, meeting_id: str) -> KeyedSnapshot | None: ...
 
 
 async def meeting_job_settings(
     source: OverrideSource, store: SnapshotLoader, base: Settings, meeting_id: str
 ) -> Settings:
-    snapshot = store.load(meeting_id)
+    snapshot = await store.load(meeting_id)
     required = snapshot is not None and snapshot.keys_supplied
     return await job_settings(source, base, meeting_id, required=required)

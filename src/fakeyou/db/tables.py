@@ -51,6 +51,7 @@ meeting_sessions = Table(
     Column("lease_owner", Text, nullable=True),
     Column("lease_expires_at", DateTime(timezone=True), nullable=True),
     Column("attempts", Integer, nullable=False, server_default="0"),
+    Column("payload", JSONB(none_as_null=True), nullable=True),
 )
 
 
@@ -75,7 +76,7 @@ owner_model_revisions = Table(
     Column("decided_at", DateTime(timezone=True), nullable=True),
     Column("valid_at", DateTime(timezone=True), nullable=True),
     Column("meeting_id", Text, nullable=True),
-    Column("evidence", JSONB, nullable=True),
+    Column("evidence", JSONB(none_as_null=True), nullable=True),
     UniqueConstraint("item_id", "revision", name="owner_model_item_revision"),
     UniqueConstraint("owner_id", "twin_id", "model_version", name="owner_model_version"),
     Index("owner_model_scope", "owner_id", "twin_id"),

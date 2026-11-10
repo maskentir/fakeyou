@@ -58,7 +58,7 @@ class MemoryHarness(ApiHarness):
             }
         )
         snapshot = build_snapshot(create, meeting_id=meeting_id, at=AT)
-        self.store.save_new(snapshot)
+        self.status.seed(snapshot.model_dump(mode="json"), STATUS_AT)
         assert snapshot.persona is not None
         return snapshot.persona
 
@@ -72,7 +72,8 @@ class MemoryHarness(ApiHarness):
                 "twin_id": twin_id,
             }
         )
-        self.store.save_new(build_snapshot(create, meeting_id=meeting_id, at=AT))
+        snapshot = build_snapshot(create, meeting_id=meeting_id, at=AT)
+        self.status.seed(snapshot.model_dump(mode="json"), STATUS_AT)
 
     def persist_ingestion(
         self, meeting_id: str, state: IngestionState, *, settled_job: SettledJob | None = None
@@ -258,6 +259,9 @@ async def test_ingestion_routes_hide_other_owner_sessions(api: MemoryHarness) ->
 
 async def test_forget_meeting_returns_the_c9_summary_with_its_stages(api: MemoryHarness) -> None:
     api.seed_twin("m-1")
+    await api.status.record_phase(
+        "m-1", PhaseUpdate("ended", STATUS_AT, terminal_reason="stopped_by_owner")
+    )
     response = await api.post("/v1/sessions/m-1/forget", json={"keep_record": False})
 
     assert response.status_code == 200
@@ -276,7 +280,7 @@ async def test_forget_meeting_returns_the_c9_summary_with_its_stages(api: Memory
         "removed",
         "absent",
         "absent",
-        "absent",
+        "removed",
     ]
 
 
@@ -293,7 +297,7 @@ async def test_forget_refuses_a_meeting_that_is_still_running(
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "memory.forget_session_live"
     assert await api.status.get("m-1") is not None
-    assert api.store.load("m-1") is not None
+    assert await api.store.load("m-1") is not None
 
 
 async def test_forget_meeting_outside_the_principal_is_not_found(api: MemoryHarness) -> None:

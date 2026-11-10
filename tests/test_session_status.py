@@ -199,3 +199,25 @@ async def test_reaching_active_resets_the_attempt_budget(
 
     assert active is not None
     assert active.attempts == 0
+
+
+async def test_the_snapshot_payload_is_stored_with_the_status_row(
+    migrated_async_engine: AsyncEngine,
+) -> None:
+    store = SessionStatusStore(migrated_async_engine)
+    payload = {"meeting_id": "m1", "owner_id": "owner-1", "twin_id": "twin-1"}
+    other = {"meeting_id": "m2", "owner_id": "owner-2", "twin_id": "twin-2"}
+
+    await store.create("m1", "owner-1", NOW, payload=payload)
+    await store.create("m2", "owner-2", NOW, payload=other)
+    await store.create("m3", "owner-1", LATER)
+
+    assert await store.payload("m1") == payload
+    assert await store.payload("m3") is None
+    assert await store.payload("missing") is None
+    assert await store.payloads_for("owner-1") == [payload]
+    assert await store.payloads_for("owner-2") == [other]
+
+    await store.discard("m1")
+
+    assert await store.payload("m1") is None

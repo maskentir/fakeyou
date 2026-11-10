@@ -1,5 +1,7 @@
+from collections.abc import Mapping
 from dataclasses import replace
 from datetime import datetime
+from typing import Any
 
 from fakeyou.db.owner_model import OwnerModelSnapshot, TwinScope
 from fakeyou.db.session_status import DesiredState, PhaseUpdate, SessionStatus
@@ -19,11 +21,19 @@ class MemoryOwnerModel:
 class MemorySessionStatus:
     def __init__(self) -> None:
         self.rows: dict[str, SessionStatus] = {}
+        self.payloads: dict[str, dict[str, Any]] = {}
         self.leases: dict[str, str] = {}
         self.expired: set[str] = set()
         self.renewals = 0
 
-    async def create(self, meeting_id: str, owner_id: str, at: datetime) -> SessionStatus | None:
+    async def create(
+        self,
+        meeting_id: str,
+        owner_id: str,
+        at: datetime,
+        *,
+        payload: Mapping[str, Any] | None = None,
+    ) -> SessionStatus | None:
         if meeting_id in self.rows:
             return None
         status = SessionStatus(
@@ -38,7 +48,36 @@ class MemorySessionStatus:
             updated_at=at,
         )
         self.rows[meeting_id] = status
+        if payload is not None:
+            self.payloads[meeting_id] = dict(payload)
         return status
+
+    def seed(self, payload: Mapping[str, Any], at: datetime) -> None:
+        meeting_id = str(payload["meeting_id"])
+        self.rows[meeting_id] = SessionStatus(
+            meeting_id=meeting_id,
+            owner_id=str(payload["owner_id"]),
+            desired_state="created",
+            phase="created",
+            terminal_reason=None,
+            detail=None,
+            attempt_id=None,
+            created_at=at,
+            updated_at=at,
+        )
+        self.payloads[meeting_id] = dict(payload)
+
+    async def payload(self, meeting_id: str) -> dict[str, Any] | None:
+        stored = self.payloads.get(meeting_id)
+        return dict(stored) if stored is not None else None
+
+    async def payloads_for(self, owner_id: str) -> list[dict[str, Any]]:
+        owned = [
+            self.payloads[status.meeting_id]
+            for status in await self.list_for(owner_id)
+            if status.meeting_id in self.payloads
+        ]
+        return [dict(payload) for payload in owned]
 
     async def get(self, meeting_id: str) -> SessionStatus | None:
         return self.rows.get(meeting_id)
@@ -78,6 +117,7 @@ class MemorySessionStatus:
 
     async def discard(self, meeting_id: str) -> None:
         self.rows.pop(meeting_id, None)
+        self.payloads.pop(meeting_id, None)
 
     async def claim(
         self, worker_id: str, attempt_id: str, lease_seconds: float

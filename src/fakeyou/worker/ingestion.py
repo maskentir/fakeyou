@@ -42,7 +42,7 @@ from fakeyou.persistence.ingestion_status import (
 )
 from fakeyou.persistence.layout import MeetingDir
 from fakeyou.transport.streams import StreamTransport
-from fakeyou.worker.consumer import SnapshotStore
+from fakeyou.worker.consumer import Snapshot, SnapshotStore
 from fakeyou.worker.documents import write_session_persona
 from fakeyou.worker.keys import meeting_job_settings
 
@@ -54,6 +54,18 @@ FAILED_JOB_DETAIL = "ingestion_job_failed"
 DEAD_LETTER_DETAIL = "ingestion_job_dead_lettered"
 DEAD_LETTER_RETRY_SECONDS = 30.0
 _FAULT_SOURCE = "ingestion"
+
+
+def _fresh_status(
+    meeting_id: str, status: IngestionState, snapshot: Snapshot | None
+) -> IngestionStatus | None:
+    if snapshot is None:
+        return None
+    return IngestionStatus(
+        meeting_id=meeting_id,
+        group_id=memory_group_for(snapshot.owner_id, snapshot.twin_id),
+        status=status,
+    )
 
 
 class IngestionHandler(Protocol):
@@ -176,7 +188,7 @@ class IngestionWorker:
         if not is_identifier(meeting_id) or kind not in INGEST_KINDS:
             await self._fault(meeting_id, INVALID_JOB_DETAIL)
             if is_identifier(meeting_id):
-                self._record_failure(meeting_id, job_id, INVALID_JOB_DETAIL, correction=False)
+                await self._record_failure(meeting_id, job_id, INVALID_JOB_DETAIL, correction=False)
             return None
         job = IngestionJob(meeting_id=meeting_id, kind=cast(IngestionJobKind, kind), job_id=job_id)
         reported: list[FakeYouError] = []
@@ -201,7 +213,7 @@ class IngestionWorker:
     ) -> bool:
         await self._fault(job.meeting_id, FAILED_JOB_DETAIL, error_type=type(error).__name__)
         if _missing_job_keys(error):
-            return self._record_failure(
+            return await self._record_failure(
                 job.meeting_id, job.job_id, str(ErrorCode.WORKER_JOB_KEYS_MISSING), correction=False
             )
         attempts = context.job.attempts
@@ -210,7 +222,7 @@ class IngestionWorker:
         await self._fault(
             job.meeting_id, DEAD_LETTER_DETAIL, deliveries=str(INGESTION_DELIVERY_LIMIT)
         )
-        recorded = self._record_failure(
+        recorded = await self._record_failure(
             job.meeting_id, job.job_id, DEAD_LETTER_DETAIL, correction=job.kind == "correct"
         )
         if recorded:
@@ -236,7 +248,7 @@ class IngestionWorker:
         settings = await meeting_job_settings(
             self._deps.transport, self._deps.store, self._deps.settings, meeting_id
         )
-        snapshot = self._deps.store.load(meeting_id)
+        snapshot = await self._deps.store.load(meeting_id)
         if snapshot is None:
             identity = OperatorIdentity(None)
         else:
@@ -265,18 +277,19 @@ class IngestionWorker:
             },
         )
 
-    def _record_failure(
+    async def _record_failure(
         self, meeting_id: str, job_id: str, reason: str, *, correction: bool
     ) -> bool:
         meeting = MeetingDir(
             self._deps.settings.paths.record_dir, parse_session_id(meeting_id, field="meeting_id")
         )
-        if not meeting.ingestion.exists() and self._deps.store.load(meeting_id) is None:
+        snapshot = await self._deps.store.load(meeting_id)
+        if not meeting.ingestion.exists() and snapshot is None:
             return True
         try:
             with record_lock(meeting.record, purpose="ingestion"):
-                previous = read_status(meeting.ingestion) or self._fresh_status(
-                    meeting_id, "not_requested" if correction else "failed"
+                previous = read_status(meeting.ingestion) or _fresh_status(
+                    meeting_id, "not_requested" if correction else "failed", snapshot
                 )
                 if previous is not None:
                     settled: dict[str, object] = {
@@ -293,13 +306,3 @@ class IngestionWorker:
         except (FakeYouError, OSError) as error:
             logger.warning("ingestion status for %s not recorded: %s", meeting_id, error)
         return True
-
-    def _fresh_status(self, meeting_id: str, status: IngestionState) -> IngestionStatus | None:
-        snapshot = self._deps.store.load(meeting_id)
-        if snapshot is None:
-            return None
-        return IngestionStatus(
-            meeting_id=meeting_id,
-            group_id=memory_group_for(snapshot.owner_id, snapshot.twin_id),
-            status=status,
-        )

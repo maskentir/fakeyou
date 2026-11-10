@@ -79,8 +79,8 @@ def debrief_models(settings: Settings) -> DebriefModels:
     return DebriefModels(create_debrief_chat_model(settings), create_fallback_chat_model(settings))
 
 
-def _operator(store: SnapshotStore, meeting_id: str) -> PersonaProfile:
-    snapshot = store.load(meeting_id)
+async def _operator(store: SnapshotStore, meeting_id: str) -> PersonaProfile:
+    snapshot = await store.load(meeting_id)
     if snapshot is None or snapshot.persona is None:
         raise FakeYouError(ErrorCode.MEMORY_PERSONA_UNREADABLE, reason=meeting_id)
     return snapshot.persona
@@ -90,7 +90,7 @@ async def build_debrief_request(deps: DebriefDeps, job: DebriefJob) -> DebriefRe
     settings = await meeting_job_settings(deps.transport, deps.store, deps.settings, job.meeting_id)
     return DebriefRequest(
         meeting_id=parse_session_id(job.meeting_id, field="meeting_id"),
-        operator=_operator(deps.store, job.meeting_id),
+        operator=await _operator(deps.store, job.meeting_id),
         settings=settings,
         force=job.force,
     )

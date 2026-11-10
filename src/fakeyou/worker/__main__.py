@@ -4,13 +4,12 @@ import importlib
 import os
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
-from pathlib import Path
 from types import ModuleType
 from typing import Protocol, cast
 
 from fakeyou.config.settings import Settings
 from fakeyou.db.jobs import create_job_queue
-from fakeyou.db.session_status import create_session_status
+from fakeyou.db.session_status import SessionStatusStore, create_session_status
 from fakeyou.orchestration.assembly import stop_signal_handlers
 from fakeyou.orchestration.join_types import JoinPorts
 from fakeyou.orchestration.providers import open_persona_memory, session_models
@@ -35,9 +34,9 @@ class LongRunning(Protocol):
 class JobStore(SnapshotStore, TwinDirectory, Protocol): ...
 
 
-def _session_store(record_dir: Path) -> JobStore:
+def _session_store(status: SessionStatusStore) -> JobStore:
     module: ModuleType = importlib.import_module("fakeyou.api.sessions")
-    return cast(JobStore, module.SessionStore(record_dir))
+    return cast(JobStore, module.SessionStore(status))
 
 
 async def verify_session_schema(settings: Settings) -> None:
@@ -80,10 +79,13 @@ async def serve(role: str) -> None:
     shutdown = asyncio.Event()
     async with AsyncExitStack() as exits:
         exits.push_async_callback(transport.aclose)
+        status = create_session_status(settings)
+        exits.push_async_callback(status.close)
         shared = _Shared(
             settings=settings,
             transport=transport,
-            store=_session_store(settings.paths.record_dir),
+            store=_session_store(status),
+            status=status,
             ports=ports,
             shutdown=shutdown,
             worker_id=f"worker-{os.getpid()}",
@@ -99,6 +101,7 @@ class _Shared:
     settings: Settings
     transport: StreamTransport
     store: JobStore
+    status: SessionStatusStore
     ports: JoinPorts
     shutdown: asyncio.Event
     worker_id: str
@@ -107,8 +110,6 @@ class _Shared:
 
 def role_consumers(role: str, shared: _Shared) -> list[LongRunning]:
     if role == SESSIONS_ROLE:
-        status = create_session_status(shared.settings)
-        shared.exits.push_async_callback(status.close)
         queue = create_job_queue(shared.settings)
         shared.exits.push_async_callback(queue.close)
         return [
@@ -117,7 +118,7 @@ def role_consumers(role: str, shared: _Shared) -> list[LongRunning]:
                     settings=shared.settings,
                     transport=shared.transport,
                     store=shared.store,
-                    status=status,
+                    status=shared.status,
                     ports=shared.ports,
                     jobs=queue,
                     shutdown=shared.shutdown,

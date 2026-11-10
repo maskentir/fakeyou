@@ -3247,6 +3247,65 @@ Revisi riset: client `kubernetes` resmi membuat Job dengan
 `ttlSecondsAfterFinished`. OpenTelemetry ditambahkan di sini untuk latency
 lintas proses; konteks trace dibawa lewat field Job dan event.
 
+Desain (D2, empat slice): prasyarat pod-per-sesi adalah tidak ada lagi
+media antar-proses berbasis filesystem bersama. Hari ini
+`SessionStore` adalah file `session.json` per meeting di volume
+bersama (registry = listing direktori), dan `record.jsonl` dibaca
+lintas worker dari volume yang sama (ketergantungan A2 yang tercatat).
+
+- D2a (registry Postgres): kolom `payload` JSONB di
+  `meeting_sessions` (migrasi 0008) memuat `SessionSnapshot` utuh,
+  ditulis atomik dalam insert baris status yang sama
+  (`create(..., payload=...)`); tarian save-file/discard-status
+  hilang. `SessionStore` menjadi store async berbasis Postgres
+  (load/list_for = SELECT payload); file store dihapus. Worker saat
+  klaim mematerialisasi `session.json` ke MeetingDir lokal dari
+  payload (seperti persona/brief hari ini), sehingga record dir murni
+  bundel artefak keluaran dan CLI replay tetap bekerja; tidak ada
+  pembaca registry yang menyentuh direktori lagi.
+- D2b (segmen object storage): uploader di worker sesi men-tail
+  `record.jsonl` dan journal, mengunggah segmen baris-utuh immutable
+  per offset (`sessions/<meeting_id>/<file>/<seq>`) tiap ≤10 detik
+  dan flush final saat terminal, lewat protokol `ObjectStore`
+  S3-compatible (`aioboto3`, settings `storage`). Saat klaim
+  pengambilalihan, worker mengunduh dan merangkai segmen bila file
+  lokal tidak ada/lebih pendek sebelum rehydrate A2c. Tanpa storage
+  terkonfigurasi perilaku = hari ini (volume lokal), dicatat jujur di
+  status.
+- D2c (Job per sesi): mode worker `sessions --meeting <id>` mengklaim
+  tepat satu baris itu, menjalankan, lalu exit. Launcher
+  (`worker launcher`, settings `sessions.launcher=worker|kubernetes`)
+  merekonsiliasi baris `desired_state=joined` ber-lease kedaluwarsa
+  tanpa Job hidup menjadi Job (`backoffLimit: 0`,
+  `activeDeadlineSeconds` = lobby+durasi+margin,
+  `ttlSecondsAfterFinished`, image worker yang sama — PulseAudio dan
+  browser sudah di dalam image, env audio per pod bukan global).
+  Retry/pengambilalihan tetap milik lease A2: pod mati → lease
+  kedaluwarsa → launcher membuat Job baru → rehydrate dari segmen
+  D2b. Manifest pendukung (namespace, ServiceAccount/Role launcher)
+  di `deploy/k8s`.
+- D2d (trace): `traceparent` dibawa lewat env Job dan event sesi;
+  span latency lintas proses dibaca dari journal.
+
+Gate per slice: D2a tes real-Postgres (create atomik, list per owner,
+worker load tanpa file); D2b tes fake ObjectStore + roundtrip
+segmen→rehydrate byte-identik; D2c kind: Job selesai untuk sesi
+palsu dan dua Job paralel tanpa tabrakan lease; gate live dua meeting
+bersamaan + kill pod menunggu sesi live.
+
+Status (D2a): selesai. `payload` JSONB di `meeting_sessions`
+(migrasi 0008, `none_as_null=True` — tanpa itu None tersimpan sebagai
+JSON null dan lolos filter `IS NOT NULL`; kolom `evidence` dari C7b
+diperbaiki sekalian). Create menulis status+payload dalam satu
+insert. `SessionStore` async di atas `SessionStatusRepository`
+(`load`/`list_for` = SELECT payload), file store dan listing
+direktori dihapus; `snapshot_store` menjadi dependency FastAPI yang
+menghormati override, dan owned-snapshot menjadi dependency handler.
+Worker memakai satu `SessionStatusStore` bersama untuk lease dan
+snapshot; saat klaim, `join_request_for` mematerialisasi
+`session.json` ke MeetingDir lokal dari payload. Sisa D2: D2b segmen
+object storage, D2c Job per sesi, D2d trace.
+
 ### D3: Config yang menyusut
 
 - `Settings` sub-model dioper langsung ke komponen. Kebijakan per meeting

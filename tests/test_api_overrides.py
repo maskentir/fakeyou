@@ -1,3 +1,4 @@
+import json
 import logging
 from collections.abc import Mapping
 from typing import Any
@@ -6,7 +7,6 @@ import pytest
 from pydantic import SecretStr
 
 from fakeyou.api.overrides import overrides_from_headers
-from fakeyou.api.sessions import SESSION_FILE_NAME
 from fakeyou.catalog.config import PROVIDER_ROLES, ROLE_ATTRIBUTE_PATH, ROLE_HEADER_SUFFIX
 from fakeyou.config.settings import Settings
 from fakeyou.worker.keys import apply_role_overrides
@@ -122,8 +122,7 @@ async def test_session_keys_never_leak_and_reach_only_the_worker_copy(
         assert joined.status_code == 202
         assert status.status_code == 200
 
-        session_file = settings.paths.record_dir / meeting_id / SESSION_FILE_NAME
-        assert_no_synthetic_markers(session_file.read_text(encoding="utf-8"))
+        assert_no_synthetic_markers(json.dumps(harness.status.payloads[meeting_id]))
         assert_no_synthetic_markers(created.text)
         assert_no_synthetic_markers(joined.text)
         assert_no_synthetic_markers(status.text)

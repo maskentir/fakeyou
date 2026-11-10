@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Literal, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 from sqlalchemy import ColumnElement, Executable, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
@@ -51,10 +51,19 @@ class PhaseUpdate:
 
 class SessionStatusRepository(Protocol):
     async def create(
-        self, meeting_id: str, owner_id: str, at: datetime
+        self,
+        meeting_id: str,
+        owner_id: str,
+        at: datetime,
+        *,
+        payload: Mapping[str, Any] | None = None,
     ) -> SessionStatus | None: ...
 
     async def get(self, meeting_id: str) -> SessionStatus | None: ...
+
+    async def payload(self, meeting_id: str) -> dict[str, Any] | None: ...
+
+    async def payloads_for(self, owner_id: str) -> list[dict[str, Any]]: ...
 
     async def list_for(self, owner_id: str) -> list[SessionStatus]: ...
 
@@ -119,7 +128,14 @@ class SessionStatusStore:
                 await connection.run_sync(require_current_on)
         self._schema_current = True
 
-    async def create(self, meeting_id: str, owner_id: str, at: datetime) -> SessionStatus | None:
+    async def create(
+        self,
+        meeting_id: str,
+        owner_id: str,
+        at: datetime,
+        *,
+        payload: Mapping[str, Any] | None = None,
+    ) -> SessionStatus | None:
         return await self._first(
             insert(meeting_sessions)
             .values(
@@ -129,10 +145,36 @@ class SessionStatusStore:
                 phase="created",
                 created_at=at,
                 updated_at=at,
+                payload=dict(payload) if payload is not None else None,
             )
             .on_conflict_do_nothing(index_elements=[meeting_sessions.c.meeting_id])
             .returning(meeting_sessions)
         )
+
+    async def payload(self, meeting_id: str) -> dict[str, Any] | None:
+        statement = select(meeting_sessions.c.payload).where(
+            meeting_sessions.c.meeting_id == meeting_id
+        )
+        with _reachable():
+            async with self._engine.connect() as connection:
+                row = (await connection.execute(statement)).first()
+        if row is None or row[0] is None:
+            return None
+        return dict(row[0])
+
+    async def payloads_for(self, owner_id: str) -> list[dict[str, Any]]:
+        statement = (
+            select(meeting_sessions.c.payload)
+            .where(
+                meeting_sessions.c.owner_id == owner_id,
+                meeting_sessions.c.payload.is_not(None),
+            )
+            .order_by(meeting_sessions.c.created_at, meeting_sessions.c.meeting_id)
+        )
+        with _reachable():
+            async with self._engine.connect() as connection:
+                rows = (await connection.execute(statement)).all()
+        return [dict(row[0]) for row in rows]
 
     async def get(self, meeting_id: str) -> SessionStatus | None:
         return await self._first(

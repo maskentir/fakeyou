@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict
 from fakeyou.api.auth import Principal, require_owner
 from fakeyou.api.overrides import stage_overrides
 from fakeyou.api.schemas import SessionSnapshot
-from fakeyou.api.sessions import SessionStore
+from fakeyou.api.sessions import SessionStore, snapshot_store
 from fakeyou.api.status import queued_jobs, require_jobs
 from fakeyou.api.transport import shared_stream_transport
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
@@ -62,13 +62,6 @@ def _deps(request: Request) -> "ApiDeps":
     return cast("ApiDeps", request.app.state.deps)
 
 
-def _snapshot_store(request: Request) -> SessionStore:
-    factory = _deps(request).snapshot_store
-    if factory is not None:
-        return cast(SessionStore, factory())
-    return SessionStore(_settings(request).paths.record_dir)
-
-
 def _overrides(request: Request) -> DebriefOverrides:
     factory = _deps(request).transport
     if factory is not None:
@@ -82,8 +75,10 @@ def _owner_id(principal: Principal) -> str:
     return principal.owner_id
 
 
-def _owned_snapshot(request: Request, meeting_id: str, principal: Principal) -> SessionSnapshot:
-    snapshot = _snapshot_store(request).load(meeting_id)
+async def _owned_snapshot(
+    store: SessionStore, meeting_id: str, principal: Principal
+) -> SessionSnapshot:
+    snapshot = await store.load(meeting_id)
     if snapshot is None or snapshot.owner_id != _owner_id(principal):
         raise FakeYouError(ErrorCode.API_NOT_FOUND)
     return snapshot
@@ -99,17 +94,24 @@ def _served_report(record_path: Path) -> dict[str, Any] | None:
 router = APIRouter(prefix="/v1/sessions", tags=["debrief"])
 
 _Owner = Annotated[Principal, Depends(require_owner)]
+_Snapshots = Annotated[SessionStore, Depends(snapshot_store)]
+
+
+async def _owned(meeting_id: str, principal: _Owner, store: _Snapshots) -> SessionSnapshot:
+    return await _owned_snapshot(store, meeting_id, principal)
+
+
+_Owned = Annotated[SessionSnapshot, Depends(_owned)]
 
 
 @router.post("/{meeting_id}/debriefs", status_code=202, response_model=DebriefQueued)
 async def submit_debrief(
     meeting_id: str,
     payload: DebriefSubmit,
-    principal: _Owner,
     request: Request,
+    _snapshot: _Owned,
     queue: Annotated[JobQueue | None, Depends(queued_jobs)],
 ) -> DebriefQueued:
-    _owned_snapshot(request, meeting_id, principal)
     await stage_overrides(_overrides(request), meeting_id, request.headers)
     await require_jobs(queue).defer_debrief(meeting_id=meeting_id, force=payload.force)
     return DebriefQueued(meeting_id=meeting_id, status="queued")
@@ -118,10 +120,9 @@ async def submit_debrief(
 @router.get("/{meeting_id}/debrief", response_model=DebriefView)
 async def read_debrief_artifact(
     meeting_id: str,
-    principal: _Owner,
     request: Request,
+    _snapshot: _Owned,
 ) -> DebriefView:
-    _owned_snapshot(request, meeting_id, principal)
     record_path = meeting_record_path(
         _settings(request).paths.record_dir,
         parse_session_id(meeting_id, field="meeting_id"),
@@ -138,10 +139,9 @@ async def read_debrief_artifact(
 @router.get("/{meeting_id}/report")
 async def read_session_report(
     meeting_id: str,
-    principal: _Owner,
     request: Request,
+    _snapshot: _Owned,
 ) -> dict[str, Any]:
-    _owned_snapshot(request, meeting_id, principal)
     settings = _settings(request)
     session = parse_session_id(meeting_id, field="meeting_id")
     path = journal_path(settings.paths.journal_dir, session)

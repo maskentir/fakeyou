@@ -36,7 +36,7 @@ class StreamDouble:
 
 
 class EmptyStore:
-    def load(self, _meeting_id: str) -> None:
+    async def load(self, _meeting_id: str) -> None:
         return None
 
     def set_phase(
@@ -44,7 +44,7 @@ class EmptyStore:
     ) -> object:
         return (phase, terminal_reason)
 
-    def list_for(self, _owner_id: str) -> list[TwinSnapshot]:
+    async def list_for(self, _owner_id: str) -> list[TwinSnapshot]:
         return []
 
 
