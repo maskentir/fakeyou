@@ -3303,8 +3303,23 @@ direktori dihapus; `snapshot_store` menjadi dependency FastAPI yang
 menghormati override, dan owned-snapshot menjadi dependency handler.
 Worker memakai satu `SessionStatusStore` bersama untuk lease dan
 snapshot; saat klaim, `join_request_for` mematerialisasi
-`session.json` ke MeetingDir lokal dari payload. Sisa D2: D2b segmen
-object storage, D2c Job per sesi, D2d trace.
+`session.json` ke MeetingDir lokal dari payload.
+
+Status (D2b): selesai. `persistence/segments.py`: protokol
+`ObjectStore` + `S3ObjectStore` (aioboto3, stub lokal di `typings/`),
+`SegmentSync` mengunggah segmen baris-utuh per offset
+(`sessions/<meeting_id>/<record|journal>/<start>-<end>`) dari worker
+sesi tiap `storage.segment_interval_seconds` (default 5) plus flush
+final di akhir sesi; `restore_segments` merangkai prefix kontigu dari
+offset 0 (berhenti di gap pertama, segmen tumpang tindih digabung)
+dan tidak pernah mengecilkan file lokal yang lebih panjang. Prime
+hanya melewati panjang yang benar-benar direstorasi — konten lokal
+yang belum terunggah selalu diunggah dari 0 pada push pertama.
+Settings `storage` baru (6 leaf, total 195); tanpa bucket,
+`create_object_store` mengembalikan None dan perilaku sama dengan
+sebelumnya. Verifikasi live terhadap MinIO/S3 asli belum dilakukan
+(hanya fake store + takeover test di consumer). Sisa D2: D2c Job per
+sesi, D2d trace.
 
 ### D3: Config yang menyusut
 

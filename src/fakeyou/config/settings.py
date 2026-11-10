@@ -145,6 +145,19 @@ class DatabaseSettings(Section):
     keepalive_idle_seconds: PositiveSeconds = 30.0
 
 
+class StorageSettings(Section):
+    bucket: str | None = None
+    endpoint_url: OptionalURL = None
+    region: str | None = None
+    access_key_id: str | None = None
+    secret_access_key: SecretStr | None = None
+    segment_interval_seconds: PositiveSeconds = 5.0
+
+    @property
+    def configured(self) -> bool:
+        return self.bucket is not None
+
+
 class SpeechSettings(Section):
     language: Literal["id", "en"] = "id"
 
@@ -490,6 +503,7 @@ class Configuration(Section):
     identity: IdentitySettings = Field(default_factory=IdentitySettings)
     paths: PathSettings = Field(default_factory=PathSettings)
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
+    storage: StorageSettings = Field(default_factory=StorageSettings)
     speech: SpeechSettings = Field(default_factory=SpeechSettings)
     reply: ReplySettings = Field(default_factory=OpenAIReply)
     reply_fallback: ReplySettings | None = None
