@@ -15,6 +15,7 @@ from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.identifiers import parse_session_id
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.session import SessionConfig, SessionResult
+from fakeyou.db.jobs import JobQueue
 from fakeyou.db.session_status import SessionStatus, SessionStatusRepository
 from fakeyou.foundation.taxonomy import TERMINAL_PHASES, PublicPhase, TerminalReason
 from fakeyou.memory.persona import OperatorIdentity, PersonaProfile
@@ -30,9 +31,7 @@ from fakeyou.persistence.layout import RECORD_FILE_NAME, MeetingDir, meeting_pro
 from fakeyou.persistence.lease import LeaseError
 from fakeyou.persistence.owner_model import FrozenOwnerModel
 from fakeyou.transport.schemas import (
-    DEBRIEF_STREAM,
     INGESTION_STREAM,
-    encode_debrief_job,
     encode_ingestion_job,
 )
 from fakeyou.transport.streams import StreamTransport
@@ -130,6 +129,7 @@ class WorkerDeps:
     store: SnapshotStore
     status: SessionStatusRepository
     ports: JoinPorts
+    jobs: JobQueue
     shutdown: asyncio.Event
     worker_id: str
 
@@ -466,10 +466,7 @@ class WorkerConsumer:
         path = session_dir(record, meeting_id) / RECORD_FILE_NAME
         if not path.exists() or not path.stat().st_size:
             return
-        await self._transport.publish_job(
-            DEBRIEF_STREAM,
-            encode_debrief_job(meeting_id=meeting_id, at=_now_iso()),
-        )
+        await self._deps.jobs.defer_debrief(meeting_id=meeting_id, force=False)
 
     async def _request_stop(self, meeting_id: str) -> None:
         if self._stop_seen:

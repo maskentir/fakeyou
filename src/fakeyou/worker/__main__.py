@@ -17,7 +17,7 @@ from fakeyou.orchestration.providers import open_persona_memory, session_models
 from fakeyou.orchestration.runtime import run_meeting_session
 from fakeyou.transport.streams import StreamTransport
 from fakeyou.worker.consumer import SnapshotStore, WorkerConsumer, WorkerDeps
-from fakeyou.worker.debrief import DebriefConsumer, DebriefDeps, debrief_models
+from fakeyou.worker.debrief import DebriefDeps, DebriefWorker, debrief_models
 from fakeyou.worker.ingestion import IngestionConsumer, IngestionDeps
 from fakeyou.worker.reembed import ReembedDeps, ReembedWorker, TwinDirectory
 
@@ -109,6 +109,8 @@ def role_consumers(role: str, shared: _Shared) -> list[LongRunning]:
     if role == SESSIONS_ROLE:
         status = create_session_status(shared.settings)
         shared.exits.push_async_callback(status.close)
+        queue = create_job_queue(shared.settings)
+        shared.exits.push_async_callback(queue.close)
         return [
             WorkerConsumer(
                 WorkerDeps(
@@ -117,6 +119,7 @@ def role_consumers(role: str, shared: _Shared) -> list[LongRunning]:
                     store=shared.store,
                     status=status,
                     ports=shared.ports,
+                    jobs=queue,
                     shutdown=shared.shutdown,
                     worker_id=shared.worker_id,
                 )
@@ -136,15 +139,17 @@ def role_consumers(role: str, shared: _Shared) -> list[LongRunning]:
             )
         ]
     if role == DEBRIEF_ROLE:
+        queue = create_job_queue(shared.settings)
+        shared.exits.push_async_callback(queue.close)
         return [
-            DebriefConsumer(
+            DebriefWorker(
                 DebriefDeps(
                     settings=shared.settings,
                     transport=shared.transport,
                     store=shared.store,
                     shutdown=shared.shutdown,
-                    worker_id=shared.worker_id,
-                )
+                ),
+                queue,
             )
         ]
     if role == REEMBED_ROLE:

@@ -29,8 +29,12 @@ async def test_the_queue_defers_into_a_real_postgres(migrated_database_url: str)
     try:
         job_id = await queue.defer_reembed(owner_id="owner-a", twin_id="twin-a")
         fetched = await queue.fetch(job_id)
+        debrief_id = await queue.defer_debrief(meeting_id="m1", force=True)
+        deferred = await queue.fetch(debrief_id)
     finally:
         await queue.close()
 
     assert fetched is not None
     assert fetched.args == {"owner_id": "owner-a", "twin_id": "twin-a"}
+    assert deferred is not None
+    assert deferred.args == {"meeting_id": "m1", "force": True}
