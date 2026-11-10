@@ -23,6 +23,7 @@ from fakeyou.conversation.session import SessionConfig, SessionResult
 from fakeyou.db.jobs import INGEST_QUEUE, INGEST_TASK, QueuedJob, build_job_queue
 from fakeyou.db.session_status import DesiredState, PhaseUpdate, SessionStatus
 from fakeyou.foundation.taxonomy import PublicPhase, TerminalReason
+from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.memory.ingest_job import IngestionJob, handle_ingestion_job
 from fakeyou.memory.ingest_service import IngestPorts, IngestRequest
 from fakeyou.memory.ingest_status import IngestSummary
@@ -40,6 +41,8 @@ from fakeyou.persistence.ingestion_status import (
 )
 from fakeyou.persistence.layout import MeetingDir, meeting_profile_dir
 from fakeyou.persistence.owner_model import FrozenOwnerModel
+from fakeyou.persistence.record import MeetingRecord
+from fakeyou.persistence.segments import ObjectStore
 from fakeyou.transport.streams import StreamTransport
 from fakeyou.worker.__main__ import run_consumers, verify_boot_dependencies
 from fakeyou.worker.consumer import (
@@ -330,6 +333,18 @@ class SessionDouble:
         return self.outcome
 
 
+def _transcript(event_id: str, text: str) -> TranscriptEvent:
+    return TranscriptEvent(
+        id=event_id,
+        timestamp="2026-10-28T10:00:00+00:00",
+        source="meeting_audio",
+        text=text,
+        finalized=True,
+        participant_id="device-ayu",
+        speaker_evidence_id=None,
+    )
+
+
 def unused_memory(_settings: Settings) -> Any:
     pytest.fail("memory must stay closed")
 
@@ -352,6 +367,7 @@ class Harness:
         self.store: SnapshotReader = cast(SnapshotReader, self.session_store)
         self.jobs = build_job_queue(InMemoryConnector())
         self.double = SessionDouble()
+        self.objects: ObjectStore | None = None
         self.ports = JoinPorts(
             run_session=self.double.run,
             open_memory=unused_memory,
@@ -370,6 +386,7 @@ class Harness:
                 jobs=self.jobs,
                 shutdown=asyncio.Event(),
                 worker_id=worker_id,
+                objects=self.objects,
             )
         )
 
@@ -525,6 +542,55 @@ async def test_a_crashed_session_is_claimed_again_and_resumed(harness: Harness) 
     await harness.finish_session(phase="ended", terminal_reason="left_by_owner")
     assert await harness.phase("m-1") == "ended"
     assert [event["type"] for event in harness.events] == ["phase_changed", "session_ended"]
+
+
+class FakeObjectStore:
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+
+    async def put(self, key: str, data: bytes) -> None:
+        self.objects[key] = data
+
+    async def get(self, key: str) -> bytes | None:
+        return self.objects.get(key)
+
+    async def list(self, prefix: str) -> list[str]:
+        return [key for key in self.objects if key.startswith(prefix)]
+
+    async def aclose(self) -> None:
+        return None
+
+
+async def test_a_takeover_restores_the_record_from_segments_and_flushes_new_ones(
+    harness: Harness,
+) -> None:
+    objects = FakeObjectStore()
+    harness.objects = objects
+    consumer = harness.member(harness.settings, "worker-c")
+    record = MeetingDir(harness.settings.paths.record_dir, SessionId("m-1")).record
+    seeded = MeetingRecord(record, now=lambda: STATUS_AT)
+    seeded.add_transcript(_transcript("event-1", "Seed line."))
+    seeded.close()
+    seed_bytes = record.read_bytes()
+    record.unlink()
+    objects.objects[f"sessions/m-1/record/000000000000-{len(seed_bytes):012d}"] = seed_bytes
+    await harness.status.record_phase("m-1", PhaseUpdate("joining", STATUS_AT))
+    await harness.enqueue("m-1", "join")
+
+    assert await consumer.run_once() == "m-1"
+    await harness.double.started.wait()
+
+    assert record.read_bytes() == seed_bytes
+
+    resumed = MeetingRecord(record, now=lambda: STATUS_AT)
+    resumed.add_transcript(_transcript("event-2", "After takeover."))
+    resumed.close()
+    harness.double.release.set()
+    await consumer.wait_session()
+
+    tail = record.read_bytes()[len(seed_bytes) :]
+    key = f"sessions/m-1/record/{len(seed_bytes):012d}-{len(seed_bytes) + len(tail):012d}"
+    assert objects.objects[key] == tail
 
 
 async def test_each_claim_runs_its_session_under_the_claimed_attempt(harness: Harness) -> None:

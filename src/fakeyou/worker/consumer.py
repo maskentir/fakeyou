@@ -30,6 +30,7 @@ from fakeyou.persistence.ingestion_status import read_status
 from fakeyou.persistence.layout import RECORD_FILE_NAME, MeetingDir, meeting_profile_dir
 from fakeyou.persistence.lease import LeaseError
 from fakeyou.persistence.owner_model import FrozenOwnerModel
+from fakeyou.persistence.segments import ObjectStore, SegmentFile, SegmentSync, restore_segments
 from fakeyou.transport.streams import StreamTransport
 from fakeyou.worker.documents import (
     BRIEF_FILE_NAME,
@@ -131,6 +132,7 @@ class WorkerDeps:
     jobs: JobQueue
     shutdown: asyncio.Event
     worker_id: str
+    objects: ObjectStore | None = None
 
 
 def _now_iso() -> str:
@@ -211,6 +213,8 @@ class WorkerConsumer:
         self._lease_lost = False
         self._bound = asyncio.Event()
         self._overrides: dict[str, dict[str, SecretStr]] = {}
+        self._objects = deps.objects
+        self._segments: SegmentSync | None = None
 
     @property
     def session_task(self) -> asyncio.Task[None] | None:
@@ -325,6 +329,7 @@ class WorkerConsumer:
         self._stop_seen = False
         self._lease_lost = False
         self._bound.clear()
+        await self._prepare_segments(meeting_id, resume=status.phase != "created")
         request = replace(
             join_request_for(snapshot, session_settings, resume=status.phase != "created"),
             on_phase=partial(self._record_live_phase, meeting_id),
@@ -374,9 +379,58 @@ class WorkerConsumer:
         self._bound.set()
         return await self._ports.run_session(config, wiring)
 
+    def _segment_files(self, meeting_id: str) -> tuple[SegmentFile, ...]:
+        parsed = parse_session_id(meeting_id, field="meeting_id")
+        return (
+            SegmentFile("record", MeetingDir(self._settings.paths.record_dir, parsed).record),
+            SegmentFile("journal", journal_path(self._settings.paths.journal_dir, parsed)),
+        )
+
+    async def _prepare_segments(self, meeting_id: str, *, resume: bool) -> None:
+        self._segments = None
+        if self._objects is None:
+            return
+        files = self._segment_files(meeting_id)
+        restored: dict[str, int] = {}
+        if resume:
+            for segment in files:
+                written, error = await capture_error(
+                    partial(restore_segments, self._objects, meeting_id, segment.name, segment.path)
+                )
+                if error is not None:
+                    logger.warning(
+                        "restoring %s segments for meeting %s failed: %s",
+                        segment.name,
+                        meeting_id,
+                        error,
+                    )
+                elif written:
+                    restored[segment.name] = written
+        self._segments = SegmentSync(self._objects, meeting_id, files)
+        self._segments.prime(restored)
+
+    async def _push_segments(self, meeting_id: str) -> None:
+        segments = self._segments
+        if segments is None:
+            return
+        interval = self._settings.storage.segment_interval_seconds
+        while not await self._sleep_or_closed(interval):
+            _pushed, error = await capture_error(segments.push)
+            if error is not None:
+                logger.warning("pushing segments for meeting %s failed: %s", meeting_id, error)
+
+    async def _flush_segments(self, meeting_id: str) -> None:
+        segments, self._segments = self._segments, None
+        if segments is None:
+            return
+        _pushed, error = await capture_error(segments.push)
+        if error is not None:
+            logger.warning("flushing segments for meeting %s failed: %s", meeting_id, error)
+
     async def _run_session(self, claim: _Claim, request: JoinRequest) -> None:
         meeting_id = claim.meeting_id
         watcher = asyncio.create_task(self._watch_lease(claim))
+        pusher = asyncio.create_task(self._push_segments(meeting_id))
         ports = JoinPorts(
             run_session=self._session_port,
             open_memory=self._ports.open_memory,
@@ -396,7 +450,9 @@ class WorkerConsumer:
                 await self._settle_failed(meeting_id, cast(Exception, error))
         finally:
             watcher.cancel()
-            await asyncio.gather(watcher, return_exceptions=True)
+            pusher.cancel()
+            await asyncio.gather(watcher, pusher, return_exceptions=True)
+            await self._flush_segments(meeting_id)
             self._forget(meeting_id)
             writer, self._writer = self._writer, None
             if writer is not None:

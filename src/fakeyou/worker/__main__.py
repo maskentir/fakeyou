@@ -14,6 +14,7 @@ from fakeyou.orchestration.assembly import stop_signal_handlers
 from fakeyou.orchestration.join_types import JoinPorts
 from fakeyou.orchestration.providers import open_persona_memory, session_models
 from fakeyou.orchestration.runtime import run_meeting_session
+from fakeyou.persistence.segments import ObjectStore, create_object_store
 from fakeyou.transport.streams import StreamTransport
 from fakeyou.worker.consumer import SnapshotStore, WorkerConsumer, WorkerDeps
 from fakeyou.worker.debrief import DebriefDeps, DebriefWorker, debrief_models
@@ -81,11 +82,15 @@ async def serve(role: str) -> None:
         exits.push_async_callback(transport.aclose)
         status = create_session_status(settings)
         exits.push_async_callback(status.close)
+        objects = create_object_store(settings)
+        if objects is not None:
+            exits.push_async_callback(objects.aclose)
         shared = _Shared(
             settings=settings,
             transport=transport,
             store=_session_store(status),
             status=status,
+            objects=objects,
             ports=ports,
             shutdown=shutdown,
             worker_id=f"worker-{os.getpid()}",
@@ -102,6 +107,7 @@ class _Shared:
     transport: StreamTransport
     store: JobStore
     status: SessionStatusStore
+    objects: ObjectStore | None
     ports: JoinPorts
     shutdown: asyncio.Event
     worker_id: str
@@ -123,6 +129,7 @@ def role_consumers(role: str, shared: _Shared) -> list[LongRunning]:
                     jobs=queue,
                     shutdown=shared.shutdown,
                     worker_id=shared.worker_id,
+                    objects=shared.objects,
                 )
             )
         ]
