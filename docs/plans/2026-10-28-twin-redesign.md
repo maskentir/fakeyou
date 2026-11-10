@@ -3156,8 +3156,16 @@ snapshot approved; disclosure `owner_only`, confidence `leaning`,
 reason memuat kutipan bukti). Approval menaikkan versi lewat workflow
 yang sudah ada dan snapshot hanya memuat yang approved, jadi gate
 "approved dipakai meeting berikutnya, ditolak tidak pernah" tinggal
-validasi live. Sisa C7b: replay eval per versi owner model dan bukti
-proposal dari `SearchFilters`/`get_nodes_and_edges_by_episode`.
+validasi live.
+Status (C7b, replay per versi): `replay_owner_model_versions` memutar
+kasus yang sama di bawah snapshot owner model yang di-pin per versi
+dan melaporkan delta jawaban antarsversi (`evals/_conversation_replay`,
+fixture `owner-model-versions.json`). Bukti live: tanggal beta hanya
+disebut pada versi yang memuat itemnya; versi sebelumnya menunda
+sebagai open question; fakta lama dan angka yang tidak pernah
+disetujui tidak bergerak. Versi produksi diambil dengan
+`snapshot(scope, version=N)` lalu `FrozenOwnerModel.of`. Sisa C7b:
+bukti proposal dari `SearchFilters`/`get_nodes_and_edges_by_episode`.
 Live debrief corpus sempat merah di main karena model mengisi
 `assignee_claim` dengan participant id dan `due_text` dengan
 timestamp; diperbaiki dengan grounding deterministik di batas
