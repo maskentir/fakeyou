@@ -43,7 +43,13 @@ def test_the_job_runs_one_meeting_with_no_retries_and_a_deadline(settings: Setti
     settings.sessions.env_from_secret = "fakeyou-secrets"
 
     job = build_job(
-        settings, _status("m_1", attempts=2), {"lobby_timeout": 60.0, "duration": 3600.0}
+        settings,
+        _status("m_1", attempts=2),
+        {
+            "lobby_timeout": 60.0,
+            "duration": 3600.0,
+            "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+        },
     )
 
     assert job["metadata"]["name"] == "session-m-1-a3"
@@ -63,6 +69,9 @@ def test_the_job_runs_one_meeting_with_no_retries_and_a_deadline(settings: Setti
         "m_1",
     ]
     assert container["envFrom"] == [{"secretRef": {"name": "fakeyou-secrets"}}]
+    [trace_env] = container["env"]
+    assert trace_env["name"] == "TRACEPARENT"
+    assert trace_env["value"].startswith("00-4bf92f3577b34da6a3ce929d0e0e4736-")
     assert spec["template"]["spec"]["restartPolicy"] == "Never"
 
 

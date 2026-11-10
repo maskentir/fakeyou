@@ -115,6 +115,9 @@ class Snapshot(Protocol):
     @property
     def participant_evidence_enabled(self) -> bool: ...
 
+    @property
+    def trace_id(self) -> str | None: ...
+
     def model_dump_json(self) -> str: ...
 
 
@@ -186,6 +189,7 @@ def join_request_for(snapshot: Snapshot, settings: Settings, *, resume: bool) ->
         brief_path=brief_path,
         owner_model=snapshot.owner_model,
         resume=resume,
+        trace_id=snapshot.trace_id,
     )
 
 
@@ -215,6 +219,7 @@ class WorkerConsumer:
         self._overrides: dict[str, dict[str, SecretStr]] = {}
         self._objects = deps.objects
         self._segments: SegmentSync | None = None
+        self._trace_id: str | None = None
 
     @property
     def session_task(self) -> asyncio.Task[None] | None:
@@ -330,6 +335,7 @@ class WorkerConsumer:
         overrides = await self._session_overrides(meeting_id)
         session_settings = apply_role_overrides(self._settings, overrides)
         self._active = meeting_id
+        self._trace_id = snapshot.trace_id
         self._wiring_stop = None
         self._stop_requested = False
         self._stop_seen = False
@@ -469,7 +475,7 @@ class WorkerConsumer:
     async def _settle_failed(self, meeting_id: str, error: Exception) -> None:
         detail = str(error)
         logger.error("join for meeting %s failed: %s", meeting_id, detail)
-        Journal(
+        journal = Journal(
             meeting_id,
             file=JournalFile(
                 journal_path(
@@ -477,7 +483,9 @@ class WorkerConsumer:
                     parse_session_id(meeting_id, field="meeting_id"),
                 )
             ),
-        ).record(
+        )
+        journal.trace_id = self._trace_id
+        journal.record(
             "session_failed",
             source="runtime",
             phase="failed",
@@ -573,6 +581,8 @@ class WorkerConsumer:
             "meeting_id": meeting_id,
         }
         payload.update({name: value for name, value in fields.items() if value is not None})
+        if self._trace_id is not None:
+            payload["trace_id"] = self._trace_id
         await self._transport.publish_event(meeting_id, payload)
 
     def _forget(self, meeting_id: str) -> None:

@@ -90,6 +90,7 @@ class Journal:
         echo: bool = True,
     ) -> None:
         self._meeting_id = meeting_id
+        self.trace_id: str | None = None
         self._emit = emit
         self._echo = echo
         self._now = now or (lambda: datetime.now(UTC))
@@ -133,6 +134,8 @@ class Journal:
                 "at": at,
                 "source": source,
             }
+            if self.trace_id is not None:
+                row["trace_id"] = self.trace_id
             row.update(_safe_value("", fields))
             line = _encode_bounded(row, self._max_bytes)
             try:

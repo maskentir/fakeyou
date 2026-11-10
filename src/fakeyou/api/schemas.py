@@ -139,9 +139,18 @@ class SessionSnapshot(BaseModel):
     participant_policy_enabled: bool = True
     participant_evidence_enabled: bool = False
     keys_supplied: bool = False
+    trace_id: str | None = None
     owner_model: FrozenOwnerModel | None = None
     created_at: str
     snapshot_sha256: str
+
+    def with_trace_id(self, trace_id: str) -> "SessionSnapshot":
+        payload = self.model_dump(mode="json")
+        payload.pop("snapshot_sha256")
+        payload["trace_id"] = trace_id
+        return SessionSnapshot.model_validate(
+            {**payload, "snapshot_sha256": canonical_json_digest(payload)}
+        )
 
 
 def build_snapshot(
@@ -175,6 +184,7 @@ class SessionView(BaseModel):
     owner_id: str
     twin_id: str
     created_at: str
+    trace_id: str | None = None
     terminal_reason: TerminalReason | None = None
     detail: str | None = None
 
