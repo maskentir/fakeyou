@@ -3164,8 +3164,24 @@ fixture `owner-model-versions.json`). Bukti live: tanggal beta hanya
 disebut pada versi yang memuat itemnya; versi sebelumnya menunda
 sebagai open question; fakta lama dan angka yang tidak pernah
 disetujui tidak bergerak. Versi produksi diambil dengan
-`snapshot(scope, version=N)` lalu `FrozenOwnerModel.of`. Sisa C7b:
-bukti proposal dari `SearchFilters`/`get_nodes_and_edges_by_episode`.
+`snapshot(scope, version=N)` lalu `FrozenOwnerModel.of`.
+
+Selesai (C7b bukti proposal): proposal debrief sebelumnya hanya membawa
+`reason` berisi meeting id + kutipan pertama; kutipan lain dan entry
+id hilang, dan owner tidak bisa melihat dukungan typed lane dari
+meeting yang sama. Perbaikan dua lapis, keduanya deterministik.
+Pertama, revision menyimpan bukti terstruktur: kolom `meeting_id` +
+`evidence` JSONB (entry id + kutipan per bukti) di
+`owner_model_revisions` (migrasi 0007), diisi `publish_proposals`
+dari `OwnerModelProposal.evidence` lengkap; `reason` menyusut menjadi
+label sumber `debrief <meeting_id>`. Kedua, endpoint baca
+`GET /v1/twins/{twin_id}/owner-model/proposals/{revision_id}/evidence`:
+mengembalikan kutipan terstruktur dari Postgres (source of truth) plus
+assertion typed dari episode graph meeting itu — dicari lewat uuid
+episode deterministik `typed_episode_uuid(group_id, meeting_id)` dan
+`get_nodes_and_edges_by_episode`, dipetakan kembali oleh typed lane
+sendiri (`assertions_from_edges`), tanpa pencarian teks bebas.
+Revision lama tanpa meeting id mengembalikan kutipan saja.
 Live debrief corpus sempat merah di main karena model mengisi
 `assignee_claim` dengan participant id dan `due_text` dengan
 timestamp; diperbaiki dengan grounding deterministik di batas

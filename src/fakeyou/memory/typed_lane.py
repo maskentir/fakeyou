@@ -1,7 +1,7 @@
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal
+from typing import Literal, cast
 from uuid import NAMESPACE_URL, uuid5
 
 from graphiti_core import Graphiti
@@ -15,6 +15,7 @@ from fakeyou.memory.ontology import (
     PACK_VERSION,
     AssertionKind,
     edge_type_for,
+    kind_for_edge_type,
 )
 
 AssertionStatus = Literal["stated", "proposed", "needs_owner", "uncertain"]
@@ -56,6 +57,40 @@ def _stable_uuid(*parts: str) -> str:
     return str(uuid5(NAMESPACE_URL, "fakeyou:typed:" + ":".join(parts)))
 
 
+def typed_episode_uuid(group_id: str, meeting_id: str) -> str:
+    return _stable_uuid(group_id, "typed-episode", meeting_id)
+
+
+def assertions_from_edges(
+    edges: Iterable[EntityEdge], episode_uuid: str
+) -> tuple[TypedAssertion, ...]:
+    found: list[TypedAssertion] = []
+    for edge in edges:
+        if episode_uuid not in edge.episodes:
+            continue
+        kind = kind_for_edge_type(edge.name)
+        attributes = edge.attributes
+        if kind is None or attributes.get("pack") != PACK_VERSION:
+            continue
+        quotes = str(attributes.get("evidence_quotes") or "").split(EVIDENCE_SEPARATOR)
+        entry_ids = str(attributes.get("evidence_entry_ids") or "").split(EVIDENCE_SEPARATOR)
+        found.append(
+            TypedAssertion(
+                kind=kind,
+                text=edge.fact,
+                status=cast(AssertionStatus, str(attributes.get("status") or "stated")),
+                evidence=tuple(
+                    TypedEvidence(entry_id=entry_id, quote=quote)
+                    for entry_id, quote in zip(entry_ids, quotes, strict=False)
+                    if quote
+                ),
+                assignee=str(attributes.get("assignee") or "") or None,
+                due_text=str(attributes.get("due_text") or "") or None,
+            )
+        )
+    return tuple(found)
+
+
 def build_assertions(
     *,
     group_id: str,
@@ -64,7 +99,7 @@ def build_assertions(
     items: Sequence[TypedAssertion],
 ) -> tuple[EpisodicNode, list[EntityNode], list[EntityEdge]]:
     episode = EpisodicNode(
-        uuid=_stable_uuid(group_id, "typed-episode", meeting_id),
+        uuid=typed_episode_uuid(group_id, meeting_id),
         name=f"{meeting_id}-typed-assertions",
         group_id=group_id,
         created_at=at,

@@ -5,6 +5,7 @@ from fakeyou.db.owner_model import (
     OwnerModelEntry,
     OwnerModelRevision,
     OwnerModelSnapshot,
+    RevisionEvidence,
     RevisionSource,
     TwinScope,
 )
@@ -30,7 +31,6 @@ def _held_as(entry: OwnerModelEntry) -> tuple[str, str, str]:
 def entries_from_proposals(report: DebriefReport) -> tuple[OwnerModelEntry, ...]:
     entries: list[OwnerModelEntry] = []
     for proposal in report.owner_model_proposals:
-        quote = proposal.evidence[0].quote
         entries.append(
             OwnerModelEntry(
                 kind=proposal.kind,
@@ -38,7 +38,12 @@ def entries_from_proposals(report: DebriefReport) -> tuple[OwnerModelEntry, ...]
                 statement=proposal.statement,
                 confidence="leaning",
                 disclosure="owner_only",
-                reason=f'debrief {report.meeting_id}: "{quote}"',
+                reason=f"debrief {report.meeting_id}",
+                meeting_id=report.meeting_id,
+                evidence=tuple(
+                    RevisionEvidence(entry_id=item.entry_id, quote=item.quote)
+                    for item in proposal.evidence
+                ),
             )
         )
     return tuple(entries)

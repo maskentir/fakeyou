@@ -1,16 +1,27 @@
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from types import SimpleNamespace
+from typing import Any
 
 import httpx2
 import pytest
 from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+import fakeyou.api.owner_model as owner_model_api
 from fakeyou.api.app import create_app
 from fakeyou.api.owner_model import owner_model
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
-from fakeyou.db.owner_model import OwnerModelEntry, OwnerModelStore, TwinScope
+from fakeyou.db.owner_model import (
+    OwnerModelEntry,
+    OwnerModelStore,
+    RevisionEvidence,
+    TwinScope,
+)
+from fakeyou.memory.persona import memory_group_for
+from fakeyou.memory.typed_lane import TypedAssertion, TypedEvidence, build_assertions
 
 OWNER_TOKEN = "owner-secret"
 AUTH = {"Authorization": f"Bearer {OWNER_TOKEN}"}
@@ -61,6 +72,8 @@ async def test_the_owner_adds_revises_and_retires_an_item(client: httpx2.AsyncCl
         "confidence": "firm",
         "disclosure": "room_speakable",
         "valid_at": None,
+        "meeting_id": None,
+        "evidence": [],
         "source": "owner",
         "status": "approved",
         "model_version": 1,
@@ -100,6 +113,69 @@ async def test_the_owner_approves_or_rejects_proposals(
     assert (again.status_code, again.json()["error"]["code"]) == (409, "owner_model.not_proposed")
     assert [item["statement"] for item in model.json()["items"]] == ["Rani leads QA."]
     assert (await client.get(f"{BASE}/proposals")).json() == []
+
+
+async def test_proposal_evidence_pairs_the_quotes_with_the_meeting_assertions(
+    client: httpx2.AsyncClient, store: OwnerModelStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scope = TwinScope("demo_owner", "demo_twin")
+    proposed = await store.add(
+        scope,
+        OwnerModelEntry(
+            "position",
+            "beta launch date",
+            "The beta launches on 14 October.",
+            meeting_id="b2-meeting",
+            evidence=(RevisionEvidence(entry_id="transcript:e1", quote="deadline"),),
+        ),
+        "debrief",
+        NOW,
+    )
+    bare = await store.add(scope, OwnerModelEntry("fact", "team", "Rani leads QA."), "debrief", NOW)
+    _episode, _nodes, edges = build_assertions(
+        group_id=memory_group_for("demo_owner", "demo_twin"),
+        meeting_id="b2-meeting",
+        at=NOW,
+        items=[
+            TypedAssertion(
+                kind="decision_claim",
+                text="The Orchid beta launch moved to 14 October 2026",
+                status="stated",
+                evidence=(TypedEvidence("transcript:e1", "deadline"),),
+            )
+        ],
+    )
+    seen: list[str] = []
+
+    async def by_episode(episode_uuids: list[str]) -> Any:
+        seen.extend(episode_uuids)
+        return SimpleNamespace(edges=edges)
+
+    @asynccontextmanager
+    async def fake_memory(_settings: Settings) -> AsyncIterator[Any]:
+        yield SimpleNamespace(get_nodes_and_edges_by_episode=by_episode)
+
+    monkeypatch.setattr(owner_model_api, "open_persona_memory", fake_memory)
+
+    response = await client.get(f"{BASE}/proposals/{proposed.revision_id}/evidence")
+    missing = await client.get(f"{BASE}/proposals/missing/evidence")
+    without_meeting = await client.get(f"{BASE}/proposals/{bare.revision_id}/evidence")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["revision_id"] == proposed.revision_id
+    assert body["meeting_id"] == "b2-meeting"
+    assert body["quotes"] == [{"entry_id": "transcript:e1", "quote": "deadline"}]
+    assert [item["kind"] for item in body["assertions"]] == ["decision_claim"]
+    assert body["assertions"][0]["evidence"] == [{"entry_id": "transcript:e1", "quote": "deadline"}]
+    assert seen == [edges[0].episodes[0]]
+    assert missing.status_code == 404
+    assert without_meeting.json() | {"revision_id": None} == {
+        "revision_id": None,
+        "meeting_id": None,
+        "quotes": [],
+        "assertions": [],
+    }
 
 
 async def test_another_owners_items_stay_invisible(
