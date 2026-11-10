@@ -47,6 +47,7 @@ dependencies = [
     "procrastinate[psycopg]>=3.10.0",
     "aioboto3>=13,<16",
     "botocore>=1.35,<2",
+    "kubernetes>=31,<35",
 ]
 
 [project.optional-dependencies]

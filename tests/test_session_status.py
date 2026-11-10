@@ -201,6 +201,23 @@ async def test_reaching_active_resets_the_attempt_budget(
     assert active.attempts == 0
 
 
+async def test_a_claim_for_one_meeting_leaves_the_others_free(
+    migrated_async_engine: AsyncEngine,
+) -> None:
+    store = SessionStatusStore(migrated_async_engine)
+    await _wanted(store, "m1")
+    await _wanted(store, "m2")
+
+    assert [row.meeting_id for row in await store.claimable()] == ["m1", "m2"]
+
+    claimed = await store.claim("worker-a", "attempt-1", 30.0, meeting_id="m2")
+
+    assert claimed is not None
+    assert claimed.meeting_id == "m2"
+    assert [row.meeting_id for row in await store.claimable()] == ["m1"]
+    assert await store.claim("worker-b", "attempt-2", 30.0, meeting_id="m2") is None
+
+
 async def test_the_snapshot_payload_is_stored_with_the_status_row(
     migrated_async_engine: AsyncEngine,
 ) -> None:

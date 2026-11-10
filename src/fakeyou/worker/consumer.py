@@ -239,12 +239,18 @@ class WorkerConsumer:
         finally:
             await self._shutdown_session()
 
-    async def run_once(self) -> str | None:
+    async def run_once(self, *, meeting_id: str | None = None) -> str | None:
         if self._session_task is not None:
             return None
         attempt_id = uuid4().hex
         status, error = await capture_error(
-            partial(self._status.claim, self._worker_id, attempt_id, SESSION_LEASE_SECONDS)
+            partial(
+                self._status.claim,
+                self._worker_id,
+                attempt_id,
+                SESSION_LEASE_SECONDS,
+                meeting_id=meeting_id,
+            )
         )
         if error is not None:
             logger.warning("claiming a session failed: %s", error)
