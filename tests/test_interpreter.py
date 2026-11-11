@@ -140,6 +140,49 @@ async def test_the_reader_reads_each_new_screen_once() -> None:
     await reader.close()
 
 
+async def test_a_larger_revisit_frame_is_read_again() -> None:
+    timeline = MeetingTimeline()
+    model = vision_model(
+        [
+            reading("Launch Timeline", text="Alpha: 12 January 2027"),
+            reading("Launch Timeline", text="Alpha: 12 January 2027"),
+        ]
+    )
+    reader = ScreenReader(timeline, _interpreter(model))
+    small = slide_jpeg(*TIMELINE)
+    with Image.open(io.BytesIO(small)) as image:
+        buffer = io.BytesIO()
+        image.convert("RGB").resize((1600, 900)).save(buffer, format="JPEG", quality=90)
+        large = buffer.getvalue()
+
+    timeline.show_screen(keyframe(small), None, data=small)
+    await reader.settle()
+    timeline.show_screen(keyframe(large, seconds=30), None, data=large)
+    await reader.settle()
+
+    assert len(model.structured_seen) == 2
+    [segment] = timeline.snapshot().screens
+    assert segment.keyframe.width == 1280
+    assert segment.reading is not None
+    assert segment.reading.title == "Launch Timeline"
+    await reader.close()
+
+
+async def test_a_same_sized_revisit_frame_is_not_read_again() -> None:
+    timeline = MeetingTimeline()
+    model = vision_model([reading("Launch Timeline")])
+    reader = ScreenReader(timeline, _interpreter(model))
+    first = slide_jpeg(*TIMELINE)
+
+    timeline.show_screen(keyframe(first), None, data=first)
+    await reader.settle()
+    timeline.show_screen(keyframe(first, seconds=30), None, data=first)
+    await reader.settle()
+
+    assert len(model.structured_seen) == 1
+    await reader.close()
+
+
 async def test_a_failed_read_marks_the_screen_and_is_journaled() -> None:
     journal = RecordingJournal()
     timeline = MeetingTimeline()

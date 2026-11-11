@@ -20,9 +20,6 @@ ScreenContent = Literal[
     "other",
 ]
 NOISE_CONTENT: frozenset[ScreenContent] = frozenset({"meeting_ui", "blank", "loading"})
-MEETING_CONTENT: frozenset[ScreenContent] = frozenset(
-    {"slide", "document", "spreadsheet", "diagram"}
-)
 SignalKind = Literal[
     "joined",
     "left",
@@ -85,7 +82,7 @@ class ScreenReading(Percept):
 
     @property
     def is_meeting_content(self) -> bool:
-        return self.content_kind in MEETING_CONTENT
+        return not self.is_noise
 
     def title_only(self) -> "ScreenReading":
         if self.is_meeting_content:

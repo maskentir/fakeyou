@@ -1,6 +1,6 @@
 from datetime import timedelta
 
-from fakeyou.perception.percepts import IncomingChat
+from fakeyou.perception.percepts import IncomingChat, ScreenFigure
 from fakeyou.perception.timeline import (
     ChatReceived,
     KeyframeCache,
@@ -202,7 +202,30 @@ def test_screen_captures_are_journaled_without_content() -> None:
     assert (event["ref"], event["change"], event["width"]) == ("screen#1", "new", 1280)
 
 
-def test_a_non_meeting_reading_is_stored_title_only() -> None:
+def test_a_noise_reading_is_stored_title_only() -> None:
+    timeline = shown_timeline(TIMELINE)
+    timeline.read_screen(
+        "screen#1",
+        reading(
+            "Meet Lobby",
+            text="Allow microphone",
+            kind="meeting_ui",
+        ),
+    )
+
+    stored = timeline.snapshot().screens[0].reading
+
+    assert stored is not None
+    assert stored.title == "Meet Lobby"
+    assert stored.content_kind == "meeting_ui"
+    assert stored.text == ""
+    assert stored.key_points == []
+    assert stored.figures == []
+    assert stored.visuals == []
+    assert stored.people == []
+
+
+def test_a_dashboard_reading_keeps_its_text() -> None:
     timeline = shown_timeline(TIMELINE)
     timeline.read_screen(
         "screen#1",
@@ -220,14 +243,12 @@ def test_a_non_meeting_reading_is_stored_title_only() -> None:
     assert stored is not None
     assert stored.title == "Cartesia Usage"
     assert stored.content_kind == "dashboard"
-    assert stored.text == ""
-    assert stored.key_points == []
-    assert stored.figures == []
-    assert stored.visuals == []
-    assert stored.people == []
+    assert stored.text == "Receipt 1450-6289 Rp899,900"
+    assert stored.key_points == ["Receipt 1450-6289 Rp899,900"]
+    assert stored.figures == [ScreenFigure(label="amount paid", value="Rp899,900")]
 
 
-def test_the_same_non_meeting_screen_again_merges_by_title() -> None:
+def test_a_dashboard_shared_again_with_new_text_stays_separate() -> None:
     timeline = shown_timeline(TIMELINE, PRICING)
     timeline.read_screen(
         "screen#1", reading("Cartesia Usage", text="Receipt 1450-6289", kind="dashboard")
@@ -236,4 +257,4 @@ def test_the_same_non_meeting_screen_again_merges_by_title() -> None:
         "screen#2", reading("Cartesia Usage", text="Invoice 7777-1111", kind="dashboard")
     )
 
-    assert [screen.ref for screen in timeline.snapshot().screens] == ["screen#1"]
+    assert [screen.ref for screen in timeline.snapshot().screens] == ["screen#1", "screen#2"]

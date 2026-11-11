@@ -166,9 +166,19 @@ class ScreenReader:
             await asyncio.gather(*tasks, return_exceptions=True)
 
     def _on_event(self, event: TimelineEvent) -> None:
-        if not isinstance(event, ScreenShown) or event.change != "new":
+        if not isinstance(event, ScreenShown):
             return
-        task = asyncio.create_task(self._read(event.segment.ref, event.segment.keyframe.sha256))
+        if event.change == "new":
+            sha256 = event.segment.keyframe.sha256
+        else:
+            arrival = event.arrival
+            if arrival is None:
+                return
+            stored = event.segment.keyframe
+            if arrival.width * arrival.height <= stored.width * stored.height:
+                return
+            sha256 = arrival.sha256
+        task = asyncio.create_task(self._read(event.segment.ref, sha256))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 

@@ -181,7 +181,7 @@ async def test_a_screen_reading_is_forwarded_to_the_moment_detector(
     assert "the beta date looks wrong" in text
 
 
-async def test_a_non_meeting_screen_is_forwarded_by_title_only(
+async def test_a_dashboard_screen_moment_forwards_its_details(
     journal: RecordingJournal,
 ) -> None:
     clock = FakeClock()
@@ -198,7 +198,25 @@ async def test_a_non_meeting_screen_is_forwarded_by_title_only(
 
     texts = [text for _ref, text in moments.screens if "Cartesia Usage" in text]
     assert texts
-    assert all("1450-6289" not in text for text in texts)
+    assert all("1450-6289" in text for text in texts)
+
+
+async def test_a_noise_screen_moment_is_forwarded_by_title_only(
+    journal: RecordingJournal,
+) -> None:
+    clock = FakeClock()
+    timeline = MeetingTimeline(journal=journal)
+    worker = _worker(clock, journal, timeline, attention=AttentionSettings(enabled=True))
+    moments = _RecordingMoments()
+    worker.moments = cast(Any, moments)
+    worker.watch_meeting_events()
+
+    _screen(timeline, "Meet Lobby", key_points=("Allow microphone",), kind="meeting_ui")
+    await asyncio.gather(*worker.moment_tasks)
+
+    texts = [text for _ref, text in moments.screens if "Meet Lobby" in text]
+    assert texts
+    assert all("microphone" not in text for text in texts)
 
 
 async def test_the_current_screen_reading_reaches_the_kernel(journal: RecordingJournal) -> None:

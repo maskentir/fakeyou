@@ -31,6 +31,7 @@ ScreenChange = Literal["new", "revisit", "same", "merged"]
 class ScreenShown:
     segment: ScreenSegment
     change: ScreenChange
+    arrival: Keyframe | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,7 +172,9 @@ class MeetingTimeline:
             and current.showing
             and compare_screens(current.keyframe, keyframe) != "distinct"
         ):
-            return ScreenShown(segment=current, change="same")
+            shown = ScreenShown(segment=current, change="same", arrival=keyframe)
+            self._emit(shown)
+            return shown
         self._close_current(keyframe.captured_at)
         visit = ScreenVisit(started_at=keyframe.captured_at)
         known = next(
@@ -190,10 +193,10 @@ class MeetingTimeline:
                 presenter=presenter,
                 visits=(visit,),
             )
-            shown = ScreenShown(segment=segment, change="new")
+            shown = ScreenShown(segment=segment, change="new", arrival=keyframe)
         else:
             segment = known.model_copy(update={"visits": (*known.visits, visit)})
-            shown = ScreenShown(segment=segment, change="revisit")
+            shown = ScreenShown(segment=segment, change="revisit", arrival=keyframe)
         state.screens[segment.ref] = segment
         state.current_ref = segment.ref
         self._journal.record(

@@ -168,23 +168,23 @@ async def test_forget_meeting_reports_episode_that_survives_removal() -> None:
     assert error.value.code is ErrorCode.MEMORY_FORGET_INCOMPLETE
 
 
-def test_a_screen_that_is_not_meeting_content_keeps_only_its_title() -> None:
-    dashboard = shown(
+def test_a_noise_screen_keeps_only_its_title() -> None:
+    lobby = shown(
         "screen-9",
-        "Cartesia Usage",
-        content="dashboard",
-        key_points=("1,105 credits used",),
-        figures=("1,105 credits",),
-        visuals=("usage chart",),
-        text="Receipt number 1450-6289, amount paid Rp899,900.00.",
+        "Meet Lobby",
+        content="meeting_ui",
+        key_points=("Allow microphone",),
+        figures=("microphone",),
+        visuals=("permission dialog",),
+        text="Allow microphone to be heard in the meeting.",
     )
 
-    body = screen_episode_body(dashboard)
+    body = screen_episode_body(lobby)
 
-    assert body == "Shared screen titled 'Cartesia Usage' shown by Rina (dashboard)."
+    assert body == "Shared screen titled 'Meet Lobby' shown by Rina (meeting_ui)."
 
 
-async def test_ingesting_a_dashboard_stores_a_title_only_episode() -> None:
+async def test_ingesting_a_dashboard_stores_a_detailed_episode() -> None:
     memory = make_graphiti(episode_prefix="uuid-", edges=[])
     dashboard = shown(
         "screen-9",
@@ -201,5 +201,5 @@ async def test_ingesting_a_dashboard_stores_a_title_only_episode() -> None:
     assert result.screen_windows == 1
     [screen] = [episode for episode in memory.added if episode["name"] == "meeting-1:s00000"]
     assert "Cartesia Usage" in screen["episode_body"]
-    assert "1450-6289" not in screen["episode_body"]
-    assert "Rp899,900" not in screen["episode_body"]
+    assert "1450-6289" in screen["episode_body"]
+    assert "Rp899,900" in screen["episode_body"]

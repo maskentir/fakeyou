@@ -5,7 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 from fakeyou.perception.percepts import (
-    MEETING_CONTENT,
+    NOISE_CONTENT,
     PERSON_REF_PREFIX,
     SCREEN_REF_PREFIX,
     CameraGlance,
@@ -149,14 +149,15 @@ def _screen(segment: ScreenSegment, *, now: datetime, current: bool) -> ViewScre
     if reading is None:
         return base
     update: dict[str, object] = {"kind": reading.content_kind, "title": reading.title}
-    if reading.content_kind in MEETING_CONTENT:
-        update |= {
-            "text": reading.text,
-            "key_points": reading.key_points,
-            "figures": reading.figures,
-            "visuals": reading.visuals,
-            "people": reading.people,
-        }
+    if reading.content_kind in NOISE_CONTENT:
+        return base.model_copy(update=update)
+    update |= {
+        "text": reading.text,
+        "key_points": reading.key_points,
+        "figures": reading.figures,
+        "visuals": reading.visuals,
+        "people": reading.people,
+    }
     return base.model_copy(update=update)
 
 

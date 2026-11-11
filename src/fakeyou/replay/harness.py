@@ -34,7 +34,7 @@ from fakeyou.orchestration.transcript import (
     build_transcript_callback,
 )
 from fakeyou.orchestration.turn_feed import EarlyCommit, TurnFeed
-from fakeyou.perception.percepts import MEETING_CONTENT
+from fakeyou.perception.percepts import NOISE_CONTENT
 from fakeyou.persistence.record import ChatEntry, MeetingRecord, ScreenEntry, TranscriptEntry
 from fakeyou.replay.compare import Comparison, compare_journals
 from fakeyou.replay.fixture import ReplayFixture, RosterPerson
@@ -387,7 +387,7 @@ async def _deliver(item: ReplayInput, sinks: _Sinks) -> None:
                 ScreenObserved(
                     title=entry.title,
                     reading_ref=entry.ref,
-                    meeting_content=entry.content in MEETING_CONTENT,
+                    meeting_content=entry.content not in NOISE_CONTENT,
                 ),
             )
         case "attention" if isinstance(entry, ScreenEntry):

@@ -19,7 +19,7 @@ def _dashboard() -> ScreenReading:
     )
 
 
-async def test_the_record_keeps_only_the_title_of_a_non_meeting_screen(tmp_path: Path) -> None:
+async def test_the_record_keeps_the_text_of_a_dashboard_screen(tmp_path: Path) -> None:
     timeline = shown_timeline(TIMELINE)
     record = MeetingRecord(tmp_path / "record.jsonl")
     archive = PerceptionArchive(timeline, record=record, screens_dir=tmp_path / "screens")
@@ -30,7 +30,23 @@ async def test_the_record_keeps_only_the_title_of_a_non_meeting_screen(tmp_path:
 
     raw = (tmp_path / "record.jsonl").read_text(encoding="utf-8")
     assert "Cartesia Usage" in raw
-    assert "1450-6289" not in raw
+    assert SECRET in raw
+    assert list((tmp_path / "screens").glob("*.jpg"))
+
+
+async def test_a_noise_screen_is_left_out_of_the_record(tmp_path: Path) -> None:
+    timeline = shown_timeline(TIMELINE)
+    record = MeetingRecord(tmp_path / "record.jsonl")
+    archive = PerceptionArchive(timeline, record=record, screens_dir=tmp_path / "screens")
+    timeline.subscribe(archive)
+
+    timeline.read_screen(
+        "screen#1", reading("Meet Lobby", text="Allow microphone", kind="meeting_ui")
+    )
+    await archive.settle()
+
+    raw = (tmp_path / "record.jsonl").read_text(encoding="utf-8")
+    assert "Meet Lobby" not in raw
     assert list((tmp_path / "screens").glob("*.jpg")) == []
 
 

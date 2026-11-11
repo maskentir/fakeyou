@@ -16,7 +16,7 @@ from fakeyou.foundation.speakers import voice_speaker_name
 from fakeyou.observability.faults import FaultReporter
 from fakeyou.observability.journal import Journal
 from fakeyou.observability.provider_faults import classify_exception
-from fakeyou.perception.percepts import MEETING_CONTENT
+from fakeyou.perception.percepts import NOISE_CONTENT
 from fakeyou.persistence.brief import MAX_CONTEXT_BYTES, MeetingBrief, MeetingContext
 from fakeyou.persistence.record import (
     ChatEntry,
@@ -150,7 +150,7 @@ SHARED_SCREEN = "shared_screen"
 
 
 def screen_source_text(entry: ScreenEntry) -> str:
-    if entry.content not in MEETING_CONTENT:
+    if entry.content in NOISE_CONTENT:
         return entry.title[:SCREEN_SOURCE_MAX_CHARS]
     parts = [entry.title, *entry.key_points, *entry.figures, *entry.visuals, entry.text]
     text = "\n".join(part for part in parts if part.strip())

@@ -196,7 +196,22 @@ def test_participants_resolve_by_reference_or_name() -> None:
     assert resolve_participant(snapshot, "") is None
 
 
-def test_a_screen_that_is_not_meeting_content_keeps_its_title_only() -> None:
+def test_a_noise_screen_keeps_its_title_only() -> None:
+    timeline = shown_timeline(TIMELINE)
+    timeline.read_screen(
+        "screen#1", reading("Meet Lobby", text="Allow microphone", kind="meeting_ui")
+    )
+
+    view = build_view(timeline.snapshot(), now=NOW)
+
+    assert view.screen_now is not None
+    assert view.screen_now.title == "Meet Lobby"
+    assert view.screen_now.text is None
+    assert view.screen_now.key_points is None
+    assert view.screen_now.figures is None
+
+
+def test_a_dashboard_keeps_its_detail() -> None:
     timeline = shown_timeline(TIMELINE)
     timeline.read_screen(
         "screen#1", reading("Cartesia Usage", text="1,105 credits", kind="dashboard")
@@ -206,9 +221,7 @@ def test_a_screen_that_is_not_meeting_content_keeps_its_title_only() -> None:
 
     assert view.screen_now is not None
     assert view.screen_now.title == "Cartesia Usage"
-    assert view.screen_now.text is None
-    assert view.screen_now.key_points is None
-    assert view.screen_now.figures is None
+    assert view.screen_now.text == "1,105 credits"
 
 
 def test_a_slide_keeps_its_detail() -> None:
@@ -221,7 +234,7 @@ def test_a_slide_keeps_its_detail() -> None:
     assert view.screen_now.text == "Beta 17 March 2027"
 
 
-def test_an_earlier_screen_that_is_not_meeting_content_keeps_its_title_only() -> None:
+def test_an_earlier_dashboard_keeps_its_detail() -> None:
     timeline = shown_timeline(TIMELINE, PRICING)
     timeline.read_screen(
         "screen#1", reading("Cartesia Usage", text="1,105 credits", kind="dashboard")
@@ -231,8 +244,8 @@ def test_an_earlier_screen_that_is_not_meeting_content_keeps_its_title_only() ->
     view = build_view(timeline.snapshot(), now=NOW)
 
     assert [screen.title for screen in view.earlier_screens] == ["Cartesia Usage"]
-    assert view.earlier_screens[0].text is None
-    assert view.earlier_screens[0].key_points is None
+    assert view.earlier_screens[0].text == "1,105 credits"
+    assert view.earlier_screens[0].key_points == []
 
 
 def test_earlier_screens_are_capped_at_the_two_most_recent() -> None:

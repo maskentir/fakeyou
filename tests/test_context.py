@@ -192,7 +192,7 @@ async def test_a_screen_whose_frame_is_gone_cannot_be_looked_at() -> None:
     assert result == {"code": "frame_unavailable", "screen": "screen#1"}
 
 
-async def test_looking_at_a_non_meeting_screen_returns_only_its_title() -> None:
+async def test_looking_at_a_dashboard_answers_from_the_image() -> None:
     timeline = shown_timeline(TIMELINE)
     timeline.read_screen(
         "screen#1",
@@ -203,12 +203,12 @@ async def test_looking_at_a_non_meeting_screen_returns_only_its_title() -> None:
     result = json.loads(await context.look_at_screen("current", "what was paid?"))
 
     assert result == {
-        "code": "not_meeting_content",
+        "code": "ok",
         "screen": "screen#1",
-        "title": "Cartesia Usage",
+        "answer": "Receipt 1450-6289 Rp899,900",
     }
     assert context.interpreter is not None
-    assert context.interpreter.budget.calls == 0
+    assert context.interpreter.budget.calls == 1
 
 
 async def test_looking_at_an_unread_screen_is_refused() -> None:

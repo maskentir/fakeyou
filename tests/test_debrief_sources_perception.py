@@ -157,7 +157,21 @@ def test_signals_are_never_sources(tmp_path: Path) -> None:
         load_record_snapshot(path)
 
 
-def test_a_non_meeting_screen_contributes_only_its_title(tmp_path: Path) -> None:
+def test_a_noise_screen_contributes_only_its_title(tmp_path: Path) -> None:
+    [source] = snapshot_sources(
+        tmp_path,
+        screen(
+            content="meeting_ui",
+            title="Meet Lobby",
+            text="Allow microphone to be heard in the meeting.",
+        ),
+    )
+
+    assert source.text == "Meet Lobby"
+    assert "microphone" not in source.text
+
+
+def test_a_dashboard_screen_contributes_its_text(tmp_path: Path) -> None:
     [source] = snapshot_sources(
         tmp_path,
         screen(
@@ -167,5 +181,5 @@ def test_a_non_meeting_screen_contributes_only_its_title(tmp_path: Path) -> None
         ),
     )
 
-    assert source.text == "Cartesia Usage"
-    assert "1450-6289" not in source.text
+    assert source.text.startswith("Cartesia Usage")
+    assert "1450-6289" in source.text
