@@ -371,8 +371,33 @@ Saran lanjutan dari data ini:
   jadi redesign lazy stream pada tahap P2 memberi dampak kecil;
   yang mahal adalah rasterisasi halaman Meet dan retry join yang
   memuat ulang halaman.
-- Deskripsi kamera bisa dicache per frame (frame kamera stabil
-  beberapa menit), sehingga pertanyaan lanjutan dijawab instan.
+### Eksperimen yang tersisa (urutan & syarat keluar)
+
+1. **Sembunyikan tile video** (`video { visibility: hidden }` di script
+   persepsi). Alasan: twin membaca frame lewat track WebRTC, bukan lewat
+   element video, jadi halaman tidak perlu meraster tile itu. Di
+   halaman pre-join (tanpa tile) tidak ada efek — 196,7% → 193,2%,
+   jadi ini harus diuji di halaman in-call yang memang punya tile.
+   Syarat keluar: renderer turun, dan frame kamera + layar tetap
+   terbaca (bukan hanya "tidak error").
+2. **Jendela raster lebih kecil** (Xvfb 1920x1080 → surface lebih
+   kecil). Renderer di in-call peak 156% dan container throttle 57
+   detik per 120 detik; Meet merender tile video besar.
+   Syarat keluar: join tetap jalan, kamera tetap terbaca.
+3. **Cache deskripsi kamera per frame**. Frame kamera stabil beberapa
+   menit, jadi deskripsi yang sama bisa dipakai ulang dan pertanyaan
+   lanjutan dijawab tanpa panggilan vision lagi. Ini yang menahan
+   gate `first_answer_audio_p50_seconds` (7,7 dtk vs 3,5 dtk): panggilan
+   vision sendiri 3-4,6 dtk, jadi evidence baru selalu melewat
+   anggaran.
+4. **Readback reaksi**. Aksi `react` terkirim dan bubble-nya terlihat,
+   tapi status masih `effect_unobserved` karena tidak ada pembacaan
+   DOM. Tambahkan pembacaan bubble yang berumur singkat, seperti
+   echo check pada `send_chat`.
+
+Yang sudah tertutup: join yang sabar terhadap fase "Getting ready",
+klasifikasi call-ended, dismissal modal yang tidak lagi jadi fault,
+ekor jurnal post-session, satu kontrak scorecard, dan biaya raster.
 
 ## Catatan
 
