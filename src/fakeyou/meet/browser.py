@@ -33,6 +33,8 @@ BROWSER_LAUNCH_ARGS = (
     "--autoplay-policy=no-user-gesture-required",
     "--lang=en-US",
     "--accept-lang=en-US,en",
+    "--disable-gpu",
+    "--disable-gpu-compositing",
 )
 
 BROWSER_DEVTOOLS_ARGS = (
@@ -258,6 +260,7 @@ class BrowserLaunch:
     fingerprint_seed: int | None = None
     profile_dir: str | Path | None = None
     warmup: bool = False
+    extra_args: tuple[str, ...] = ()
 
 
 DEFAULT_BROWSER_LAUNCH = BrowserLaunch()
@@ -279,6 +282,7 @@ async def _prepared_browser_context(
         fresh_profile = profile_is_fresh(profile)
         await asyncio.to_thread(patch_preferences_for_3p_cookies, profile)
         launch_args = list(BROWSER_LAUNCH_ARGS)
+        launch_args.extend(launch_profile.extra_args)
         if devtools:
             launch_args.extend(BROWSER_DEVTOOLS_ARGS)
         if launch_profile.fingerprint_seed is not None:
