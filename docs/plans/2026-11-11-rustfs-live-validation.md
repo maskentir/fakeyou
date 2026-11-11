@@ -312,6 +312,41 @@ Urutan: `POST /v1/sessions` → `POST /v1/sessions/<id>/join` → twin join
 → human交谈 → `POST /v1/sessions/<id>/stop` → job ingest/debrief →
 bukti restore.
 
+## Temuan performa CPU (2026-11-11)
+
+Profil per-proses (per-PID, `/proc`, 1 core = 100%):
+
+| Fase | gpu-process | renderer | worker python | total |
+| --- | --- | --- | --- | --- |
+| Join / page load | **104,5%** (mean, 35s) | 14,5% | — | **131,7%** |
+| In-call idle | 1,6% | 9,7% | 9,6% | ~33% |
+
+Container tidak punya `/dev/dri`, jadi Chromium meraster lewat
+SwiftShader (`libvk_swiftshader.so`) — proses gpu-nya memakan satu
+core penuh selama page load Meet. Worker Python sendiri
+murah (2,1% saat join, 9,6% in-call), jadi persepsi video bukan
+penyebabnya.
+
+Matriks flag (mean selama 35s memuat halaman Meet):
+
+| Varian | gpu-process | total |
+| --- | --- | --- |
+| baseline | 104,5% | 131,7% |
+| `--disable-gpu` | 2,3% | **33,9%** |
+| `--disable-gpu-compositing` | 2,4% | **34,0%** |
+| `--in-process-gpu` | (105% pindah ke browser) | 127,4% |
+
+Karena itu browser sekarang start dengan `--disable-gpu` dan
+`--disable-gpu-compositing`. Verifikasi live (sesi `rustfs-live-40`):
+CPU join turun dari 94-150% ke 32-50%, twin tetap join, mic nyala
+0,19s setelah admitted, nol fault, persepsi jalan (stream layar
+ter-bind), dan twin bicara. Flag tambahan bisa lewat
+`BrowserLaunch.extra_args`.
+
+Throttling cgroup nyata: `nr_throttled` naik dan `throttled_usec`
+mencatat 6,5 detik per 120 detik saat join — limit 2 core memang
+mengikat.
+
 ## Catatan
 
 - RustFS `1.0.0-alpha.81` = alpha, dipakai sesuai keputusan user; versi
