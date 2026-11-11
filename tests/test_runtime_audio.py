@@ -197,7 +197,8 @@ async def test_a_failed_dialog_dismissal_is_recorded_without_failing_session(
 
     assert result.terminal_reason != "audio_failure"
     assert journal.events("microphone_enabled")
-    assert any(
+    assert journal.events("modal_dismiss_expired")
+    assert not any(
         (entry.source, entry.operation) == ("browser", "dismiss_modal")
         for entry in reporter.summaries()
     )

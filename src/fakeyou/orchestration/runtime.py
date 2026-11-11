@@ -169,7 +169,7 @@ REJOIN_DELAY_CAP_SECONDS = 8.0
 BLOCKED_REJOIN_SECONDS = 30.0
 REJOIN = "the browser crashed and the twin joins again"
 DOM_PRESENCE_FRESH_SECONDS = 30.0
-NOTICE_DISMISS_SECONDS = 5.0
+NOTICE_DISMISS_SECONDS = 2.0
 
 
 @dataclass(slots=True)
@@ -489,7 +489,10 @@ class MeetingWorker:
         try:
             async with asyncio.timeout(NOTICE_DISMISS_SECONDS):
                 dismissed = await dismiss_notices(self.page)
-        except (PlaywrightError, TimeoutError, TypeError, RuntimeError) as error:
+        except TimeoutError:
+            self.record("modal_dismiss_expired", source="browser")
+            return
+        except (PlaywrightError, TypeError, RuntimeError) as error:
             if self.faults is not None:
                 self.faults.record(classify_exception("browser", error, operation="dismiss_modal"))
             return
