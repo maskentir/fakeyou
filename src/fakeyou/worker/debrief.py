@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -26,6 +27,8 @@ from fakeyou.observability.faults import capture_error
 from fakeyou.observability.journal import Journal, journal_path
 from fakeyou.orchestration.assembly import stop_signal_handlers
 from fakeyou.orchestration.providers import create_debrief_chat_model, create_fallback_chat_model
+from fakeyou.persistence.ingestion_status import read_status
+from fakeyou.persistence.layout import MeetingDir
 from fakeyou.persistence.segments import ObjectStore, SegmentFile, push_appended_segments
 from fakeyou.transport.streams import StreamTransport
 from fakeyou.worker.consumer import SnapshotStore
@@ -34,6 +37,8 @@ from fakeyou.worker.keys import meeting_job_settings
 logger = logging.getLogger(__name__)
 
 DEBRIEF_DELIVERY_LIMIT = 5
+DEBRIEF_INGESTION_WAIT_SECONDS = 180.0
+DEBRIEF_INGESTION_POLL_SECONDS = 2.0
 INVALID_JOB_DETAIL = "debrief_job_invalid"
 FAILED_JOB_DETAIL = "debrief_job_failed"
 DEAD_LETTER_DETAIL = "debrief_job_dead_lettered"
@@ -152,6 +157,7 @@ class DebriefWorker:
             return None
         job = DebriefJob(meeting_id=meeting_id, force=force)
         try:
+            await self._await_ingestion(job.meeting_id)
             outcome = await self._handler(job, deps=self._deps)
         except Exception as error:
             attempts = context.job.attempts
@@ -164,6 +170,18 @@ class DebriefWorker:
             await self._push_journal_segments(meeting_id)
         logger.info("debrief job for %s finished", job.meeting_id)
         return outcome
+
+    async def _await_ingestion(self, meeting_id: str) -> None:
+        deadline = time.monotonic() + DEBRIEF_INGESTION_WAIT_SECONDS
+        path = MeetingDir(
+            self._deps.settings.paths.record_dir,
+            parse_session_id(meeting_id, field="meeting_id"),
+        ).ingestion
+        while time.monotonic() < deadline:
+            status = read_status(path)
+            if status is None or status.status in ("completed", "interrupted", "failed"):
+                return
+            await asyncio.sleep(DEBRIEF_INGESTION_POLL_SECONDS)
 
     async def _push_journal_segments(self, meeting_id: str) -> None:
         objects = self._deps.objects

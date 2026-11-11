@@ -204,6 +204,17 @@ refusal jujur semuanya terbukti live.
   (`visible controls`), jadi locator yang meleset bisa langsung
   dibandingkan dengan UI Meet saat itu.
 
+### Debrief vs ingest: race lock
+
+Job debrief dan job ingest sama-sama antre saat sesi berakhir, dan
+keduanya butuh lock record yang sama. Job ingest memegangnya ~80 detik
+(3 window), sementara job debrief memakai 5 percobaan dengan backoff
+total ~75 detik — jadi job debrief selalu kalah dan mati (`failed`,
+tanpa laporan). Fix: job debrief menunggu status ingestion terminal
+sebelum menjalankan diri sendiri (batas 180 detik, poll 2 detik).
+Setelah fix, `rustfs-live-22` punya laporan debrief berstatus
+`available`.
+
 ### Slice C — D1 + rotasi secret
 
 Ditunda oleh user ("d1 sama rotasi bisa belakang"). Tidak dikerjakan.

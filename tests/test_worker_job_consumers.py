@@ -3,6 +3,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 
+import pytest
 from procrastinate.testing import InMemoryConnector
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
@@ -12,7 +13,10 @@ from fakeyou.db.jobs import JobQueue, build_job_queue
 from fakeyou.debrief.debrief_service import DebriefOutcome
 from fakeyou.memory.operator_access import OperatorAccess
 from fakeyou.observability.journal import journal_path
+from fakeyou.persistence.ingestion_status import IngestionStatus, write_status
+from fakeyou.persistence.layout import MeetingDir
 from fakeyou.transport.streams import StreamTransport
+from fakeyou.worker import debrief as debrief_worker
 from fakeyou.worker.consumer import SnapshotStore
 from fakeyou.worker.debrief import DebriefDeps, DebriefHandler, DebriefJob, DebriefWorker
 from fakeyou.worker.reembed import (
@@ -227,6 +231,37 @@ async def test_debrief_worker_pushes_its_journal_tail_after_a_failure(settings: 
     await worker.run_once()
 
     assert store.objects == {f"sessions/m1/journal/000000000000-{len(text):012d}": text.encode()}
+
+
+async def test_debrief_worker_waits_for_the_ingestion_to_settle(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(debrief_worker, "DEBRIEF_INGESTION_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(debrief_worker, "DEBRIEF_INGESTION_WAIT_SECONDS", 5.0)
+    stream = StreamDouble()
+    seen: list[DebriefJob] = []
+
+    async def handler(job: DebriefJob, *, deps: DebriefDeps) -> DebriefOutcome:
+        del deps
+        seen.append(job)
+        return _outcome(job.meeting_id)
+
+    worker, queue = _debrief_worker(settings, stream, handler)
+    status = MeetingDir(settings.paths.record_dir, SessionId("m1")).ingestion
+    write_status(status, IngestionStatus(meeting_id="m1", group_id="g", status="pending"))
+    job_id = await queue.defer_debrief(meeting_id="m1", force=True)
+
+    running = asyncio.create_task(worker.run_once())
+    await asyncio.sleep(0.05)
+    assert seen == []
+
+    write_status(status, IngestionStatus(meeting_id="m1", group_id="g", status="completed"))
+    await running
+
+    assert seen == [DebriefJob(meeting_id="m1", force=True)]
+    fetched = await queue.fetch(job_id)
+    assert fetched is not None
+    assert fetched.status == "succeeded"
 
 
 async def test_debrief_worker_runs_the_meeting_from_the_job_queue(
