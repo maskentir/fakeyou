@@ -13,6 +13,7 @@ from playwright.async_api import Page
 LOBBY = '<input placeholder="Your name"><button>Ask to join</button>'
 IN_CALL = '<button aria-label="Leave call"></button><button>Mute microphone</button>'
 DENIED = "<h1>You can't join this video call</h1>"
+CALL_ENDED = '<div data-call-ended="true"></div><h1>You can\'t join this video call</h1>'
 EXPLICIT_DENIED = "<h1>Someone in the call denied your request to join</h1>"
 REMOVED = "<h1>You've been removed from the call</h1>"
 ENDED = "<h1>The call has ended</h1>"

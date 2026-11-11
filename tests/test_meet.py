@@ -23,6 +23,7 @@ from fakeyou.meet.meet import (
 from tests._fakes_common import LINK, FakeClock
 from tests._meet_browser_fakes import (
     ASK_SELECTOR,
+    CALL_ENDED,
     CAM_OFF_SELECTOR,
     CAM_ON_SELECTOR,
     DENIED,
@@ -126,6 +127,20 @@ async def test_request_guest_join_reports_platform_block() -> None:
     assert result.status == "blocked"
     assert "blocked" in result.detail
     assert "can't join this" in result.detail
+
+
+async def test_request_guest_join_reports_a_call_that_had_already_ended() -> None:
+    page = meet_page([CALL_ENDED])
+    clock = FakeClock()
+
+    result = await request_guest_join(
+        page,
+        _request(),
+        polling=JoinPolling(clock.sleep, clock.monotonic),
+    )
+
+    assert result.status == "ended"
+    assert "already ended" in result.detail
 
 
 async def test_request_guest_join_waits_out_captcha_grace_then_reports_block() -> None:

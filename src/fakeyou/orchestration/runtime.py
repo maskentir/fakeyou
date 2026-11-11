@@ -144,6 +144,7 @@ _JOIN_EVENTS: dict[JoinStatus, tuple[LifecycleEventKind, LifecycleAttribution]] 
     "timeout": ("lobby_timed_out", "system_fault"),
     "aborted": ("owner_stopped", "owner_action"),
     "failed": ("browser_failed", "system_fault"),
+    "ended": ("meeting_ended", "host_action"),
 }
 
 

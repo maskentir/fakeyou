@@ -14,7 +14,7 @@ from playwright.async_api import Locator, Page
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.foundation.invariants import POLL_TIMEOUT_MULTIPLIER
 
-JoinStatus = Literal["admitted", "denied", "blocked", "timeout", "aborted", "failed"]
+JoinStatus = Literal["admitted", "denied", "blocked", "timeout", "aborted", "failed", "ended"]
 CallState = Literal["in_call", "removed", "ended", "lobby", "left", "unknown"]
 LeaveStatus = Literal["left", "failed"]
 
@@ -79,6 +79,7 @@ class MeetSignals:
 
 
 DEFAULT_MEET_SIGNALS = MeetSignals()
+CALL_ENDED_MARKER = 'data-call-ended="true"'
 _HEADING_TAGS = frozenset({"h1", "h2", "h3"})
 _VOID_TAGS = frozenset(
     {
@@ -373,13 +374,21 @@ async def _poll_content(
         )
 
 
-def _page_phrase(content: str, marker: str, limit: int = 160) -> str:
+def _page_phrase(content: str, marker: str, limit: int = 400) -> str:
     lowered = content.lower()
     index = lowered.find(marker.lower())
     if index < 0:
         return "marker not found"
     start = max(index - 60, 0)
     return " ".join(content[start : start + limit].split())
+
+
+def _classify_denial(content: str) -> JoinResult | None:
+    if _is_explicit_denial(content):
+        return JoinResult(status="denied", detail="guest request to join was denied")
+    if CALL_ENDED_MARKER in content:
+        return JoinResult(status="ended", detail="the call had already ended when the twin arrived")
+    return None
 
 
 async def _poll_captcha(
@@ -494,15 +503,17 @@ async def _await_admission(
             await polling.sleep(request.poll_interval_seconds)
             continue
         unreadable = 0
-        if _is_explicit_denial(content):
-            return JoinResult(status="denied", detail="guest request to join was denied")
+        denial = _classify_denial(content)
+        if denial is not None:
+            return denial
         if signals.denied in content:
             outcome, captcha_since = await _poll_captcha(page, polling, captcha_since, request)
             if outcome is None:
                 continue
             return JoinResult(
                 status=outcome.status,
-                detail=f"{outcome.detail}; page says: {_page_phrase(content, signals.denied)}",
+                detail=f"{outcome.detail}; page says: {_page_phrase(content, signals.denied)}; "
+                f"visible controls: {await visible_control_labels(page)}",
             )
         if _is_in_call(content, signals):
             return JoinResult(status="admitted", detail="guest admitted to the call")
