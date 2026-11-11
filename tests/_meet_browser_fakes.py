@@ -249,6 +249,8 @@ class FakePage(Page):
     async def evaluate(self, expression: str, arg: Any = None) -> Any:
         self.evaluate_calls.append(expression)
         if not self._evaluates:
+            if "enumerateDevices" in expression:
+                return ["audioinput", "videoinput", "audiooutput"]
             raise AssertionError("page evaluate called more times than scripted")
         result = self._evaluates.pop(0)
         if isinstance(result, Exception):

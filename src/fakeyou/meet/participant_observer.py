@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, override
 
 from fakeyou.foundation.digest import canonical_json_digest
-from fakeyou.foundation.invariants import POLL_TIMEOUT_MULTIPLIER
+from fakeyou.foundation.invariants import PERCEPTION_POLL_TIMEOUT_MULTIPLIER
 from fakeyou.foundation.polling import PageEvaluator, PollingLoop, PollSchedule
 from fakeyou.observability.faults import ConsumerSink, Fault, FaultReporter, create_poll_guard
 
@@ -186,7 +186,7 @@ class ParticipantObserver(PollingLoop):
     async def start(self) -> None:
         await super().start()
         with suppress(TimeoutError):
-            async with asyncio.timeout(POLL_TIMEOUT_MULTIPLIER * self._poll_interval):
+            async with asyncio.timeout(PERCEPTION_POLL_TIMEOUT_MULTIPLIER * self._poll_interval):
                 await self._sampled.wait()
 
     @override
@@ -194,7 +194,7 @@ class ParticipantObserver(PollingLoop):
         started = self._monotonic()
         self.polls += 1
         try:
-            async with asyncio.timeout(POLL_TIMEOUT_MULTIPLIER * self._poll_interval):
+            async with asyncio.timeout(PERCEPTION_POLL_TIMEOUT_MULTIPLIER * self._poll_interval):
                 raw = await self._page.evaluate(OBSERVE_JS)
             if _is_observation(raw):
                 await asyncio.to_thread(self._on_poll, raw, started * 1000.0)

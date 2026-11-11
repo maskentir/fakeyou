@@ -772,7 +772,10 @@ async def test_media_toggle_preserves_state_and_reports_failure(
         values["visible"] = {current: PlaywrightError("state boom")}
     elif scenario == "failed_confirmation":
         values["wait_failures"] = {current}
-    page = meet_page([], **values)
+    evaluates: list[Any] = []
+    if device == "camera":
+        evaluates.append(["audioinput", "videoinput", "audiooutput"])
+    page = meet_page([], evaluates, **values)
     clock = FakeClock()
     if scenario.startswith("failed"):
         target = "enabled microphone" if device == "microphone" else "disabled camera"
@@ -809,6 +812,31 @@ async def test_camera_without_a_device_counts_as_disabled_without_waiting() -> N
     assert page.clicked == []
     assert page.waited == []
     assert clock.sleeps == []
+
+
+async def test_a_host_without_a_camera_device_never_toggles_the_camera() -> None:
+    page = meet_page(
+        [],
+        [["audioinput", "audiooutput"]],
+        visible={CAM_ON_SELECTOR: True, CAM_OFF_SELECTOR: False},
+    )
+    clock = FakeClock()
+
+    assert await disable_meeting_camera(page, clock.sleep) is True
+    assert page.clicked == []
+    assert page.waited == []
+
+
+async def test_a_camera_device_is_toggled_off_when_the_host_has_one() -> None:
+    page = meet_page(
+        [],
+        [["audioinput", "videoinput", "audiooutput"]],
+        visible={CAM_ON_SELECTOR: True, CAM_OFF_SELECTOR: False},
+    )
+    clock = FakeClock()
+
+    assert await disable_meeting_camera(page, clock.sleep) is True
+    assert page.clicked == [CAM_ON_SELECTOR]
 
 
 async def test_request_guest_join_admits_on_deadline_recheck() -> None:

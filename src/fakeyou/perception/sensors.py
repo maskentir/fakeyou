@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import PerceptionSettings
-from fakeyou.foundation.invariants import POLL_TIMEOUT_MULTIPLIER
+from fakeyou.foundation.invariants import PERCEPTION_POLL_TIMEOUT_MULTIPLIER
 from fakeyou.foundation.polling import PollingLoop, PollSchedule
 from fakeyou.foundation.resources import load_bridged_script
 from fakeyou.observability.faults import ConsumerSink, create_poll_guard
@@ -367,7 +367,7 @@ class PerceptionDrain(PollingLoop):
 
     async def drain_once(self) -> None:
         self.polls += 1
-        async with asyncio.timeout(POLL_TIMEOUT_MULTIPLIER * self._poll_interval):
+        async with asyncio.timeout(PERCEPTION_POLL_TIMEOUT_MULTIPLIER * self._poll_interval):
             raw = await self._page.evaluate(PERCEPTION_DRAIN_JS)
         if raw is None:
             return
@@ -408,7 +408,7 @@ class PerceptionDrain(PollingLoop):
             {"stream_id": item.stream_id, "role": item.role, "device_id": item.device_id}
             for item in wanted
         ]
-        async with asyncio.timeout(POLL_TIMEOUT_MULTIPLIER * self._poll_interval):
+        async with asyncio.timeout(PERCEPTION_POLL_TIMEOUT_MULTIPLIER * self._poll_interval):
             await self._page.evaluate(PERCEPTION_ASSIGN_JS, payload)
         self._assigned = wanted
         if self._journal is not None:

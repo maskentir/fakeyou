@@ -5,7 +5,7 @@
   const PROTOCOL_CHANNELS = ["collections"];
   const MAX_MESSAGES = 2000;
   const MAX_FRAMES = 8;
-  const MAX_DRAIN_BYTES = 6000000;
+  const MAX_DRAIN_BYTES = 1500000;
   const SAMPLE_MS = { screen: 500, camera: 4000 };
   const MAX_EDGE = { screen: 1920, camera: 480 };
   const JPEG_QUALITY = 0.85;

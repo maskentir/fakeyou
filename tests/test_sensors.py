@@ -301,6 +301,12 @@ def test_the_perception_script_ships_with_the_bridge() -> None:
     assert script.index("__fakeyouRtc") < script.index("__fakeyouPerception")
 
 
+def test_the_drain_moves_a_bounded_payload_per_poll() -> None:
+    script = load_perception_script()
+
+    assert "const MAX_DRAIN_BYTES = 1500000;" in script
+
+
 async def test_each_audio_output_is_journaled_once_with_its_device() -> None:
     sensed, _, journal = sensors()
     audio = collection_payload(

@@ -624,6 +624,21 @@ async def enable_meeting_microphone(
     )
 
 
+CAMERA_DEVICE_PROBE = (
+    "() => navigator.mediaDevices.enumerateDevices().then(devices => devices.map(d => d.kind))"
+)
+
+
+async def camera_device_present(page: Page) -> bool:
+    try:
+        kinds = await page.evaluate(CAMERA_DEVICE_PROBE)
+    except PlaywrightError:
+        return True
+    if not isinstance(kinds, list) or not kinds:
+        return True
+    return "videoinput" in kinds
+
+
 async def disable_meeting_camera(
     page: Page, sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
 ) -> bool:
@@ -634,6 +649,8 @@ async def disable_meeting_camera(
     except PlaywrightError as error:
         raise RuntimeError(f"checking camera state failed: {error}") from error
     if not sending:
+        return True
+    if not await camera_device_present(page):
         return True
     return await toggle_control(page, ToggleSelectors(off, on), "camera", "disabled", sleep)
 
