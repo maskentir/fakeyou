@@ -373,6 +373,15 @@ async def _poll_content(
         )
 
 
+def _page_phrase(content: str, marker: str, limit: int = 160) -> str:
+    lowered = content.lower()
+    index = lowered.find(marker.lower())
+    if index < 0:
+        return "marker not found"
+    start = max(index - 60, 0)
+    return " ".join(content[start : start + limit].split())
+
+
 async def _poll_captcha(
     page: Page,
     polling: JoinPolling,
@@ -491,7 +500,10 @@ async def _await_admission(
             outcome, captcha_since = await _poll_captcha(page, polling, captcha_since, request)
             if outcome is None:
                 continue
-            return outcome
+            return JoinResult(
+                status=outcome.status,
+                detail=f"{outcome.detail}; page says: {_page_phrase(content, signals.denied)}",
+            )
         if _is_in_call(content, signals):
             return JoinResult(status="admitted", detail="guest admitted to the call")
         if polling.monotonic() >= deadline:
@@ -615,6 +627,16 @@ async def disable_meeting_camera(
     return await toggle_control(page, ToggleSelectors(off, on), "camera", "disabled", sleep)
 
 
+async def visible_control_labels(page: Page) -> str:
+    try:
+        labels = await page.locator("button[aria-label]").evaluate_all(
+            "nodes => nodes.map(node => node.getAttribute('aria-label')).filter(Boolean)"
+        )
+    except PlaywrightError:
+        return "unknown"
+    return ", ".join(str(label) for label in labels[:40]) or "none"
+
+
 @dataclass(frozen=True, slots=True)
 class ToggleSelectors:
     desired: str
@@ -637,7 +659,7 @@ async def toggle_control(
         partial(page.locator, selectors.toggle), f"{control} button", sleep
     )
     if failure is not None:
-        raise RuntimeError(failure)
+        raise RuntimeError(f"{failure}; visible controls: {await visible_control_labels(page)}")
     try:
         await page.locator(selectors.desired).first.wait_for(state="visible", timeout=10000)
     except PlaywrightError as error:
@@ -670,7 +692,11 @@ async def leave_meeting(
         out = await _already_out(page, signals)
         if out is not None:
             return out
-        return LeaveResult(status="failed", detail="leave button not found on the page")
+        return LeaveResult(
+            status="failed",
+            detail=f"leave button not found on the page; visible controls: "
+            f"{await visible_control_labels(page)}",
+        )
     failure = await click_when_ready(
         partial(page.locator, f'button[aria-label="{signals.leave_call}"]'),
         "leave button",

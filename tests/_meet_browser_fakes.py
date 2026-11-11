@@ -105,7 +105,7 @@ class FakeLocator:
 
     async def evaluate_all(self, expression: str) -> list[Any]:
         del expression
-        return []
+        return self._page.labels.get(self.selector, [])
 
     async def click(self, **kwargs: Any) -> None:
         del kwargs
@@ -124,6 +124,7 @@ class FakeLocator:
 class PageScript(TypedDict, total=False):
     counts: dict[str, list[int]]
     locator_evaluates: dict[str, list[Any]]
+    labels: dict[str, list[str]]
     click_failures: Iterable[str]
     click_flaky: dict[str, int]
     wait_flaky: dict[str, int]
@@ -156,6 +157,7 @@ class FakePage(Page):
         self.click_flaky = dict(script.get("click_flaky", {}))
         self.wait_flaky = dict(script.get("wait_flaky", {}))
         self.visible = dict(script.get("visible", {}))
+        self.labels = dict(script.get("labels", {}))
         self.reveal_on_click = dict(script.get("reveal_on_click", {}))
         self.wait_failures = set(script.get("wait_failures", ()))
         self.type_failures = set(script.get("type_failures", ()))

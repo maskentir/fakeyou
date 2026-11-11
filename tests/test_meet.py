@@ -125,6 +125,7 @@ async def test_request_guest_join_reports_platform_block() -> None:
 
     assert result.status == "blocked"
     assert "blocked" in result.detail
+    assert "can't join this" in result.detail
 
 
 async def test_request_guest_join_waits_out_captcha_grace_then_reports_block() -> None:
@@ -770,6 +771,19 @@ async def test_media_toggle_preserves_state_and_reports_failure(
     else:
         assert await toggle(page, clock.sleep) is True
         assert page.clicked == ([opposite, opposite] if scenario == "transient_click" else [])
+
+
+async def test_a_failed_media_toggle_names_the_controls_it_found() -> None:
+    page = meet_page(
+        [],
+        visible={MIC_ON_SELECTOR: False},
+        click_failures={MIC_OFF_SELECTOR},
+        labels={"button[aria-label]": ["Turn on your microphone", "Leave call"]},
+    )
+    clock = FakeClock()
+
+    with pytest.raises(RuntimeError, match="Turn on your microphone"):
+        await enable_meeting_microphone(page, clock.sleep)
 
 
 async def test_camera_without_a_device_counts_as_disabled_without_waiting() -> None:

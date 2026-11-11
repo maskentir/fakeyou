@@ -141,6 +141,7 @@ class CollectionUpdate(ProtocolPart):
     users: tuple[MeetUser, ...] = ()
     outputs: tuple[DeviceOutput, ...] = ()
     chat: tuple[MeetChatMessage, ...] = ()
+    skipped: tuple[str, ...] = ()
 
 
 def inflate(payload: bytes) -> bytes:
@@ -218,10 +219,20 @@ def _chat(envelope: Any) -> MeetChatMessage | None:
 def decode_collection_event(payload: bytes) -> CollectionUpdate:
     event = _parse("CollectionEvent", inflate(payload))
     update = event.body.update
+    outputs: list[DeviceOutput] = []
+    skipped: list[str] = []
+    for item in update.devices.outputs:
+        output = _output(item)
+        if output is None:
+            if item.device_id:
+                skipped.append(item.device_id)
+            continue
+        outputs.append(output)
     return CollectionUpdate(
         users=_users(update.space.users),
-        outputs=tuple(item for item in map(_output, update.devices.outputs) if item is not None),
+        outputs=tuple(outputs),
         chat=tuple(item for item in map(_chat, update.space.chat) if item is not None),
+        skipped=tuple(skipped),
     )
 
 

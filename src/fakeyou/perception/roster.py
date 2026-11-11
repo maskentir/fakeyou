@@ -165,7 +165,7 @@ class MeetRoster:
 
     def output_streams(self) -> list[str]:
         return sorted(
-            f"{device_id}:{kind}:{output.stream_id}"
+            f"{device_id}:{kind}:{output.stream_id}:{'off' if output.disabled else 'on'}"
             for (device_id, kind), output in self._outputs.items()
         )
 
