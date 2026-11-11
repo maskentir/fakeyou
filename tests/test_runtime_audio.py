@@ -123,6 +123,8 @@ async def test_audio_failure_stops_pipeline_and_leaves_with_distinct_reason(
         assert "browser_closed" not in session.events
         return
     assert result.terminal_reason == "audio_failure"
+    if failure_at == "microphone":
+        assert "not enabled" in result.detail
     assert session.events[-2:] == ["leave", "browser_closed"]
     assert session.events.index("audio_stopped") < session.events.index("leave")
 

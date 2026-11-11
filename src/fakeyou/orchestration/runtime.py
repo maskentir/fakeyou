@@ -403,7 +403,7 @@ class MeetingWorker:
                 enable_meeting_microphone(self.page, self.sleep), self.stop
             )
         except RuntimeError as error:
-            raise MeetingAudioError("meeting microphone could not be enabled") from error
+            raise MeetingAudioError(f"meeting microphone could not be enabled: {error}") from error
         if enabled is None or self.stop.is_set():
             return await self._finish_commit(
                 "owner_stopped", "owner_action", "owner stopped microphone startup"
