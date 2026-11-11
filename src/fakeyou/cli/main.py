@@ -49,6 +49,7 @@ from fakeyou.cli.sessions import (
     worker_status,
     worker_stop,
 )
+from fakeyou.cli.storage import initialize_storage
 from fakeyou.cli.voiceprint import (
     voiceprint_challenge,
     voiceprint_delete,
@@ -134,6 +135,13 @@ db_app = typer.Typer(
     pretty_exceptions_enable=False,
     rich_markup_mode=None,
 )
+storage_app = typer.Typer(
+    help="Manage the session object storage",
+    add_completion=False,
+    no_args_is_help=False,
+    pretty_exceptions_enable=False,
+    rich_markup_mode=None,
+)
 voiceprint_app = typer.Typer(
     help="Enroll and verify speaker voiceprints",
     add_completion=False,
@@ -178,6 +186,7 @@ diarize_app = typer.Typer(
 )
 app.add_typer(worker_app, name="worker")
 app.add_typer(db_app, name="db")
+app.add_typer(storage_app, name="storage")
 app.add_typer(voiceprint_app, name="voiceprint")
 app.add_typer(calibrate_app, name="calibrate")
 app.add_typer(audio_app, name="audio")
@@ -564,6 +573,12 @@ def db_stamp_command() -> None:
 @_guard_interrupts
 def db_status_command() -> None:
     db_status(settings=_load_settings())
+
+
+@storage_app.command("init", help="Create the session object storage bucket when it is missing")
+@_guard_interrupts
+def storage_init_command() -> None:
+    asyncio.run(initialize_storage(_load_settings()))
 
 
 @voiceprint_app.command("enroll", help="Enroll a voiceprint from audio clips")

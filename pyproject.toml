@@ -248,6 +248,7 @@ modules = [
     "fakeyou.cli.owner_model",
     "fakeyou.cli.replay",
     "fakeyou.cli.sessions",
+    "fakeyou.cli.storage",
     "fakeyou.cli.voiceprint",
 ]
 

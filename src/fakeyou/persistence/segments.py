@@ -28,7 +28,7 @@ class ObjectStore(Protocol):
 
 class S3ObjectStore:
     def __init__(self, settings: StorageSettings) -> None:
-        if settings.bucket is None:
+        if not settings.bucket:
             raise ValueError("storage bucket is not configured")
         self._bucket = settings.bucket
         secret = settings.secret_access_key
@@ -72,6 +72,22 @@ class S3ObjectStore:
                 keys.append(item["Key"])
         return keys
 
+    async def ensure_bucket(self) -> bool:
+        client = await self._connected()
+        try:
+            await client.head_bucket(Bucket=self._bucket)
+        except ClientError as error:
+            if error.response.get("Error", {}).get("Code") not in ("404", "NoSuchBucket"):
+                raise
+        else:
+            return False
+        try:
+            await client.create_bucket(Bucket=self._bucket)
+        except ClientError as error:
+            if error.response.get("Error", {}).get("Code") != "BucketAlreadyOwnedByYou":
+                raise
+        return True
+
     async def aclose(self) -> None:
         if self._context is not None and self._client is not None:
             await self._context.__aexit__(None, None, None)
@@ -83,6 +99,18 @@ def create_object_store(settings: Settings) -> ObjectStore | None:
     if not settings.storage.configured:
         return None
     return S3ObjectStore(settings.storage)
+
+
+async def ensure_bucket(settings: Settings) -> bool:
+    store = create_object_store(settings)
+    if store is None:
+        raise ValueError("storage is not configured")
+    if not isinstance(store, S3ObjectStore):
+        raise TypeError("only the S3 object store can ensure its bucket")
+    try:
+        return await store.ensure_bucket()
+    finally:
+        await store.aclose()
 
 
 @dataclass(frozen=True, slots=True)

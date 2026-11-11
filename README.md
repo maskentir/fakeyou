@@ -44,7 +44,13 @@ git clone https://github.com/maskentir/fakeyou.git && cd fakeyou
 uv sync --locked --all-groups
 npm ci --ignore-scripts
 cp .env.example .env          # then fill in the credential block
-docker compose --profile audio up -d postgres redis neo4j embeddings
+docker compose --profile audio up -d postgres redis neo4j embeddings rustfs
+```
+
+Create the object storage bucket once, before the first session:
+
+```sh
+fakeyou storage init
 ```
 
 Start the API and one worker per role:
@@ -225,10 +231,11 @@ fakeyou audio purge-expired --days 30
 fakeyou perception purge-expired --days 30
 fakeyou db upgrade
 fakeyou db status
+fakeyou storage init
 ```
 
-Host-local commands, deliberately not API routes: `db upgrade`, the
-`purge-expired` retention sweeps, `diarize show`, `calibrate`, and `voiceprint`,
+Host-local commands, deliberately not API routes: `db upgrade`, `storage init`,
+the `purge-expired` retention sweeps, `diarize show`, `calibrate`, and `voiceprint`,
 because they touch the migration path, the operator filesystem, or a local ONNX
 model.
 

@@ -16,6 +16,10 @@ NEO4J_IMAGE = (
 REDIS_IMAGE = (
     "redis:7.4-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499"
 )
+RUSTFS_IMAGE = (
+    "rustfs/rustfs:1.0.0-alpha.81@sha256:"
+    "4ee605dfe7c6548d1fa1856357e8a1eccd929e3176acf933fafeba3ce09a69f9"
+)
 
 
 @dataclass(frozen=True, slots=True)
