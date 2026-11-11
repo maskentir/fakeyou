@@ -206,7 +206,7 @@ Rincian per pemicu, dari jurnal:
 
 | Pemicu | Rincian |
 | --- | --- |
-| `first_audio` | Balasan biasa **1,22 s** (final → playback) ✓; balasan yang butuh evidence kamera **7-8 s** ✗. Biayanya: panggilan vision (3,1-4,6 s) + model jawaban (2,3 s). Yang bikin terasa lambat: **opener ("sebentar ya…") sudah berbunyi di ~1,5 s** ✓, tapi opener di-prerender sehingga tidak punya event `synthesis_pcm_emitted` dan **tidak dihitung metrik** (`first_pcm` hanya melihat PCM jawaban akhir). |
+| `first_audio` | Balasan biasa **1,22 s** (final → playback) ✓; balasan yang butuh evidence kamera **7-8 s** ✗. Biayanya: panggilan vision (3,1-4,6 s) + model jawaban (2,3 s). Evidence yang **sudah ter-cache** (deskripsi layar yang pernah dibaca) lookup-nya instan; yang baru selalu butuh panggilan model. Yang bikin terasa lambat: **opener ("sebentar ya…") sudah berbunyi di ~1,5 s** ✓, tapi opener di-prerender sehingga tidak punya event `synthesis_pcm_emitted` dan **tidak dihitung metrik** (`first_pcm` hanya melihat PCM jawaban akhir). |
 | `trailing_question_rate` | Twin menanyakan pertanyaan yang memang ada di brief ("Apa saja yang masih dibutuhkan vendor…?"). Balasan itu ditandai `claims[0] = {act: question, basis: brief}` — jadi metrik bisa membedakan "bertanya karena brief" dari "bertanya ngejar". |
 | `faults_per_hour` | 2 fault unik (`perception_drain` + `participant_observer`, keduanya timeout) → 6,87/jam. `FaultReporter` menduplikasi per kunci, jadi 7 kejadian timeout jadi 2 entri. Penyebabnya: drain memindahkan 6 MB base64 per poll dan halaman Meet sibuk sesaat setelah join → sudah diperbaiki (payload 1,5 MB + multiplier timeout khusus persepsi). |
 
@@ -214,7 +214,9 @@ Dua pertanyaan semantik metrik (menunggu keputusan, **tidak** diubah sepihak):
 1. Apakah `first_audio_p50_seconds` harus menghitung opener/cue sebagai audio pertama (sesuai nama metriknya), atau memang khusus PCM jawaban akhir? Kalau yang pertama, metriknya perlu event cue-level; kalau yang kedua, target 3,5 s mustahil dicapai untuk balasan ber-evidence dan targetnya yang perlu ditinjau.
 2. Apakah `trailing_question_rate` boleh mengecualikan pertanyaan yang berasal dari brief (`basis: brief`)? Kalimatnya sudah dibuktikan sebagai pertanyaan brief, bukan pertanyaan ngejar.
 
-Catatan operasional: sink PulseAudio `agent_output` di container menumpuk ~800 ms audio basi antar sesi (diukur via probe `enumerateDevices` + `pactl`), sehingga latensi audio twin naik seiring umur container (live-6 1,94 s → live-10 5,81 s → live-22 8,25 s). Ini artefak perangkat audio virtual container, bukan logika twin — tapi memengaruhi skor latensi.
+Catatan operasional: `first_audio` di sesi-sesi berbeda bergerak 1,94 s (live-6) → 5,81 s (live-10) → 8,25 s (live-22) **karena isi evidence-nya berbeda**, bukan karena umur container: live-6 memakai evidence `screen` yang deskripsinya sudah ada (lookup instan), live-10 memakai `screen` + `participant` baru, live-22 3× `participant` (kamera) yang selalu butuh panggilan vision baru. Jadi metrik ini mengukur "lookup evidence baru", dan itu memang mahal — target 3,5 s hanya bisa dicapai kalau lookup-nya di-cache atau dijawab tanpa panggilan model.
+
+Terpisah dari itu, sink PulseAudio `agent_output` di container menyisakan ~800 ms audio basi antar sesi (diukur via probe `enumerateDevices` + `pactl`); dampaknya kecil dibanding jalur vision, tapi menambah offset tetap pada audio twin.
 
 ### Klasifikasi join yang diperbaiki
 
