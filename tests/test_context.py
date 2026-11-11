@@ -196,10 +196,18 @@ async def test_looking_reports_why_it_could_not_see() -> None:
     no_camera = json.loads(await exhausted.look_at_participant("Ayu", "what?"))
     camera = json.loads(await seeing.look_at_participant("budi", "What is shown?"))
 
-    assert unknown == {"code": "unknown_screen", "screen": "screen#9"}
-    assert broke == {"code": "budget_exhausted", "screen": "screen#1"}
-    assert nobody == {"code": "unknown_participant", "participant": "Zed"}
-    assert no_camera == {"code": "camera_unavailable", "participant": "person#1"}
+    assert unknown == {"code": "unknown_screen", "screen": "screen#9", "resolution": "unavailable"}
+    assert broke == {"code": "budget_exhausted", "screen": "screen#1", "resolution": "unavailable"}
+    assert nobody == {
+        "code": "unknown_participant",
+        "participant": "Zed",
+        "resolution": "unavailable",
+    }
+    assert no_camera == {
+        "code": "camera_unavailable",
+        "participant": "person#1",
+        "resolution": "unavailable",
+    }
     assert camera["code"] == "ok"
     assert camera["participant"] == "person#2"
     assert camera["resolution"] == "fresh"
@@ -213,7 +221,11 @@ async def test_a_screen_whose_frame_is_gone_cannot_be_looked_at() -> None:
 
     result = json.loads(await _context(timeline).look_at_screen("current", "what?"))
 
-    assert result == {"code": "frame_unavailable", "screen": "screen#1"}
+    assert result == {
+        "code": "frame_unavailable",
+        "screen": "screen#1",
+        "resolution": "unavailable",
+    }
 
 
 async def test_looking_at_a_dashboard_answers_from_the_image() -> None:
@@ -226,11 +238,12 @@ async def test_looking_at_a_dashboard_answers_from_the_image() -> None:
 
     result = json.loads(await context.look_at_screen("current", "what was paid?"))
 
-    assert result == {
-        "code": "ok",
-        "screen": "screen#1",
-        "answer": "Receipt 1450-6289 Rp899,900",
-    }
+    assert result["code"] == "ok"
+    assert result["screen"] == "screen#1"
+    assert result["answer"] == "Receipt 1450-6289 Rp899,900"
+    assert result["resolution"] == "fresh"
+    assert result["age_ms"] == 0
+    assert result["vision_latency_ms"] >= 0
     assert context.interpreter is not None
     assert context.interpreter.budget.calls == 1
 
@@ -241,7 +254,11 @@ async def test_looking_at_an_unread_screen_is_refused() -> None:
 
     result = json.loads(await context.look_at_screen("current", "what?"))
 
-    assert result == {"code": "not_meeting_content", "screen": "screen#1"}
+    assert result == {
+        "code": "not_meeting_content",
+        "screen": "screen#1",
+        "resolution": "unavailable",
+    }
     assert context.interpreter is not None
     assert context.interpreter.budget.calls == 0
 

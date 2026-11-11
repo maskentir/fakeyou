@@ -116,6 +116,7 @@ async def test_first_pcm_event_carries_correlation_without_content(
         "provider",
         "answer_boundary",
         "evidence_paths",
+        "evidence_resolution_v2",
     }
     assert first["source"] == "tts"
     assert first["request_id"] == started_request

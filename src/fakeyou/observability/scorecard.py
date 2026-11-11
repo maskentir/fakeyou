@@ -183,6 +183,8 @@ def score_session(report: Report, targets: SessionTargets | None = None) -> dict
         }
     failed = [name for name, metric in metrics.items() if metric["status"] == "failed"]
     unscored = [name for name, metric in metrics.items() if metric["status"] == "unscored"]
+    if report.get("evidence_resolution_v2") and report.get("evidence_unclassified"):
+        unscored.append("evidence_classification")
     return {
         "version": _version(report, targets),
         "passed": not failed and not unscored,

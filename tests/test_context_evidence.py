@@ -9,10 +9,11 @@ from langchain_core.messages import HumanMessage
 from fakeyou.perception import context as context_module
 from fakeyou.perception.budget import PerceptionBudget
 from fakeyou.perception.camera_evidence import CameraObservation
-from fakeyou.perception.context import PerceptionContext, gather_evidence
+from fakeyou.perception.context import MeetingEvidence, PerceptionContext, gather_evidence
 from fakeyou.perception.interpreter import PerceptionInterpreter
 from fakeyou.perception.timeline import CameraFrame, MeetingTimeline
 from tests._perception_fakes import START, reading, shown_timeline, slide_jpeg, vision_model
+from tests._persistence_fakes import RecordingJournal
 
 TIMELINE = ("Launch Timeline", ["Alpha: 12 January 2027", "Beta: 17 March 2027"])
 
@@ -65,9 +66,27 @@ async def test_a_planned_screen_look_answers_the_spoken_question() -> None:
         context(read_timeline(), "Beta is 17 March 2027."), "When is beta?", ("screen",)
     )
 
-    assert evidence == {
-        "screen": {"code": "ok", "answer": "Beta is 17 March 2027.", "screen": "screen#1"}
-    }
+    screen = evidence["screen"]
+    assert screen["code"] == "ok"
+    assert screen["answer"] == "Beta is 17 March 2027."
+    assert screen["screen"] == "screen#1"
+    assert screen["resolution"] == "fresh"
+    assert screen["age_ms"] == 0
+    assert screen["vision_latency_ms"] >= 0
+
+
+async def test_a_fresh_screen_look_emits_its_resolution() -> None:
+    journal = RecordingJournal()
+    seeing = context(read_timeline(), "Beta is 17 March 2027.")
+    evidence = MeetingEvidence(seeing, journal=journal)
+
+    await evidence("When is beta?", ("screen",), "t1")
+
+    [resolved] = journal.events("perception_evidence_resolved")
+    assert resolved["evidence_kind"] == "screen"
+    assert resolved["resolution"] == "fresh"
+    assert resolved["transcript_id"] == "t1"
+    assert resolved["vision_latency_ms"] >= 0
 
 
 async def test_a_participant_look_among_several_people_needs_a_name() -> None:
@@ -84,7 +103,13 @@ async def test_a_participant_look_among_several_people_needs_a_name() -> None:
     unnamed = await gather_evidence(seeing, "What is he holding?", ("participant",))
 
     assert named["participant"]["code"] == "ok"
-    assert unnamed == {"participant": {"code": "unknown_participant", "participant": ""}}
+    assert unnamed == {
+        "participant": {
+            "code": "unknown_participant",
+            "participant": "",
+            "resolution": "unavailable",
+        }
+    }
 
 
 async def test_the_only_person_in_the_meeting_is_looked_at_without_a_name() -> None:

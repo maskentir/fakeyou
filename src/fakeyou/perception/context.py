@@ -95,16 +95,16 @@ class PerceptionContext:
     async def look_at_screen(self, screen: str, question: str) -> str:
         segment = resolve_screen(self.timeline.snapshot(), screen)
         if segment is None:
-            return _look_result("unknown_screen", screen=screen)
+            return _look_result("unknown_screen", screen=screen, resolution="unavailable")
         reading = segment.reading
         if reading is None or not reading.is_meeting_content:
-            fields: dict[str, Any] = {"screen": segment.ref}
+            fields: dict[str, Any] = {"screen": segment.ref, "resolution": "unavailable"}
             if reading is not None:
                 fields["title"] = reading.title
             return _look_result("not_meeting_content", **fields)
         data = self.timeline.keyframes.get(segment.keyframe.sha256)
         if data is None:
-            return _look_result("frame_unavailable", screen=segment.ref)
+            return _look_result("frame_unavailable", screen=segment.ref, resolution="unavailable")
         return await self._look(
             data, question, source=SCREEN_SOURCE, subject={"screen": segment.ref}
         )
@@ -126,13 +126,19 @@ class PerceptionContext:
         del question
         person = resolve_participant(self.timeline.snapshot(), participant)
         if person is None:
-            return _look_result("unknown_participant", participant=participant)
+            return _look_result(
+                "unknown_participant", participant=participant, resolution="unavailable"
+            )
         if self.interpreter is None:
-            return _look_result("budget_exhausted", participant=person.ref)
+            return _look_result(
+                "budget_exhausted", participant=person.ref, resolution="unavailable"
+            )
         frame = self.timeline.camera_frames.get(person.participant_id)
         if frame is None:
             self.interpreter.drop_camera_observation(person.participant_id)
-            return _look_result("camera_unavailable", participant=person.ref)
+            return _look_result(
+                "camera_unavailable", participant=person.ref, resolution="unavailable"
+            )
         meeting = self._state() if self._state is not None else None
         camera_on = meeting.cameras_on if meeting is not None else None
         live = (
@@ -142,12 +148,16 @@ class PerceptionContext:
         )
         if not live:
             self.interpreter.drop_camera_observation(person.participant_id)
-            return _look_result("camera_unavailable", participant=person.ref)
+            return _look_result(
+                "camera_unavailable", participant=person.ref, resolution="unavailable"
+            )
         evidence = await self.interpreter.camera_observation(
             person.participant_id, frame.data, captured_at=frame.captured_at
         )
         if evidence is None:
-            return _look_result("budget_exhausted", participant=person.ref)
+            return _look_result(
+                "budget_exhausted", participant=person.ref, resolution="unavailable"
+            )
         return _look_result(
             "ok",
             answer=evidence.observation.as_evidence(),
@@ -161,15 +171,29 @@ class PerceptionContext:
         self, data: bytes, question: str, *, source: str, subject: dict[str, str]
     ) -> str:
         if self.interpreter is None:
-            return _look_result("budget_exhausted", **subject)
+            return _look_result("budget_exhausted", resolution="unavailable", **subject)
+        started = time.monotonic()
         try:
             async with asyncio.timeout(LOOK_TIMEOUT_SECONDS):
                 answer = await self.interpreter.answer(data, question, source=source)
         except (ProviderFault, FakeYouError, OSError, TimeoutError) as error:
-            return _look_result("look_failed", error_type=type(error).__name__, **subject)
+            return _look_result(
+                "look_failed",
+                error_type=type(error).__name__,
+                resolution="unavailable",
+                **subject,
+            )
         if answer is None:
-            return _look_result("budget_exhausted", **subject)
-        return _look_result("ok", answer=answer, **subject)
+            return _look_result("budget_exhausted", resolution="unavailable", **subject)
+        vision_latency_ms = round((time.monotonic() - started) * 1000)
+        return _look_result(
+            "ok",
+            answer=answer,
+            resolution="fresh",
+            age_ms=0,
+            vision_latency_ms=vision_latency_ms,
+            **subject,
+        )
 
 
 def _gathered(trigger: HumanMessage) -> dict[str, Any]:
@@ -201,7 +225,7 @@ async def _look_for(context: PerceptionContext, need: str, question: str) -> str
         snapshot = context.timeline.snapshot()
         target = _mentioned(snapshot, question) or _sole_participant(snapshot)
         if target is None:
-            return _look_result("unknown_participant", participant="")
+            return _look_result("unknown_participant", participant="", resolution="unavailable")
         return await context.look_at_participant(target, question)
     return context.backlog_chat()
 
