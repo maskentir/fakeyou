@@ -193,6 +193,29 @@ Sesi `rustfs-live-22` (room `meet.google.com/dup-qtsn-byk`, twin
 Kesimpulan: kamera, reaksi, chat, hand, layar, memori, roster, dan
 refusal jujur semuanya terbukti live.
 
+### Scorecard live-22: 4 metrik gagal, dan penyebabnya
+
+`GET /v1/sessions/rustfs-live-22/report` → `scorecard.passed = false`:
+`first_audio_p50_seconds` (8,245 vs 3,5), `first_audio_p95_seconds`
+(9,693 vs 6,5), `trailing_question_rate` (0,167 vs 0,1),
+`faults_per_hour` (6,871 vs 6). Yang lolos: `session_completed`,
+`attribution_coverage` (1,0), `admission_to_listening_seconds` (4,03),
+`watchdog_failures_per_hour` (0).
+
+Rincian per pemicu, dari jurnal:
+
+| Pemicu | Rincian |
+| --- | --- |
+| `first_audio` | Balasan biasa **1,22 s** (final → playback) ✓; balasan yang butuh evidence kamera **7-8 s** ✗. Biayanya: panggilan vision (3,1-4,6 s) + model jawaban (2,3 s). Yang bikin terasa lambat: **opener ("sebentar ya…") sudah berbunyi di ~1,5 s** ✓, tapi opener di-prerender sehingga tidak punya event `synthesis_pcm_emitted` dan **tidak dihitung metrik** (`first_pcm` hanya melihat PCM jawaban akhir). |
+| `trailing_question_rate` | Twin menanyakan pertanyaan yang memang ada di brief ("Apa saja yang masih dibutuhkan vendor…?"). Balasan itu ditandai `claims[0] = {act: question, basis: brief}` — jadi metrik bisa membedakan "bertanya karena brief" dari "bertanya ngejar". |
+| `faults_per_hour` | 2 fault unik (`perception_drain` + `participant_observer`, keduanya timeout) → 6,87/jam. `FaultReporter` menduplikasi per kunci, jadi 7 kejadian timeout jadi 2 entri. Penyebabnya: drain memindahkan 6 MB base64 per poll dan halaman Meet sibuk sesaat setelah join → sudah diperbaiki (payload 1,5 MB + multiplier timeout khusus persepsi). |
+
+Dua pertanyaan semantik metrik (menunggu keputusan, **tidak** diubah sepihak):
+1. Apakah `first_audio_p50_seconds` harus menghitung opener/cue sebagai audio pertama (sesuai nama metriknya), atau memang khusus PCM jawaban akhir? Kalau yang pertama, metriknya perlu event cue-level; kalau yang kedua, target 3,5 s mustahil dicapai untuk balasan ber-evidence dan targetnya yang perlu ditinjau.
+2. Apakah `trailing_question_rate` boleh mengecualikan pertanyaan yang berasal dari brief (`basis: brief`)? Kalimatnya sudah dibuktikan sebagai pertanyaan brief, bukan pertanyaan ngejar.
+
+Catatan operasional: sink PulseAudio `agent_output` di container menumpuk ~800 ms audio basi antar sesi (diukur via probe `enumerateDevices` + `pactl`), sehingga latensi audio twin naik seiring umur container (live-6 1,94 s → live-10 5,81 s → live-22 8,25 s). Ini artefak perangkat audio virtual container, bukan logika twin — tapi memengaruhi skor latensi.
+
 ### Klasifikasi join yang diperbaiki
 
 - Panggilan yang **sudah berakhir** (marker `data-call-ended="true"`)
