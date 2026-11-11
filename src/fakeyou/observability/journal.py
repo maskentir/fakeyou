@@ -134,6 +134,7 @@ class Journal:
                 "at": at,
                 "source": source,
                 "answer_boundary": True,
+                "evidence_paths": True,
             }
             if self.trace_id is not None:
                 row["trace_id"] = self.trace_id

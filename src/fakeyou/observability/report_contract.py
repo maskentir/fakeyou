@@ -12,6 +12,7 @@ ANSWER_STAGE = "speech_stopped_to_first_answer_audio_seconds"
 
 @dataclass(slots=True)
 class _Turn:
+    transcript_id: str
     stopped_at: datetime | None
     expected: bool = False
     silent: bool = False
@@ -153,6 +154,79 @@ def measures_output(rows: list[dict[str, Any]]) -> bool:
     return any(row.get("answer_boundary") is True for row in rows)
 
 
+EVIDENCE_PATHS = ("no_visual", "visual_cached", "visual_fresh")
+
+
+def _evidence_resolutions(rows: list[dict[str, Any]]) -> dict[str, str]:
+    resolutions: dict[str, str] = {}
+    for row in rows:
+        if row.get("event") != "perception_evidence_resolved":
+            continue
+        transcript_id = row.get("transcript_id")
+        resolution = row.get("resolution")
+        if isinstance(transcript_id, str) and transcript_id:
+            if resolution == "cache_hit":
+                resolutions[transcript_id] = "visual_cached"
+            elif resolution == "fresh":
+                resolutions[transcript_id] = "visual_fresh"
+    return resolutions
+
+
+def _path_of(turn: _Turn, resolutions: dict[str, str]) -> str:
+    if turn.transcript_id in resolutions:
+        return resolutions[turn.transcript_id]
+    if "screen" in turn.evidence:
+        return "visual_cached"
+    return "no_visual"
+
+
+def _latency_by_path(turns: list[_Turn], resolutions: dict[str, str]) -> dict[str, Any]:
+    groups: dict[str, list[_Turn]] = {path: [] for path in EVIDENCE_PATHS}
+    for turn in turns:
+        groups[_path_of(turn, resolutions)].append(turn)
+    return {
+        path: {
+            "expected_answers": len(group),
+            "first_audio_seconds": summarize(
+                [value for turn in group if (value := _latency(turn, turn.response_at)) is not None]
+            ),
+            "first_answer_audio_seconds": summarize(
+                [value for turn in group if (value := _latency(turn, turn.answer_at)) is not None]
+            ),
+        }
+        for path, group in groups.items()
+    }
+
+
+def _cache_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    hits = 0
+    misses = 0
+    ages: list[float] = []
+    latencies: list[float] = []
+    for row in rows:
+        if row.get("event") != "perception_evidence_resolved":
+            continue
+        resolution = row.get("resolution")
+        if resolution == "cache_hit":
+            hits += 1
+        elif resolution == "fresh":
+            misses += 1
+        age = row.get("age_ms")
+        if isinstance(age, int):
+            ages.append(float(age))
+        latency = row.get("vision_latency_ms")
+        if isinstance(latency, int):
+            latencies.append(float(latency))
+    total = hits + misses
+    return {
+        "hits": hits,
+        "misses": misses,
+        "hit_rate": round(hits / total, 3) if total else None,
+        "age_ms": summarize(ages),
+        "vision_latency_ms": summarize(latencies),
+    }
+
+
 def apply_contract(report: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any]:
     turns: dict[str, _Turn] = {}
     stopped_at: datetime | None = None
@@ -173,7 +247,7 @@ def apply_contract(report: dict[str, Any], rows: list[dict[str, Any]]) -> dict[s
             stopped_at = _at(row)
         identifier = _identity(row)
         if event == "transcript_finalized" and identifier is not None:
-            turns[identifier] = _Turn(stopped_at)
+            turns[identifier] = _Turn(identifier, stopped_at)
             stopped_at = None
         if identifier is not None and identifier in turns:
             _observe(turns[identifier], row)
@@ -188,6 +262,10 @@ def apply_contract(report: dict[str, Any], rows: list[dict[str, Any]]) -> dict[s
             turn_report[RESPONSE_STAGE] = _latency(turn, turn.response_at)
             turn_report[ANSWER_STAGE] = _latency(turn, turn.answer_at)
     report["latency_by_evidence"] = _evidence_latencies(expected)
+    report["evidence_paths"] = any(row.get("evidence_paths") is True for row in rows)
+    resolutions = _evidence_resolutions(rows)
+    report["latency_by_evidence_path"] = _latency_by_path(expected, resolutions)
+    report["evidence_cache"] = _cache_report(rows)
     report["latency"][RESPONSE_STAGE] = summarize([v for v in response_values if v is not None])
     report["latency"][ANSWER_STAGE] = summarize([v for v in answer_values if v is not None])
     report["replies"] = {

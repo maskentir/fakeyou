@@ -59,8 +59,10 @@ async def test_the_same_frame_is_described_once() -> None:
     first = await interpreter.camera_observation("p1", frame)
     second = await interpreter.camera_observation("p1", frame)
 
-    assert first is not None and first.resolution == "fresh"
-    assert second is not None and second.resolution == "cache_hit"
+    assert first is not None
+    assert first.resolution == "fresh"
+    assert second is not None
+    assert second.resolution == "cache_hit"
     assert second.vision_latency_ms == 0
     assert len(model.observations) == 0
 
@@ -73,7 +75,8 @@ async def test_a_different_frame_is_described_again() -> None:
     await interpreter.camera_observation("p1", jpeg_of((10, 10, 10)))
     second = await interpreter.camera_observation("p1", jpeg_of((250, 250, 250)))
 
-    assert second is not None and second.resolution == "fresh"
+    assert second is not None
+    assert second.resolution == "fresh"
     assert len(model.observations) == 0
 
 
@@ -86,7 +89,8 @@ async def test_another_participant_is_described_separately() -> None:
     await interpreter.camera_observation("p1", frame)
     other = await interpreter.camera_observation("p2", frame)
 
-    assert other is not None and other.resolution == "fresh"
+    assert other is not None
+    assert other.resolution == "fresh"
     assert len(model.observations) == 0
 
 
@@ -101,7 +105,8 @@ async def test_two_questions_about_one_frame_share_one_vision_call() -> None:
         interpreter.camera_observation("p1", frame),
     )
 
-    assert first is not None and second is not None
+    assert first is not None
+    assert second is not None
     assert {first.resolution, second.resolution} == {"cache_hit", "fresh"}
     assert len(model.observations) == 0
 
@@ -111,14 +116,15 @@ async def test_a_stale_description_is_not_reused() -> None:
     model = vision_model()
     model.observations = [observation(), observation()]
     interpreter = interpreter_with(model)
-    interpreter._monotonic = lambda: clock[0]
+    object.__setattr__(interpreter, "_monotonic", lambda: clock[0])
     frame = jpeg_of((60, 60, 60))
 
     await interpreter.camera_observation("p1", frame)
     clock[0] = 3600.0
     later = await interpreter.camera_observation("p1", frame)
 
-    assert later is not None and later.resolution == "fresh"
+    assert later is not None
+    assert later.resolution == "fresh"
 
 
 async def test_resolving_evidence_is_journalled_with_its_resolution() -> None:

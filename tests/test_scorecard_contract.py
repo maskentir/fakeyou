@@ -13,7 +13,14 @@ from tests._report_support import row
 
 def session(*, answer_at: float | None = 8.0) -> list[dict[str, Any]]:
     rows = [
-        row(0, "join_finished", source="runtime", status="admitted", answer_boundary=True),
+        row(
+            0,
+            "join_finished",
+            source="runtime",
+            status="admitted",
+            answer_boundary=True,
+            evidence_paths=True,
+        ),
         row(1, "conversation_bound", source="runtime"),
         row(10, "speech_stopped"),
         row(10.4, "transcript_finalized", transcript_id="t1", participant_id="p1"),
@@ -35,7 +42,7 @@ def test_cue_and_answer_have_independent_gates() -> None:
     report = build_session_report(session())
     card = score_session(report)
 
-    assert card["version"] == 2
+    assert card["version"] == 3
     assert card["metrics"]["first_audio_p50_seconds"]["value"] == 1.5
     assert card["metrics"]["first_answer_audio_p50_seconds"]["value"] == 8.0
     assert card["metrics"]["first_answer_audio_p50_seconds"]["passed"] is False
@@ -163,6 +170,42 @@ def test_journals_without_the_answer_boundary_leave_the_new_gates_unscored() -> 
     assert card["metrics"]["unnecessary_question_rate"]["value"] is None
     assert card["metrics"]["first_answer_audio_p50_seconds"]["value"] is None
     assert card["failed"] == []
+
+
+def test_a_journal_without_evidence_paths_keeps_the_earlier_scorecard() -> None:
+    rows = [
+        {key: value for key, value in entry.items() if key != "evidence_paths"}
+        for entry in session()
+    ]
+    card = score_session(build_session_report(rows))
+
+    assert card["version"] == 2
+    assert "first_answer_audio_p50_visual_cached_seconds" not in card["metrics"]
+
+
+def test_evidence_paths_are_scored_and_reported_per_path() -> None:
+    rows = session()
+    rows.append(
+        row(
+            12,
+            "perception_evidence_resolved",
+            source="perception",
+            transcript_id="t1",
+            evidence_kind="participant",
+            resolution="cache_hit",
+            age_ms=4300,
+            vision_latency_ms=0,
+        )
+    )
+    report = build_session_report(rows)
+    card = score_session(report)
+
+    assert report["evidence_paths"] is True
+    assert report["evidence_cache"]["hits"] == 1
+    assert report["evidence_cache"]["hit_rate"] == 1.0
+    assert report["latency_by_evidence_path"]["visual_cached"]["expected_answers"] == 1
+    assert card["version"] == 3
+    assert card["metrics"]["first_answer_audio_p50_visual_cached_seconds"]["value"] == 8.0
 
 
 def test_new_journal_rows_declare_the_answer_boundary() -> None:

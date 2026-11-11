@@ -318,6 +318,7 @@ async def test_join_journals_brief_metadata_without_brief_text(
         "meeting_id": "meeting-9",
         "source": "cli",
         "answer_boundary": True,
+        "evidence_paths": True,
         "brief_sha256": brief_digest(brief),
         "persona_sha256": persona_digest(profile),
         "owner_model_version": None,

@@ -27,6 +27,20 @@ def _first_answer_audio(report: Report, quantile: str) -> float | None:
     return float(value) if value is not None else None
 
 
+def _path_latency(report: Report, path: str, quantile: str, stage: str) -> float | None:
+    paths = report.get("latency_by_evidence_path")
+    if not isinstance(paths, Mapping):
+        return None
+    group = paths.get(path)
+    if not isinstance(group, Mapping):
+        return None
+    summary = group.get(stage)
+    if not isinstance(summary, Mapping):
+        return None
+    value = summary.get(quantile)
+    return float(value) if value is not None else None
+
+
 def _reply_rate(report: Report, numerator: str, denominator: str) -> float | None:
     replies = report["replies"]
     count = replies.get(denominator, 0)
@@ -47,6 +61,14 @@ def _session_completed(report: Report) -> float | None:
     return None if outcome == "unknown" else float(outcome == "completed")
 
 
+BASE_TARGETS_VERSION = 2
+PATH_GATES = (
+    "first_answer_audio_p50_no_visual_seconds",
+    "first_answer_audio_p95_no_visual_seconds",
+    "first_answer_audio_p50_visual_cached_seconds",
+    "first_answer_audio_p95_visual_cached_seconds",
+)
+
 SCORED_METRICS: dict[str, Callable[[Report], float | None]] = {
     "session_completed": _session_completed,
     "first_audio_p50_seconds": lambda report: _first_audio(report, "p50"),
@@ -55,6 +77,18 @@ SCORED_METRICS: dict[str, Callable[[Report], float | None]] = {
     "first_answer_audio_p95_seconds": lambda report: _first_answer_audio(report, "p95"),
     "answer_audio_coverage": lambda report: _reply_rate(
         report, "answers_with_audio", "expected_answers"
+    ),
+    "first_answer_audio_p50_no_visual_seconds": lambda report: _path_latency(
+        report, "no_visual", "p50", "first_answer_audio_seconds"
+    ),
+    "first_answer_audio_p95_no_visual_seconds": lambda report: _path_latency(
+        report, "no_visual", "p95", "first_answer_audio_seconds"
+    ),
+    "first_answer_audio_p50_visual_cached_seconds": lambda report: _path_latency(
+        report, "visual_cached", "p50", "first_answer_audio_seconds"
+    ),
+    "first_answer_audio_p95_visual_cached_seconds": lambda report: _path_latency(
+        report, "visual_cached", "p95", "first_answer_audio_seconds"
     ),
     "unnecessary_question_rate": lambda report: _reply_rate(
         report, "unnecessary_questions", "spoken"
@@ -100,18 +134,26 @@ class SessionTargets(BaseModel):
 SESSION_TARGETS = SessionTargets.model_validate_json(read_package_text("session_targets.json"))
 
 
+def _version(report: Report, targets: SessionTargets) -> int:
+    if any(name in PATH_GATES for name in targets.metrics) and not report.get("evidence_paths"):
+        return BASE_TARGETS_VERSION
+    return targets.version
+
+
 def score_session(report: Report, targets: SessionTargets | None = None) -> dict[str, Any]:
     if targets is None:
         targets = SESSION_TARGETS
     metrics: dict[str, dict[str, Any]] = {}
     for name, target in targets.metrics.items():
+        if name in PATH_GATES and not report.get("evidence_paths"):
+            continue
         value = SCORED_METRICS[name](report)
         passed = None if value is None else target.accepts(value)
         metrics[name] = {**target.model_dump(exclude_none=True), "value": value, "passed": passed}
     failed = [name for name, metric in metrics.items() if metric["passed"] is False]
     unscored = [name for name, metric in metrics.items() if metric["passed"] is None]
     return {
-        "version": targets.version,
+        "version": _version(report, targets),
         "passed": not failed and not unscored,
         "failed": failed,
         "unscored": unscored,

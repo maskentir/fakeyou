@@ -556,6 +556,7 @@ async def test_streamed_journal_events_carry_metadata_only(journal: RecordingJou
         "at",
         "source",
         "answer_boundary",
+        "evidence_paths",
         "request_id",
         "transcript_id",
     }
@@ -572,6 +573,7 @@ async def test_streamed_journal_events_carry_metadata_only(journal: RecordingJou
             "claim_index",
             "chars",
             "answer_boundary",
+            "evidence_paths",
         }
     ] * 2
     body = "\n".join(journal.lines)
