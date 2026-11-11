@@ -146,14 +146,17 @@ Perbaikan yang lahir dari validasi ini:
   microphone" milik Chrome kini default locator join flow.
 - **Ekor jurnal post-session**: job ingest/debrief menulis baris
   jurnal SETELAH flush terakhir worker sesi (3 event
-  `memory_episode_ingested` live-10 hilang dari bucket). Fix baru:
+  `memory_episode_ingested` live-10 hilang dari bucket). Fix:
   `push_appended_segments` (prime dari extent kontigu remote) dipanggil
-  kedua worker setelah tiap job — terbukti mengunggah ekor 2714 B
-  live-10, journal kini byte-identical.
-- **Kamera** (terbuka): frame kamera tidak pernah sampai twin — jalur
-  frame unassigned di-drop diam-diam. Instrumen diagnostik ditambah
-  (`perception_frame_unassigned`, `perception_batch_observed` tiap 30
-  poll, `perception_streams_bound`) untuk sesi uji berikutnya.
+  kedua worker setelah tiap job. Terbukti live di `rustfs-live-22`:
+  `record` 19 segmen / 7105 B dan `journal` 82 segmen / 193299 B
+  sama-sama byte-identical (SHA-256 sama) termasuk tulisan ingest
+  yang terjadi setelah sesi ditutup.
+- **Kamera**: tidak pernah rusak — kondisi "kamera tidak pernah
+  sampai" pada live-14 karena tidak ada peserta dengan kamera nyala di
+  ruangan itu. Instrumen yang ditambahkan (id track vs id output,
+  frame unassigned, batch per 30 poll, stream ter-bind) membuat ini
+  terukur, dan live-22 membuktikannya (lihat di bawah).
 
 Join failures yang dipelajari:
 - `blocked` = teks penolakan Google "can't join this" — akses link
@@ -165,16 +168,101 @@ Join failures yang dipelajari:
 
 ## Yang belum (setelah hasil live)
 
-### Kamera + reaksi butuh uji ulang
+### Kamera + reaksi: terbukti di live-22 (2026-11-11)
 
-Sesi baru dengan instrumen baru perlu membuktikan: track kamera
-tampak (`tracks`), assignment ter-push (`sampling`), frame kamera
-sampai (`camera_frames`), dan `look_at_participant` membaca warna
-kaos. Reaksi emoji juga menunggu pengamatan `effect_observed`.
+Sesi `rustfs-live-22` (room `meet.google.com/dup-qtsn-byk`, twin
+"Harun Twin") menutup gap terakhir:
+
+- `perception_streams_bound` → `camera:4021220798` (roster punya output
+  video kamera, stream ter-bind).
+- `perception_batch_observed` → `camera_frames: 1`, `tracks: 1`,
+  `sampling: 1`, `output_streams` memuat `devices/161:video:4021220798:on`.
+- `meeting_evidence_emitted` → `needs: ["participant"], codes: ["ok"]`
+  (vision LLM membaca frame).
+- Jawaban twin: *"Warna kaos yang Anda kenakan adalah putih gading."*
+  — dibaca dari frame kamera, bukan tebakan. Di live-10, pertanyaan sama
+  dijawab *"I'd rather not guess"* karena tidak ada kamera nyala di
+  ruangan itu (hanya share layar). Jadi jalur kamera tidak pernah rusak;
+  meeting live-14 memang tidak punya peserta dengan kamera menyala.
+- `react`: aksi jalan tanpa error (`attempts: 1`, bukan
+  `failed_after_boundary`) dan bubble reaksi **terlihat** di Meet. Status
+  `effect_unobserved` tetap dipakai karena belum ada readback DOM untuk
+  reaksi (hanya `send_chat` yang punya echo check) — status itu jujur
+  soal verifikasi, bukan soal pengiriman.
+
+Kesimpulan: kamera, reaksi, chat, hand, layar, memori, roster, dan
+refusal jujur semuanya terbukti live.
+
+### Klasifikasi join yang diperbaiki
+
+- Panggilan yang **sudah berakhir** (marker `data-call-ended="true"`)
+  dulu dilapor sebagai "platform blocked the guest" — menyesatkan,
+  karena operator mencari masalah izin. Sekarang status join `ended` →
+  `terminal_reason: ended_by_host`, tanpa retry ke room yang tak akan
+  pernah buka.
+- Halaman yang ditolak kini dikutip + daftar tombol yang terlihat
+  (`visible controls`), jadi locator yang meleset bisa langsung
+  dibandingkan dengan UI Meet saat itu.
 
 ### Slice C — D1 + rotasi secret
 
 Ditunda oleh user ("d1 sama rotasi bisa belakang"). Tidak dikerjakan.
+
+## Cara menjalankan sesi live
+
+Body create sesi live penuh (kapabilitas + nama twin):
+
+```json
+{
+  "link": "<meet link>",
+  "meeting_id": "rustfs-live-<n>",
+  "owner_id": "hard_owner",
+  "twin_id": "hard_twin",
+  "twin_name": "Harun Twin",
+  "audio": true,
+  "initial_speech": "Hello everyone, I am Harun Twin.",
+  "conversation": true,
+  "persona": {
+    "owner_id": "hard_owner",
+    "twin_id": "hard_twin",
+    "display_name": "Harun Twin",
+    "owner_name": "Harun",
+    "role": "Product lead for the synthetic Orchid project",
+    "language": "en",
+    "speaking_style": "Short, friendly, straight to the point",
+    "allowed_tools": ["recall_meeting_context"],
+    "ingest_transcripts": true,
+    "ai_disclosure": "when_asked",
+    "vocabulary": ["Orchid", "Harun", "kickoff", "PIC"]
+  },
+  "brief": {
+    "schema_version": "meeting_brief/v2",
+    "owner_id": "hard_owner",
+    "twin_id": "hard_twin",
+    "agenda": ["Kickoff Orchid and vendor needs"],
+    "roster_hint": ["Harun"],
+    "objectives": [{"id": "blockers", "text": "Find kickoff blockers."}],
+    "approved_facts": [{"id": "demo-date", "text": "The Orchid demo is scheduled for Friday."}],
+    "questions": [{"id": "vendor-needs", "text": "What does the vendor still need?"}],
+    "permissions": ["ask_brief_questions", "discuss_options", "explain_facts", "meet_act", "meet_chat", "meet_leave"],
+    "knowledge_scope": "persona_memory"
+  },
+  "memory": true,
+  "barge_in": true,
+  "participant_policy_enabled": true,
+  "participant_evidence_enabled": true
+}
+```
+
+Syarat room Meet (kalau tidak, twin ditolak atau mengetuk lobby):
+- Sharing access → **Anyone with the link** (bukan Restricted).
+- **Host management OFF** (supaya twin langsung masuk tanpa knock).
+- Panggilan harus **aktif** — room yang call-nya sudah berakhir ditolak
+  dengan `data-call-ended="true"` (klasifikasi `ended`).
+
+Urutan: `POST /v1/sessions` → `POST /v1/sessions/<id>/join` → twin join
+→ human交谈 → `POST /v1/sessions/<id>/stop` → job ingest/debrief →
+bukti restore.
 
 ## Catatan
 

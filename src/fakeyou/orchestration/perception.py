@@ -164,8 +164,6 @@ def create_perception_stack(
     interpreter = create_perception_interpreter(settings, journal=journal)
     reader = ScreenReader(timeline, interpreter, journal=journal) if interpreter else None
     sensors = PerceptionSensors(timeline, perception, joined_at=datetime.now(UTC), journal=journal)
-    if screens_dir is not None:
-        sensors.dump_dir = screens_dir.parent
     sensors.roster_listener = on_roster
     context = PerceptionContext(
         timeline,

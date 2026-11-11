@@ -4,7 +4,6 @@ import binascii
 import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any, Literal, Protocol, override
 
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -112,8 +111,6 @@ class PerceptionSensors:
         self._joined_at = joined_at
         self._journal = journal or Journal("", echo=False)
         self._clock = clock
-        self.dump_dir: Path | None = None
-        self._dumped = 0
         self.rejected_messages = 0
         self.heartbeats = 0
         self.frames_seen = 0
@@ -140,19 +137,7 @@ class PerceptionSensors:
             body = await response.body()
         except (OSError, RuntimeError):
             return
-        self._dump_sync(body)
         self.accept_sync(body)
-
-    def _dump_sync(self, body: bytes) -> None:
-        if self.dump_dir is None:
-            return
-        self._dumped += 1
-        path = self.dump_dir / f"sync-{self._dumped:03d}.b64"
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(body)
-        except OSError:
-            return
 
     def accept_sync(self, body: bytes) -> None:
         try:
