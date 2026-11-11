@@ -1535,11 +1535,11 @@ class _ActorSpeaker:
     async def speak_prepared(self, prepared: PreparedSpeech) -> None:
         await self._session().speak_prepared(prepared)
 
-    async def play_cue(self, text: str) -> bool:
+    async def play_cue(self, text: str, *, transcript_id: str | None = None) -> bool:
         session = self._actor.session
         if not isinstance(session, SupportsCues):
             return False
-        return await session.play_cue(text)
+        return await session.play_cue(text, transcript_id=transcript_id)
 
     def _session(self) -> MeetingAudio:
         session = self._actor.session

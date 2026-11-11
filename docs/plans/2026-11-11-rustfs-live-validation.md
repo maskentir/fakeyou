@@ -210,11 +210,15 @@ Rincian per pemicu, dari jurnal:
 | `trailing_question_rate` | Twin menanyakan pertanyaan yang memang ada di brief ("Apa saja yang masih dibutuhkan vendor…?"). Balasan itu ditandai `claims[0] = {act: question, basis: brief}` — jadi metrik bisa membedakan "bertanya karena brief" dari "bertanya ngejar". |
 | `faults_per_hour` | 2 fault unik (`perception_drain` + `participant_observer`, keduanya timeout) → 6,87/jam. `FaultReporter` menduplikasi per kunci, jadi 7 kejadian timeout jadi 2 entri. Penyebabnya: drain memindahkan 6 MB base64 per poll dan halaman Meet sibuk sesaat setelah join → sudah diperbaiki (payload 1,5 MB + multiplier timeout khusus persepsi). |
 
-Dua pertanyaan semantik metrik (menunggu keputusan, **tidak** diubah sepihak):
-1. Apakah `first_audio_p50_seconds` harus menghitung opener/cue sebagai audio pertama (sesuai nama metriknya), atau memang khusus PCM jawaban akhir? Kalau yang pertama, metriknya perlu event cue-level; kalau yang kedua, target 3,5 s mustahil dicapai untuk balasan ber-evidence dan targetnya yang perlu ditinjau.
-2. Apakah `trailing_question_rate` boleh mengecualikan pertanyaan yang berasal dari brief (`basis: brief`)? Kalimatnya sudah dibuktikan sebagai pertanyaan brief, bukan pertanyaan ngejar.
+Keputusan owner: [kontrak scorecard v2](2026-11-11-scorecard-contract.md).
+Respons audio pertama boleh menghitung cue, tetapi audio jawaban punya gate
+terpisah dengan budget 3,5/6,5 detik yang sama. Coverage memastikan jawaban
+yang gagal tidak hilang dari percentile. Pengecualian pertanyaan memerlukan
+validasi sumber, permission, konteks giliran dan kecocokan ucapan; label
+`basis: brief` saja tidak cukup. Denominator dihitung per turn. Fault baru
+dicatat per kejadian, bukan hanya kunci unik. Hasil historis live-22 tetap v1.
 
-Catatan operasional: `first_audio` di sesi-sesi berbeda bergerak 1,94 s (live-6) → 5,81 s (live-10) → 8,25 s (live-22) **karena isi evidence-nya berbeda**, bukan karena umur container: live-6 memakai evidence `screen` yang deskripsinya sudah ada (lookup instan), live-10 memakai `screen` + `participant` baru, live-22 3× `participant` (kamera) yang selalu butuh panggilan vision baru. Jadi metrik ini mengukur "lookup evidence baru", dan itu memang mahal — target 3,5 s hanya bisa dicapai kalau lookup-nya di-cache atau dijawab tanpa panggilan model.
+Catatan operasional: `first_audio` di sesi-sesi berbeda bergerak 1,94 s (live-6) → 5,81 s (live-10) → 8,25 s (live-22) **karena isi evidence-nya berbeda**, bukan karena umur container: live-6 memakai evidence `screen` yang deskripsinya sudah ada (lookup instan), live-10 memakai `screen` + `participant` baru, live-22 3× `participant` (kamera) yang selalu butuh panggilan vision baru. Jalur evidence baru yang diukur belum memenuhi target 3,5 s. Ini belum membuktikan target tersebut mustahil setelah optimasi; perbandingan berikutnya perlu memakai komposisi skenario yang sama.
 
 Terpisah dari itu, sink PulseAudio `agent_output` di container menyisakan ~800 ms audio basi antar sesi (diukur via probe `enumerateDevices` + `pactl`); dampaknya kecil dibanding jalur vision, tapi menambah offset tetap pada audio twin.
 

@@ -26,7 +26,7 @@ class CueSpeaker(Protocol):
     @property
     def is_speaking(self) -> bool: ...
 
-    async def play_cue(self, text: str) -> bool: ...
+    async def play_cue(self, text: str, *, transcript_id: str | None = None) -> bool: ...
 
 
 @dataclass(slots=True)
@@ -122,7 +122,7 @@ async def speak_opener(
         _record_skip(journal, turn, reason)
         return
     journal.record("thinking_cue_requested", source="agent", transcript_id=turn.transcript_id)
-    if not await speaker.play_cue(cue.next_opener_line()):
+    if not await speaker.play_cue(cue.next_opener_line(), transcript_id=turn.transcript_id):
         _record_skip(journal, turn, "unavailable")
         return
     turn.state.played = True
@@ -142,7 +142,7 @@ async def cue_when_slow(
         _record_skip(journal, turn, reason)
         return
     journal.record("thinking_cue_requested", source="agent", transcript_id=turn.transcript_id)
-    if not await speaker.play_cue(cue.next_line()):
+    if not await speaker.play_cue(cue.next_line(), transcript_id=turn.transcript_id):
         _record_skip(journal, turn, "unavailable")
         return
     turn.state.played = True

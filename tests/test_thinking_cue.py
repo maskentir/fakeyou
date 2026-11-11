@@ -35,12 +35,14 @@ class CueAudio(FakeReplyAudio):
         super().__init__()
         self.prepared: list[tuple[str, ...]] = []
         self.timeline: list[tuple[str, str]] = []
+        self.cue_transcripts: list[str | None] = []
 
     def prepare_cues(self, texts: Sequence[str]) -> None:
         self.prepared.append(tuple(texts))
 
-    async def play_cue(self, text: str) -> bool:
+    async def play_cue(self, text: str, *, transcript_id: str | None = None) -> bool:
         self.timeline.append(("cue", text))
+        self.cue_transcripts.append(transcript_id)
         return True
 
     @override
@@ -106,6 +108,7 @@ async def test_a_slow_reply_is_preceded_by_one_thinking_cue() -> None:
     ]
     assert [row["transcript_id"] for row in journal.events("thinking_cue_requested")] == ["t1"]
     assert audio.spoken == [QUESTION]
+    assert audio.cue_transcripts == ["t1"]
 
 
 async def test_an_evidence_turn_speaks_the_opener_without_waiting_for_the_timer() -> None:
@@ -127,6 +130,7 @@ async def test_an_evidence_turn_speaks_the_opener_without_waiting_for_the_timer(
     await asyncio.sleep(0.05)
 
     assert audio.timeline == [("cue", OPENER_LINES["id"][0])]
+    assert audio.cue_transcripts == ["t1"]
     gate.set()
     await final
     await turns.close()

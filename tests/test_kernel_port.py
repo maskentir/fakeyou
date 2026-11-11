@@ -151,6 +151,7 @@ def test_a_reconnect_starts_a_new_browser_epoch() -> None:
 def test_a_clip_dropped_while_playing_is_an_interrupted_delivery() -> None:
     kernel = port()
     kernel.playback(PlaybackEvent("playback_started", "First."))
+    kernel.playback(PlaybackEvent("playback_audio_started", "First."))
     kernel.playback(PlaybackEvent("playback_finished", "First."))
     kernel.playback(PlaybackEvent("playback_dropped", "Queued.", "interrupted"))
     kernel.playback(PlaybackEvent("playback_started", "Second"))

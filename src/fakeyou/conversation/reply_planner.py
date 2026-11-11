@@ -176,6 +176,7 @@ class ReplyHandlers:
     on_plan: PlanHandler | None = None
     on_language: Callable[[str], None] | None = None
     on_gate: GateHandler | None = None
+    on_sentence: Callable[[int, str, bool], None] | None = None
 
 
 class ReplyPlanner:
@@ -194,6 +195,7 @@ class ReplyPlanner:
         self._on_plan = resolved.on_plan
         self._on_language = resolved.on_language
         self._on_gate = resolved.on_gate
+        self._on_sentence = resolved.on_sentence
         self._gate = speech_gate
         self._claims: list[ClaimHeader] = []
         self._says: list[str] = []
@@ -212,6 +214,7 @@ class ReplyPlanner:
         self._waiting: list[SpeechPiece] = []
         self._short_spoken = False
         self._spoken = 0
+        self._accepted_sentences: list[tuple[str, bool]] = []
         self._reported = False
 
     @property
@@ -295,7 +298,7 @@ class ReplyPlanner:
         if self._lead is None:
             self._lead = claim
         if claim == self._lead:
-            return self._admit(sentence)
+            return self._admit(sentence, claim)
         self._waiting = [piece for piece in self._waiting if piece.claim == claim]
         self._waiting.append(SpeechPiece(claim, sentence))
         return []
@@ -305,7 +308,7 @@ class ReplyPlanner:
             return self._release_review(claim)
         ended = [piece.text for piece in self._waiting if piece.claim == claim]
         self._waiting = [piece for piece in self._waiting if piece.claim != claim]
-        return [line for sentence in ended for line in self._admit(sentence)]
+        return [line for sentence in ended for line in self._admit(sentence, claim)]
 
     def _release_review(self, claim: int) -> list[str]:
         verdict = self._verdicts.get(claim)
@@ -315,27 +318,55 @@ class ReplyPlanner:
         if not verdict:
             self.refuse(claim)
             return []
-        return [line for piece in pieces for line in self._admit(piece.text)]
+        return [line for piece in pieces for line in self._admit(piece.text, piece.claim)]
 
     def finish_sentences(self) -> list[str]:
         waiting, self._waiting = self._waiting, []
         spoken: list[str] = []
         for claim in sorted(self._review_pieces):
             spoken.extend(self._release_review(claim))
-        spoken.extend(line for piece in waiting for line in self._admit(piece.text))
+        spoken.extend(line for piece in waiting for line in self._admit(piece.text, piece.claim))
         spoken.extend(self._fallback())
         self._report()
         return spoken
 
-    def _admit(self, sentence: str) -> list[str]:
+    def _admit(self, sentence: str, claim: int) -> list[str]:
         if self.intent in SHORT_INTENTS:
             if self._short_spoken:
                 return []
             self._short_spoken = True
-            self._spoken += 1
-            return [sentence]
+        authorized = self._authorized_question(sentence, claim)
+        self._accepted_sentences.append((sentence, authorized))
+        if self._on_sentence is not None:
+            self._on_sentence(self._spoken, sentence, authorized)
         self._spoken += 1
         return [sentence]
+
+    def authorized_reply_question(self, text: str) -> bool:
+        count = len(split_sentences(text, language=self.language))
+        retained = self._accepted_sentences[:count]
+        if text != " ".join(sentence for sentence, _ in retained):
+            return False
+        questions = [allowed for sentence, allowed in retained if "?" in sentence]
+        return bool(questions) and all(questions)
+
+    def _authorized_question(self, sentence: str, claim: int) -> bool:
+        gate, header = self._gate, self.claim_header(claim)
+        if gate is None or not gate.verify or gate.proactive or header is None:
+            return False
+        if header.act != "question" or header.basis != "brief":
+            return False
+        if self._judge(gate, sentence, claim) != "pass":
+            return False
+        normalized = " ".join(sentence.split()).casefold()
+        return any(
+            entry.kind == "question"
+            and entry.namespace == "brief"
+            and entry.disclosure == "room_speakable"
+            and " ".join(entry.text.split()).casefold() == normalized
+            for ref in header.refs
+            if (entry := gate.book.entries.get(ref)) is not None
+        )
 
     def _judge(self, gate: SpeechGate, sentence: str, claim: int) -> SpeechVerdict:
         if not gate.verify:

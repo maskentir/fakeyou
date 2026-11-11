@@ -598,12 +598,12 @@ class MeetingAudioSession:
                     self._faults.record(classify_exception("tts", error, operation="cue"))
                 return
 
-    async def play_cue(self, text: str) -> bool:
+    async def play_cue(self, text: str, *, transcript_id: str | None = None) -> bool:
         engine = self._engine
         if self._failure is not None or self._stopping or not isinstance(engine, CuePlayback):
             return False
         with self._gate.own_speech.speaking(text):
-            return await engine.play_cue(text)
+            return await engine.play_cue(text, transcript_id=transcript_id)
 
     async def _stop(self) -> None:
         self._stopping = True

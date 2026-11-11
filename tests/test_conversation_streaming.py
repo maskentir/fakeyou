@@ -550,7 +550,15 @@ async def test_streamed_journal_events_carry_metadata_only(journal: RecordingJou
     await loop.actor.receive_final(event("t1", "hello"))
     await loop.actor.wait_idle()
     [first] = journal.events("answer_text_emitted")
-    assert set(first) == {"event", "meeting_id", "at", "source", "request_id", "transcript_id"}
+    assert set(first) == {
+        "event",
+        "meeting_id",
+        "at",
+        "source",
+        "scorecard_version",
+        "request_id",
+        "transcript_id",
+    }
     emitted = journal.events("answer_sentence_emitted")
     assert [set(row) for row in emitted] == [
         {
@@ -563,6 +571,7 @@ async def test_streamed_journal_events_carry_metadata_only(journal: RecordingJou
             "sentence_index",
             "claim_index",
             "chars",
+            "scorecard_version",
         }
     ] * 2
     body = "\n".join(journal.lines)

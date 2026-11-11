@@ -114,6 +114,7 @@ async def test_first_pcm_event_carries_correlation_without_content(
         "first_chunk_ms",
         "bytes_out",
         "provider",
+        "scorecard_version",
     }
     assert first["source"] == "tts"
     assert first["request_id"] == started_request

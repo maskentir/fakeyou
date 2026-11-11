@@ -26,6 +26,7 @@ _LEAVE_PHASES: Mapping[str, PublicPhase] = {"left": "ended", "failed": "failed"}
 _CALL_STATES: frozenset[str] = frozenset(get_args(CallState))
 _PLAYBACK_EVENT_TYPES: Mapping[str, str | None] = {
     "playback_started": "twin.speech_started",
+    "playback_audio_started": None,
     "playback_finished": "twin.speech_finished",
     "playback_failed": None,
     "playback_dropped": None,

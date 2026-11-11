@@ -1,10 +1,13 @@
 {
-  "version": 1,
+  "version": 2,
   "metrics": {
     "session_completed": {"min": 1.0},
     "first_audio_p50_seconds": {"max": 3.5},
     "first_audio_p95_seconds": {"max": 6.5},
-    "trailing_question_rate": {"max": 0.1},
+    "first_answer_audio_p50_seconds": {"max": 3.5},
+    "first_answer_audio_p95_seconds": {"max": 6.5},
+    "answer_audio_coverage": {"min": 1.0},
+    "unnecessary_question_rate": {"max": 0.1},
     "faults_per_hour": {"max": 6.0},
     "watchdog_failures_per_hour": {"max": 20.0},
     "attribution_coverage": {"min": 0.9},

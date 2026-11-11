@@ -20,7 +20,8 @@ class CueSpeaker:
     cues: list[str] = field(default_factory=list)
     is_speaking: bool = False
 
-    async def play_cue(self, text: str) -> bool:
+    async def play_cue(self, text: str, *, transcript_id: str | None = None) -> bool:
+        del transcript_id
         self.cues.append(text)
         return True
 

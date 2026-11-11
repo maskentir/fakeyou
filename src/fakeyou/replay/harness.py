@@ -93,8 +93,8 @@ class EngineAudio:
         for text in texts:
             await self._engine.prepare_cue(text)
 
-    async def play_cue(self, text: str) -> bool:
-        return await self._engine.play_cue(text)
+    async def play_cue(self, text: str, *, transcript_id: str | None = None) -> bool:
+        return await self._engine.play_cue(text, transcript_id=transcript_id)
 
     async def speak(
         self,

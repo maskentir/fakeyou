@@ -490,7 +490,7 @@ async def test_join_hung_recall_never_blocks_the_reply_and_keeps_listening(
         for line in capsys.readouterr().err.splitlines()
         if line.startswith('{"event":"fault_recorded"')
     ]
-    assert [(row["source"], row["kind"]) for row in faults] == [("memory", "timeout")]
+    assert [(row["source"], row["kind"]) for row in faults] == [("memory", "timeout")] * 2
 
 
 async def test_memory_ingest_command_ingests_the_record_into_the_persona_group(

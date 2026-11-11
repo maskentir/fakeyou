@@ -12,6 +12,7 @@ from fakeyou.foundation.numbers import finite_float, real_number
 from fakeyou.foundation.timeparse import parse_iso_datetime
 from fakeyou.observability.baseline import baseline_metrics, summarize
 from fakeyou.observability.journal import JOURNAL_BACKUP_COUNT, journal_path
+from fakeyou.observability.report_v2 import extend_report_v2
 
 LATENCY_STAGES = (
     "speech_stopped_to_final_seconds",
@@ -698,6 +699,12 @@ def build_session_report(rows: list[dict[str, Any]], *, corrupt_lines: int = 0) 
     _close_pending(state)
     turn_reports = [_turn_report(turn, state.excluded) for turn in state.turns.values()]
     report = _assemble_report(state, turn_reports, corrupt_lines=corrupt_lines)
+    contract_row = next(
+        (row for row in rows if row.get("event") in (*STARTUP_MILESTONES, "session_finished")),
+        rows[0] if rows else {},
+    )
+    if contract_row.get("scorecard_version") == 2:
+        report = extend_report_v2(report, rows)
     return {**report, "baseline": baseline_metrics(rows)}
 
 

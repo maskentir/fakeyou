@@ -25,7 +25,11 @@ from fakeyou.speech.contract import (
 )
 
 PlaybackEventKind = Literal[
-    "playback_started", "playback_finished", "playback_failed", "playback_dropped"
+    "playback_started",
+    "playback_audio_started",
+    "playback_finished",
+    "playback_failed",
+    "playback_dropped",
 ]
 
 
@@ -151,7 +155,7 @@ class FreezingPlayback(Protocol):
 class CuePlayback(Protocol):
     async def prepare_cue(self, text: str) -> None: ...
 
-    async def play_cue(self, text: str) -> bool: ...
+    async def play_cue(self, text: str, *, transcript_id: str | None = None) -> bool: ...
 
 
 class SpokenWords(Protocol):
@@ -589,11 +593,13 @@ class PlaybackEngine:
             await self._close_stream(chunks)
             self._end_later(turn.finish)
 
-    async def play_cue(self, text: str) -> bool:
+    async def play_cue(self, text: str, *, transcript_id: str | None = None) -> bool:
         pcm = self._cues.get(text)
         if pcm is None or self._closed or self._speaking or not self._queue.empty():
             return False
-        await self._play_queued(_pcm_chunks(pcm), text, cue=True)
+        await self._play_queued(
+            _pcm_chunks(pcm), text, cue=True, utterance=Utterance(transcript_id)
+        )
         return True
 
     async def _play_queued(
@@ -684,9 +690,8 @@ class PlaybackEngine:
                 timeout_seconds=self._cleanup_timeout_seconds,
             )
 
-    async def _consume_audio(
-        self, audio: AsyncIterator[bytes], generation: int, *, gain: bool = True
-    ) -> bool:
+    async def _consume_audio(self, clip: _Clip, generation: int, *, gain: bool = True) -> bool:
+        audio = clip.audio
         pending = b""
         try:
             async for chunk in audio:
@@ -696,14 +701,14 @@ class PlaybackEngine:
                     if generation != self._generation:
                         await self._writer.write(_faded(frame))
                         return False
-                    await self._write_frame(frame, gain=gain)
+                    await self._write_frame(frame, clip, gain=gain)
             rest = _whole_samples(pending)
             if not rest:
                 return generation == self._generation
             if generation != self._generation:
                 await self._writer.write(_faded(rest))
                 return False
-            await self._write_frame(rest, gain=gain)
+            await self._write_frame(rest, clip, gain=gain)
         except asyncio.CancelledError:
             await self._fade_out()
             raise
@@ -712,12 +717,14 @@ class PlaybackEngine:
         finally:
             await self._close_audio(audio)
 
-    async def _write_frame(self, frame: bytes, *, gain: bool) -> None:
+    async def _write_frame(self, frame: bytes, clip: _Clip, *, gain: bool) -> None:
         await self._thawed.wait()
         pcm = self._apply_gain(frame) if gain else frame
         self._last_sample = _pcm_last_sample(pcm)
-        self._clip_bytes += len(pcm)
         await self._writer.write(pcm)
+        if self._clip_bytes == 0:
+            self._emit("playback_audio_started", clip.text, cue=clip.cue, utterance=clip.utterance)
+        self._clip_bytes += len(pcm)
 
     async def _fade_out(self) -> None:
         if self._last_sample == 0:
@@ -916,7 +923,7 @@ class PlaybackEngine:
             self._emit("playback_started", clip.text, cue=clip.cue, utterance=clip.utterance)
             self._clip_bytes = 0
             play_task = asyncio.create_task(
-                self._consume_audio(clip.audio, generation, gain=not clip.cue)
+                self._consume_audio(clip, generation, gain=not clip.cue)
             )
             self._play_tasks.add(play_task)
             self._active_done = clip.done

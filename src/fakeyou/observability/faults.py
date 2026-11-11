@@ -166,11 +166,6 @@ class FaultReporter:
             key = (fault.source, fault.operation, fault.kind, fault.status)
             self._total += 1
             existing = self._records.get(key)
-            if existing is not None:
-                self._records[key] = replace(existing, count=existing.count + 1)
-                return
-            if len(self._records) >= _MAX_FAULT_RECORDS:
-                return
             detail = trim_detail(fault.detail)
             first_at = self.journal.record(
                 "fault_recorded",
@@ -180,6 +175,11 @@ class FaultReporter:
                 status=fault.status,
                 detail=detail,
             )
+            if existing is not None:
+                self._records[key] = replace(existing, count=existing.count + 1)
+                return
+            if len(self._records) >= _MAX_FAULT_RECORDS:
+                return
             self._records[key] = Fault(
                 source=fault.source,
                 kind=fault.kind,

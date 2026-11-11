@@ -384,7 +384,7 @@ async def _open_moment_detector(prepared: PreparedJoin, run: _JoinRun) -> None:
 def _log_playback_event(run: _JoinRun, event: PlaybackEvent) -> None:
     if run.kernel is not None:
         run.kernel.playback(event)
-    if run.voice_activity is not None:
+    if run.voice_activity is not None and event.kind != "playback_audio_started":
         run.voice_activity.observe_self_speech(active=event.kind == "playback_started")
     run.spoken.observe(event)
 

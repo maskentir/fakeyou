@@ -94,7 +94,7 @@ async def test_a_clip_is_written_in_frames_of_whole_samples() -> None:
 
     assert [len(frame) for frame in writer.writes] == [FRAME_BYTES, FRAME_BYTES, 580]
     assert b"".join(writer.writes) == tone(1250)
-    assert kinds(events) == ["playback_started", "playback_finished"]
+    assert kinds(events) == ["playback_started", "playback_audio_started", "playback_finished"]
 
 
 async def test_ducking_lowers_the_volume_until_it_is_lifted() -> None:
@@ -112,7 +112,7 @@ async def test_ducking_lowers_the_volume_until_it_is_lifted() -> None:
 
     assert ducked < full * 0.3
     assert full > 4000
-    assert kinds(events) == ["playback_started", "playback_finished"] * 2
+    assert kinds(events) == ["playback_started", "playback_audio_started", "playback_finished"] * 2
 
 
 async def test_freezing_holds_frames_and_thawing_resumes_without_losing_words() -> None:
@@ -136,7 +136,7 @@ async def test_freezing_holds_frames_and_thawing_resumes_without_losing_words() 
     await speaking
 
     assert b"".join(writer.writes) == pcm
-    assert kinds(events) == ["playback_started", "playback_finished"]
+    assert kinds(events) == ["playback_started", "playback_audio_started", "playback_finished"]
 
 
 async def test_stop_releases_a_freeze_instead_of_hanging() -> None:
@@ -208,7 +208,7 @@ async def test_stop_fades_out_the_next_frame_and_drains_to_silence() -> None:
     assert faded[0] == original[0]
     assert np.all(np.abs(faded) <= np.abs(original))
     assert abs(int(faded[-1])) < 400
-    assert kinds(events) == ["playback_started", "playback_dropped"]
+    assert kinds(events) == ["playback_started", "playback_audio_started", "playback_dropped"]
     assert events[-1].detail == "interrupted"
     assert writer.drains == 1
     assert not engine.is_speaking
@@ -227,7 +227,7 @@ async def test_stop_cancels_a_clip_stuck_on_synthesis_after_the_halt_window() ->
     await speaking
 
     assert loop.time() - started < HALT_SECONDS + 0.5
-    assert kinds(events) == ["playback_started", "playback_dropped"]
+    assert kinds(events) == ["playback_started", "playback_audio_started", "playback_dropped"]
     assert not engine.is_speaking
 
 
@@ -241,8 +241,10 @@ async def test_back_to_back_clips_play_without_draining_between_them() -> None:
     assert all(writer.speaking_at_write)
     assert kinds(events) == [
         "playback_started",
+        "playback_audio_started",
         "playback_finished",
         "playback_started",
+        "playback_audio_started",
         "playback_finished",
     ]
 
@@ -335,7 +337,7 @@ async def test_a_prepared_sentence_synthesises_before_it_is_played() -> None:
 
     assert writer.writes
     assert b"".join(writer.writes) == tone(1250)
-    assert kinds(events) == ["playback_started", "playback_finished"]
+    assert kinds(events) == ["playback_started", "playback_audio_started", "playback_finished"]
     assert prepared.sentence_index is None
     assert prepared.text == "Hello there."
 

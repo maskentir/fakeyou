@@ -17,6 +17,7 @@ class CueEngine(PreparedSpeaker):
         self.failure = failure
         self.prepared: list[str] = []
         self.played: list[str] = []
+        self.transcripts: list[str | None] = []
         self.speaking_while_cued: list[bool] = []
         self.gate: FinalGate | None = None
 
@@ -49,10 +50,11 @@ class CueEngine(PreparedSpeaker):
             raise self.failure
         self.prepared.append(text)
 
-    async def play_cue(self, text: str) -> bool:
+    async def play_cue(self, text: str, *, transcript_id: str | None = None) -> bool:
         assert self.gate is not None
         self.speaking_while_cued.append(self.gate.own_speech.heard_back(text))
         self.played.append(text)
+        self.transcripts.append(transcript_id)
         return True
 
 
@@ -78,13 +80,14 @@ async def test_cues_are_prepared_in_the_background_and_played_as_own_speech() ->
     session.prepare_cues(("Hmm…", "Hmm, one sec…"))
     session.prepare_cues(("ignored",))
     await asyncio.sleep(0)
-    played = await session.play_cue("Hmm, one sec…")
+    played = await session.play_cue("Hmm, one sec…", transcript_id="t7")
     gate.set()
     await runner
 
     assert engine.prepared == ["Hmm…", "Hmm, one sec…"]
     assert played is True
     assert engine.played == ["Hmm, one sec…"]
+    assert engine.transcripts == ["t7"]
     assert engine.speaking_while_cued == [True]
 
 

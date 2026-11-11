@@ -46,8 +46,8 @@ class Speaker:
     async def speak_prepared(self, prepared: PreparedSpeech) -> None:
         del prepared
 
-    async def play_cue(self, text: str) -> bool:
-        del text
+    async def play_cue(self, text: str, *, transcript_id: str | None = None) -> bool:
+        del text, transcript_id
         return False
 
 

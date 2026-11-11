@@ -1,3 +1,4 @@
+import hashlib
 from dataclasses import dataclass
 
 from fakeyou.audio.playback import PlaybackEvent
@@ -18,6 +19,8 @@ class SpokenLog:
                 source="playback",
                 detail=event.detail,
                 cue_text=event.text,
+                transcript_id=event.utterance.transcript_id,
+                sentence_index=event.utterance.sentence_index,
             )
             return
         utterance = event.utterance
@@ -26,9 +29,11 @@ class SpokenLog:
             event.kind,
             source="playback",
             ends_with_question=event.text.rstrip().endswith("?"),
+            contains_question="?" in event.text,
             detail=event.detail,
             transcript_id=utterance.transcript_id,
             sentence_index=utterance.sentence_index,
+            sentence_sha256=hashlib.sha256(" ".join(event.text.split()).encode()).hexdigest(),
             **heard,
         )
         if event.kind == "playback_started":

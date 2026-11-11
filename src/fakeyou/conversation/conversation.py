@@ -1,3 +1,4 @@
+import hashlib
 import json
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import AbstractContextManager
@@ -630,7 +631,25 @@ def _handlers(trace: StreamTrace) -> ReplyHandlers:
         on_gate=partial(
             _record_speech_rejected, trace.journal, trace.request_id, trace.transcript_id
         ),
+        on_sentence=lambda index, sentence, allowed: _record_validated_sentence(
+            trace, index, sentence, authorized=allowed
+        ),
     )
+
+
+def _record_validated_sentence(
+    trace: StreamTrace, index: int, sentence: str, *, authorized: bool
+) -> None:
+    if trace.journal is not None:
+        trace.journal.record(
+            "answer_sentence_accepted",
+            source="agent",
+            request_id=trace.request_id,
+            transcript_id=trace.transcript_id,
+            sentence_index=index,
+            sentence_sha256=hashlib.sha256(" ".join(sentence.split()).encode()).hexdigest(),
+            authorized_brief_question=authorized,
+        )
 
 
 def _reply_planner(max_sentences: int, trace: StreamTrace) -> ReplyPlanner:
@@ -876,7 +895,14 @@ class MeetingResponder:
                 for index in planner.review_claims():
                     planner.settle_claim(index, accepted=True)
         spoken = planner.speak_pieces(pieces)
-        return SpokenChunk(text=" ".join(spoken), language=planner.language)
+        text = " ".join(spoken)
+        if text:
+            outputs = dict.fromkeys((text, cap_spoken_reply(text, self.limit, planner.language)))
+            for output in outputs:
+                _record_validated_sentence(
+                    trace, 0, output, authorized=planner.authorized_reply_question(output)
+                )
+        return SpokenChunk(text=text, language=planner.language)
 
     async def _respond_gated(self, reply: str, trace: StreamTrace) -> SpokenChunk:
         planner = ReplyPlanner(

@@ -18,8 +18,24 @@ def _per_hour(count: float, report: Report) -> float | None:
 
 
 def _first_audio(report: Report, quantile: str) -> float | None:
-    value = report["latency"]["speech_stopped_to_first_pcm_seconds"][quantile]
+    stage = (
+        "speech_stopped_to_first_audio_seconds"
+        if report.get("scorecard_version") == 2
+        else "speech_stopped_to_first_pcm_seconds"
+    )
+    value = report["latency"][stage][quantile]
     return float(value) if value is not None else None
+
+
+def _first_answer_audio(report: Report, quantile: str) -> float | None:
+    value = report["latency"].get("speech_stopped_to_first_answer_audio_seconds", {}).get(quantile)
+    return float(value) if value is not None else None
+
+
+def _reply_rate(report: Report, numerator: str, denominator: str) -> float | None:
+    replies = report["replies"]
+    count = replies.get(denominator, 0)
+    return replies.get(numerator, 0) / count if count else None
 
 
 def _trailing_question_rate(report: Report) -> float | None:
@@ -37,6 +53,14 @@ SCORED_METRICS: dict[str, Callable[[Report], float | None]] = {
     "session_completed": _session_completed,
     "first_audio_p50_seconds": lambda report: _first_audio(report, "p50"),
     "first_audio_p95_seconds": lambda report: _first_audio(report, "p95"),
+    "first_answer_audio_p50_seconds": lambda report: _first_answer_audio(report, "p50"),
+    "first_answer_audio_p95_seconds": lambda report: _first_answer_audio(report, "p95"),
+    "answer_audio_coverage": lambda report: _reply_rate(
+        report, "answers_with_audio", "expected_answers"
+    ),
+    "unnecessary_question_rate": lambda report: _reply_rate(
+        report, "unnecessary_questions", "spoken"
+    ),
     "trailing_question_rate": _trailing_question_rate,
     "faults_per_hour": lambda report: _per_hour(
         sum(fault["count"] for fault in report["faults"]), report
@@ -76,9 +100,14 @@ class SessionTargets(BaseModel):
 
 
 SESSION_TARGETS = SessionTargets.model_validate_json(read_package_text("session_targets.json"))
+SESSION_TARGETS_V1 = SessionTargets.model_validate_json(
+    read_package_text("session_targets_v1.json")
+)
 
 
-def score_session(report: Report, targets: SessionTargets = SESSION_TARGETS) -> dict[str, Any]:
+def score_session(report: Report, targets: SessionTargets | None = None) -> dict[str, Any]:
+    if targets is None:
+        targets = SESSION_TARGETS if report.get("scorecard_version") == 2 else SESSION_TARGETS_V1
     metrics: dict[str, dict[str, Any]] = {}
     for name, target in targets.metrics.items():
         value = SCORED_METRICS[name](report)

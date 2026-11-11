@@ -69,7 +69,11 @@ async def test_stream_timeout_before_audio_retries_once() -> None:
 
     assert synth.calls == 2
     assert writer.heard == b"".join(synth.chunks)
-    assert [event.kind for event in events] == ["playback_started", "playback_finished"]
+    assert [event.kind for event in events] == [
+        "playback_started",
+        "playback_audio_started",
+        "playback_finished",
+    ]
 
 
 async def test_stream_timeout_after_audio_does_not_retry() -> None:
@@ -102,7 +106,11 @@ async def test_stream_timeout_after_audio_does_not_retry() -> None:
 
     assert synth.calls == 1
     assert writer.written == [synth.chunks[0]]
-    assert [event.kind for event in events] == ["playback_started", "playback_failed"]
+    assert [event.kind for event in events] == [
+        "playback_started",
+        "playback_audio_started",
+        "playback_failed",
+    ]
 
 
 async def test_streaming_speak_writes_the_chunks_to_the_writer() -> None:
@@ -118,7 +126,11 @@ async def test_streaming_speak_writes_the_chunks_to_the_writer() -> None:
 
     assert synth.texts == ["hello"]
     assert writer.heard == b"".join(synth.chunks)
-    assert [event.kind for event in events] == ["playback_started", "playback_finished"]
+    assert [event.kind for event in events] == [
+        "playback_started",
+        "playback_audio_started",
+        "playback_finished",
+    ]
 
 
 async def test_streaming_play_failure_reports_and_engine_recovers(

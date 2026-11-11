@@ -81,8 +81,10 @@ async def test_speak_plays_in_order_as_one_voice() -> None:
     assert writer.closed
     assert [event.kind for event in events] == [
         "playback_started",
+        "playback_audio_started",
         "playback_finished",
         "playback_started",
+        "playback_audio_started",
         "playback_finished",
     ]
     assert engine.is_speaking is False
@@ -106,8 +108,10 @@ async def test_speak_threads_sentence_index_to_synthesis_in_order() -> None:
     assert writer.written == [synth.audio, synth.audio]
     assert [event.kind for event in events] == [
         "playback_started",
+        "playback_audio_started",
         "playback_finished",
         "playback_started",
+        "playback_audio_started",
         "playback_finished",
     ]
 
@@ -308,6 +312,7 @@ async def test_speak_retry_is_journaled(
             "meeting_id": "meeting-1",
             "at": retries[0]["at"],
             "source": "playback",
+            "scorecard_version": 2,
             "attempt": 2,
             "streaming": True,
             "reason": "timeout",

@@ -118,7 +118,7 @@ def test_record_keeps_only_new_final_nonblank_transcripts(tmp_path: Path) -> Non
     assert len(entries) == 1
 
 
-def test_record_write_failure_is_reported_once_without_raising(
+def test_each_record_write_failure_is_reported_without_raising(
     journal: RecordingJournal, tmp_path: Path
 ) -> None:
     record = open_record(tmp_path, faults=FaultReporter(journal=journal))
@@ -128,7 +128,9 @@ def test_record_write_failure_is_reported_once_without_raising(
     record.add_twin_speech("Okay.")
 
     faults = journal.events()
-    assert [(fault["source"], fault["kind"]) for fault in faults] == [("meeting_record", "unknown")]
+    assert [(fault["source"], fault["kind"]) for fault in faults] == [
+        ("meeting_record", "unknown")
+    ] * 2
 
 
 def test_read_meeting_record_rejects_unknown_entries(tmp_path: Path) -> None:

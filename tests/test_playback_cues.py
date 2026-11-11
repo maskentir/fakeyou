@@ -37,6 +37,7 @@ async def test_prepared_cue_plays_from_cache_without_new_synthesis() -> None:
     assert writer.heard == CUE_AUDIO
     assert [(event.kind, event.text, event.cue) for event in events] == [
         ("playback_started", "Hmm…", True),
+        ("playback_audio_started", "Hmm…", True),
         ("playback_finished", "Hmm…", True),
     ]
 

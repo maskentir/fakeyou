@@ -125,7 +125,7 @@ def test_empty_report_is_none() -> None:
     assert _reporter().total() == 0
 
 
-def test_first_of_kind_logs_once_with_meeting_id() -> None:
+def test_every_occurrence_logs_with_meeting_id() -> None:
     lines: list[str] = []
     frozen = datetime(2026, 9, 28, 12, 0, 0, tzinfo=UTC)
     reporter = FaultReporter(journal=Journal("meeting-7", now=lambda: frozen, emit=lines.append))
@@ -140,12 +140,12 @@ def test_first_of_kind_logs_once_with_meeting_id() -> None:
         ProviderFault("tts", "unknown", evidence=FaultEvidence(detail="odd"), retryable=False)
     )
 
-    assert len(lines) == 2
+    assert len(lines) == 3
     first = json.loads(lines[0])
     assert first["meeting_id"] == "meeting-7"
     assert first["kind"] == "timeout"
     assert first["at"] == frozen.isoformat()
-    second = json.loads(lines[1])
+    second = json.loads(lines[2])
     assert second["kind"] == "unknown"
 
 
@@ -237,13 +237,13 @@ def test_fault_should_reach_journal_file_and_report_with_shared_identity_and_clo
     journal.close()
 
     rows = read_journal(path)
-    assert len(rows) == 1
+    assert len(rows) == 2
     assert rows[0]["meeting_id"] == "meeting-7"
     assert rows[0]["at"] == frozen.isoformat()
     assert reporter.summaries()[0].first_at == rows[0]["at"]
     assert reporter.total() == 2
     assert build_session_report(rows)["faults"] == [
-        {"source": "stt", "kind": "timeout", "count": 1}
+        {"source": "stt", "kind": "timeout", "operation": None, "count": 2}
     ]
 
 
