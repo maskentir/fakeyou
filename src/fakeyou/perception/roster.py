@@ -163,6 +163,12 @@ class MeetRoster:
     def assignment_for(self, stream_id: str) -> StreamAssignment | None:
         return next((item for item in self.assignments() if item.stream_id == stream_id), None)
 
+    def output_streams(self) -> list[str]:
+        return sorted(
+            f"{device_id}:{kind}:{output.stream_id}"
+            for (device_id, kind), output in self._outputs.items()
+        )
+
     def _is_screen(self, device_id: str) -> bool:
         user = self._users.get(device_id)
         return user is not None and user.is_screen

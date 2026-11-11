@@ -267,8 +267,13 @@ async def test_the_drain_journals_frame_batches_and_assignment_changes() -> None
     assert batched["camera_frames"] == 1
     assert batched["screen_frames"] == 0
     assert batched["tracks"] == 0
+    assert batched["track_ids"] == []
     assert batched["sampling"] == 0
     assert batched["dropped_frames"] == 0
+    assert batched["output_streams"] == [
+        f"{SCREEN}:video:stream-screen",
+        f"{BUDI}:video:stream-budi",
+    ]
     [bound] = journal.events("perception_streams_bound")
     assert bound["streams"] == ["screen:stream-screen", "camera:stream-budi"]
 
