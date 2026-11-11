@@ -347,6 +347,33 @@ Throttling cgroup nyata: `nr_throttled` naik dan `throttled_usec`
 mencatat 6,5 detik per 120 detik saat join — limit 2 core memang
 mengikat.
 
+### Kapasitas (P3)
+
+Benchmark N browser paralel memuat halaman Meet (35-40 detik):
+
+| Browser paralel | total mean | per browser |
+| --- | --- | --- |
+| 1 | 151,4% | 151,4% |
+| 3 | 161,0% | 53,7% |
+
+Tiga browser nyaris tidak menambah biaya karena container 2 core
+throttle-nya: biaya per browser turun dari 151% ke 54%. Jadi
+paralelisme dibatasi limit core, dan biaya per sesi aktif (idle
+in-call) terukur ~0,33 core. Setelah perbaikan kompositing, gpu process
+turun ke 12,8% dan penyumbang terbesar menjadi renderer (83,7%),
+yaitu render antarmuka Meet itu sendiri.
+
+Saran lanjutan dari data ini:
+
+- Permukaan raster masih besar (Xvfb 1920x1080). Jendela browser lebih
+  kecil memotong biaya renderer tanpa menyentuh Meet.
+- Sampling video ternyata bukan penyebab (renderer 14,5% saat join),
+  jadi redesign lazy stream pada tahap P2 memberi dampak kecil;
+  yang mahal adalah rasterisasi halaman Meet dan retry join yang
+  memuat ulang halaman.
+- Deskripsi kamera bisa dicache per frame (frame kamera stabil
+  beberapa menit), sehingga pertanyaan lanjutan dijawab instan.
+
 ## Catatan
 
 - RustFS `1.0.0-alpha.81` = alpha, dipakai sesuai keputusan user; versi
