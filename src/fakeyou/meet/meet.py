@@ -59,7 +59,7 @@ _CAPTCHA_PROBE = """(() => {
 
 TYPE_DELAY_MS = 90
 _CLICK_ATTEMPTS = 3
-NAME_FIELD_ATTEMPTS = 10
+NAME_FIELD_ATTEMPTS = 25
 _CLICK_TIMEOUT_MS = 5000
 _CLICK_WAIT_MS = 2000
 _CLICK_RETRY_DELAY_SECONDS = 1.0
@@ -79,7 +79,6 @@ class MeetSignals:
 
 
 DEFAULT_MEET_SIGNALS = MeetSignals()
-CALL_ENDED_MARKER = 'data-call-ended="true"'
 _HEADING_TAGS = frozenset({"h1", "h2", "h3"})
 _VOID_TAGS = frozenset(
     {
@@ -386,10 +385,13 @@ def _page_phrase(content: str, marker: str, limit: int = 400) -> str:
     return " ".join(content[start : start + limit].split())
 
 
-def _classify_denial(content: str) -> JoinResult | None:
+def _classify_denial(content: str, signals: MeetSignals) -> JoinResult | None:
     if _is_explicit_denial(content):
         return JoinResult(status="denied", detail="guest request to join was denied")
-    if CALL_ENDED_MARKER in content:
+    headings, _buttons = call_markers(content)
+    if signals.denied in headings:
+        return None
+    if signals.ended in headings:
         return JoinResult(status="ended", detail="the call had already ended when the twin arrived")
     return None
 
@@ -506,7 +508,7 @@ async def _await_admission(
             await polling.sleep(request.poll_interval_seconds)
             continue
         unreadable = 0
-        denial = _classify_denial(content)
+        denial = _classify_denial(content, signals)
         if denial is not None:
             return denial
         if signals.denied in content:

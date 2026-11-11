@@ -130,7 +130,7 @@ async def test_request_guest_join_reports_platform_block() -> None:
 
 
 async def test_request_guest_join_reports_a_call_that_had_already_ended() -> None:
-    page = meet_page([CALL_ENDED])
+    page = meet_page([ENDED])
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -141,6 +141,16 @@ async def test_request_guest_join_reports_a_call_that_had_already_ended() -> Non
 
     assert result.status == "ended"
     assert "already ended" in result.detail
+
+
+async def test_access_refusal_with_call_ended_button_does_not_mean_meeting_ended() -> None:
+    page = meet_page([CALL_ENDED], evaluates=[NO_CAPTCHA])
+    clock = FakeClock()
+    result = await request_guest_join(
+        page, _request(), polling=JoinPolling(clock.sleep, clock.monotonic)
+    )
+    assert result.status == "blocked"
+    assert "can't join this" in result.detail
 
 
 async def test_request_guest_join_waits_out_captcha_grace_then_reports_block() -> None:
@@ -401,6 +411,19 @@ async def test_request_guest_join_waits_out_meet_getting_ready() -> None:
 
     assert result.status == "admitted"
     assert NAME_SELECTOR in page.waited
+
+
+async def test_request_guest_join_still_finds_a_late_name_field() -> None:
+    page = meet_page([IN_CALL], wait_flaky={NAME_SELECTOR: 20})
+    clock = FakeClock()
+
+    result = await request_guest_join(
+        page,
+        _request(),
+        polling=JoinPolling(clock.sleep, clock.monotonic),
+    )
+
+    assert result.status == "admitted"
 
 
 async def test_request_guest_join_fails_without_join_button() -> None:

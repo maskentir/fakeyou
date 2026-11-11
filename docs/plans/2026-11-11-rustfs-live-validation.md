@@ -224,6 +224,14 @@ Terpisah dari itu, sink PulseAudio `agent_output` di container menyisakan ~800 m
 
 ### Klasifikasi join yang diperbaiki
 
+Koreksi setelah bukti live tambahan: `data-call-ended="true"` juga muncul
+pada tombol di halaman penolakan akses ketika host masih berada di room.
+Atribut itu tidak membuktikan rapat berakhir. Lihat
+[laporan salah klasifikasi](../reports/2026-11-11-meet-ended-misclassification.md).
+Kode lokal kini memakai heading halaman untuk membedakan penolakan akses
+dari rapat yang benar-benar berakhir; klaim historis berbasis atribut saja
+di bawah ini tidak lagi dianggap bukti bahwa room selesai.
+
 - Panggilan yang **sudah berakhir** (marker `data-call-ended="true"`)
   dulu dilapor sebagai "platform blocked the guest" — menyesatkan,
   karena operator mencari masalah izin. Sekarang status join `ended` →
