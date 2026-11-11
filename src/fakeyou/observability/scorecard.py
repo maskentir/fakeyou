@@ -27,12 +27,17 @@ def _first_answer_audio(report: Report, quantile: str) -> float | None:
     return float(value) if value is not None else None
 
 
-def _path_latency(report: Report, path: str, quantile: str, stage: str) -> float | None:
+def _path_group(report: Report, path: str) -> Mapping[str, Any] | None:
     paths = report.get("latency_by_evidence_path")
     if not isinstance(paths, Mapping):
         return None
     group = paths.get(path)
-    if not isinstance(group, Mapping):
+    return group if isinstance(group, Mapping) else None
+
+
+def _path_latency(report: Report, path: str, quantile: str, stage: str) -> float | None:
+    group = _path_group(report, path)
+    if group is None:
         return None
     summary = group.get(stage)
     if not isinstance(summary, Mapping):
@@ -68,6 +73,12 @@ PATH_GATES = (
     "first_answer_audio_p50_visual_cached_seconds",
     "first_answer_audio_p95_visual_cached_seconds",
 )
+PATH_GATE_PATHS = {
+    "first_answer_audio_p50_no_visual_seconds": "no_visual",
+    "first_answer_audio_p95_no_visual_seconds": "no_visual",
+    "first_answer_audio_p50_visual_cached_seconds": "visual_cached",
+    "first_answer_audio_p95_visual_cached_seconds": "visual_cached",
+}
 
 SCORED_METRICS: dict[str, Callable[[Report], float | None]] = {
     "session_completed": _session_completed,
@@ -140,6 +151,20 @@ def _version(report: Report, targets: SessionTargets) -> int:
     return targets.version
 
 
+def _metric_status(name: str, report: Report, value: float | None, *, passed: bool | None) -> str:
+    if name in PATH_GATES:
+        path = PATH_GATE_PATHS[name]
+        group = _path_group(report, path)
+        expected = group.get("expected_answers") if isinstance(group, Mapping) else None
+        if isinstance(expected, int) and expected == 0:
+            return "not_applicable"
+        if value is None:
+            return "unscored"
+    if value is None:
+        return "unscored"
+    return "passed" if passed else "failed"
+
+
 def score_session(report: Report, targets: SessionTargets | None = None) -> dict[str, Any]:
     if targets is None:
         targets = SESSION_TARGETS
@@ -149,9 +174,15 @@ def score_session(report: Report, targets: SessionTargets | None = None) -> dict
             continue
         value = SCORED_METRICS[name](report)
         passed = None if value is None else target.accepts(value)
-        metrics[name] = {**target.model_dump(exclude_none=True), "value": value, "passed": passed}
-    failed = [name for name, metric in metrics.items() if metric["passed"] is False]
-    unscored = [name for name, metric in metrics.items() if metric["passed"] is None]
+        status = _metric_status(name, report, value, passed=passed)
+        metrics[name] = {
+            **target.model_dump(exclude_none=True),
+            "value": value,
+            "status": status,
+            "passed": passed,
+        }
+    failed = [name for name, metric in metrics.items() if metric["status"] == "failed"]
+    unscored = [name for name, metric in metrics.items() if metric["status"] == "unscored"]
     return {
         "version": _version(report, targets),
         "passed": not failed and not unscored,

@@ -206,6 +206,126 @@ def test_evidence_paths_are_scored_and_reported_per_path() -> None:
     assert report["latency_by_evidence_path"]["visual_cached"]["expected_answers"] == 1
     assert card["version"] == 3
     assert card["metrics"]["first_answer_audio_p50_visual_cached_seconds"]["value"] == 8.0
+    assert card["metrics"]["first_answer_audio_p50_visual_cached_seconds"]["status"] == "failed"
+
+
+def fast_session(*, answer_at: float = 2.0, evidence: tuple[str, ...] = ()) -> list[dict[str, Any]]:
+    rows = [
+        row(
+            0,
+            "join_finished",
+            source="runtime",
+            status="admitted",
+            answer_boundary=True,
+            evidence_paths=True,
+        ),
+        row(1, "conversation_bound", source="runtime"),
+        row(10, "speech_stopped"),
+        row(10.4, "transcript_finalized", transcript_id="t1", participant_id="p1"),
+        row(10.5, "agent_started", request_id="t1:1"),
+        row(
+            10.6,
+            "plan_selected",
+            transcript_id="t1",
+            output="speech",
+            template="answer",
+            evidence=list(evidence),
+        ),
+        row(11.0, "thinking_cue_audio_started", transcript_id="t1"),
+        row(11.5, "reply_plan_observed", transcript_id="t1", intent="answer"),
+        row(11.5, "agent_finished", request_id="t1:1"),
+        row(10 + answer_at, "playback_audio_started", transcript_id="t1", sentence_index=0),
+        row(20, "playback_finished", transcript_id="t1", sentence_index=0),
+        row(3600, "session_finished", source="cli", exit_code=0),
+    ]
+    return rows
+
+
+def test_a_no_visual_session_passes_without_visual_cached_answers() -> None:
+    card = score_session(build_session_report(fast_session()))
+
+    assert card["passed"] is True
+    assert card["metrics"]["first_answer_audio_p50_no_visual_seconds"]["status"] == "passed"
+    assert card["metrics"]["first_answer_audio_p95_no_visual_seconds"]["status"] == "passed"
+    assert (
+        card["metrics"]["first_answer_audio_p50_visual_cached_seconds"]["status"]
+        == "not_applicable"
+    )
+    assert (
+        card["metrics"]["first_answer_audio_p95_visual_cached_seconds"]["status"]
+        == "not_applicable"
+    )
+    assert card["metrics"]["first_answer_audio_p50_visual_cached_seconds"]["passed"] is None
+    assert "first_answer_audio_p50_visual_cached_seconds" not in card["unscored"]
+    assert "first_answer_audio_p50_visual_cached_seconds" not in card["failed"]
+
+
+def test_a_visual_cached_session_passes_without_no_visual_answers() -> None:
+    rows = fast_session(evidence=("screen",))
+    card = score_session(build_session_report(rows))
+
+    assert card["passed"] is True
+    assert card["metrics"]["first_answer_audio_p50_visual_cached_seconds"]["status"] == "passed"
+    assert card["metrics"]["first_answer_audio_p50_no_visual_seconds"]["status"] == "not_applicable"
+    assert "first_answer_audio_p50_no_visual_seconds" not in card["unscored"]
+    assert "first_answer_audio_p50_no_visual_seconds" not in card["failed"]
+
+
+def test_an_expected_answer_without_measured_audio_cannot_pass() -> None:
+    rows = fast_session()
+    rows = [
+        entry
+        for entry in rows
+        if not (
+            entry.get("event") == "playback_audio_started" and entry.get("transcript_id") == "t1"
+        )
+    ]
+    rows.insert(-1, row(12, "agent_failed", request_id="t1:1"))
+    card = score_session(build_session_report(rows))
+
+    assert card["metrics"]["first_answer_audio_p50_no_visual_seconds"]["status"] == "unscored"
+    assert card["metrics"]["first_answer_audio_p50_no_visual_seconds"]["value"] is None
+    assert "first_answer_audio_p50_no_visual_seconds" in card["unscored"]
+    assert card["passed"] is False
+
+
+def test_a_session_without_expected_answers_in_gated_paths_follows_global_gates() -> None:
+    rows = fast_session(evidence=("participant",))
+    rows.append(
+        row(
+            12,
+            "perception_evidence_resolved",
+            source="perception",
+            transcript_id="t1",
+            evidence_kind="participant",
+            resolution="fresh",
+            age_ms=0,
+            vision_latency_ms=3000,
+        )
+    )
+    card = score_session(build_session_report(rows))
+
+    assert card["metrics"]["first_answer_audio_p50_no_visual_seconds"]["status"] == "not_applicable"
+    assert (
+        card["metrics"]["first_answer_audio_p50_visual_cached_seconds"]["status"]
+        == "not_applicable"
+    )
+    assert card["metrics"]["first_answer_audio_p50_seconds"]["status"] == "passed"
+    assert card["passed"] is True
+
+
+def test_historical_journals_without_evidence_paths_keep_their_behaviour() -> None:
+    rows = fast_session()
+    rows = [
+        {key: value for key, value in entry.items() if key != "evidence_paths"} for entry in rows
+    ]
+    card = score_session(build_session_report(rows))
+
+    assert card["version"] == 2
+    assert "first_answer_audio_p50_visual_cached_seconds" not in card["metrics"]
+    assert "first_answer_audio_p50_no_visual_seconds" not in card["metrics"]
+    assert card["passed"] is True
+    assert card["metrics"]["first_answer_audio_p50_seconds"]["status"] == "passed"
 
 
 def test_new_journal_rows_declare_the_answer_boundary() -> None:

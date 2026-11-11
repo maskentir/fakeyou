@@ -39,6 +39,7 @@ def test_misses_are_named_and_rates_are_per_reply_and_per_hour() -> None:
     assert card["metrics"]["watchdog_failures_per_hour"] == {
         "max": 20.0,
         "value": 40.0,
+        "status": "failed",
         "passed": False,
     }
 
