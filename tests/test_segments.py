@@ -5,6 +5,7 @@ from fakeyou.persistence.segments import (
     SegmentFile,
     SegmentSync,
     create_object_store,
+    push_appended_segments,
     restore_segments,
 )
 from tests._fakes_common import env_file_opt
@@ -112,6 +113,40 @@ async def test_restore_merges_an_overlapping_segment(tmp_path: Path) -> None:
 
     assert written == 14
     assert record.read_bytes() == b"one\ntwo\nthree\n"
+
+
+async def test_pushing_appended_segments_uploads_only_the_post_session_tail(
+    tmp_path: Path,
+) -> None:
+    store = FakeStore()
+    record = tmp_path / "record.jsonl"
+    record.write_bytes(b"one\ntwo\n")
+    sync = SegmentSync(store, "m-1", [SegmentFile("record", record)])
+    await sync.push()
+    _append(record, b"three\nfour\n")
+
+    pushed = await push_appended_segments(store, "m-1", [SegmentFile("record", record)])
+
+    assert pushed == 11
+    assert list(store.objects) == [
+        "sessions/m-1/record/000000000000-000000000008",
+        "sessions/m-1/record/000000000008-000000000019",
+    ]
+    restored = tmp_path / "restored.jsonl"
+    assert await restore_segments(store, "m-1", "record", restored) == 19
+    assert restored.read_bytes() == record.read_bytes()
+
+
+async def test_pushing_appended_segments_waits_for_a_complete_line(tmp_path: Path) -> None:
+    store = FakeStore()
+    record = tmp_path / "record.jsonl"
+    record.write_bytes(b"one\n")
+    sync = SegmentSync(store, "m-1", [SegmentFile("record", record)])
+    await sync.push()
+    _append(record, b"tw")
+
+    assert await push_appended_segments(store, "m-1", [SegmentFile("record", record)]) == 0
+    assert list(store.objects) == ["sessions/m-1/record/000000000000-000000000004"]
 
 
 def test_a_blank_bucket_means_storage_is_not_configured() -> None:

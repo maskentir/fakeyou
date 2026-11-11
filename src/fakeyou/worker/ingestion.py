@@ -30,7 +30,8 @@ from fakeyou.memory.ingest_service import IngestPorts
 from fakeyou.memory.ingest_status import IngestSummary
 from fakeyou.memory.operator_access import OperatorAccess
 from fakeyou.memory.persona import OperatorIdentity, memory_group_for
-from fakeyou.observability.journal import Journal
+from fakeyou.observability.faults import capture_error
+from fakeyou.observability.journal import Journal, journal_path
 from fakeyou.persistence.ingestion_status import (
     IngestionState,
     IngestionStatus,
@@ -41,6 +42,7 @@ from fakeyou.persistence.ingestion_status import (
     write_status,
 )
 from fakeyou.persistence.layout import MeetingDir
+from fakeyou.persistence.segments import ObjectStore, SegmentFile, push_appended_segments
 from fakeyou.transport.streams import StreamTransport
 from fakeyou.worker.consumer import Snapshot, SnapshotStore
 from fakeyou.worker.documents import write_session_persona
@@ -87,6 +89,7 @@ class IngestionDeps:
     shutdown: asyncio.Event
     handler: IngestionHandler = handle_ingestion_job
     journal: Journal | None = None
+    objects: ObjectStore | None = None
 
 
 def _without_stop_signals(_stop: asyncio.Event, _journal: Journal) -> AbstractContextManager[None]:
@@ -201,12 +204,33 @@ class IngestionWorker:
             if await self._settle_failure(job, error, context):
                 return None
             raise
+        finally:
+            await self._push_journal_segments(meeting_id)
         await self._fault_reported(meeting_id, reported)
         return summary
 
     async def _fault_reported(self, meeting_id: str, reported: list[FakeYouError]) -> None:
         for item in reported:
             await self._fault(meeting_id, str(item.code))
+
+    async def _push_journal_segments(self, meeting_id: str) -> None:
+        objects = self._deps.objects
+        if objects is None:
+            return
+        files = (
+            SegmentFile(
+                "journal",
+                journal_path(
+                    self._deps.settings.paths.journal_dir,
+                    parse_session_id(meeting_id, field="meeting_id"),
+                ),
+            ),
+        )
+        _pushed, error = await capture_error(
+            partial(push_appended_segments, objects, meeting_id, files)
+        )
+        if error is not None:
+            logger.warning("pushing journal segments for meeting %s failed: %s", meeting_id, error)
 
     async def _settle_failure(
         self, job: IngestionJob, error: Exception, context: JobContext

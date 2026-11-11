@@ -153,6 +153,7 @@ def role_consumers(role: str, shared: _Shared) -> list[LongRunning]:
                     store=shared.store,
                     open_memory=open_persona_memory,
                     shutdown=shared.shutdown,
+                    objects=shared.objects,
                 ),
                 queue,
             )
@@ -167,6 +168,7 @@ def role_consumers(role: str, shared: _Shared) -> list[LongRunning]:
                     transport=shared.transport,
                     store=shared.store,
                     shutdown=shared.shutdown,
+                    objects=shared.objects,
                 ),
                 queue,
             )

@@ -178,7 +178,7 @@ class SegmentSync:
         return uploaded
 
 
-async def restore_segments(store: ObjectStore, meeting_id: str, name: str, path: Path) -> int:
+async def _contiguous_remote(store: ObjectStore, meeting_id: str, name: str) -> bytes:
     keys = sorted(await store.list(_segment_prefix(meeting_id, name)))
     assembled = bytearray()
     for key in keys:
@@ -194,7 +194,23 @@ async def restore_segments(store: ObjectStore, meeting_id: str, name: str, path:
         if chunk is None or len(chunk) != end - start:
             break
         assembled.extend(chunk[len(assembled) - start :])
+    return bytes(assembled)
+
+
+async def restore_segments(store: ObjectStore, meeting_id: str, name: str, path: Path) -> int:
+    assembled = await _contiguous_remote(store, meeting_id, name)
     if len(assembled) <= await asyncio.to_thread(_local_size, path):
         return 0
     await asyncio.to_thread(write_atomically, path, bytes(assembled))
     return len(assembled)
+
+
+async def push_appended_segments(
+    store: ObjectStore, meeting_id: str, files: Sequence[SegmentFile]
+) -> int:
+    extents = {
+        file.name: len(await _contiguous_remote(store, meeting_id, file.name)) for file in files
+    }
+    sync = SegmentSync(store, meeting_id, files)
+    sync.prime(extents)
+    return await sync.push()

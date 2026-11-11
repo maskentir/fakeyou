@@ -3317,8 +3317,9 @@ hanya melewati panjang yang benar-benar direstorasi — konten lokal
 yang belum terunggah selalu diunggah dari 0 pada push pertama.
 Settings `storage` baru (6 leaf, total 195); tanpa bucket,
 `create_object_store` mengembalikan None dan perilaku sama dengan
-sebelumnya. Verifikasi live terhadap MinIO/S3 asli belum dilakukan
-(hanya fake store + takeover test di consumer).
+sebelumnya. Terbukti live terhadap RustFS (S3-compatible) pada
+2026-11-11: segmen `record` dan `journal` sesi `rustfs-live-10`
+direstorasi byte-identical terhadap file lokal (SHA-256 sama).
 
 Status (D2c): selesai di kode + manifest; belum dibuktikan di
 cluster. `claim(..., meeting_id=...)` + `claimable()` di repository;
@@ -3350,7 +3351,8 @@ env ambient di worker sengaja ditolak (snapshot otoritatif; env
 proses bisa bocor dari konteks lain). Tidak ada exporter/collector
 OTel di slice ini — latency lintas proses dibaca dari journal
 bertanda trace yang sama. Dengan ini D2 tuntas di kode; gate live
-(dua pod bersamaan, kill pod, MinIO asli) tetap terbuka.
+(dua pod bersamaan, kill pod) masih menunggu cluster, sementara
+gate RustFS asli sudah terbukti byte-identical (lihat status D2b).
 
 ### D3: Config yang menyusut
 

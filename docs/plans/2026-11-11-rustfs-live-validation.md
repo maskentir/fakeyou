@@ -96,6 +96,82 @@ Verifikasi yang harus dibuktikan:
   (sebelumnya hanya terbukti lewat test container).
 - `restore_segments` mengembalikan byte identik dari bucket.
 
+## Hasil (live, 2026-11-11)
+
+Slice B dijalankan lewat empat sesi live berturut-turut
+(`rustfs-live-3`, `rustfs-live-6`, `rustfs-live-10`; dua link lain
+gagal karena akses meeting, lihat di bawah) dengan konfigurasi
+kapabilitas penuh: `memory: true`, `barge_in: true`,
+`participant_policy_enabled: true`, `participant_evidence_enabled:
+true`, `initial_speech` salam, persona `allowed_tools:
+["recall_meeting_context"]` + `ingest_transcripts`, dan brief dengan
+enam izin (`explain_facts`, `discuss_options`, `ask_brief_questions`,
+`meet_act`, `meet_chat`, `meet_leave`) + `knowledge_scope:
+persona_memory`.
+
+Kapabilitas terbukti live di `meet.google.com/jkc-xssq-fkr`
+(session `rustfs-live-10`, pengguna Harun):
+- **Join**: diterima 9,2 detik attempt pertama (meeting "Anyone with
+  the link", host management off — tanpa knock).
+- **Speech**: STT/TTS dua arah berjalan; twin menjawab dengan nama user.
+- **Screen share** (fix `d6e9a15`): twin membaca kalender Google yang
+  dibagikan user secara rinci ("week view for November 8 to 14,
+  2026... recurring standups, alignment work session, mini-calendar").
+- **Chat**: `send_chat` `effect_observed` (chat#3), chat user terbaca.
+- **Reaksi**: `lower_hand` `effect_observed`; `react` masih
+  `effect_unobserved` (pengamatan emoji DOM perlu diverifikasi).
+- **Memory**: recall konteks ("We were testing screen sharing,
+  reactions, and raising hands"); prefetch memori dengan `outcome:
+  "found"`.
+- **Anti-halusinasi**: verifier menolak klaim `basis_mismatch`.
+- **Roster**: "who is all in this meeting?" → "I can see Harun here."
+- **Refusal jujur**: menolak share layar ("I cannot share my screen"),
+  tidak mengarang chart ("I don't see a chart right now"), tidak
+  menebak warna kaos ("I'd rather not guess"), menolak permintaan
+  host-management/link-access di luar izin.
+
+Bukti penyimpanan (sesi `rustfs-live-10`):
+- `record`: 50 segmen, 23274 B, byte-identical (SHA-256
+  `28168f72b28ff6a5…`).
+- `journal`: 160 segmen, 424053 B, byte-identical (SHA-256
+  `db41c22adb90cbac…`).
+
+Perbaikan yang lahir dari validasi ini:
+- **Persepsi konten** (`d6e9a15`): "real content = not noise" —
+  `is_meeting_content` kini `not is_noise`; `NOISE_CONTENT`
+  (`meeting_ui/blank/loading`) satu-satunya gate strip; keyframe
+  `arrival` + re-read `ScreenReader` agar share yang dibuka ulang
+  tetap dibaca.
+- **Signal drift** (`32f8fa1`): tombol "Continue without
+  microphone" milik Chrome kini default locator join flow.
+- **Ekor jurnal post-session**: job ingest/debrief menulis baris
+  jurnal SETELAH flush terakhir worker sesi (3 event
+  `memory_episode_ingested` live-10 hilang dari bucket). Fix baru:
+  `push_appended_segments` (prime dari extent kontigu remote) dipanggil
+  kedua worker setelah tiap job — terbukti mengunggah ekor 2714 B
+  live-10, journal kini byte-identical.
+- **Kamera** (terbuka): frame kamera tidak pernah sampai twin — jalur
+  frame unassigned di-drop diam-diam. Instrumen diagnostik ditambah
+  (`perception_frame_unassigned`, `perception_batch_observed` tiap 30
+  poll, `perception_streams_bound`) untuk sesi uji berikutnya.
+
+Join failures yang dipelajari:
+- `blocked` = teks penolakan Google "can't join this" — akses link
+  Restricted; perbaiki lewat "Sharing access" → "Anyone with the link"
+  (bukan Host management).
+- `lobby` stuck = knock menunggu admit manusia.
+- `name field never became visible` = halaman lambat atau varian
+  pre-join restricted.
+
+## Yang belum (setelah hasil live)
+
+### Kamera + reaksi butuh uji ulang
+
+Sesi baru dengan instrumen baru perlu membuktikan: track kamera
+tampak (`tracks`), assignment ter-push (`sampling`), frame kamera
+sampai (`camera_frames`), dan `look_at_participant` membaca warna
+kaos. Reaksi emoji juga menunggu pengamatan `effect_observed`.
+
 ### Slice C — D1 + rotasi secret
 
 Ditunda oleh user ("d1 sama rotasi bisa belakang"). Tidak dikerjakan.

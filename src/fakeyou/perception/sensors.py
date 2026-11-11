@@ -36,6 +36,7 @@ PERCEPTION_ASSIGN_JS = (
     "? window.__fakeyouPerception.assign(assignments) : null"
 )
 PERCEPTION_POLL_SECONDS = 0.5
+DRAIN_STATS_EVERY = 30
 BACKLOG_GRACE = timedelta(seconds=2)
 BACKLOG_WINDOW = timedelta(seconds=45)
 _PLAUSIBLE_SKEW = timedelta(seconds=120)
@@ -284,6 +285,15 @@ class PerceptionSensors:
     async def _accept_frame(self, frame: DrainedFrame) -> None:
         assignment = self.roster.assignment_for(frame.stream_id)
         if assignment is None or assignment.role != frame.role:
+            self._journal.record(
+                "perception_frame_unassigned",
+                source="perception",
+                stream_id=frame.stream_id,
+                role=frame.role,
+                assignments=sorted(
+                    f"{item.role}:{item.stream_id}" for item in self.roster.assignments()
+                ),
+            )
             return
         try:
             data = base64.b64decode(frame.jpeg_b64, validate=True)
@@ -364,6 +374,21 @@ class PerceptionDrain(PollingLoop):
                 )
             return
         await self._sensors.accept_batch(batch)
+        if self._journal is not None and (
+            batch.frames or batch.dropped_frames or self.polls % DRAIN_STATS_EVERY == 0
+        ):
+            self._journal.record(
+                "perception_batch_observed",
+                source="perception",
+                frames=len(batch.frames),
+                camera_frames=sum(item.role == "camera" for item in batch.frames),
+                screen_frames=sum(item.role == "screen" for item in batch.frames),
+                tracks=len(batch.tracks),
+                sampling=len(batch.sampling),
+                peers=len(batch.peers),
+                dropped_frames=batch.dropped_frames,
+                dropped_messages=batch.dropped_messages,
+            )
         await self._push_assignments()
 
     async def _push_assignments(self) -> None:
@@ -377,3 +402,9 @@ class PerceptionDrain(PollingLoop):
         async with asyncio.timeout(POLL_TIMEOUT_MULTIPLIER * self._poll_interval):
             await self._page.evaluate(PERCEPTION_ASSIGN_JS, payload)
         self._assigned = wanted
+        if self._journal is not None:
+            self._journal.record(
+                "perception_streams_bound",
+                source="perception",
+                streams=[f"{item.role}:{item.stream_id}" for item in wanted],
+            )

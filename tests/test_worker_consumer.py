@@ -29,6 +29,7 @@ from fakeyou.memory.ingest_service import IngestPorts, IngestRequest
 from fakeyou.memory.ingest_status import IngestSummary
 from fakeyou.memory.operator_access import OperatorAccess
 from fakeyou.memory.persona import PersonaProfile
+from fakeyou.observability.journal import journal_path
 from fakeyou.orchestration.join_types import JoinOutcome, JoinPorts, JoinRequest
 from fakeyou.orchestration.runtime import SessionWiring, run_meeting_session
 from fakeyou.persistence.brief import MeetingBrief
@@ -942,6 +943,42 @@ async def test_ingestion_job_succeeds_once_its_status_is_persisted(
     assert access.identity.persona_path is not None
     assert PersonaProfile.model_validate_json(access.identity.persona_path.read_bytes()) == persona
     assert ingestion.client.events == []
+
+
+async def test_ingestion_job_pushes_its_journal_tail_to_object_storage(
+    ingestion: IngestionHarness,
+) -> None:
+    ingestion.seed("m-1")
+    text = '{"event":"memory_episode_ingested"}\n'
+    journal = journal_path(ingestion.settings.paths.journal_dir, SessionId("m-1"))
+    journal.parent.mkdir(parents=True, exist_ok=True)
+    journal.write_text(text, encoding="utf-8")
+    store = FakeObjectStore()
+    ingestion.consumer = ingestion.build(objects=store)
+
+    await ingestion.submit("m-1")
+    await ingestion.consumer.run_once()
+
+    assert ingestion.client.log == ["status"]
+    assert store.objects == {f"sessions/m-1/journal/000000000000-{len(text):012d}": text.encode()}
+
+
+async def test_ingestion_job_pushes_its_journal_tail_after_a_failure(
+    ingestion: IngestionHarness,
+) -> None:
+    ingestion.seed("m-1")
+    text = '{"event":"memory_episode_ingested"}\n'
+    journal = journal_path(ingestion.settings.paths.journal_dir, SessionId("m-1"))
+    journal.parent.mkdir(parents=True, exist_ok=True)
+    journal.write_text(text, encoding="utf-8")
+    store = FakeObjectStore()
+    ingestion.consumer = ingestion.build(objects=store)
+    ingestion.handler.failure = RuntimeError("ingestion exploded")
+
+    await ingestion.submit("m-1")
+    await ingestion.consumer.run_once()
+
+    assert store.objects == {f"sessions/m-1/journal/000000000000-{len(text):012d}": text.encode()}
 
 
 async def test_unstored_summary_is_retried_then_dead_lettered(

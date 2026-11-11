@@ -22,9 +22,11 @@ from fakeyou.debrief.debrief_service import (
     run_debrief,
 )
 from fakeyou.memory.persona import PersonaProfile
-from fakeyou.observability.journal import Journal
+from fakeyou.observability.faults import capture_error
+from fakeyou.observability.journal import Journal, journal_path
 from fakeyou.orchestration.assembly import stop_signal_handlers
 from fakeyou.orchestration.providers import create_debrief_chat_model, create_fallback_chat_model
+from fakeyou.persistence.segments import ObjectStore, SegmentFile, push_appended_segments
 from fakeyou.transport.streams import StreamTransport
 from fakeyou.worker.consumer import SnapshotStore
 from fakeyou.worker.keys import meeting_job_settings
@@ -61,6 +63,7 @@ class DebriefDeps:
     shutdown: asyncio.Event
     handler: DebriefHandler | None = None
     journal: Journal | None = None
+    objects: ObjectStore | None = None
 
 
 def _now_iso() -> str:
@@ -157,8 +160,29 @@ class DebriefWorker:
             )
             await self._fault(meeting_id, detail, **_error_fields(error))
             raise
+        finally:
+            await self._push_journal_segments(meeting_id)
         logger.info("debrief job for %s finished", job.meeting_id)
         return outcome
+
+    async def _push_journal_segments(self, meeting_id: str) -> None:
+        objects = self._deps.objects
+        if objects is None:
+            return
+        files = (
+            SegmentFile(
+                "journal",
+                journal_path(
+                    self._deps.settings.paths.journal_dir,
+                    parse_session_id(meeting_id, field="meeting_id"),
+                ),
+            ),
+        )
+        _pushed, error = await capture_error(
+            partial(push_appended_segments, objects, meeting_id, files)
+        )
+        if error is not None:
+            logger.warning("pushing journal segments for meeting %s failed: %s", meeting_id, error)
 
     async def _fault(self, meeting_id: str, detail: str, **extra: str) -> None:
         if not is_identifier(meeting_id):

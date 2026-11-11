@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fakeyou.config.settings import PerceptionSettings
+from fakeyou.observability.faults import ConsumerSink
 from fakeyou.perception.context import PerceptionContext
 from fakeyou.perception.meet_protocol import DeviceOutput
 from fakeyou.perception.sensors import (
@@ -113,7 +114,7 @@ async def test_camera_frames_are_kept_per_participant_not_as_screens() -> None:
 
 
 async def test_frames_from_unassigned_or_mismatched_streams_are_ignored() -> None:
-    sensed, timeline, _ = sensors()
+    sensed, timeline, journal = sensors()
     data = slide_jpeg("Launch Timeline")
 
     await sensed.accept_batch(
@@ -125,6 +126,11 @@ async def test_frames_from_unassigned_or_mismatched_streams_are_ignored() -> Non
 
     assert timeline.snapshot().screens == ()
     assert sensed.frames_seen == 0
+    unassigned = journal.events("perception_frame_unassigned")
+    assert [event["stream_id"] for event in unassigned] == ["stream-unknown", "stream-budi"]
+    assert [event["role"] for event in unassigned] == ["screen", "screen"]
+    expected = ["camera:stream-budi", "screen:stream-screen"]
+    assert all(event["assignments"] == expected for event in unassigned)
 
 
 async def test_assignments_follow_the_perception_toggles() -> None:
@@ -242,6 +248,29 @@ async def test_the_drain_feeds_sensors_and_assigns_streams_once() -> None:
     assert {item["role"] for item in page.assigned[0]} == {"screen", "camera"}
     assert drain.batches_rejected == 1
     assert timeline.snapshot().presenting is not None
+
+
+async def test_the_drain_journals_frame_batches_and_assignment_changes() -> None:
+    sensed, _, journal = sensors()
+    raw = DrainBatch(
+        messages=[message(people())],
+        frames=[frame("stream-budi", "camera", slide_jpeg("Budi wave"))],
+    ).model_dump()
+    page = FakePerceptionPage([raw, {"messages": []}])
+    drain = PerceptionDrain(page, sensed, sinks=ConsumerSink(journal=journal))
+
+    await drain.drain_once()
+    await drain.drain_once()
+
+    [batched] = journal.events("perception_batch_observed")
+    assert batched["frames"] == 1
+    assert batched["camera_frames"] == 1
+    assert batched["screen_frames"] == 0
+    assert batched["tracks"] == 0
+    assert batched["sampling"] == 0
+    assert batched["dropped_frames"] == 0
+    [bound] = journal.events("perception_streams_bound")
+    assert bound["streams"] == ["screen:stream-screen", "camera:stream-budi"]
 
 
 async def test_sync_responses_update_the_roster_and_are_journaled() -> None:

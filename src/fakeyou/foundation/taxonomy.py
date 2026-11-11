@@ -63,6 +63,7 @@ EventVerb = Literal[
     "suppressed",
     "thawed",
     "transitioned",
+    "unassigned",
     "verified",
 ]
 PublicPhase = Literal[

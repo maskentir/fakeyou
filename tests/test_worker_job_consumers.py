@@ -11,6 +11,7 @@ from fakeyou.config.settings import Settings
 from fakeyou.db.jobs import JobQueue, build_job_queue
 from fakeyou.debrief.debrief_service import DebriefOutcome
 from fakeyou.memory.operator_access import OperatorAccess
+from fakeyou.observability.journal import journal_path
 from fakeyou.transport.streams import StreamTransport
 from fakeyou.worker.consumer import SnapshotStore
 from fakeyou.worker.debrief import DebriefDeps, DebriefHandler, DebriefJob, DebriefWorker
@@ -22,6 +23,23 @@ from fakeyou.worker.reembed import (
     TwinSnapshot,
 )
 from tests._persistence_fakes import RecordingJournal
+
+
+class JournalTailStore:
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+
+    async def put(self, key: str, data: bytes) -> None:
+        self.objects[key] = data
+
+    async def get(self, key: str) -> bytes | None:
+        return self.objects.get(key)
+
+    async def list(self, prefix: str) -> list[str]:
+        return [key for key in self.objects if key.startswith(prefix)]
+
+    async def aclose(self) -> None:
+        return None
 
 
 class StreamDouble:
@@ -58,7 +76,10 @@ def _outcome(meeting_id: str) -> DebriefOutcome:
 
 
 def _debrief_worker(
-    settings: Settings, stream: StreamDouble, handler: DebriefHandler
+    settings: Settings,
+    stream: StreamDouble,
+    handler: DebriefHandler,
+    objects: JournalTailStore | None = None,
 ) -> tuple[DebriefWorker, JobQueue]:
     queue = build_job_queue(InMemoryConnector())
     worker = DebriefWorker(
@@ -68,6 +89,7 @@ def _debrief_worker(
             store=cast(SnapshotStore, EmptyStore()),
             shutdown=asyncio.Event(),
             handler=handler,
+            objects=objects,
         ),
         queue,
     )
@@ -162,6 +184,49 @@ async def test_reembed_worker_faults_and_keeps_a_failing_run_for_retry(
     assert fetched is not None
     assert fetched.status == "todo"
     assert [row["detail"] for row in journal.events("reembed_failed")] == ["reembed_job_failed"]
+
+
+async def test_debrief_worker_pushes_its_journal_tail(settings: Settings) -> None:
+    stream = StreamDouble()
+    text = '{"event":"debrief_completed"}\n'
+    journal = journal_path(settings.paths.journal_dir, SessionId("m1"))
+    journal.parent.mkdir(parents=True, exist_ok=True)
+    journal.write_text(text, encoding="utf-8")
+    store = JournalTailStore()
+
+    async def handler(job: DebriefJob, *, deps: DebriefDeps) -> DebriefOutcome:
+        del deps
+        return _outcome(job.meeting_id)
+
+    worker, queue = _debrief_worker(settings, stream, handler, objects=store)
+    job_id = await queue.defer_debrief(meeting_id="m1", force=True)
+
+    await worker.run_once()
+
+    fetched = await queue.fetch(job_id)
+    assert fetched is not None
+    assert fetched.status == "succeeded"
+    assert store.objects == {f"sessions/m1/journal/000000000000-{len(text):012d}": text.encode()}
+
+
+async def test_debrief_worker_pushes_its_journal_tail_after_a_failure(settings: Settings) -> None:
+    stream = StreamDouble()
+    text = '{"event":"debrief_started"}\n'
+    journal = journal_path(settings.paths.journal_dir, SessionId("m1"))
+    journal.parent.mkdir(parents=True, exist_ok=True)
+    journal.write_text(text, encoding="utf-8")
+    store = JournalTailStore()
+
+    async def handler(job: DebriefJob, *, deps: DebriefDeps) -> DebriefOutcome:
+        del job, deps
+        raise FakeYouError(ErrorCode.DEBRIEF_RECORD_MISSING)
+
+    worker, queue = _debrief_worker(settings, stream, handler, objects=store)
+    await queue.defer_debrief(meeting_id="m1", force=False)
+
+    await worker.run_once()
+
+    assert store.objects == {f"sessions/m1/journal/000000000000-{len(text):012d}": text.encode()}
 
 
 async def test_debrief_worker_runs_the_meeting_from_the_job_queue(
