@@ -120,13 +120,59 @@ class KeyframeCache:
         return data
 
 
+@dataclass(frozen=True, slots=True)
+class CameraFrame:
+    data: bytes
+    stream_id: str
+    captured_at: datetime
+    epoch: int
+    seen_at: float
+
+
+class CameraFrameStore:
+    def __init__(self, *, capacity: int = CAMERA_FRAME_CACHE_SIZE) -> None:
+        self._capacity = capacity
+        self._frames: OrderedDict[str, CameraFrame] = OrderedDict()
+
+    def put(self, participant_id: str, frame: CameraFrame) -> None:
+        self._frames[participant_id] = frame
+        self._frames.move_to_end(participant_id)
+        while len(self._frames) > self._capacity:
+            self._frames.popitem(last=False)
+
+    def get(self, participant_id: str) -> CameraFrame | None:
+        frame = self._frames.get(participant_id)
+        if frame is not None:
+            self._frames.move_to_end(participant_id)
+        return frame
+
+    def touch(self, participant_id: str, *, seen_at: float) -> None:
+        frame = self._frames.get(participant_id)
+        if frame is None:
+            return
+        self._frames[participant_id] = CameraFrame(
+            data=frame.data,
+            stream_id=frame.stream_id,
+            captured_at=frame.captured_at,
+            epoch=frame.epoch,
+            seen_at=seen_at,
+        )
+        self._frames.move_to_end(participant_id)
+
+    def drop(self, participant_id: str) -> None:
+        self._frames.pop(participant_id, None)
+
+    def clear(self) -> None:
+        self._frames.clear()
+
+
 class MeetingTimeline:
     def __init__(self, *, journal: Journal | None = None) -> None:
         self._journal = journal or Journal("", echo=False)
         self._state = _Registry()
         self._subscribers: list[TimelineSubscriber] = []
         self.keyframes = KeyframeCache()
-        self.camera_frames = KeyframeCache(capacity=CAMERA_FRAME_CACHE_SIZE)
+        self.camera_frames = CameraFrameStore()
 
     def subscribe(self, subscriber: TimelineSubscriber) -> None:
         self._subscribers.append(subscriber)

@@ -189,6 +189,7 @@
         const now = performance.now();
         if (now - state.sampledAt >= interval) {
           state.sampledAt = now;
+          state.lastSamplePageMs = bridge.pageNow();
           sample(state, frame, now);
         }
       } catch {
@@ -235,6 +236,7 @@
       reader,
       stopped: false,
       sampledAt: 0,
+      lastSamplePageMs: 0,
       lastThumb: null,
       emittedThumb: null,
       emittedAt: 0,
@@ -305,6 +307,14 @@
     });
   }
 
+  function activeSamplers() {
+    return [...samplers.values()].map((state) => ({
+      stream_id: state.id,
+      role: state.role,
+      page_ms: state.lastSamplePageMs || bridge.pageNow(),
+    }));
+  }
+
   function drain() {
     const sizedMessages = takeWithin(messages, MAX_DRAIN_BYTES, (item) => item.b64.length);
     const sizedFrames = takeWithin(
@@ -317,6 +327,7 @@
       frames: sizedFrames.taken,
       tracks: [...videoTracks.keys()],
       sampling: [...samplers.keys()],
+      active: activeSamplers(),
       channels: channels.slice(),
       peers: peerStates(),
       dropped_messages: droppedMessages,

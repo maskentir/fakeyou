@@ -1,4 +1,5 @@
 import json
+import time
 from datetime import timedelta
 from typing import Any, cast
 
@@ -17,7 +18,7 @@ from fakeyou.perception.context import (
 )
 from fakeyou.perception.interpreter import PerceptionInterpreter
 from fakeyou.perception.percepts import IncomingChat
-from fakeyou.perception.timeline import MeetingTimeline
+from fakeyou.perception.timeline import CameraFrame, MeetingTimeline
 from fakeyou.perception.view import VIEW_PREFIX
 from tests._conversation_fakes import ToolCallingFakeModel
 from tests._perception_fakes import (
@@ -184,7 +185,10 @@ async def test_looking_reports_why_it_could_not_see() -> None:
     timeline.participant("device-budi", "Budi")
     exhausted = _context(timeline, max_calls=0)
     seeing = _context(timeline, answers=("A mockup.",))
-    timeline.camera_frames.put("device-budi", slide_jpeg("Mockup"))
+    timeline.camera_frames.put(
+        "device-budi",
+        CameraFrame(slide_jpeg("Mockup"), "stream-budi", START, 0, time.monotonic()),
+    )
 
     unknown = json.loads(await exhausted.look_at_screen("screen#9", "what?"))
     broke = json.loads(await exhausted.look_at_screen("current", "what?"))

@@ -1,4 +1,5 @@
 import asyncio
+import time
 from datetime import timedelta
 from typing import cast
 
@@ -10,7 +11,7 @@ from fakeyou.perception.budget import PerceptionBudget
 from fakeyou.perception.camera_evidence import CameraObservation
 from fakeyou.perception.context import PerceptionContext, gather_evidence
 from fakeyou.perception.interpreter import PerceptionInterpreter
-from fakeyou.perception.timeline import MeetingTimeline
+from fakeyou.perception.timeline import CameraFrame, MeetingTimeline
 from tests._perception_fakes import START, reading, shown_timeline, slide_jpeg, vision_model
 
 TIMELINE = ("Launch Timeline", ["Alpha: 12 January 2027", "Beta: 17 March 2027"])
@@ -73,7 +74,10 @@ async def test_a_participant_look_among_several_people_needs_a_name() -> None:
     timeline = read_timeline()
     timeline.participant("device-budi", "Budi")
     timeline.participant("device-ayu", "Ayu")
-    timeline.camera_frames.put("device-budi", slide_jpeg("Mockup"))
+    timeline.camera_frames.put(
+        "device-budi",
+        CameraFrame(slide_jpeg("Mockup"), "stream-budi", START, 0, time.monotonic()),
+    )
     seeing = context(timeline, "A paper mockup.")
 
     named = await gather_evidence(seeing, "What is Budi holding?", ("participant",))
@@ -86,7 +90,10 @@ async def test_a_participant_look_among_several_people_needs_a_name() -> None:
 async def test_the_only_person_in_the_meeting_is_looked_at_without_a_name() -> None:
     timeline = MeetingTimeline()
     timeline.participant("device-harun", "Harun")
-    timeline.camera_frames.put("device-harun", slide_jpeg("Shirt"))
+    timeline.camera_frames.put(
+        "device-harun",
+        CameraFrame(slide_jpeg("Shirt"), "stream-harun", START, 0, time.monotonic()),
+    )
     seeing = context(timeline, "A dark blue shirt.")
 
     evidence = await gather_evidence(

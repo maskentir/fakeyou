@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any, Literal, override
@@ -29,6 +30,7 @@ OBSERVE_MEETING = "observe_meeting"
 MEETING_EVIDENCE = "meeting_evidence"
 LOOK_NEEDS = frozenset({"screen", "participant", "chat_history"})
 LOOK_TIMEOUT_SECONDS = 6.0
+CAMERA_LIVENESS_TIMEOUT_SECONDS = 10.0
 PERCEPTION_GUIDANCE = (
     "What you see: every request ends with a system observe_meeting result ('Meeting "
     "view'): the screen and its text, earlier screens, chat, hands and cameras. A "
@@ -49,6 +51,7 @@ LookCode = Literal[
     "look_failed",
 ]
 Clock = Callable[[], datetime]
+Monotonic = Callable[[], float]
 
 
 def _utc_now() -> datetime:
@@ -68,12 +71,16 @@ class PerceptionContext:
         max_chars: int,
         clock: Clock = _utc_now,
         state: Callable[[], MeetingState] | None = None,
+        camera_epoch: Callable[[], int] | None = None,
+        camera_monotonic: Monotonic = time.monotonic,
     ) -> None:
         self.timeline = timeline
         self.interpreter = interpreter
         self.max_chars = max_chars
         self.clock = clock
         self._state = state
+        self._camera_epoch = camera_epoch or (lambda: 0)
+        self._camera_monotonic = camera_monotonic
 
     def view(self) -> MeetingView:
         meeting = self._state() if self._state is not None else None
@@ -120,12 +127,25 @@ class PerceptionContext:
         person = resolve_participant(self.timeline.snapshot(), participant)
         if person is None:
             return _look_result("unknown_participant", participant=participant)
-        data = self.timeline.camera_frames.get(person.participant_id)
-        if data is None:
-            return _look_result("camera_unavailable", participant=person.ref)
         if self.interpreter is None:
             return _look_result("budget_exhausted", participant=person.ref)
-        evidence = await self.interpreter.camera_observation(person.participant_id, data)
+        frame = self.timeline.camera_frames.get(person.participant_id)
+        if frame is None:
+            self.interpreter.drop_camera_observation(person.participant_id)
+            return _look_result("camera_unavailable", participant=person.ref)
+        meeting = self._state() if self._state is not None else None
+        camera_on = meeting.cameras_on if meeting is not None else None
+        live = (
+            (camera_on is None or person.participant_id in camera_on)
+            and frame.epoch == self._camera_epoch()
+            and self._camera_monotonic() - frame.seen_at <= CAMERA_LIVENESS_TIMEOUT_SECONDS
+        )
+        if not live:
+            self.interpreter.drop_camera_observation(person.participant_id)
+            return _look_result("camera_unavailable", participant=person.ref)
+        evidence = await self.interpreter.camera_observation(
+            person.participant_id, frame.data, captured_at=frame.captured_at
+        )
         if evidence is None:
             return _look_result("budget_exhausted", participant=person.ref)
         return _look_result(

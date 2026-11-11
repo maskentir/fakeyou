@@ -163,13 +163,30 @@ def create_perception_stack(
     timeline.subscribe(archive)
     interpreter = create_perception_interpreter(settings, journal=journal)
     reader = ScreenReader(timeline, interpreter, journal=journal) if interpreter else None
-    sensors = PerceptionSensors(timeline, perception, joined_at=datetime.now(UTC), journal=journal)
+
+    def on_camera_invalidate(participant_id: str | None) -> None:
+        if interpreter is None:
+            return
+        if participant_id is None:
+            interpreter.clear_camera_observations()
+        else:
+            interpreter.drop_camera_observation(participant_id)
+
+    sensors = PerceptionSensors(
+        timeline,
+        perception,
+        joined_at=datetime.now(UTC),
+        journal=journal,
+        on_camera_invalidate=on_camera_invalidate,
+    )
     sensors.roster_listener = on_roster
     context = PerceptionContext(
         timeline,
         interpreter,
         max_chars=perception.view_max_chars,
         state=sensors.roster.state,
+        camera_epoch=lambda: sensors.epoch,
+        camera_monotonic=sensors.monotonic,
     )
     return PerceptionStack(
         timeline=timeline, sensors=sensors, context=context, archive=archive, reader=reader

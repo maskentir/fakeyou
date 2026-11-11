@@ -1,11 +1,12 @@
 import asyncio
+import time
 from datetime import UTC, datetime
 
 from fakeyou.perception.budget import PerceptionBudget
 from fakeyou.perception.camera_evidence import CameraObservation
 from fakeyou.perception.context import PerceptionContext
 from fakeyou.perception.interpreter import PerceptionInterpreter
-from fakeyou.perception.timeline import MeetingTimeline
+from fakeyou.perception.timeline import CameraFrame, MeetingTimeline
 from tests._perception_fakes import FakeVisionModel, vision_model
 from tests._persistence_fakes import RecordingJournal
 
@@ -35,7 +36,10 @@ def interpreter_with(
 def _context_with(interpreter: PerceptionInterpreter) -> PerceptionContext:
     timeline = MeetingTimeline()
     timeline.participant("device-p1", "Budi")
-    timeline.camera_frames.put("device-p1", jpeg_of((140, 130, 120)))
+    timeline.camera_frames.put(
+        "device-p1",
+        CameraFrame(jpeg_of((140, 130, 120)), "stream-p1", datetime.now(UTC), 0, time.monotonic()),
+    )
     return PerceptionContext(timeline, interpreter, max_chars=6000)
 
 

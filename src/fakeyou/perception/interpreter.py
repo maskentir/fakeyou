@@ -97,6 +97,12 @@ class PerceptionInterpreter:
     def budget(self) -> PerceptionBudget:
         return self._budget
 
+    def drop_camera_observation(self, participant_id: str) -> None:
+        self._camera_cache.drop(participant_id)
+
+    def clear_camera_observations(self) -> None:
+        self._camera_cache.clear()
+
     async def read_screen(
         self, image: bytes, *, previous_title: str | None = None
     ) -> ScreenReading | None:
@@ -135,8 +141,12 @@ class PerceptionInterpreter:
             reservation.charge(tokens_used(response.usage_metadata, estimate))
         return response.text.strip() or None
 
-    async def camera_observation(self, participant_id: str, image: bytes) -> CameraEvidence | None:
-        keyframe = await asyncio.to_thread(keyframe_from_jpeg, image, captured_at=datetime.now(UTC))
+    async def camera_observation(
+        self, participant_id: str, image: bytes, *, captured_at: datetime | None = None
+    ) -> CameraEvidence | None:
+        keyframe = await asyncio.to_thread(
+            keyframe_from_jpeg, image, captured_at=captured_at or datetime.now(UTC)
+        )
         async with self._camera_cache.lock_for(participant_id):
             cached = self._camera_cache.get(participant_id)
             if cached is not None:

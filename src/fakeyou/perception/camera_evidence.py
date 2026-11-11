@@ -67,3 +67,9 @@ class CameraCache:
 
     def put(self, participant_id: str, entry: CameraCacheEntry) -> None:
         self.entries[participant_id] = entry
+
+    def drop(self, participant_id: str) -> None:
+        self.entries.pop(participant_id, None)
+
+    def clear(self) -> None:
+        self.entries.clear()

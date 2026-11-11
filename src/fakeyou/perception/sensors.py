@@ -27,7 +27,7 @@ from fakeyou.perception.meet_protocol import (
 )
 from fakeyou.perception.percepts import IncomingChat, ParticipantRef
 from fakeyou.perception.roster import MeetRoster, RosterChange, StreamAssignment
-from fakeyou.perception.timeline import MeetingTimeline
+from fakeyou.perception.timeline import CameraFrame, MeetingTimeline
 
 PERCEPTION_ASSET = "perception.js"
 PERCEPTION_DRAIN_JS = "() => window.__fakeyouPerception ? window.__fakeyouPerception.drain() : null"
@@ -72,11 +72,18 @@ class DrainedFrame(DrainPart):
     jpeg_b64: str
 
 
+class ActiveSampler(DrainPart):
+    stream_id: str
+    role: Literal["screen", "camera"]
+    page_ms: float
+
+
 class DrainBatch(DrainPart):
     messages: list[DrainedMessage] = []
     frames: list[DrainedFrame] = []
     tracks: list[str] = []
     sampling: list[str] = []
+    active: list[ActiveSampler] = []
     peers: list[str] = []
     dropped_messages: int = 0
     dropped_frames: int = 0
@@ -102,6 +109,7 @@ class PerceptionSensors:
         joined_at: datetime,
         journal: Journal | None = None,
         clock: Clock = _utc_now,
+        on_camera_invalidate: Callable[[str | None], None] | None = None,
     ) -> None:
         self.timeline = timeline
         self.monotonic: Callable[[], float] = time.monotonic
@@ -111,6 +119,8 @@ class PerceptionSensors:
         self._joined_at = joined_at
         self._journal = journal or Journal("", echo=False)
         self._clock = clock
+        self._on_camera_invalidate = on_camera_invalidate
+        self.epoch = 0
         self.rejected_messages = 0
         self.heartbeats = 0
         self.frames_seen = 0
@@ -121,12 +131,17 @@ class PerceptionSensors:
         self._audio_outputs: set[tuple[str, str]] = set()
         self._admitted_at: datetime | None = None
 
+    def _invalidate_camera(self, participant_id: str | None = None) -> None:
+        if self._on_camera_invalidate is not None:
+            self._on_camera_invalidate(participant_id)
+
     async def accept_batch(self, batch: DrainBatch) -> None:
         self.drained_at = self.monotonic()
         self._observe_peers(tuple(batch.peers))
         for message in batch.messages:
             if message.channel == COLLECTIONS_CHANNEL:
                 self._accept_collection(message)
+        self._touch_active(batch.active)
         for frame in batch.frames:
             await self._accept_frame(frame)
 
@@ -249,15 +264,36 @@ class PerceptionSensors:
             if presenting or self._settings.signals:
                 self.timeline.add_signal(change.kind, person, at)
             if change.kind == "left":
+                self.timeline.camera_frames.drop(change.device_id)
+                self._invalidate_camera(change.device_id)
                 self.timeline.leave(change.device_id)
+            if change.kind == "camera_off":
+                self.timeline.camera_frames.drop(change.device_id)
+                self._invalidate_camera(change.device_id)
 
     def begin_epoch(self) -> None:
+        self.epoch += 1
+        self.timeline.camera_frames.clear()
+        self._invalidate_camera(None)
         self.roster.begin_epoch()
         self.drained_at = None
         self.synced_at = None
         self.heartbeats = 0
         self.peer_states = ()
         self._own_status = None
+
+    def _touch_active(self, active: Sequence[ActiveSampler]) -> None:
+        seen = self.monotonic()
+        for sampler in active:
+            if sampler.role != "camera":
+                continue
+            assignment = self.roster.assignment_for(sampler.stream_id)
+            if assignment is None or assignment.role != "camera":
+                continue
+            frame = self.timeline.camera_frames.get(assignment.device_id)
+            if frame is None or frame.stream_id != sampler.stream_id or frame.epoch != self.epoch:
+                continue
+            self.timeline.camera_frames.touch(assignment.device_id, seen_at=seen)
 
     def mark_admitted(self, at: datetime) -> None:
         if self._admitted_at is None:
@@ -315,7 +351,20 @@ class PerceptionSensors:
         if frame.role == "screen":
             self.timeline.show_screen(keyframe, person, data=data)
         else:
-            self.timeline.camera_frames.put(person.participant_id, data)
+            participant_id = person.participant_id
+            current = self.timeline.camera_frames.get(participant_id)
+            if current is not None and current.stream_id != frame.stream_id:
+                self._invalidate_camera(participant_id)
+            self.timeline.camera_frames.put(
+                participant_id,
+                CameraFrame(
+                    data=data,
+                    stream_id=frame.stream_id,
+                    captured_at=page_time(frame.page_ms),
+                    epoch=self.epoch,
+                    seen_at=self.monotonic(),
+                ),
+            )
 
     def _reject(self, kind: str, error: Exception) -> None:
         self.rejected_messages += 1
