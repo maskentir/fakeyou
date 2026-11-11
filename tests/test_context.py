@@ -194,7 +194,7 @@ async def test_looking_reports_why_it_could_not_see() -> None:
     broke = json.loads(await exhausted.look_at_screen("current", "what?"))
     nobody = json.loads(await exhausted.look_at_participant("Zed", "what?"))
     no_camera = json.loads(await exhausted.look_at_participant("Ayu", "what?"))
-    camera = json.loads(await seeing.look_at_participant("budi", "What is shown?"))
+    camera = json.loads(await seeing.look_at_participant("budi", "What is he wearing?"))
 
     assert unknown == {"code": "unknown_screen", "screen": "screen#9", "resolution": "unavailable"}
     assert broke == {"code": "budget_exhausted", "screen": "screen#1", "resolution": "unavailable"}

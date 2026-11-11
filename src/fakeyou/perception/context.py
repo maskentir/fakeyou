@@ -14,6 +14,7 @@ from fakeyou.foundation.participation import mentions_whole_phrase
 from fakeyou.foundation.triggers import current_trigger, meeting_event_of
 from fakeyou.observability.journal import Journal
 from fakeyou.observability.provider_faults import ProviderFault
+from fakeyou.perception.camera_evidence import observation_sufficient, question_need
 from fakeyou.perception.interpreter import SCREEN_SOURCE, PerceptionInterpreter
 from fakeyou.perception.roster import MeetingState
 from fakeyou.perception.timeline import MeetingTimeline, TimelineSnapshot
@@ -49,6 +50,7 @@ LookCode = Literal[
     "camera_unavailable",
     "budget_exhausted",
     "look_failed",
+    "insufficient_evidence",
 ]
 Clock = Callable[[], datetime]
 Monotonic = Callable[[], float]
@@ -123,11 +125,12 @@ class PerceptionContext:
         return _look_result("ok", lines=lines[-limit:])
 
     async def look_at_participant(self, participant: str, question: str) -> str:
-        del question
         person = resolve_participant(self.timeline.snapshot(), participant)
         if person is None:
             return _look_result(
-                "unknown_participant", participant=participant, resolution="unavailable"
+                "unknown_participant",
+                participant=participant,
+                resolution="unavailable",
             )
         if self.interpreter is None:
             return _look_result(
@@ -151,20 +154,91 @@ class PerceptionContext:
             return _look_result(
                 "camera_unavailable", participant=person.ref, resolution="unavailable"
             )
+        need = question_need(question)
+        if need.reason == "change":
+            return _look_result(
+                "insufficient_evidence",
+                participant=person.ref,
+                resolution="unavailable",
+                age_ms=0,
+                vision_latency_ms=0,
+                sufficiency="insufficient",
+                strategy="structured_observation",
+            )
+        if need.strategy == "targeted_vision":
+            return await self._targeted_participant_look(person.ref, frame.data, question)
         evidence = await self.interpreter.camera_observation(
             person.participant_id, frame.data, captured_at=frame.captured_at
         )
         if evidence is None:
             return _look_result(
-                "budget_exhausted", participant=person.ref, resolution="unavailable"
+                "budget_exhausted",
+                participant=person.ref,
+                resolution="unavailable",
+                strategy="structured_observation",
+            )
+        if observation_sufficient(evidence.observation, need):
+            return _look_result(
+                "ok",
+                answer=evidence.observation.as_evidence(),
+                participant=person.ref,
+                resolution=evidence.resolution,
+                age_ms=evidence.age_ms,
+                vision_latency_ms=evidence.vision_latency_ms,
+                sufficiency="sufficient",
+                strategy="structured_observation",
             )
         return _look_result(
-            "ok",
-            answer=evidence.observation.as_evidence(),
+            "insufficient_evidence",
             participant=person.ref,
             resolution=evidence.resolution,
             age_ms=evidence.age_ms,
             vision_latency_ms=evidence.vision_latency_ms,
+            sufficiency="insufficient",
+            strategy="structured_observation",
+        )
+
+    async def _targeted_participant_look(self, participant: str, data: bytes, question: str) -> str:
+        assert self.interpreter is not None
+        started = time.monotonic()
+        try:
+            async with asyncio.timeout(LOOK_TIMEOUT_SECONDS):
+                answer = await self.interpreter.answer(data, question, source="camera")
+        except (ProviderFault, FakeYouError, OSError, TimeoutError) as error:
+            return _look_result(
+                "look_failed",
+                error_type=type(error).__name__,
+                participant=participant,
+                resolution="unavailable",
+                strategy="targeted_vision",
+            )
+        if answer is None:
+            return _look_result(
+                "budget_exhausted",
+                participant=participant,
+                resolution="unavailable",
+                strategy="targeted_vision",
+            )
+        vision_latency_ms = round((time.monotonic() - started) * 1000)
+        if _detail_not_visible(answer):
+            return _look_result(
+                "insufficient_evidence",
+                participant=participant,
+                resolution="fresh",
+                age_ms=0,
+                vision_latency_ms=vision_latency_ms,
+                sufficiency="insufficient",
+                strategy="targeted_vision",
+            )
+        return _look_result(
+            "ok",
+            answer=answer,
+            participant=participant,
+            resolution="fresh",
+            age_ms=0,
+            vision_latency_ms=vision_latency_ms,
+            sufficiency="sufficient",
+            strategy="targeted_vision",
         )
 
     async def _look(
@@ -194,6 +268,25 @@ class PerceptionContext:
             vision_latency_ms=vision_latency_ms,
             **subject,
         )
+
+
+def _detail_not_visible(answer: str) -> bool:
+    lowered = answer.casefold()
+    markers = (
+        "not visible",
+        "cannot see",
+        "can't see",
+        "not legible",
+        "cannot read",
+        "can't read",
+        "unreadable",
+        "tidak terlihat",
+        "tidak terbaca",
+        "tidak bisa melihat",
+        "tidak bisa membaca",
+        "tidak jelas",
+    )
+    return any(marker in lowered for marker in markers)
 
 
 def _gathered(trigger: HumanMessage) -> dict[str, Any]:
@@ -258,14 +351,23 @@ class MeetingEvidence:
                 resolution = result.get("resolution")
                 if resolution is None:
                     continue
+                fields: dict[str, Any] = {
+                    "transcript_id": transcript_id or "",
+                    "evidence_kind": need,
+                    "resolution": str(resolution),
+                    "age_ms": int(result.get("age_ms") or 0),
+                    "vision_latency_ms": int(result.get("vision_latency_ms") or 0),
+                }
+                strategy = result.get("strategy")
+                if strategy is not None:
+                    fields["strategy"] = str(strategy)
+                sufficiency = result.get("sufficiency")
+                if sufficiency is not None:
+                    fields["sufficiency"] = str(sufficiency)
                 self._journal.record(
                     "perception_evidence_resolved",
                     source="perception",
-                    transcript_id=transcript_id or "",
-                    evidence_kind=need,
-                    resolution=str(resolution),
-                    age_ms=int(result.get("age_ms") or 0),
-                    vision_latency_ms=int(result.get("vision_latency_ms") or 0),
+                    **fields,
                 )
         return evidence
 

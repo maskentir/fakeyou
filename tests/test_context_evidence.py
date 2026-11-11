@@ -99,7 +99,7 @@ async def test_a_participant_look_among_several_people_needs_a_name() -> None:
     )
     seeing = context(timeline, "A paper mockup.")
 
-    named = await gather_evidence(seeing, "What is Budi holding?", ("participant",))
+    named = await gather_evidence(seeing, "What is Budi wearing?", ("participant",))
     unnamed = await gather_evidence(seeing, "What is he holding?", ("participant",))
 
     assert named["participant"]["code"] == "ok"

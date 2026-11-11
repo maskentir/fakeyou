@@ -1,10 +1,13 @@
 import asyncio
+import json
 import time
 from datetime import UTC, datetime
 
+from langchain_core.messages import AIMessage
+
 from fakeyou.perception.budget import PerceptionBudget
 from fakeyou.perception.camera_evidence import CameraObservation
-from fakeyou.perception.context import PerceptionContext
+from fakeyou.perception.context import MeetingEvidence, PerceptionContext
 from fakeyou.perception.interpreter import PerceptionInterpreter
 from fakeyou.perception.timeline import CameraFrame, MeetingTimeline
 from tests._perception_fakes import FakeVisionModel, vision_model
@@ -148,3 +151,150 @@ async def test_resolving_evidence_is_journalled_with_its_resolution() -> None:
     assert resolved["resolution"] == "fresh"
     assert resolved["transcript_id"] == "t1"
     assert resolved["vision_latency_ms"] >= 0
+
+
+def cam_observation(participant_id: str = "device-p1") -> CameraObservation:
+    return CameraObservation(
+        participant_id=participant_id,
+        observed_at=datetime.now(UTC),
+        clothing="light ivory shirt",
+        visible_objects=[],
+        background="indoor room",
+        appearance="a person speaking",
+    )
+
+
+def live_context(
+    model: FakeVisionModel, *, max_calls: int = 10, journal: RecordingJournal | None = None
+) -> PerceptionContext:
+    timeline = MeetingTimeline()
+    timeline.participant("device-p1", "Budi")
+    timeline.camera_frames.put(
+        "device-p1",
+        CameraFrame(jpeg_of((140, 130, 120)), "stream-p1", datetime.now(UTC), 0, time.monotonic()),
+    )
+    interpreter = PerceptionInterpreter(
+        model,
+        PerceptionBudget(budget_usd=10.0, max_calls=max_calls),
+        max_concurrent=2,
+        journal=journal,
+    )
+    return PerceptionContext(timeline, interpreter, max_chars=6000)
+
+
+async def test_schema_question_uses_cached_observation_without_vision_call() -> None:
+    model = vision_model()
+    model.observations = [cam_observation()]
+    context = live_context(model)
+
+    first = json.loads(await context.look_at_participant("Budi", "What color is his shirt?"))
+    calls = len(model.seen) + len(model.structured_seen)
+    second = json.loads(await context.look_at_participant("Budi", "What is he wearing?"))
+
+    assert first["code"] == "ok"
+    assert first["resolution"] == "fresh"
+    assert first["sufficiency"] == "sufficient"
+    assert first["strategy"] == "structured_observation"
+    assert second["resolution"] == "cache_hit"
+    assert second["sufficiency"] == "sufficient"
+    assert len(model.seen) + len(model.structured_seen) == calls
+
+
+async def test_detail_question_with_cached_observation_does_targeted_vision() -> None:
+    model = vision_model()
+    model.observations = [cam_observation()]
+    model.responses = [AIMessage(content="The shirt says HELLO.")]
+    context = live_context(model)
+
+    await context.look_at_participant("Budi", "What is he wearing?")
+    result = json.loads(await context.look_at_participant("Budi", "What text is on his shirt?"))
+
+    assert result["code"] == "ok"
+    assert result["resolution"] == "fresh"
+    assert result["strategy"] == "targeted_vision"
+    assert result["sufficiency"] == "sufficient"
+    assert "HELLO" in result["answer"]
+    assert len(model.observations) == 0
+    assert len(model.seen) == 1
+
+
+async def test_detail_question_without_observation_goes_directly_to_targeted_vision() -> None:
+    model = vision_model()
+    model.responses = [AIMessage(content="Three fingers.")]
+    context = live_context(model)
+
+    result = json.loads(
+        await context.look_at_participant("Budi", "How many fingers is he showing?")
+    )
+
+    assert result["code"] == "ok"
+    assert result["resolution"] == "fresh"
+    assert result["strategy"] == "targeted_vision"
+    assert result["vision_latency_ms"] >= 0
+    assert len(model.observations) == 0
+    assert len(model.seen) == 1
+
+
+async def test_schema_question_without_observation_uses_generic_observation() -> None:
+    model = vision_model()
+    model.observations = [cam_observation()]
+    context = live_context(model)
+
+    result = json.loads(await context.look_at_participant("Budi", "What is he wearing?"))
+
+    assert result["code"] == "ok"
+    assert result["resolution"] == "fresh"
+    assert result["strategy"] == "structured_observation"
+    assert result["sufficiency"] == "sufficient"
+    assert len(model.observations) == 0
+
+
+async def test_detail_not_visible_returns_insufficient_without_guessing() -> None:
+    model = vision_model()
+    model.responses = [AIMessage(content="The text is not visible in the frame.")]
+    context = live_context(model)
+
+    result = json.loads(await context.look_at_participant("Budi", "What text is on his shirt?"))
+
+    assert result["code"] == "insufficient_evidence"
+    assert result["resolution"] == "fresh"
+    assert result["sufficiency"] == "insufficient"
+    assert result["strategy"] == "targeted_vision"
+    assert "answer" not in result
+
+
+async def test_change_question_is_insufficient_without_vision_call() -> None:
+    model = vision_model()
+    context = live_context(model)
+
+    result = json.loads(await context.look_at_participant("Budi", "What changed since earlier?"))
+
+    assert result["code"] == "insufficient_evidence"
+    assert result["sufficiency"] == "insufficient"
+    assert result["strategy"] == "structured_observation"
+    assert result["vision_latency_ms"] == 0
+    assert len(model.seen) + len(model.structured_seen) == 0
+
+
+async def test_budget_exhausted_for_camera_does_not_guess() -> None:
+    model = vision_model()
+    context = live_context(model, max_calls=0)
+
+    result = json.loads(await context.look_at_participant("Budi", "What is he wearing?"))
+
+    assert result["code"] == "budget_exhausted"
+    assert result["strategy"] == "structured_observation"
+
+
+async def test_participant_resolution_journals_strategy_and_sufficiency() -> None:
+    model = vision_model()
+    model.observations = [cam_observation()]
+    journal = RecordingJournal()
+    context = live_context(model, journal=journal)
+    evidence = MeetingEvidence(context, journal=journal)
+
+    await evidence("What is he wearing?", ("participant",), "t1")
+
+    [resolved] = journal.events("perception_evidence_resolved")
+    assert resolved["strategy"] == "structured_observation"
+    assert resolved["sufficiency"] == "sufficient"

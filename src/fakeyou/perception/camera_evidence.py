@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
@@ -73,3 +74,78 @@ class CameraCache:
 
     def clear(self) -> None:
         self.entries.clear()
+
+
+SchemaField = Literal["clothing", "appearance", "background", "visible_objects"]
+Strategy = Literal["structured_observation", "targeted_vision"]
+Sufficiency = Literal["sufficient", "insufficient"]
+
+CLOTHING = re.compile(
+    r"\b(shirt|t[- ]?shirt|kaos|baju|jacket|jaket|hoodie|sweater|dress|wearing|"
+    r"pakaian|outfit|clothes|clothing|top|blouse)\b",
+    re.I,
+)
+BACKGROUND = re.compile(
+    r"\b(background|behind|room|ruangan|latar|tempat|where are|di mana|dimana)\b",
+    re.I,
+)
+APPEARANCE = re.compile(
+    r"\b(look like|appearance|terlihat seperti|how .* look|rambut|hair|glasses|"
+    r"kacamata|beard|jenggot)\b",
+    re.I,
+)
+OBJECTS = re.compile(
+    r"\b(holding|memegang|object|benda|barang|using|memakai|carrying|membawa)\b",
+    re.I,
+)
+CHANGE = re.compile(
+    r"\b(changed|berubah|perubahan|different from|sejak tadi|since earlier|dibanding|"
+    r"sebelumnya|before)\b",
+    re.I,
+)
+DETAIL = re.compile(
+    r"\b(text|tulisan|written|write|kata|word|logo|number|nomor|angka|berapa|"
+    r"how many|count|jari|finger|gesture|tunjuk|pointing|showing|holding up|angkat)\b",
+    re.I,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class CameraQuestionNeed:
+    strategy: Strategy
+    field: SchemaField | None = None
+    reason: str = "general"
+
+
+def question_need(question: str) -> CameraQuestionNeed:
+    if CHANGE.search(question):
+        return CameraQuestionNeed("structured_observation", None, "change")
+    if DETAIL.search(question):
+        return CameraQuestionNeed("targeted_vision", None, "detail")
+    candidates: tuple[tuple[SchemaField, re.Pattern[str]], ...] = (
+        ("clothing", CLOTHING),
+        ("background", BACKGROUND),
+        ("appearance", APPEARANCE),
+        ("visible_objects", OBJECTS),
+    )
+    matches = [field for field, pattern in candidates if pattern.search(question)]
+    if len(matches) == 1:
+        return CameraQuestionNeed("structured_observation", matches[0], "schema")
+    if matches:
+        return CameraQuestionNeed("targeted_vision", None, "ambiguous")
+    return CameraQuestionNeed("targeted_vision", None, "general")
+
+
+def observation_sufficient(observation: CameraObservation, need: CameraQuestionNeed) -> bool:
+    if need.reason == "change":
+        return False
+    field = need.field
+    if field == "clothing":
+        return bool(observation.clothing.strip())
+    if field == "appearance":
+        return bool(observation.appearance.strip())
+    if field == "background":
+        return bool(observation.background.strip())
+    if field == "visible_objects":
+        return bool(observation.visible_objects)
+    return False
