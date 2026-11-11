@@ -10,7 +10,7 @@ from sqlalchemy import text
 from fakeyou.db.engine import create_engine_for_url
 from fakeyou.memory.ingestion import episode_name
 from fakeyou.memory.memory import meeting_episodes, meeting_saga
-from tests._container_harness import NEO4J_IMAGE, POSTGRES_IMAGE
+from tests._container_harness import NEO4J_IMAGE, POSTGRES_IMAGE, RUSTFS_IMAGE
 from tests._memory_fakes import make_real_graphiti
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -21,6 +21,7 @@ def test_harness_images_match_the_compose_pins() -> None:
 
     assert f"image: {POSTGRES_IMAGE}" in compose
     assert f"image: {NEO4J_IMAGE}" in compose
+    assert f"image: {RUSTFS_IMAGE}" in compose
 
 
 @pytest.mark.container

@@ -47,6 +47,9 @@ x-worker-runtime: &worker-runtime
     FAKEYOU_DATABASE__URL: postgresql://fakeyou:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/fakeyou
     FAKEYOU_MEMORY__STORE__URI: ${FAKEYOU_COMPOSE_NEO4J_URI:-bolt://neo4j:7687}
     FAKEYOU_MEMORY__EMBEDDER__BASE_URL: ${FAKEYOU_COMPOSE_EMBEDDINGS_BASE_URL:-http://embeddings:80}
+    FAKEYOU_STORAGE__ENDPOINT_URL: http://rustfs:9000
+    FAKEYOU_STORAGE__ACCESS_KEY_ID: ${FAKEYOU_STORAGE__ACCESS_KEY_ID:-rustfsadmin}
+    FAKEYOU_STORAGE__SECRET_ACCESS_KEY: ${FAKEYOU_STORAGE__SECRET_ACCESS_KEY:-rustfsadmin}
   volumes:
     - ./.runtime/audio:/workspace/.runtime
     - ./examples:/workspace/examples:ro
@@ -107,6 +110,9 @@ services:
       FAKEYOU_DATABASE__URL: postgresql://fakeyou:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/fakeyou
       FAKEYOU_MEMORY__STORE__URI: ${FAKEYOU_COMPOSE_NEO4J_URI:-bolt://neo4j:7687}
       FAKEYOU_MEMORY__EMBEDDER__BASE_URL: ${FAKEYOU_COMPOSE_EMBEDDINGS_BASE_URL:-http://embeddings:80}
+      FAKEYOU_STORAGE__ENDPOINT_URL: http://rustfs:9000
+      FAKEYOU_STORAGE__ACCESS_KEY_ID: ${FAKEYOU_STORAGE__ACCESS_KEY_ID:-rustfsadmin}
+      FAKEYOU_STORAGE__SECRET_ACCESS_KEY: ${FAKEYOU_STORAGE__SECRET_ACCESS_KEY:-rustfsadmin}
     volumes:
       - ./.runtime/audio:/workspace/.runtime
 
@@ -190,7 +196,29 @@ services:
       timeout: 5s
       retries: 6
 
+  rustfs:
+    image: rustfs/rustfs:1.0.0-alpha.81@sha256:4ee605dfe7c6548d1fa1856357e8a1eccd929e3176acf933fafeba3ce09a69f9
+    logging: *default-logging
+    environment:
+      RUSTFS_ACCESS_KEY: ${FAKEYOU_STORAGE__ACCESS_KEY_ID:-rustfsadmin}
+      RUSTFS_SECRET_KEY: ${FAKEYOU_STORAGE__SECRET_ACCESS_KEY:-rustfsadmin}
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - rustfs_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
 volumes:
   neo4j_data:
   postgres_data:
+  rustfs_data:
   tei_models:

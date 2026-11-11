@@ -1,6 +1,13 @@
 from pathlib import Path
 
-from fakeyou.persistence.segments import SegmentFile, SegmentSync, restore_segments
+from fakeyou.config.settings import Settings, StorageSettings
+from fakeyou.persistence.segments import (
+    SegmentFile,
+    SegmentSync,
+    create_object_store,
+    restore_segments,
+)
+from tests._fakes_common import env_file_opt
 
 
 class FakeStore:
@@ -105,3 +112,17 @@ async def test_restore_merges_an_overlapping_segment(tmp_path: Path) -> None:
 
     assert written == 14
     assert record.read_bytes() == b"one\ntwo\nthree\n"
+
+
+def test_a_blank_bucket_means_storage_is_not_configured() -> None:
+    assert StorageSettings(bucket="").configured is False
+    assert StorageSettings(bucket="   ").configured is False
+    assert StorageSettings(bucket=None).configured is False
+    assert StorageSettings(bucket="fakeyou").configured is True
+
+
+def test_no_object_store_without_a_bucket() -> None:
+    settings = Settings(**env_file_opt(None))
+    settings = settings.model_copy(update={"storage": StorageSettings(bucket="")})
+
+    assert create_object_store(settings) is None

@@ -170,7 +170,7 @@ class StorageSettings(Section):
 
     @property
     def configured(self) -> bool:
-        return self.bucket is not None
+        return bool(self.bucket and self.bucket.strip())
 
 
 class SpeechSettings(Section):

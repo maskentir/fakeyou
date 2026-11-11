@@ -2,6 +2,7 @@ import os
 import subprocess
 from collections.abc import AsyncIterator, Callable, Iterator, MutableMapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from typing import Any, cast
@@ -50,6 +51,7 @@ from tests._container_harness import (
     NEO4J_IMAGE,
     POSTGRES_IMAGE,
     REDIS_IMAGE,
+    RUSTFS_IMAGE,
     require_docker,
     service_endpoint,
     start_service,
@@ -276,6 +278,52 @@ def redis_endpoint() -> Iterator[str]:
 
         wait_ready(ready, description="harness redis", timeout_seconds=60.0)
         yield f"redis://{endpoint.host}:{endpoint.port}/0"
+    finally:
+        stop_service(container)
+
+
+@dataclass(frozen=True, slots=True)
+class ObjectStorageEndpoint:
+    endpoint_url: str
+    bucket: str
+    access_key_id: str
+    secret_access_key: str
+
+
+@pytest.fixture(scope="session")
+def object_storage_endpoint() -> Iterator[ObjectStorageEndpoint]:
+    require_docker()
+    name = f"fakeyou-harness-rustfs-{uuid4().hex[:12]}"
+    access_key_id = "harness-only"
+    secret_access_key = "harness-only-secret"
+    container = start_service(
+        RUSTFS_IMAGE,
+        name=name,
+        env={
+            "RUSTFS_ACCESS_KEY": access_key_id,
+            "RUSTFS_SECRET_KEY": secret_access_key,
+        },
+        container_port=9000,
+    )
+    try:
+        endpoint = service_endpoint(container, 9000)
+
+        def ready() -> bool:
+            probe = subprocess.run(
+                ["docker", "exec", container, "curl", "-fsS", "http://127.0.0.1:9000/health"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            return probe.returncode == 0
+
+        wait_ready(ready, description="harness rustfs", timeout_seconds=120.0)
+        yield ObjectStorageEndpoint(
+            endpoint_url=f"http://{endpoint.host}:{endpoint.port}",
+            bucket=f"harness-{uuid4().hex[:12]}",
+            access_key_id=access_key_id,
+            secret_access_key=secret_access_key,
+        )
     finally:
         stop_service(container)
 
