@@ -19,7 +19,7 @@ ENDED = "<h1>The call has ended</h1>"
 WAITING = LOBBY + "<div>Asking to be let in...</div>"
 LEAVE_AND_WAITING = IN_CALL + "<div>Asking to be let in...</div>"
 
-DIALOG_SELECTOR = 'text="Continue without microphone and camera"'
+DIALOG_SELECTOR = "text=Continue without microphone"
 NAME_SELECTOR = "placeholder:Your name"
 ASK_SELECTOR = 'text="Ask to join"'
 JOIN_NOW_SELECTOR = 'text="Join now"'

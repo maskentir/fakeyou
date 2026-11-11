@@ -75,7 +75,7 @@ class MeetSignals:
     removed: str = "been removed"
     ended: str = "ended"
     left: str = "left the meeting"
-    continue_without_media: str = "Continue without microphone and camera"
+    continue_without_media: str = "Continue without microphone"
 
 
 DEFAULT_MEET_SIGNALS = MeetSignals()
@@ -239,14 +239,14 @@ async def _dismiss_media_dialog(
     signals: MeetSignals,
     sleep: Callable[[float], Awaitable[None]],
 ) -> str | None:
-    locator = page.locator(f'text="{signals.continue_without_media}"')
+    locator = page.locator(f"text={signals.continue_without_media}")
     try:
         if await locator.count() == 0:
             return None
     except PlaywrightError as error:
         return f"finding {signals.continue_without_media!r} failed: ({type(error).__name__})"
     return await click_when_ready(
-        partial(page.locator, f'text="{signals.continue_without_media}"'),
+        partial(page.locator, f"text={signals.continue_without_media}"),
         signals.continue_without_media,
         sleep,
     )
