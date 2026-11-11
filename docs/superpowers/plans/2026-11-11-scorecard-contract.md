@@ -2,7 +2,7 @@
 
 **Goal:** Measure response audio and answer audio separately, count questions per turn using validated provenance, and count every fault occurrence.
 
-**Architecture:** Extend the existing playback journal and session report. Preserve version 1 scoring for historical journals; new journals explicitly declare contract version 2. Keep all existing numeric budgets; answer audio retains its own latency gates, so a cue alone cannot pass a session.
+**Architecture:** Extend the existing playback journal and session report. One report contract; new journals declare that they record the answer output boundary, journals without it leave the gates that need it unscored. Keep all existing numeric budgets; answer audio retains its own latency gates, so a cue alone cannot pass a session.
 
 **Spec:** `docs/plans/2026-11-11-scorecard-contract.md` (owner-approved design, 2026-11-11).
 
@@ -37,9 +37,16 @@ Files: `observability/report.py`, `observability/scorecard.py`, `observability/f
 
 - [x] Add failing tests for cue at 1.5s plus answer at 8s, cue-only failure, wrong transcript, split sentences, validated versus unvalidated questions, repeated faults, and historical scoring.
 - [x] Declare v2 on newly created journals. Add output audio latency stages and turn-based reply aggregation in v2 only. Preserve v1 semantics for historical sessions, including those with new background events.
-- [x] Add v2 response and answer latency gates with unchanged budgets, unnecessary-question gate, and answer-output coverage gate. Missing answer timestamps leave latency unscored and fail coverage where a reply was expected.
-- [x] Emit one fault journal event for every occurrence while retaining grouped summaries; preserve operation in v2 diagnostics.
+- [x] Add response and answer latency gates with unchanged budgets, unnecessary-question gate, and answer-output coverage gate. Missing answer timestamps leave latency unscored and fail coverage where a reply was expected.
+- [x] Emit one fault journal event for every occurrence while retaining grouped summaries; preserve the operation in the diagnostics.
 - [x] Run targeted tests, the full offline suite, ruff, mypy and architecture checks available in the repo.
+
+## Follow-up: one contract
+
+The owner chose the single contract over keeping the earlier one. The earlier
+numbers now live in `docs/reports/2026-11-11-contract-v1-scorecards.json`,
+the earlier targets and report shapes are gone, and journals without the
+answer boundary marker leave the gates that need it unscored.
 
 ## Execution notes
 

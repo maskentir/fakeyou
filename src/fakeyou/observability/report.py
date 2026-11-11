@@ -12,7 +12,7 @@ from fakeyou.foundation.numbers import finite_float, real_number
 from fakeyou.foundation.timeparse import parse_iso_datetime
 from fakeyou.observability.baseline import baseline_metrics, summarize
 from fakeyou.observability.journal import JOURNAL_BACKUP_COUNT, journal_path
-from fakeyou.observability.report_v2 import extend_report_v2
+from fakeyou.observability.report_contract import apply_contract
 
 LATENCY_STAGES = (
     "speech_stopped_to_final_seconds",
@@ -109,11 +109,9 @@ class _ReportState:
     synthesis_turns: dict[str, str | None] = field(default_factory=dict)
     pending: dict[str, Any] = field(default_factory=dict)
     excluded: Counter[str] = field(default_factory=Counter)
-    replies: Counter[str] = field(default_factory=Counter)
     tools: dict[str, Counter[str]] = field(default_factory=dict)
     meet_actions: dict[str, dict[str, Any]] = field(default_factory=dict)
     episodes: list[dict[str, Any]] = field(default_factory=list)
-    faults: Counter[tuple[str, str]] = field(default_factory=Counter)
     result: dict[str, Any] | None = None
     milestones: dict[str, dict[str, Any]] = field(default_factory=dict)
     cancel_requested: int = 0
@@ -307,13 +305,10 @@ def _apply_playback_event(state: _ReportState, row: dict[str, Any], at: datetime
         if state.replying is not None:
             state.replying.setdefault("speak_at", at)
     elif event == "playback_finished":
-        state.replies["spoken"] += 1
-        state.replies["trailing_questions"] += row.get("ends_with_question") is True
         if state.replying is not None:
             state.replying["outcome"] = "spoken"
         state.replying = None
     else:
-        state.replies["interrupted"] += 1
         _playback_drop_delay(state, row, at)
         if state.replying is not None:
             state.replying["outcome"] = "interrupted"
@@ -381,7 +376,6 @@ def _apply_memory_event(state: _ReportState, row: dict[str, Any], _at: datetime 
         )
         state.ingest_fault_pending = False
     else:
-        state.faults[(str(row.get("source")), str(row.get("kind")))] += 1
         if row.get("source") == "memory_ingest":
             state.ingest_fault_pending = True
 
@@ -649,9 +643,6 @@ def _assemble_report(
             for stage in LATENCY_STAGES
         },
         "evidence": {"excluded": dict(state.excluded)},
-        "replies": {
-            key: state.replies[key] for key in ("spoken", "interrupted", "trailing_questions")
-        },
         "tools": {name: dict(counts) for name, counts in state.tools.items()},
         "meet_actions": _meet_actions_report(state.meet_actions),
         "interruptions": {
@@ -668,10 +659,6 @@ def _assemble_report(
             "capture_engines": dict(state.capture_engines),
         },
         "ingestion": _ingestion_section(state.episodes),
-        "faults": [
-            {"source": source, "kind": kind, "count": count}
-            for (source, kind), count in state.faults.items()
-        ],
         "pregeneration": {
             "starts": state.starts,
             "outcomes": dict(state.outcomes),
@@ -699,12 +686,7 @@ def build_session_report(rows: list[dict[str, Any]], *, corrupt_lines: int = 0) 
     _close_pending(state)
     turn_reports = [_turn_report(turn, state.excluded) for turn in state.turns.values()]
     report = _assemble_report(state, turn_reports, corrupt_lines=corrupt_lines)
-    contract_row = next(
-        (row for row in rows if row.get("event") in (*STARTUP_MILESTONES, "session_finished")),
-        rows[0] if rows else {},
-    )
-    if contract_row.get("scorecard_version") == 2:
-        report = extend_report_v2(report, rows)
+    report = apply_contract(report, rows)
     return {**report, "baseline": baseline_metrics(rows)}
 
 

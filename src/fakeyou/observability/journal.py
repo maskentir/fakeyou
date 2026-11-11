@@ -133,7 +133,7 @@ class Journal:
                 "meeting_id": self._meeting_id,
                 "at": at,
                 "source": source,
-                "scorecard_version": 2,
+                "answer_boundary": True,
             }
             if self.trace_id is not None:
                 row["trace_id"] = self.trace_id

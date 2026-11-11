@@ -312,7 +312,7 @@ async def test_speak_retry_is_journaled(
             "meeting_id": "meeting-1",
             "at": retries[0]["at"],
             "source": "playback",
-            "scorecard_version": 2,
+            "answer_boundary": True,
             "attempt": 2,
             "streaming": True,
             "reason": "timeout",

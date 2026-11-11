@@ -30,7 +30,10 @@ def test_report_breaks_down_latency_per_turn() -> None:
         "p95": 2.5,
         "max": 2.5,
     }
-    assert report["replies"] == {"spoken": 2, "interrupted": 0, "trailing_questions": 1}
+    assert report["replies"]["spoken"] == 2
+    assert report["replies"]["interrupted"] == 0
+    assert report["replies"]["trailing_questions"] == 1
+    assert report["replies"]["unnecessary_questions"] is None
 
 
 def test_report_marks_interrupted_and_cancelled_turns() -> None:
@@ -46,6 +49,7 @@ def test_report_marks_interrupted_and_cancelled_turns() -> None:
             4.5,
             "playback_dropped",
             source="playback",
+            transcript_id="t1",
             text="A very long reply.",
             detail="interrupted",
         ),
@@ -83,7 +87,9 @@ def test_report_summarizes_ingestion_faults_tools_and_result() -> None:
         "failed": 1,
         "duration_seconds": {"count": 3, "p50": 3.0, "p95": 8.4, "max": 9.0},
     }
-    assert report["faults"] == [{"source": "memory_ingest", "kind": "timeout", "count": 2}]
+    assert report["faults"] == [
+        {"source": "memory_ingest", "kind": "timeout", "operation": None, "count": 2}
+    ]
     assert report["tools"] == {"recall_meeting_context": {"finished": 1, "failed": 1}}
     assert report["result"] == {
         "phase": "ended",

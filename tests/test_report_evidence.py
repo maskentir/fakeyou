@@ -1,3 +1,5 @@
+from typing import Any
+
 from fakeyou.observability.report import (
     build_session_report,
 )
@@ -5,16 +7,30 @@ from tests._report_support import answered_turn, row
 
 
 def test_report_should_count_trailing_questions_without_retaining_reply_text() -> None:
-    report = build_session_report(
-        [
-            row(1, "playback_finished", ends_with_question=True),
-            row(2, "playback_finished", ends_with_question=False),
-            row(3, "playback_finished"),
-            row(4, "playback_dropped", ends_with_question=True),
-        ]
+    rows: list[dict[str, Any]] = []
+    outcomes = (
+        ("playback_finished", True),
+        ("playback_finished", False),
+        ("playback_finished", False),
+        ("playback_dropped", True),
     )
+    for index, (event, question) in enumerate(outcomes):
+        transcript_id = f"t{index}"
+        rows += [
+            row(index, "transcript_finalized", transcript_id=transcript_id),
+            row(index, "agent_started", request_id=f"{transcript_id}:1"),
+            row(
+                index + 0.1,
+                event,
+                transcript_id=transcript_id,
+                ends_with_question=question,
+            ),
+        ]
+    report = build_session_report(rows)
 
-    assert report["replies"] == {"spoken": 3, "interrupted": 1, "trailing_questions": 1}
+    assert report["replies"]["spoken"] == 3
+    assert report["replies"]["interrupted"] == 1
+    assert report["replies"]["trailing_questions"] == 1
 
 
 def test_interrupted_stream_with_pcm_still_reports_first_pcm_latency() -> None:
@@ -95,7 +111,8 @@ def test_late_synthesis_finish_uses_its_request_mapping() -> None:
 
 def test_synthesis_finished_without_chunk_proof_yields_no_pcm_latency() -> None:
     rows = answered_turn(0, "t1", "The demo is on Friday.")
-    rows[5] = row(4.6, "synthesis_finished", duration_ms=3000, first_chunk_ms=None)
+    index = next(i for i, entry in enumerate(rows) if entry["event"] == "synthesis_finished")
+    rows[index] = row(4.6, "synthesis_finished", duration_ms=3000, first_chunk_ms=None)
 
     report = build_session_report(rows)
     [turn] = report["turns"]

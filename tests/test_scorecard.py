@@ -12,7 +12,7 @@ def _session(*, ending_question: bool = False, watchdog_failures: int = 0) -> li
     closing = "Anything else?" if ending_question else "Sure."
     failures = [row(40.0 + index, "watchdog_failed") for index in range(watchdog_failures)]
     return [
-        row(0.0, "join_finished", source="runtime", status="admitted"),
+        row(0.0, "join_finished", source="runtime", status="admitted", answer_boundary=True),
         row(1.0, "conversation_bound", source="runtime"),
         *answered_turn(10.0, "t1", "The demo is on Friday.", participant_id="speaker-a"),
         *answered_turn(30.0, "t2", closing, participant_id="speaker-a"),
@@ -34,8 +34,8 @@ def test_misses_are_named_and_rates_are_per_reply_and_per_hour() -> None:
     card = score_session(build_session_report(_session(ending_question=True, watchdog_failures=40)))
 
     assert card["passed"] is False
-    assert card["failed"] == ["trailing_question_rate", "watchdog_failures_per_hour"]
-    assert card["metrics"]["trailing_question_rate"]["value"] == 0.5
+    assert card["failed"] == ["unnecessary_question_rate", "watchdog_failures_per_hour"]
+    assert card["metrics"]["unnecessary_question_rate"]["value"] == 0.5
     assert card["metrics"]["watchdog_failures_per_hour"] == {
         "max": 20.0,
         "value": 40.0,

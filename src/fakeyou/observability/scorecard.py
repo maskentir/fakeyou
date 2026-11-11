@@ -18,12 +18,7 @@ def _per_hour(count: float, report: Report) -> float | None:
 
 
 def _first_audio(report: Report, quantile: str) -> float | None:
-    stage = (
-        "speech_stopped_to_first_audio_seconds"
-        if report.get("scorecard_version") == 2
-        else "speech_stopped_to_first_pcm_seconds"
-    )
-    value = report["latency"][stage][quantile]
+    value = report["latency"].get("speech_stopped_to_first_audio_seconds", {}).get(quantile)
     return float(value) if value is not None else None
 
 
@@ -35,7 +30,10 @@ def _first_answer_audio(report: Report, quantile: str) -> float | None:
 def _reply_rate(report: Report, numerator: str, denominator: str) -> float | None:
     replies = report["replies"]
     count = replies.get(denominator, 0)
-    return replies.get(numerator, 0) / count if count else None
+    value = replies.get(numerator)
+    if not count or value is None:
+        return None
+    return float(value) / float(count)
 
 
 def _trailing_question_rate(report: Report) -> float | None:
@@ -100,14 +98,11 @@ class SessionTargets(BaseModel):
 
 
 SESSION_TARGETS = SessionTargets.model_validate_json(read_package_text("session_targets.json"))
-SESSION_TARGETS_V1 = SessionTargets.model_validate_json(
-    read_package_text("session_targets_v1.json")
-)
 
 
 def score_session(report: Report, targets: SessionTargets | None = None) -> dict[str, Any]:
     if targets is None:
-        targets = SESSION_TARGETS if report.get("scorecard_version") == 2 else SESSION_TARGETS_V1
+        targets = SESSION_TARGETS
     metrics: dict[str, dict[str, Any]] = {}
     for name, target in targets.metrics.items():
         value = SCORED_METRICS[name](report)

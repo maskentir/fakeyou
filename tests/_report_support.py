@@ -40,12 +40,20 @@ def answered_turn(
         )
     rows += [
         row(offset + 1.6, "agent_finished", request_id=f"{transcript_id}:1", duration_ms=1200),
-        row(offset + 1.6, "playback_started", source="playback", text=reply),
+        row(
+            offset + 1.6,
+            "playback_started",
+            source="playback",
+            text=reply,
+            transcript_id=transcript_id,
+        ),
+        row(offset + 2.5, "playback_audio_started", source="playback", transcript_id=transcript_id),
         row(offset + 4.6, "synthesis_finished", duration_ms=3000, first_chunk_ms=900),
         row(
             offset + 7.0,
             "playback_finished",
             source="playback",
+            transcript_id=transcript_id,
             ends_with_question=reply.rstrip().endswith("?"),
         ),
     ]

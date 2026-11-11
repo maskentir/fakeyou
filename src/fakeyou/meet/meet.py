@@ -265,7 +265,10 @@ async def _enter_twin_name(
     except PlaywrightError as error:
         return f"finding the name field failed: ({type(error).__name__})"
     if found == 0:
-        return f"name field {signals.name_field!r} not found on the lobby page"
+        return (
+            f"name field {signals.name_field!r} not found on the lobby page; "
+            f"visible controls: {await visible_control_labels(page)}"
+        )
     failure = await click_when_ready(
         partial(page.get_by_placeholder, signals.name_field),
         "name field",
@@ -273,7 +276,7 @@ async def _enter_twin_name(
         NAME_FIELD_ATTEMPTS,
     )
     if failure is not None:
-        return failure
+        return f"{failure}; visible controls: {await visible_control_labels(page)}"
     try:
         await page.keyboard.type(twin_name, delay=TYPE_DELAY_MS)
     except PlaywrightError as error:

@@ -149,10 +149,15 @@ def _evidence_latencies(turns: list[_Turn]) -> dict[str, Any]:
     }
 
 
-def extend_report_v2(report: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any]:
+def measures_output(rows: list[dict[str, Any]]) -> bool:
+    return any(row.get("answer_boundary") is True for row in rows)
+
+
+def apply_contract(report: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any]:
     turns: dict[str, _Turn] = {}
     stopped_at: datetime | None = None
     faults: Counter[tuple[str, str, str | None]] = Counter()
+    observes = measures_output(rows)
     for row in rows:
         event = row.get("event")
         if event == "fault_recorded":
@@ -173,7 +178,7 @@ def extend_report_v2(report: dict[str, Any], rows: list[dict[str, Any]]) -> dict
         if identifier is not None and identifier in turns:
             _observe(turns[identifier], row)
 
-    expected = [turn for turn in turns.values() if _expected(turn)]
+    expected = [turn for turn in turns.values() if _expected(turn)] if observes else []
     spoken = [turn for turn in turns.values() if turn.spoken]
     response_values = [_latency(turn, turn.response_at) for turn in expected]
     answer_values = [_latency(turn, turn.answer_at) for turn in expected]
@@ -182,7 +187,6 @@ def extend_report_v2(report: dict[str, Any], rows: list[dict[str, Any]]) -> dict
         if turn is not None:
             turn_report[RESPONSE_STAGE] = _latency(turn, turn.response_at)
             turn_report[ANSWER_STAGE] = _latency(turn, turn.answer_at)
-    report["scorecard_version"] = 2
     report["latency_by_evidence"] = _evidence_latencies(expected)
     report["latency"][RESPONSE_STAGE] = summarize([v for v in response_values if v is not None])
     report["latency"][ANSWER_STAGE] = summarize([v for v in answer_values if v is not None])
@@ -193,12 +197,18 @@ def extend_report_v2(report: dict[str, Any], rows: list[dict[str, Any]]) -> dict
         "trailing_question_rate": sum(turn.spoken[-1][0] for turn in spoken) / len(spoken)
         if spoken
         else None,
-        "unnecessary_questions": sum(
-            any(question and not authorized for _, question, authorized in turn.spoken)
-            for turn in spoken
+        "unnecessary_questions": (
+            sum(
+                any(question and not authorized for _, question, authorized in turn.spoken)
+                for turn in spoken
+            )
+            if observes
+            else None
         ),
         "expected_answers": len(expected),
-        "answers_with_audio": sum(value is not None for value in answer_values),
+        "answers_with_audio": (
+            sum(value is not None for value in answer_values) if observes else None
+        ),
     }
     report["faults"] = [
         {"source": source, "kind": kind, "operation": operation, "count": count}

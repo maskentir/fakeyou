@@ -13,7 +13,7 @@ from tests._report_support import row
 
 def session(*, answer_at: float | None = 8.0) -> list[dict[str, Any]]:
     rows = [
-        row(0, "join_finished", source="runtime", status="admitted", scorecard_version=2),
+        row(0, "join_finished", source="runtime", status="admitted", answer_boundary=True),
         row(1, "conversation_bound", source="runtime"),
         row(10, "speech_stopped"),
         row(10.4, "transcript_finalized", transcript_id="t1", participant_id="p1"),
@@ -149,21 +149,26 @@ def test_fault_journal_counts_occurrences_and_retains_operation() -> None:
     ]
 
 
-def test_old_journals_keep_the_original_scorecard() -> None:
+def test_journals_without_the_answer_boundary_leave_the_new_gates_unscored() -> None:
     rows = [
-        {key: value for key, value in entry.items() if key != "scorecard_version"}
+        {key: value for key, value in entry.items() if key != "answer_boundary"}
         for entry in session()
     ]
-    card = score_session(build_session_report(rows))
+    report = build_session_report(rows)
+    card = score_session(report)
 
-    assert card["version"] == 1
-    assert "first_answer_audio_p50_seconds" not in card["metrics"]
+    assert report["replies"]["unnecessary_questions"] is None
+    assert report["replies"]["answers_with_audio"] is None
+    assert card["metrics"]["answer_audio_coverage"]["value"] is None
+    assert card["metrics"]["unnecessary_question_rate"]["value"] is None
+    assert card["metrics"]["first_answer_audio_p50_seconds"]["value"] is None
+    assert card["failed"] == []
 
 
-def test_new_journal_rows_declare_the_metric_contract() -> None:
+def test_new_journal_rows_declare_the_answer_boundary() -> None:
     lines: list[str] = []
     Journal("m1", emit=lines.append).record("session_finished", source="cli", exit_code=0)
-    assert json.loads(lines[0])["scorecard_version"] == 2
+    assert json.loads(lines[0])["answer_boundary"] is True
 
 
 @pytest.mark.parametrize(
@@ -195,11 +200,13 @@ def test_a_cancelled_slow_answer_remains_in_the_latency_distribution() -> None:
 
 def test_background_work_does_not_upgrade_a_historical_session() -> None:
     rows = [
-        {key: value for key, value in entry.items() if key != "scorecard_version"}
+        {key: value for key, value in entry.items() if key != "answer_boundary"}
         for entry in session()
     ]
-    rows.append(row(3700, "memory_episode_ingested", source="memory_ingest", scorecard_version=2))
-    assert score_session(build_session_report(rows))["version"] == 1
+    rows.append(row(3700, "memory_episode_ingested", source="memory_ingest"))
+    report = build_session_report(rows)
+
+    assert report["replies"]["answers_with_audio"] is None
 
 
 def test_pausing_whole_reply_generation_is_an_intentional_cancellation() -> None:

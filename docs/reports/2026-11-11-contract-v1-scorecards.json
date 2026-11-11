@@ -1,0 +1,5356 @@
+{
+ "archived_on": "2026-11-11",
+ "contract_version": 1,
+ "note": "Scores measured under the version 1 scorecard contract, before the journal carried output boundary events. Kept because the version 1 calculations are removed from the code.",
+ "sessions": {
+  "rustfs-live-1": {
+   "report": {
+    "browser": {
+     "watchdog_failures": 0
+    },
+    "cancellation": {
+     "completed": 0,
+     "requested": 0
+    },
+    "evidence": {
+     "excluded": {}
+    },
+    "faults": [],
+    "in_call_seconds": null,
+    "ingestion": {
+     "duration_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "empty": 0,
+     "episodes": 0,
+     "facts": 0,
+     "failed": 0
+    },
+    "ingestion_outcome": "unknown",
+    "interruptions": {
+     "speech_to_stop_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "triggers": {}
+    },
+    "journal": {
+     "corrupt_lines": 0
+    },
+    "latency": {
+     "agent_to_first_sentence_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "agent_to_first_text_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "agent_to_reply_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_agent_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_first_sentence_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_reply_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "first_sentence_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "reply_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "speech_stopped_to_final_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "speech_stopped_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     }
+    },
+    "meet_actions": {
+     "actions": [],
+     "counts": {},
+     "duration_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "rejections": {}
+    },
+    "participation": {
+     "answers": 0,
+     "attributed_utterances": 0,
+     "attribution_coverage": null,
+     "observer_methods": {},
+     "policy": {},
+     "policy_reasons": {},
+     "policy_sources": {},
+     "unknown_reasons": {},
+     "utterances_recorded": 0
+    },
+    "perception": {
+     "budget_exhausted": 0,
+     "chat_lines": 0,
+     "interpreter_disabled": 0,
+     "readings": {
+      "failed": 0,
+      "finished": 0,
+      "p95_ms": null,
+      "skipped": 0
+     },
+     "rejected_inputs": 0,
+     "screens": {
+      "merged": 0,
+      "new": 0,
+      "revisited": 0
+     },
+     "signals": 0,
+     "views": {
+      "emitted": 0,
+      "with_image": 0
+     }
+    },
+    "replies": {
+     "interrupted": 0,
+     "spoken": 0,
+     "trailing_questions": 0
+    },
+    "result": null,
+    "session_outcome": "unknown",
+    "startup": {
+     "admission_to_listening_seconds": null,
+     "admission_to_microphone_seconds": null,
+     "audio_ready_at_admission": null,
+     "audio_startup_seconds": null,
+     "join_status": null,
+     "lobby_wait_seconds": null
+    },
+    "stt_quality": {
+     "capture_engines": {},
+     "drain_gaps": 0,
+     "first_interim_to_final_ms": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "order_inversions": 0,
+     "tap_slot_drops": 0,
+     "tap_slot_rescues": 0,
+     "turn_interims": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     }
+    },
+    "tools": {}
+   },
+   "scorecard": {
+    "failed": [],
+    "metrics": {
+     "admission_to_listening_seconds": {
+      "max": 5.0,
+      "passed": null,
+      "value": null
+     },
+     "attribution_coverage": {
+      "min": 0.9,
+      "passed": null,
+      "value": null
+     },
+     "faults_per_hour": {
+      "max": 6.0,
+      "passed": null,
+      "value": null
+     },
+     "first_audio_p50_seconds": {
+      "max": 3.5,
+      "passed": null,
+      "value": null
+     },
+     "first_audio_p95_seconds": {
+      "max": 6.5,
+      "passed": null,
+      "value": null
+     },
+     "session_completed": {
+      "min": 1.0,
+      "passed": null,
+      "value": null
+     },
+     "trailing_question_rate": {
+      "max": 0.1,
+      "passed": null,
+      "value": null
+     },
+     "watchdog_failures_per_hour": {
+      "max": 20.0,
+      "passed": null,
+      "value": null
+     }
+    },
+    "passed": false,
+    "unscored": [
+     "session_completed",
+     "first_audio_p50_seconds",
+     "first_audio_p95_seconds",
+     "trailing_question_rate",
+     "faults_per_hour",
+     "watchdog_failures_per_hour",
+     "attribution_coverage",
+     "admission_to_listening_seconds"
+    ],
+    "version": 1
+   }
+  },
+  "rustfs-live-10": {
+   "report": {
+    "browser": {
+     "watchdog_failures": 0
+    },
+    "cancellation": {
+     "completed": 2,
+     "requested": 2
+    },
+    "evidence": {
+     "excluded": {
+      "ambiguous_synthesis_request": 14,
+      "missing_timestamp": 114,
+      "negative_latency": 7,
+      "unknown_transcript": 17,
+      "unobserved_finish": 4
+     }
+    },
+    "faults": [
+     {
+      "count": 2,
+      "kind": "timeout",
+      "source": "browser"
+     }
+    ],
+    "in_call_seconds": 2025.896,
+    "ingestion": {
+     "duration_seconds": {
+      "count": 8,
+      "max": 75.557,
+      "p50": 25.944,
+      "p95": 67.803
+     },
+     "empty": 3,
+     "episodes": 8,
+     "facts": 9,
+     "failed": 0
+    },
+    "ingestion_outcome": "completed",
+    "interruptions": {
+     "speech_to_stop_seconds": {
+      "count": 1,
+      "max": 2.082,
+      "p50": 2.082,
+      "p95": 2.082
+     },
+     "triggers": {
+      "final": 2,
+      "interim": 1
+     }
+    },
+    "journal": {
+     "corrupt_lines": 0
+    },
+    "latency": {
+     "agent_to_first_sentence_seconds": {
+      "count": 7,
+      "max": 16.158,
+      "p50": 5.706,
+      "p95": 13.411
+     },
+     "agent_to_first_text_seconds": {
+      "count": 7,
+      "max": 15.954,
+      "p50": 5.643,
+      "p95": 13.268
+     },
+     "agent_to_reply_seconds": {
+      "count": 7,
+      "max": 23.536,
+      "p50": 9.041,
+      "p95": 20.2
+     },
+     "final_to_agent_seconds": {
+      "count": 12,
+      "max": 1.358,
+      "p50": 0.621,
+      "p95": 1.112
+     },
+     "final_to_first_sentence_seconds": {
+      "count": 7,
+      "max": 17.516,
+      "p50": 6.345,
+      "p95": 14.536
+     },
+     "final_to_reply_seconds": {
+      "count": 7,
+      "max": 24.894,
+      "p50": 9.68,
+      "p95": 21.366
+     },
+     "first_sentence_to_first_pcm_seconds": {
+      "count": 7,
+      "max": 0.198,
+      "p50": 0.17,
+      "p95": 0.197
+     },
+     "reply_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "speech_stopped_to_final_seconds": {
+      "count": 31,
+      "max": 673.983,
+      "p50": 1.534,
+      "p95": 2.997
+     },
+     "speech_stopped_to_first_pcm_seconds": {
+      "count": 8,
+      "max": 18.565,
+      "p50": 6.095,
+      "p95": 15.108
+     }
+    },
+    "meet_actions": {
+     "actions": [
+      {
+       "action": "react",
+       "action_id": "e7070c52a398e7012c72ac9d028faff4",
+       "attempts": 1,
+       "duration_ms": null,
+       "observed": false,
+       "outcome": "finished",
+       "reason": null
+      },
+      {
+       "action": "react",
+       "action_id": "c4999f2461a3850de47fb1b08faa0cdb",
+       "attempts": 1,
+       "duration_ms": null,
+       "observed": false,
+       "outcome": "finished",
+       "reason": null
+      },
+      {
+       "action": "send_chat",
+       "action_id": "f9963e6f781903aaf0f89e04ed8c9f4c",
+       "attempts": 1,
+       "duration_ms": null,
+       "observed": false,
+       "outcome": "finished",
+       "reason": null
+      },
+      {
+       "action": "send_chat",
+       "action_id": "7eb4e2141dcd133d4c4921cf74e7c794",
+       "attempts": 1,
+       "duration_ms": null,
+       "observed": false,
+       "outcome": "finished",
+       "reason": null
+      },
+      {
+       "action": "raise_hand",
+       "action_id": "49d47bc7b17d5004d1695805c0e3c9f7",
+       "attempts": 1,
+       "duration_ms": null,
+       "observed": false,
+       "outcome": "finished",
+       "reason": null
+      },
+      {
+       "action": "lower_hand",
+       "action_id": "1bc3004a8ee94aad29df12c079180b78",
+       "attempts": 1,
+       "duration_ms": null,
+       "observed": false,
+       "outcome": "finished",
+       "reason": null
+      }
+     ],
+     "counts": {
+      "lower_hand": {
+       "finished": 1
+      },
+      "raise_hand": {
+       "finished": 1
+      },
+      "react": {
+       "finished": 2
+      },
+      "send_chat": {
+       "finished": 2
+      }
+     },
+     "duration_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "rejections": {}
+    },
+    "participation": {
+     "answers": 8,
+     "attributed_utterances": 31,
+     "attribution_coverage": 1.0,
+     "observer_methods": {
+      "dom_mining": 1
+     },
+     "policy": {
+      "reply": 16,
+      "silent": 15
+     },
+     "policy_reasons": {
+      "floor_occupied": 6,
+      "judge_below_threshold": 1,
+      "judge_reply": 16,
+      "judge_stay_silent": 8
+     },
+     "policy_sources": {
+      "floor": 6,
+      "judge": 25
+     },
+     "unknown_reasons": {},
+     "utterances_recorded": 31
+    },
+    "perception": {
+     "budget_exhausted": 0,
+     "chat_lines": 4,
+     "interpreter_disabled": 0,
+     "readings": {
+      "failed": 0,
+      "finished": 2,
+      "p95_ms": 8012.556,
+      "skipped": 0
+     },
+     "rejected_inputs": 0,
+     "screens": {
+      "merged": 0,
+      "new": 2,
+      "revisited": 0
+     },
+     "signals": 7,
+     "views": {
+      "emitted": 12,
+      "with_image": 0
+     }
+    },
+    "replies": {
+     "interrupted": 1,
+     "spoken": 11,
+     "trailing_questions": 0
+    },
+    "result": {
+     "detail": "guest left the call [browser_degraded: timeoutx3]",
+     "exit_code": 0,
+     "phase": "ended",
+     "terminal_reason": "stopped_by_owner"
+    },
+    "session_outcome": "completed",
+    "startup": {
+     "admission_to_listening_seconds": 2.619,
+     "admission_to_microphone_seconds": 0.116,
+     "audio_ready_at_admission": true,
+     "audio_startup_seconds": null,
+     "join_status": "admitted",
+     "lobby_wait_seconds": 9.249
+    },
+    "stt_quality": {
+     "capture_engines": {},
+     "drain_gaps": 0,
+     "first_interim_to_final_ms": {
+      "count": 31,
+      "max": 654638.2,
+      "p50": 5467.2,
+      "p95": 19738.0
+     },
+     "order_inversions": 0,
+     "tap_slot_drops": 0,
+     "tap_slot_rescues": 0,
+     "turn_interims": {
+      "count": 31,
+      "max": 18.0,
+      "p50": 8.0,
+      "p95": 14.5
+     }
+    },
+    "tools": {}
+   },
+   "scorecard": {
+    "failed": [
+     "first_audio_p50_seconds",
+     "first_audio_p95_seconds"
+    ],
+    "metrics": {
+     "admission_to_listening_seconds": {
+      "max": 5.0,
+      "passed": true,
+      "value": 2.619
+     },
+     "attribution_coverage": {
+      "min": 0.9,
+      "passed": true,
+      "value": 1.0
+     },
+     "faults_per_hour": {
+      "max": 6.0,
+      "passed": true,
+      "value": 3.554
+     },
+     "first_audio_p50_seconds": {
+      "max": 3.5,
+      "passed": false,
+      "value": 6.095
+     },
+     "first_audio_p95_seconds": {
+      "max": 6.5,
+      "passed": false,
+      "value": 15.108
+     },
+     "session_completed": {
+      "min": 1.0,
+      "passed": true,
+      "value": 1.0
+     },
+     "trailing_question_rate": {
+      "max": 0.1,
+      "passed": true,
+      "value": 0.0
+     },
+     "watchdog_failures_per_hour": {
+      "max": 20.0,
+      "passed": true,
+      "value": 0.0
+     }
+    },
+    "passed": false,
+    "unscored": [],
+    "version": 1
+   }
+  },
+  "rustfs-live-11": {
+   "report": {
+    "browser": {
+     "watchdog_failures": 0
+    },
+    "cancellation": {
+     "completed": 0,
+     "requested": 0
+    },
+    "evidence": {
+     "excluded": {}
+    },
+    "faults": [],
+    "in_call_seconds": 76.34,
+    "ingestion": {
+     "duration_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "empty": 0,
+     "episodes": 0,
+     "facts": 0,
+     "failed": 0
+    },
+    "ingestion_outcome": "completed",
+    "interruptions": {
+     "speech_to_stop_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "triggers": {}
+    },
+    "journal": {
+     "corrupt_lines": 0
+    },
+    "latency": {
+     "agent_to_first_sentence_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "agent_to_first_text_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "agent_to_reply_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_agent_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_first_sentence_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_reply_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "first_sentence_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "reply_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "speech_stopped_to_final_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "speech_stopped_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     }
+    },
+    "meet_actions": {
+     "actions": [],
+     "counts": {},
+     "duration_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "rejections": {}
+    },
+    "participation": {
+     "answers": 0,
+     "attributed_utterances": 0,
+     "attribution_coverage": null,
+     "observer_methods": {},
+     "policy": {},
+     "policy_reasons": {},
+     "policy_sources": {},
+     "unknown_reasons": {},
+     "utterances_recorded": 0
+    },
+    "perception": {
+     "budget_exhausted": 0,
+     "chat_lines": 0,
+     "interpreter_disabled": 0,
+     "readings": {
+      "failed": 0,
+      "finished": 0,
+      "p95_ms": null,
+      "skipped": 0
+     },
+     "rejected_inputs": 0,
+     "screens": {
+      "merged": 0,
+      "new": 0,
+      "revisited": 0
+     },
+     "signals": 1,
+     "views": {
+      "emitted": 0,
+      "with_image": 0
+     }
+    },
+    "replies": {
+     "interrupted": 0,
+     "spoken": 0,
+     "trailing_questions": 0
+    },
+    "result": {
+     "detail": "meeting microphone could not be enabled",
+     "exit_code": 1,
+     "phase": "ended",
+     "terminal_reason": "audio_failure"
+    },
+    "session_outcome": "failed",
+    "startup": {
+     "admission_to_listening_seconds": null,
+     "admission_to_microphone_seconds": null,
+     "audio_ready_at_admission": true,
+     "audio_startup_seconds": null,
+     "join_status": "admitted",
+     "lobby_wait_seconds": 48.142
+    },
+    "stt_quality": {
+     "capture_engines": {},
+     "drain_gaps": 0,
+     "first_interim_to_final_ms": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "order_inversions": 0,
+     "tap_slot_drops": 0,
+     "tap_slot_rescues": 0,
+     "turn_interims": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     }
+    },
+    "tools": {}
+   },
+   "scorecard": {
+    "failed": [
+     "session_completed"
+    ],
+    "metrics": {
+     "admission_to_listening_seconds": {
+      "max": 5.0,
+      "passed": null,
+      "value": null
+     },
+     "attribution_coverage": {
+      "min": 0.9,
+      "passed": null,
+      "value": null
+     },
+     "faults_per_hour": {
+      "max": 6.0,
+      "passed": true,
+      "value": 0.0
+     },
+     "first_audio_p50_seconds": {
+      "max": 3.5,
+      "passed": null,
+      "value": null
+     },
+     "first_audio_p95_seconds": {
+      "max": 6.5,
+      "passed": null,
+      "value": null
+     },
+     "session_completed": {
+      "min": 1.0,
+      "passed": false,
+      "value": 0.0
+     },
+     "trailing_question_rate": {
+      "max": 0.1,
+      "passed": null,
+      "value": null
+     },
+     "watchdog_failures_per_hour": {
+      "max": 20.0,
+      "passed": true,
+      "value": 0.0
+     }
+    },
+    "passed": false,
+    "unscored": [
+     "first_audio_p50_seconds",
+     "first_audio_p95_seconds",
+     "trailing_question_rate",
+     "attribution_coverage",
+     "admission_to_listening_seconds"
+    ],
+    "version": 1
+   }
+  },
+  "rustfs-live-12": {
+   "report": {
+    "browser": {
+     "watchdog_failures": 0
+    },
+    "cancellation": {
+     "completed": 0,
+     "requested": 0
+    },
+    "evidence": {
+     "excluded": {}
+    },
+    "faults": [],
+    "in_call_seconds": null,
+    "ingestion": {
+     "duration_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "empty": 0,
+     "episodes": 0,
+     "facts": 0,
+     "failed": 0
+    },
+    "ingestion_outcome": "completed",
+    "interruptions": {
+     "speech_to_stop_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "triggers": {}
+    },
+    "journal": {
+     "corrupt_lines": 0
+    },
+    "latency": {
+     "agent_to_first_sentence_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "agent_to_first_text_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "agent_to_reply_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_agent_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_first_sentence_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_reply_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "first_sentence_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "reply_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "speech_stopped_to_final_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "speech_stopped_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     }
+    },
+    "meet_actions": {
+     "actions": [],
+     "counts": {},
+     "duration_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "rejections": {}
+    },
+    "participation": {
+     "answers": 0,
+     "attributed_utterances": 0,
+     "attribution_coverage": null,
+     "observer_methods": {},
+     "policy": {},
+     "policy_reasons": {},
+     "policy_sources": {},
+     "unknown_reasons": {},
+     "utterances_recorded": 0
+    },
+    "perception": {
+     "budget_exhausted": 0,
+     "chat_lines": 0,
+     "interpreter_disabled": 0,
+     "readings": {
+      "failed": 0,
+      "finished": 0,
+      "p95_ms": null,
+      "skipped": 0
+     },
+     "rejected_inputs": 0,
+     "screens": {
+      "merged": 0,
+      "new": 0,
+      "revisited": 0
+     },
+     "signals": 0,
+     "views": {
+      "emitted": 0,
+      "with_image": 0
+     }
+    },
+    "replies": {
+     "interrupted": 0,
+     "spoken": 0,
+     "trailing_questions": 0
+    },
+    "result": {
+     "detail": "owner stopped browser startup",
+     "exit_code": 0,
+     "phase": "ended",
+     "terminal_reason": "stopped_by_owner"
+    },
+    "session_outcome": "completed",
+    "startup": {
+     "admission_to_listening_seconds": null,
+     "admission_to_microphone_seconds": null,
+     "audio_ready_at_admission": null,
+     "audio_startup_seconds": null,
+     "join_status": null,
+     "lobby_wait_seconds": null
+    },
+    "stt_quality": {
+     "capture_engines": {},
+     "drain_gaps": 0,
+     "first_interim_to_final_ms": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "order_inversions": 0,
+     "tap_slot_drops": 0,
+     "tap_slot_rescues": 0,
+     "turn_interims": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     }
+    },
+    "tools": {}
+   },
+   "scorecard": {
+    "failed": [],
+    "metrics": {
+     "admission_to_listening_seconds": {
+      "max": 5.0,
+      "passed": null,
+      "value": null
+     },
+     "attribution_coverage": {
+      "min": 0.9,
+      "passed": null,
+      "value": null
+     },
+     "faults_per_hour": {
+      "max": 6.0,
+      "passed": null,
+      "value": null
+     },
+     "first_audio_p50_seconds": {
+      "max": 3.5,
+      "passed": null,
+      "value": null
+     },
+     "first_audio_p95_seconds": {
+      "max": 6.5,
+      "passed": null,
+      "value": null
+     },
+     "session_completed": {
+      "min": 1.0,
+      "passed": true,
+      "value": 1.0
+     },
+     "trailing_question_rate": {
+      "max": 0.1,
+      "passed": null,
+      "value": null
+     },
+     "watchdog_failures_per_hour": {
+      "max": 20.0,
+      "passed": null,
+      "value": null
+     }
+    },
+    "passed": false,
+    "unscored": [
+     "first_audio_p50_seconds",
+     "first_audio_p95_seconds",
+     "trailing_question_rate",
+     "faults_per_hour",
+     "watchdog_failures_per_hour",
+     "attribution_coverage",
+     "admission_to_listening_seconds"
+    ],
+    "version": 1
+   }
+  },
+  "rustfs-live-13": {
+   "report": {
+    "browser": {
+     "watchdog_failures": 0
+    },
+    "cancellation": {
+     "completed": 0,
+     "requested": 0
+    },
+    "evidence": {
+     "excluded": {}
+    },
+    "faults": [
+     {
+      "count": 1,
+      "kind": "unavailable",
+      "source": "stt"
+     }
+    ],
+    "in_call_seconds": null,
+    "ingestion": {
+     "duration_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "empty": 0,
+     "episodes": 0,
+     "facts": 0,
+     "failed": 0
+    },
+    "ingestion_outcome": "completed",
+    "interruptions": {
+     "speech_to_stop_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "triggers": {}
+    },
+    "journal": {
+     "corrupt_lines": 0
+    },
+    "latency": {
+     "agent_to_first_sentence_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "agent_to_first_text_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "agent_to_reply_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_agent_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_first_sentence_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_reply_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "first_sentence_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "reply_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "speech_stopped_to_final_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "speech_stopped_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     }
+    },
+    "meet_actions": {
+     "actions": [],
+     "counts": {},
+     "duration_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "rejections": {}
+    },
+    "participation": {
+     "answers": 0,
+     "attributed_utterances": 0,
+     "attribution_coverage": null,
+     "observer_methods": {},
+     "policy": {},
+     "policy_reasons": {},
+     "policy_sources": {},
+     "unknown_reasons": {},
+     "utterances_recorded": 0
+    },
+    "perception": {
+     "budget_exhausted": 0,
+     "chat_lines": 0,
+     "interpreter_disabled": 0,
+     "readings": {
+      "failed": 0,
+      "finished": 0,
+      "p95_ms": null,
+      "skipped": 0
+     },
+     "rejected_inputs": 0,
+     "screens": {
+      "merged": 0,
+      "new": 0,
+      "revisited": 0
+     },
+     "signals": 0,
+     "views": {
+      "emitted": 0,
+      "with_image": 0
+     }
+    },
+    "replies": {
+     "interrupted": 0,
+     "spoken": 0,
+     "trailing_questions": 0
+    },
+    "result": {
+     "detail": "owner stopped guest join [stt_degraded: unavailablex1]",
+     "exit_code": 0,
+     "phase": "ended",
+     "terminal_reason": "stopped_by_owner"
+    },
+    "session_outcome": "completed",
+    "startup": {
+     "admission_to_listening_seconds": null,
+     "admission_to_microphone_seconds": null,
+     "audio_ready_at_admission": null,
+     "audio_startup_seconds": null,
+     "join_status": "aborted",
+     "lobby_wait_seconds": 163.226
+    },
+    "stt_quality": {
+     "capture_engines": {},
+     "drain_gaps": 0,
+     "first_interim_to_final_ms": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "order_inversions": 0,
+     "tap_slot_drops": 0,
+     "tap_slot_rescues": 0,
+     "turn_interims": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     }
+    },
+    "tools": {}
+   },
+   "scorecard": {
+    "failed": [],
+    "metrics": {
+     "admission_to_listening_seconds": {
+      "max": 5.0,
+      "passed": null,
+      "value": null
+     },
+     "attribution_coverage": {
+      "min": 0.9,
+      "passed": null,
+      "value": null
+     },
+     "faults_per_hour": {
+      "max": 6.0,
+      "passed": null,
+      "value": null
+     },
+     "first_audio_p50_seconds": {
+      "max": 3.5,
+      "passed": null,
+      "value": null
+     },
+     "first_audio_p95_seconds": {
+      "max": 6.5,
+      "passed": null,
+      "value": null
+     },
+     "session_completed": {
+      "min": 1.0,
+      "passed": true,
+      "value": 1.0
+     },
+     "trailing_question_rate": {
+      "max": 0.1,
+      "passed": null,
+      "value": null
+     },
+     "watchdog_failures_per_hour": {
+      "max": 20.0,
+      "passed": null,
+      "value": null
+     }
+    },
+    "passed": false,
+    "unscored": [
+     "first_audio_p50_seconds",
+     "first_audio_p95_seconds",
+     "trailing_question_rate",
+     "faults_per_hour",
+     "watchdog_failures_per_hour",
+     "attribution_coverage",
+     "admission_to_listening_seconds"
+    ],
+    "version": 1
+   }
+  },
+  "rustfs-live-14": {
+   "report": {
+    "browser": {
+     "watchdog_failures": 0
+    },
+    "cancellation": {
+     "completed": 0,
+     "requested": 0
+    },
+    "evidence": {
+     "excluded": {
+      "missing_timestamp": 93,
+      "unknown_transcript": 2
+     }
+    },
+    "faults": [],
+    "in_call_seconds": null,
+    "ingestion": {
+     "duration_seconds": {
+      "count": 3,
+      "max": 48.367,
+      "p50": 42.858,
+      "p95": 47.816
+     },
+     "empty": 1,
+     "episodes": 3,
+     "facts": 2,
+     "failed": 0
+    },
+    "ingestion_outcome": "unknown",
+    "interruptions": {
+     "speech_to_stop_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "triggers": {}
+    },
+    "journal": {
+     "corrupt_lines": 0
+    },
+    "latency": {
+     "agent_to_first_sentence_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "agent_to_first_text_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "agent_to_reply_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_agent_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_first_sentence_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_reply_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "first_sentence_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "reply_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "speech_stopped_to_final_seconds": {
+      "count": 15,
+      "max": 11.024,
+      "p50": 3.098,
+      "p95": 7.506
+     },
+     "speech_stopped_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     }
+    },
+    "meet_actions": {
+     "actions": [],
+     "counts": {},
+     "duration_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "rejections": {}
+    },
+    "participation": {
+     "answers": 0,
+     "attributed_utterances": 8,
+     "attribution_coverage": 0.444,
+     "observer_methods": {},
+     "policy": {
+      "silent": 19
+     },
+     "policy_reasons": {
+      "floor_occupied": 3,
+      "judge_stay_silent": 16
+     },
+     "policy_sources": {
+      "floor": 3,
+      "judge": 16
+     },
+     "unknown_reasons": {
+      "no_source": 5,
+      "no_speech": 1,
+      "overlap": 4
+     },
+     "utterances_recorded": 18
+    },
+    "perception": {
+     "budget_exhausted": 0,
+     "chat_lines": 0,
+     "interpreter_disabled": 0,
+     "readings": {
+      "failed": 0,
+      "finished": 13,
+      "p95_ms": 14658.976,
+      "skipped": 0
+     },
+     "rejected_inputs": 0,
+     "screens": {
+      "merged": 0,
+      "new": 12,
+      "revisited": 0
+     },
+     "signals": 0,
+     "views": {
+      "emitted": 0,
+      "with_image": 0
+     }
+    },
+    "replies": {
+     "interrupted": 0,
+     "spoken": 0,
+     "trailing_questions": 0
+    },
+    "result": {
+     "detail": "guest left the call [browser_degraded: timeoutx31]",
+     "exit_code": 0,
+     "phase": "ended",
+     "terminal_reason": "stopped_by_owner"
+    },
+    "session_outcome": "completed",
+    "startup": {
+     "admission_to_listening_seconds": null,
+     "admission_to_microphone_seconds": null,
+     "audio_ready_at_admission": null,
+     "audio_startup_seconds": null,
+     "join_status": null,
+     "lobby_wait_seconds": null
+    },
+    "stt_quality": {
+     "capture_engines": {},
+     "drain_gaps": 0,
+     "first_interim_to_final_ms": {
+      "count": 18,
+      "max": 13504.6,
+      "p50": 5856.25,
+      "p95": 12127.09
+     },
+     "order_inversions": 0,
+     "tap_slot_drops": 0,
+     "tap_slot_rescues": 0,
+     "turn_interims": {
+      "count": 18,
+      "max": 18.0,
+      "p50": 6.0,
+      "p95": 17.15
+     }
+    },
+    "tools": {}
+   },
+   "scorecard": {
+    "failed": [
+     "attribution_coverage"
+    ],
+    "metrics": {
+     "admission_to_listening_seconds": {
+      "max": 5.0,
+      "passed": null,
+      "value": null
+     },
+     "attribution_coverage": {
+      "min": 0.9,
+      "passed": false,
+      "value": 0.444
+     },
+     "faults_per_hour": {
+      "max": 6.0,
+      "passed": null,
+      "value": null
+     },
+     "first_audio_p50_seconds": {
+      "max": 3.5,
+      "passed": null,
+      "value": null
+     },
+     "first_audio_p95_seconds": {
+      "max": 6.5,
+      "passed": null,
+      "value": null
+     },
+     "session_completed": {
+      "min": 1.0,
+      "passed": true,
+      "value": 1.0
+     },
+     "trailing_question_rate": {
+      "max": 0.1,
+      "passed": null,
+      "value": null
+     },
+     "watchdog_failures_per_hour": {
+      "max": 20.0,
+      "passed": null,
+      "value": null
+     }
+    },
+    "passed": false,
+    "unscored": [
+     "first_audio_p50_seconds",
+     "first_audio_p95_seconds",
+     "trailing_question_rate",
+     "faults_per_hour",
+     "watchdog_failures_per_hour",
+     "admission_to_listening_seconds"
+    ],
+    "version": 1
+   }
+  },
+  "rustfs-live-15": {
+   "report": {
+    "browser": {
+     "watchdog_failures": 0
+    },
+    "cancellation": {
+     "completed": 0,
+     "requested": 0
+    },
+    "evidence": {
+     "excluded": {
+      "missing_timestamp": 5
+     }
+    },
+    "faults": [],
+    "in_call_seconds": 37.309,
+    "ingestion": {
+     "duration_seconds": {
+      "count": 1,
+      "max": 15.228,
+      "p50": 15.228,
+      "p95": 15.228
+     },
+     "empty": 1,
+     "episodes": 1,
+     "facts": 0,
+     "failed": 0
+    },
+    "ingestion_outcome": "completed",
+    "interruptions": {
+     "speech_to_stop_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "triggers": {}
+    },
+    "journal": {
+     "corrupt_lines": 0
+    },
+    "latency": {
+     "agent_to_first_sentence_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "agent_to_first_text_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "agent_to_reply_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_agent_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_first_sentence_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_reply_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "first_sentence_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "reply_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "speech_stopped_to_final_seconds": {
+      "count": 1,
+      "max": 0.874,
+      "p50": 0.874,
+      "p95": 0.874
+     },
+     "speech_stopped_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     }
+    },
+    "meet_actions": {
+     "actions": [],
+     "counts": {},
+     "duration_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "rejections": {}
+    },
+    "participation": {
+     "answers": 0,
+     "attributed_utterances": 0,
+     "attribution_coverage": 0.0,
+     "observer_methods": {},
+     "policy": {
+      "silent": 1
+     },
+     "policy_reasons": {
+      "judge_stay_silent": 1
+     },
+     "policy_sources": {
+      "judge": 1
+     },
+     "unknown_reasons": {
+      "stale": 1
+     },
+     "utterances_recorded": 1
+    },
+    "perception": {
+     "budget_exhausted": 0,
+     "chat_lines": 0,
+     "interpreter_disabled": 0,
+     "readings": {
+      "failed": 0,
+      "finished": 0,
+      "p95_ms": null,
+      "skipped": 0
+     },
+     "rejected_inputs": 0,
+     "screens": {
+      "merged": 0,
+      "new": 0,
+      "revisited": 0
+     },
+     "signals": 5,
+     "views": {
+      "emitted": 0,
+      "with_image": 0
+     }
+    },
+    "replies": {
+     "interrupted": 0,
+     "spoken": 0,
+     "trailing_questions": 0
+    },
+    "result": {
+     "detail": "meeting microphone could not be enabled: clicking 'microphone button' failed after 3 attempts: locator never became visible",
+     "exit_code": 1,
+     "phase": "ended",
+     "terminal_reason": "audio_failure"
+    },
+    "session_outcome": "failed",
+    "startup": {
+     "admission_to_listening_seconds": null,
+     "admission_to_microphone_seconds": null,
+     "audio_ready_at_admission": true,
+     "audio_startup_seconds": null,
+     "join_status": "admitted",
+     "lobby_wait_seconds": 16.757
+    },
+    "stt_quality": {
+     "capture_engines": {},
+     "drain_gaps": 0,
+     "first_interim_to_final_ms": {
+      "count": 1,
+      "max": 1.7,
+      "p50": 1.7,
+      "p95": 1.7
+     },
+     "order_inversions": 0,
+     "tap_slot_drops": 0,
+     "tap_slot_rescues": 0,
+     "turn_interims": {
+      "count": 1,
+      "max": 1.0,
+      "p50": 1.0,
+      "p95": 1.0
+     }
+    },
+    "tools": {}
+   },
+   "scorecard": {
+    "failed": [
+     "session_completed",
+     "attribution_coverage"
+    ],
+    "metrics": {
+     "admission_to_listening_seconds": {
+      "max": 5.0,
+      "passed": null,
+      "value": null
+     },
+     "attribution_coverage": {
+      "min": 0.9,
+      "passed": false,
+      "value": 0.0
+     },
+     "faults_per_hour": {
+      "max": 6.0,
+      "passed": true,
+      "value": 0.0
+     },
+     "first_audio_p50_seconds": {
+      "max": 3.5,
+      "passed": null,
+      "value": null
+     },
+     "first_audio_p95_seconds": {
+      "max": 6.5,
+      "passed": null,
+      "value": null
+     },
+     "session_completed": {
+      "min": 1.0,
+      "passed": false,
+      "value": 0.0
+     },
+     "trailing_question_rate": {
+      "max": 0.1,
+      "passed": null,
+      "value": null
+     },
+     "watchdog_failures_per_hour": {
+      "max": 20.0,
+      "passed": true,
+      "value": 0.0
+     }
+    },
+    "passed": false,
+    "unscored": [
+     "first_audio_p50_seconds",
+     "first_audio_p95_seconds",
+     "trailing_question_rate",
+     "admission_to_listening_seconds"
+    ],
+    "version": 1
+   }
+  },
+  "rustfs-live-16": {
+   "report": {
+    "browser": {
+     "watchdog_failures": 0
+    },
+    "cancellation": {
+     "completed": 0,
+     "requested": 0
+    },
+    "evidence": {
+     "excluded": {}
+    },
+    "faults": [],
+    "in_call_seconds": null,
+    "ingestion": {
+     "duration_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "empty": 0,
+     "episodes": 0,
+     "facts": 0,
+     "failed": 0
+    },
+    "ingestion_outcome": "completed",
+    "interruptions": {
+     "speech_to_stop_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "triggers": {}
+    },
+    "journal": {
+     "corrupt_lines": 0
+    },
+    "latency": {
+     "agent_to_first_sentence_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "agent_to_first_text_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "agent_to_reply_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_agent_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_first_sentence_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_reply_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "first_sentence_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "reply_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "speech_stopped_to_final_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "speech_stopped_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     }
+    },
+    "meet_actions": {
+     "actions": [],
+     "counts": {},
+     "duration_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "rejections": {}
+    },
+    "participation": {
+     "answers": 0,
+     "attributed_utterances": 0,
+     "attribution_coverage": null,
+     "observer_methods": {},
+     "policy": {},
+     "policy_reasons": {},
+     "policy_sources": {},
+     "unknown_reasons": {},
+     "utterances_recorded": 0
+    },
+    "perception": {
+     "budget_exhausted": 0,
+     "chat_lines": 0,
+     "interpreter_disabled": 0,
+     "readings": {
+      "failed": 0,
+      "finished": 0,
+      "p95_ms": null,
+      "skipped": 0
+     },
+     "rejected_inputs": 0,
+     "screens": {
+      "merged": 0,
+      "new": 0,
+      "revisited": 0
+     },
+     "signals": 0,
+     "views": {
+      "emitted": 0,
+      "with_image": 0
+     }
+    },
+    "replies": {
+     "interrupted": 0,
+     "spoken": 0,
+     "trailing_questions": 0
+    },
+    "result": {
+     "detail": "platform blocked the guest",
+     "exit_code": 0,
+     "phase": "ended",
+     "terminal_reason": "blocked_by_platform"
+    },
+    "session_outcome": "completed",
+    "startup": {
+     "admission_to_listening_seconds": null,
+     "admission_to_microphone_seconds": null,
+     "audio_ready_at_admission": null,
+     "audio_startup_seconds": null,
+     "join_status": "blocked",
+     "lobby_wait_seconds": 18.078
+    },
+    "stt_quality": {
+     "capture_engines": {},
+     "drain_gaps": 0,
+     "first_interim_to_final_ms": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "order_inversions": 0,
+     "tap_slot_drops": 0,
+     "tap_slot_rescues": 0,
+     "turn_interims": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     }
+    },
+    "tools": {}
+   },
+   "scorecard": {
+    "failed": [],
+    "metrics": {
+     "admission_to_listening_seconds": {
+      "max": 5.0,
+      "passed": null,
+      "value": null
+     },
+     "attribution_coverage": {
+      "min": 0.9,
+      "passed": null,
+      "value": null
+     },
+     "faults_per_hour": {
+      "max": 6.0,
+      "passed": null,
+      "value": null
+     },
+     "first_audio_p50_seconds": {
+      "max": 3.5,
+      "passed": null,
+      "value": null
+     },
+     "first_audio_p95_seconds": {
+      "max": 6.5,
+      "passed": null,
+      "value": null
+     },
+     "session_completed": {
+      "min": 1.0,
+      "passed": true,
+      "value": 1.0
+     },
+     "trailing_question_rate": {
+      "max": 0.1,
+      "passed": null,
+      "value": null
+     },
+     "watchdog_failures_per_hour": {
+      "max": 20.0,
+      "passed": null,
+      "value": null
+     }
+    },
+    "passed": false,
+    "unscored": [
+     "first_audio_p50_seconds",
+     "first_audio_p95_seconds",
+     "trailing_question_rate",
+     "faults_per_hour",
+     "watchdog_failures_per_hour",
+     "attribution_coverage",
+     "admission_to_listening_seconds"
+    ],
+    "version": 1
+   }
+  },
+  "rustfs-live-17": {
+   "report": {
+    "browser": {
+     "watchdog_failures": 0
+    },
+    "cancellation": {
+     "completed": 1,
+     "requested": 1
+    },
+    "evidence": {
+     "excluded": {
+      "ambiguous_synthesis_request": 5,
+      "missing_timestamp": 45,
+      "unknown_transcript": 2
+     }
+    },
+    "faults": [
+     {
+      "count": 1,
+      "kind": "unknown",
+      "source": "browser"
+     }
+    ],
+    "in_call_seconds": 108.776,
+    "ingestion": {
+     "duration_seconds": {
+      "count": 1,
+      "max": 20.619,
+      "p50": 20.619,
+      "p95": 20.619
+     },
+     "empty": 1,
+     "episodes": 1,
+     "facts": 0,
+     "failed": 0
+    },
+    "ingestion_outcome": "completed",
+    "interruptions": {
+     "speech_to_stop_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "triggers": {}
+    },
+    "journal": {
+     "corrupt_lines": 0
+    },
+    "latency": {
+     "agent_to_first_sentence_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "agent_to_first_text_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "agent_to_reply_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_agent_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_first_sentence_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_reply_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "first_sentence_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "reply_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "speech_stopped_to_final_seconds": {
+      "count": 9,
+      "max": 2.667,
+      "p50": 2.457,
+      "p95": 2.663
+     },
+     "speech_stopped_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     }
+    },
+    "meet_actions": {
+     "actions": [],
+     "counts": {},
+     "duration_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "rejections": {}
+    },
+    "participation": {
+     "answers": 0,
+     "attributed_utterances": 0,
+     "attribution_coverage": 0.0,
+     "observer_methods": {
+      "dom_mining": 1
+     },
+     "policy": {
+      "silent": 9
+     },
+     "policy_reasons": {
+      "floor_occupied": 3,
+      "judge_stay_silent": 6
+     },
+     "policy_sources": {
+      "floor": 3,
+      "judge": 6
+     },
+     "unknown_reasons": {
+      "stale": 9
+     },
+     "utterances_recorded": 9
+    },
+    "perception": {
+     "budget_exhausted": 0,
+     "chat_lines": 0,
+     "interpreter_disabled": 0,
+     "readings": {
+      "failed": 0,
+      "finished": 0,
+      "p95_ms": null,
+      "skipped": 0
+     },
+     "rejected_inputs": 0,
+     "screens": {
+      "merged": 0,
+      "new": 0,
+      "revisited": 0
+     },
+     "signals": 4,
+     "views": {
+      "emitted": 1,
+      "with_image": 0
+     }
+    },
+    "replies": {
+     "interrupted": 0,
+     "spoken": 1,
+     "trailing_questions": 0
+    },
+    "result": {
+     "detail": "the call has ended [browser_degraded: unknownx1]",
+     "exit_code": 0,
+     "phase": "ended",
+     "terminal_reason": "ended_by_host"
+    },
+    "session_outcome": "completed",
+    "startup": {
+     "admission_to_listening_seconds": 62.249,
+     "admission_to_microphone_seconds": 9.721,
+     "audio_ready_at_admission": true,
+     "audio_startup_seconds": null,
+     "join_status": "admitted",
+     "lobby_wait_seconds": 24.008
+    },
+    "stt_quality": {
+     "capture_engines": {},
+     "drain_gaps": 0,
+     "first_interim_to_final_ms": {
+      "count": 9,
+      "max": 18309.4,
+      "p50": 4104.1,
+      "p95": 13502.28
+     },
+     "order_inversions": 0,
+     "tap_slot_drops": 0,
+     "tap_slot_rescues": 0,
+     "turn_interims": {
+      "count": 9,
+      "max": 18.0,
+      "p50": 8.0,
+      "p95": 16.0
+     }
+    },
+    "tools": {}
+   },
+   "scorecard": {
+    "failed": [
+     "faults_per_hour",
+     "attribution_coverage",
+     "admission_to_listening_seconds"
+    ],
+    "metrics": {
+     "admission_to_listening_seconds": {
+      "max": 5.0,
+      "passed": false,
+      "value": 62.249
+     },
+     "attribution_coverage": {
+      "min": 0.9,
+      "passed": false,
+      "value": 0.0
+     },
+     "faults_per_hour": {
+      "max": 6.0,
+      "passed": false,
+      "value": 33.096
+     },
+     "first_audio_p50_seconds": {
+      "max": 3.5,
+      "passed": null,
+      "value": null
+     },
+     "first_audio_p95_seconds": {
+      "max": 6.5,
+      "passed": null,
+      "value": null
+     },
+     "session_completed": {
+      "min": 1.0,
+      "passed": true,
+      "value": 1.0
+     },
+     "trailing_question_rate": {
+      "max": 0.1,
+      "passed": true,
+      "value": 0.0
+     },
+     "watchdog_failures_per_hour": {
+      "max": 20.0,
+      "passed": true,
+      "value": 0.0
+     }
+    },
+    "passed": false,
+    "unscored": [
+     "first_audio_p50_seconds",
+     "first_audio_p95_seconds"
+    ],
+    "version": 1
+   }
+  },
+  "rustfs-live-18": {
+   "report": {
+    "browser": {
+     "watchdog_failures": 0
+    },
+    "cancellation": {
+     "completed": 0,
+     "requested": 0
+    },
+    "evidence": {
+     "excluded": {}
+    },
+    "faults": [],
+    "in_call_seconds": null,
+    "ingestion": {
+     "duration_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "empty": 0,
+     "episodes": 0,
+     "facts": 0,
+     "failed": 0
+    },
+    "ingestion_outcome": "completed",
+    "interruptions": {
+     "speech_to_stop_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "triggers": {}
+    },
+    "journal": {
+     "corrupt_lines": 0
+    },
+    "latency": {
+     "agent_to_first_sentence_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "agent_to_first_text_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "agent_to_reply_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_agent_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_first_sentence_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_reply_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "first_sentence_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "reply_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "speech_stopped_to_final_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "speech_stopped_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     }
+    },
+    "meet_actions": {
+     "actions": [],
+     "counts": {},
+     "duration_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "rejections": {}
+    },
+    "participation": {
+     "answers": 0,
+     "attributed_utterances": 0,
+     "attribution_coverage": null,
+     "observer_methods": {},
+     "policy": {},
+     "policy_reasons": {},
+     "policy_sources": {},
+     "unknown_reasons": {},
+     "utterances_recorded": 0
+    },
+    "perception": {
+     "budget_exhausted": 0,
+     "chat_lines": 0,
+     "interpreter_disabled": 0,
+     "readings": {
+      "failed": 0,
+      "finished": 0,
+      "p95_ms": null,
+      "skipped": 0
+     },
+     "rejected_inputs": 0,
+     "screens": {
+      "merged": 0,
+      "new": 0,
+      "revisited": 0
+     },
+     "signals": 0,
+     "views": {
+      "emitted": 0,
+      "with_image": 0
+     }
+    },
+    "replies": {
+     "interrupted": 0,
+     "spoken": 0,
+     "trailing_questions": 0
+    },
+    "result": {
+     "detail": "platform blocked the guest; page says: =\"UaslIb\"></div></div><h1 jsname=\"r4nke\" class=\"roSPhc\">You can't join this video call</h1><div jsname=\"c6xFrd\" class=\"kJU3pb\" data-initial-focus-index=\"1\"><div",
+     "exit_code": 0,
+     "phase": "ended",
+     "terminal_reason": "blocked_by_platform"
+    },
+    "session_outcome": "completed",
+    "startup": {
+     "admission_to_listening_seconds": null,
+     "admission_to_microphone_seconds": null,
+     "audio_ready_at_admission": null,
+     "audio_startup_seconds": null,
+     "join_status": "blocked",
+     "lobby_wait_seconds": 45.12
+    },
+    "stt_quality": {
+     "capture_engines": {},
+     "drain_gaps": 0,
+     "first_interim_to_final_ms": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "order_inversions": 0,
+     "tap_slot_drops": 0,
+     "tap_slot_rescues": 0,
+     "turn_interims": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     }
+    },
+    "tools": {}
+   },
+   "scorecard": {
+    "failed": [],
+    "metrics": {
+     "admission_to_listening_seconds": {
+      "max": 5.0,
+      "passed": null,
+      "value": null
+     },
+     "attribution_coverage": {
+      "min": 0.9,
+      "passed": null,
+      "value": null
+     },
+     "faults_per_hour": {
+      "max": 6.0,
+      "passed": null,
+      "value": null
+     },
+     "first_audio_p50_seconds": {
+      "max": 3.5,
+      "passed": null,
+      "value": null
+     },
+     "first_audio_p95_seconds": {
+      "max": 6.5,
+      "passed": null,
+      "value": null
+     },
+     "session_completed": {
+      "min": 1.0,
+      "passed": true,
+      "value": 1.0
+     },
+     "trailing_question_rate": {
+      "max": 0.1,
+      "passed": null,
+      "value": null
+     },
+     "watchdog_failures_per_hour": {
+      "max": 20.0,
+      "passed": null,
+      "value": null
+     }
+    },
+    "passed": false,
+    "unscored": [
+     "first_audio_p50_seconds",
+     "first_audio_p95_seconds",
+     "trailing_question_rate",
+     "faults_per_hour",
+     "watchdog_failures_per_hour",
+     "attribution_coverage",
+     "admission_to_listening_seconds"
+    ],
+    "version": 1
+   }
+  },
+  "rustfs-live-19": {
+   "report": {
+    "browser": {
+     "watchdog_failures": 0
+    },
+    "cancellation": {
+     "completed": 0,
+     "requested": 0
+    },
+    "evidence": {
+     "excluded": {}
+    },
+    "faults": [],
+    "in_call_seconds": null,
+    "ingestion": {
+     "duration_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "empty": 0,
+     "episodes": 0,
+     "facts": 0,
+     "failed": 0
+    },
+    "ingestion_outcome": "completed",
+    "interruptions": {
+     "speech_to_stop_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "triggers": {}
+    },
+    "journal": {
+     "corrupt_lines": 0
+    },
+    "latency": {
+     "agent_to_first_sentence_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "agent_to_first_text_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "agent_to_reply_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_agent_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_first_sentence_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_reply_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "first_sentence_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "reply_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "speech_stopped_to_final_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "speech_stopped_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     }
+    },
+    "meet_actions": {
+     "actions": [],
+     "counts": {},
+     "duration_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "rejections": {}
+    },
+    "participation": {
+     "answers": 0,
+     "attributed_utterances": 0,
+     "attribution_coverage": null,
+     "observer_methods": {},
+     "policy": {},
+     "policy_reasons": {},
+     "policy_sources": {},
+     "unknown_reasons": {},
+     "utterances_recorded": 0
+    },
+    "perception": {
+     "budget_exhausted": 0,
+     "chat_lines": 0,
+     "interpreter_disabled": 0,
+     "readings": {
+      "failed": 0,
+      "finished": 0,
+      "p95_ms": null,
+      "skipped": 0
+     },
+     "rejected_inputs": 0,
+     "screens": {
+      "merged": 0,
+      "new": 0,
+      "revisited": 0
+     },
+     "signals": 0,
+     "views": {
+      "emitted": 0,
+      "with_image": 0
+     }
+    },
+    "replies": {
+     "interrupted": 0,
+     "spoken": 0,
+     "trailing_questions": 0
+    },
+    "result": {
+     "detail": "platform blocked the guest; page says: =\"UaslIb\"></div></div><h1 jsname=\"r4nke\" class=\"roSPhc\">You can't join this video call</h1><div jsname=\"c6xFrd\" class=\"kJU3pb\" data-initial-focus-index=\"1\"><div",
+     "exit_code": 0,
+     "phase": "ended",
+     "terminal_reason": "blocked_by_platform"
+    },
+    "session_outcome": "completed",
+    "startup": {
+     "admission_to_listening_seconds": null,
+     "admission_to_microphone_seconds": null,
+     "audio_ready_at_admission": null,
+     "audio_startup_seconds": null,
+     "join_status": "blocked",
+     "lobby_wait_seconds": 12.671
+    },
+    "stt_quality": {
+     "capture_engines": {},
+     "drain_gaps": 0,
+     "first_interim_to_final_ms": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "order_inversions": 0,
+     "tap_slot_drops": 0,
+     "tap_slot_rescues": 0,
+     "turn_interims": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     }
+    },
+    "tools": {}
+   },
+   "scorecard": {
+    "failed": [],
+    "metrics": {
+     "admission_to_listening_seconds": {
+      "max": 5.0,
+      "passed": null,
+      "value": null
+     },
+     "attribution_coverage": {
+      "min": 0.9,
+      "passed": null,
+      "value": null
+     },
+     "faults_per_hour": {
+      "max": 6.0,
+      "passed": null,
+      "value": null
+     },
+     "first_audio_p50_seconds": {
+      "max": 3.5,
+      "passed": null,
+      "value": null
+     },
+     "first_audio_p95_seconds": {
+      "max": 6.5,
+      "passed": null,
+      "value": null
+     },
+     "session_completed": {
+      "min": 1.0,
+      "passed": true,
+      "value": 1.0
+     },
+     "trailing_question_rate": {
+      "max": 0.1,
+      "passed": null,
+      "value": null
+     },
+     "watchdog_failures_per_hour": {
+      "max": 20.0,
+      "passed": null,
+      "value": null
+     }
+    },
+    "passed": false,
+    "unscored": [
+     "first_audio_p50_seconds",
+     "first_audio_p95_seconds",
+     "trailing_question_rate",
+     "faults_per_hour",
+     "watchdog_failures_per_hour",
+     "attribution_coverage",
+     "admission_to_listening_seconds"
+    ],
+    "version": 1
+   }
+  },
+  "rustfs-live-2": {
+   "report": {
+    "browser": {
+     "watchdog_failures": 0
+    },
+    "cancellation": {
+     "completed": 0,
+     "requested": 0
+    },
+    "evidence": {
+     "excluded": {}
+    },
+    "faults": [],
+    "in_call_seconds": null,
+    "ingestion": {
+     "duration_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "empty": 0,
+     "episodes": 0,
+     "facts": 0,
+     "failed": 0
+    },
+    "ingestion_outcome": "completed",
+    "interruptions": {
+     "speech_to_stop_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "triggers": {}
+    },
+    "journal": {
+     "corrupt_lines": 0
+    },
+    "latency": {
+     "agent_to_first_sentence_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "agent_to_first_text_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "agent_to_reply_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_agent_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_first_sentence_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_reply_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "first_sentence_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "reply_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "speech_stopped_to_final_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "speech_stopped_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     }
+    },
+    "meet_actions": {
+     "actions": [],
+     "counts": {},
+     "duration_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "rejections": {}
+    },
+    "participation": {
+     "answers": 0,
+     "attributed_utterances": 0,
+     "attribution_coverage": null,
+     "observer_methods": {},
+     "policy": {},
+     "policy_reasons": {},
+     "policy_sources": {},
+     "unknown_reasons": {},
+     "utterances_recorded": 0
+    },
+    "perception": {
+     "budget_exhausted": 0,
+     "chat_lines": 0,
+     "interpreter_disabled": 0,
+     "readings": {
+      "failed": 0,
+      "finished": 0,
+      "p95_ms": null,
+      "skipped": 0
+     },
+     "rejected_inputs": 0,
+     "screens": {
+      "merged": 0,
+      "new": 0,
+      "revisited": 0
+     },
+     "signals": 0,
+     "views": {
+      "emitted": 0,
+      "with_image": 0
+     }
+    },
+    "replies": {
+     "interrupted": 0,
+     "spoken": 0,
+     "trailing_questions": 0
+    },
+    "result": {
+     "detail": "clicking 'name field' failed after 10 attempts: locator never became visible",
+     "exit_code": 1,
+     "phase": "ended",
+     "terminal_reason": "browser_failure"
+    },
+    "session_outcome": "failed",
+    "startup": {
+     "admission_to_listening_seconds": null,
+     "admission_to_microphone_seconds": null,
+     "audio_ready_at_admission": null,
+     "audio_startup_seconds": null,
+     "join_status": "failed",
+     "lobby_wait_seconds": 98.254
+    },
+    "stt_quality": {
+     "capture_engines": {},
+     "drain_gaps": 0,
+     "first_interim_to_final_ms": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "order_inversions": 0,
+     "tap_slot_drops": 0,
+     "tap_slot_rescues": 0,
+     "turn_interims": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     }
+    },
+    "tools": {}
+   },
+   "scorecard": {
+    "failed": [
+     "session_completed"
+    ],
+    "metrics": {
+     "admission_to_listening_seconds": {
+      "max": 5.0,
+      "passed": null,
+      "value": null
+     },
+     "attribution_coverage": {
+      "min": 0.9,
+      "passed": null,
+      "value": null
+     },
+     "faults_per_hour": {
+      "max": 6.0,
+      "passed": null,
+      "value": null
+     },
+     "first_audio_p50_seconds": {
+      "max": 3.5,
+      "passed": null,
+      "value": null
+     },
+     "first_audio_p95_seconds": {
+      "max": 6.5,
+      "passed": null,
+      "value": null
+     },
+     "session_completed": {
+      "min": 1.0,
+      "passed": false,
+      "value": 0.0
+     },
+     "trailing_question_rate": {
+      "max": 0.1,
+      "passed": null,
+      "value": null
+     },
+     "watchdog_failures_per_hour": {
+      "max": 20.0,
+      "passed": null,
+      "value": null
+     }
+    },
+    "passed": false,
+    "unscored": [
+     "first_audio_p50_seconds",
+     "first_audio_p95_seconds",
+     "trailing_question_rate",
+     "faults_per_hour",
+     "watchdog_failures_per_hour",
+     "attribution_coverage",
+     "admission_to_listening_seconds"
+    ],
+    "version": 1
+   }
+  },
+  "rustfs-live-20": {
+   "report": {
+    "browser": {
+     "watchdog_failures": 0
+    },
+    "cancellation": {
+     "completed": 0,
+     "requested": 0
+    },
+    "evidence": {
+     "excluded": {}
+    },
+    "faults": [],
+    "in_call_seconds": null,
+    "ingestion": {
+     "duration_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "empty": 0,
+     "episodes": 0,
+     "facts": 0,
+     "failed": 0
+    },
+    "ingestion_outcome": "completed",
+    "interruptions": {
+     "speech_to_stop_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "triggers": {}
+    },
+    "journal": {
+     "corrupt_lines": 0
+    },
+    "latency": {
+     "agent_to_first_sentence_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "agent_to_first_text_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "agent_to_reply_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_agent_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_first_sentence_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_reply_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "first_sentence_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "reply_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "speech_stopped_to_final_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "speech_stopped_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     }
+    },
+    "meet_actions": {
+     "actions": [],
+     "counts": {},
+     "duration_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "rejections": {}
+    },
+    "participation": {
+     "answers": 0,
+     "attributed_utterances": 0,
+     "attribution_coverage": null,
+     "observer_methods": {},
+     "policy": {},
+     "policy_reasons": {},
+     "policy_sources": {},
+     "unknown_reasons": {},
+     "utterances_recorded": 0
+    },
+    "perception": {
+     "budget_exhausted": 0,
+     "chat_lines": 0,
+     "interpreter_disabled": 0,
+     "readings": {
+      "failed": 0,
+      "finished": 0,
+      "p95_ms": null,
+      "skipped": 0
+     },
+     "rejected_inputs": 0,
+     "screens": {
+      "merged": 0,
+      "new": 0,
+      "revisited": 0
+     },
+     "signals": 0,
+     "views": {
+      "emitted": 0,
+      "with_image": 0
+     }
+    },
+    "replies": {
+     "interrupted": 0,
+     "spoken": 0,
+     "trailing_questions": 0
+    },
+    "result": {
+     "detail": "platform blocked the guest; page says: =\"UaslIb\"></div></div><h1 jsname=\"r4nke\" class=\"roSPhc\">You can't join this video call</h1><div jsname=\"c6xFrd\" class=\"kJU3pb\" data-initial-focus-index=\"1\"><div data-call-ended=\"true\" jscontroller=\"bNxobe\" jsaction=\"JIbuQc:UxAr5b(dqt8Pb); auxclick:UxAr5b(dqt8Pb",
+     "exit_code": 0,
+     "phase": "ended",
+     "terminal_reason": "blocked_by_platform"
+    },
+    "session_outcome": "completed",
+    "startup": {
+     "admission_to_listening_seconds": null,
+     "admission_to_microphone_seconds": null,
+     "audio_ready_at_admission": null,
+     "audio_startup_seconds": null,
+     "join_status": "blocked",
+     "lobby_wait_seconds": 17.793
+    },
+    "stt_quality": {
+     "capture_engines": {},
+     "drain_gaps": 0,
+     "first_interim_to_final_ms": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "order_inversions": 0,
+     "tap_slot_drops": 0,
+     "tap_slot_rescues": 0,
+     "turn_interims": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     }
+    },
+    "tools": {}
+   },
+   "scorecard": {
+    "failed": [],
+    "metrics": {
+     "admission_to_listening_seconds": {
+      "max": 5.0,
+      "passed": null,
+      "value": null
+     },
+     "attribution_coverage": {
+      "min": 0.9,
+      "passed": null,
+      "value": null
+     },
+     "faults_per_hour": {
+      "max": 6.0,
+      "passed": null,
+      "value": null
+     },
+     "first_audio_p50_seconds": {
+      "max": 3.5,
+      "passed": null,
+      "value": null
+     },
+     "first_audio_p95_seconds": {
+      "max": 6.5,
+      "passed": null,
+      "value": null
+     },
+     "session_completed": {
+      "min": 1.0,
+      "passed": true,
+      "value": 1.0
+     },
+     "trailing_question_rate": {
+      "max": 0.1,
+      "passed": null,
+      "value": null
+     },
+     "watchdog_failures_per_hour": {
+      "max": 20.0,
+      "passed": null,
+      "value": null
+     }
+    },
+    "passed": false,
+    "unscored": [
+     "first_audio_p50_seconds",
+     "first_audio_p95_seconds",
+     "trailing_question_rate",
+     "faults_per_hour",
+     "watchdog_failures_per_hour",
+     "attribution_coverage",
+     "admission_to_listening_seconds"
+    ],
+    "version": 1
+   }
+  },
+  "rustfs-live-21": {
+   "report": {
+    "browser": {
+     "watchdog_failures": 0
+    },
+    "cancellation": {
+     "completed": 0,
+     "requested": 0
+    },
+    "evidence": {
+     "excluded": {}
+    },
+    "faults": [],
+    "in_call_seconds": null,
+    "ingestion": {
+     "duration_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "empty": 0,
+     "episodes": 0,
+     "facts": 0,
+     "failed": 0
+    },
+    "ingestion_outcome": "completed",
+    "interruptions": {
+     "speech_to_stop_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "triggers": {}
+    },
+    "journal": {
+     "corrupt_lines": 0
+    },
+    "latency": {
+     "agent_to_first_sentence_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "agent_to_first_text_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "agent_to_reply_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_agent_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_first_sentence_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_reply_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "first_sentence_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "reply_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "speech_stopped_to_final_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "speech_stopped_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     }
+    },
+    "meet_actions": {
+     "actions": [],
+     "counts": {},
+     "duration_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "rejections": {}
+    },
+    "participation": {
+     "answers": 0,
+     "attributed_utterances": 0,
+     "attribution_coverage": null,
+     "observer_methods": {},
+     "policy": {},
+     "policy_reasons": {},
+     "policy_sources": {},
+     "unknown_reasons": {},
+     "utterances_recorded": 0
+    },
+    "perception": {
+     "budget_exhausted": 0,
+     "chat_lines": 0,
+     "interpreter_disabled": 0,
+     "readings": {
+      "failed": 0,
+      "finished": 0,
+      "p95_ms": null,
+      "skipped": 0
+     },
+     "rejected_inputs": 0,
+     "screens": {
+      "merged": 0,
+      "new": 0,
+      "revisited": 0
+     },
+     "signals": 0,
+     "views": {
+      "emitted": 0,
+      "with_image": 0
+     }
+    },
+    "replies": {
+     "interrupted": 0,
+     "spoken": 0,
+     "trailing_questions": 0
+    },
+    "result": {
+     "detail": "browser session failed (ValueError)",
+     "exit_code": 1,
+     "phase": "ended",
+     "terminal_reason": "browser_failure"
+    },
+    "session_outcome": "failed",
+    "startup": {
+     "admission_to_listening_seconds": null,
+     "admission_to_microphone_seconds": null,
+     "audio_ready_at_admission": null,
+     "audio_startup_seconds": null,
+     "join_status": "ended",
+     "lobby_wait_seconds": 12.992
+    },
+    "stt_quality": {
+     "capture_engines": {},
+     "drain_gaps": 0,
+     "first_interim_to_final_ms": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "order_inversions": 0,
+     "tap_slot_drops": 0,
+     "tap_slot_rescues": 0,
+     "turn_interims": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     }
+    },
+    "tools": {}
+   },
+   "scorecard": {
+    "failed": [
+     "session_completed"
+    ],
+    "metrics": {
+     "admission_to_listening_seconds": {
+      "max": 5.0,
+      "passed": null,
+      "value": null
+     },
+     "attribution_coverage": {
+      "min": 0.9,
+      "passed": null,
+      "value": null
+     },
+     "faults_per_hour": {
+      "max": 6.0,
+      "passed": null,
+      "value": null
+     },
+     "first_audio_p50_seconds": {
+      "max": 3.5,
+      "passed": null,
+      "value": null
+     },
+     "first_audio_p95_seconds": {
+      "max": 6.5,
+      "passed": null,
+      "value": null
+     },
+     "session_completed": {
+      "min": 1.0,
+      "passed": false,
+      "value": 0.0
+     },
+     "trailing_question_rate": {
+      "max": 0.1,
+      "passed": null,
+      "value": null
+     },
+     "watchdog_failures_per_hour": {
+      "max": 20.0,
+      "passed": null,
+      "value": null
+     }
+    },
+    "passed": false,
+    "unscored": [
+     "first_audio_p50_seconds",
+     "first_audio_p95_seconds",
+     "trailing_question_rate",
+     "faults_per_hour",
+     "watchdog_failures_per_hour",
+     "attribution_coverage",
+     "admission_to_listening_seconds"
+    ],
+    "version": 1
+   }
+  },
+  "rustfs-live-22": {
+   "report": {
+    "browser": {
+     "watchdog_failures": 0
+    },
+    "cancellation": {
+     "completed": 0,
+     "requested": 0
+    },
+    "evidence": {
+     "excluded": {
+      "ambiguous_synthesis_request": 16,
+      "missing_timestamp": 40,
+      "negative_latency": 5,
+      "unknown_transcript": 9
+     }
+    },
+    "faults": [
+     {
+      "count": 2,
+      "kind": "timeout",
+      "source": "browser"
+     }
+    ],
+    "in_call_seconds": 1047.839,
+    "ingestion": {
+     "duration_seconds": {
+      "count": 3,
+      "max": 75.124,
+      "p50": 60.819,
+      "p95": 73.693
+     },
+     "empty": 1,
+     "episodes": 3,
+     "facts": 3,
+     "failed": 0
+    },
+    "ingestion_outcome": "completed",
+    "interruptions": {
+     "speech_to_stop_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "triggers": {}
+    },
+    "journal": {
+     "corrupt_lines": 0
+    },
+    "latency": {
+     "agent_to_first_sentence_seconds": {
+      "count": 3,
+      "max": 8.158,
+      "p50": 5.835,
+      "p95": 7.926
+     },
+     "agent_to_first_text_seconds": {
+      "count": 3,
+      "max": 8.091,
+      "p50": 5.728,
+      "p95": 7.855
+     },
+     "agent_to_reply_seconds": {
+      "count": 3,
+      "max": 12.288,
+      "p50": 11.561,
+      "p95": 12.215
+     },
+     "final_to_agent_seconds": {
+      "count": 4,
+      "max": 1.549,
+      "p50": 1.419,
+      "p95": 1.539
+     },
+     "final_to_first_sentence_seconds": {
+      "count": 4,
+      "max": 8.162,
+      "p50": 4.606,
+      "p95": 8.045
+     },
+     "final_to_reply_seconds": {
+      "count": 3,
+      "max": 13.837,
+      "p50": 11.565,
+      "p95": 13.61
+     },
+     "first_sentence_to_first_pcm_seconds": {
+      "count": 3,
+      "max": 6.11,
+      "p50": 0.167,
+      "p95": 5.516
+     },
+     "reply_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "speech_stopped_to_final_seconds": {
+      "count": 11,
+      "max": 2.901,
+      "p50": 1.525,
+      "p95": 2.897
+     },
+     "speech_stopped_to_first_pcm_seconds": {
+      "count": 3,
+      "max": 9.854,
+      "p50": 8.245,
+      "p95": 9.693
+     }
+    },
+    "meet_actions": {
+     "actions": [
+      {
+       "action": "react",
+       "action_id": "4101acb0118e5ad71f48d8e59363f7b6",
+       "attempts": 1,
+       "duration_ms": null,
+       "observed": false,
+       "outcome": "finished",
+       "reason": null
+      }
+     ],
+     "counts": {
+      "react": {
+       "finished": 1
+      }
+     },
+     "duration_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "rejections": {}
+    },
+    "participation": {
+     "answers": 4,
+     "attributed_utterances": 11,
+     "attribution_coverage": 1.0,
+     "observer_methods": {
+      "dom_mining": 1
+     },
+     "policy": {
+      "reply": 5,
+      "silent": 7
+     },
+     "policy_reasons": {
+      "fallback_unnamed": 1,
+      "floor_occupied": 2,
+      "judge_reply": 5,
+      "judge_stay_silent": 4
+     },
+     "policy_sources": {
+      "fallback": 1,
+      "floor": 2,
+      "judge": 9
+     },
+     "unknown_reasons": {},
+     "utterances_recorded": 11
+    },
+    "perception": {
+     "budget_exhausted": 0,
+     "chat_lines": 0,
+     "interpreter_disabled": 0,
+     "readings": {
+      "failed": 0,
+      "finished": 0,
+      "p95_ms": null,
+      "skipped": 0
+     },
+     "rejected_inputs": 0,
+     "screens": {
+      "merged": 0,
+      "new": 0,
+      "revisited": 0
+     },
+     "signals": 3,
+     "views": {
+      "emitted": 6,
+      "with_image": 0
+     }
+    },
+    "replies": {
+     "interrupted": 0,
+     "spoken": 6,
+     "trailing_questions": 1
+    },
+    "result": {
+     "detail": "guest left the call [browser_degraded: timeoutx7]",
+     "exit_code": 0,
+     "phase": "ended",
+     "terminal_reason": "stopped_by_owner"
+    },
+    "session_outcome": "completed",
+    "startup": {
+     "admission_to_listening_seconds": 4.028,
+     "admission_to_microphone_seconds": 0.738,
+     "audio_ready_at_admission": true,
+     "audio_startup_seconds": null,
+     "join_status": "admitted",
+     "lobby_wait_seconds": 9.949
+    },
+    "stt_quality": {
+     "capture_engines": {},
+     "drain_gaps": 0,
+     "first_interim_to_final_ms": {
+      "count": 11,
+      "max": 86843.1,
+      "p50": 2125.4,
+      "p95": 56814.0
+     },
+     "order_inversions": 0,
+     "tap_slot_drops": 0,
+     "tap_slot_rescues": 0,
+     "turn_interims": {
+      "count": 11,
+      "max": 9.0,
+      "p50": 6.0,
+      "p95": 8.0
+     }
+    },
+    "tools": {}
+   },
+   "scorecard": {
+    "failed": [
+     "first_audio_p50_seconds",
+     "first_audio_p95_seconds",
+     "trailing_question_rate",
+     "faults_per_hour"
+    ],
+    "metrics": {
+     "admission_to_listening_seconds": {
+      "max": 5.0,
+      "passed": true,
+      "value": 4.028
+     },
+     "attribution_coverage": {
+      "min": 0.9,
+      "passed": true,
+      "value": 1.0
+     },
+     "faults_per_hour": {
+      "max": 6.0,
+      "passed": false,
+      "value": 6.871
+     },
+     "first_audio_p50_seconds": {
+      "max": 3.5,
+      "passed": false,
+      "value": 8.245
+     },
+     "first_audio_p95_seconds": {
+      "max": 6.5,
+      "passed": false,
+      "value": 9.693
+     },
+     "session_completed": {
+      "min": 1.0,
+      "passed": true,
+      "value": 1.0
+     },
+     "trailing_question_rate": {
+      "max": 0.1,
+      "passed": false,
+      "value": 0.167
+     },
+     "watchdog_failures_per_hour": {
+      "max": 20.0,
+      "passed": true,
+      "value": 0.0
+     }
+    },
+    "passed": false,
+    "unscored": [],
+    "version": 1
+   }
+  },
+  "rustfs-live-3": {
+   "report": {
+    "browser": {
+     "watchdog_failures": 0
+    },
+    "cancellation": {
+     "completed": 3,
+     "requested": 3
+    },
+    "evidence": {
+     "excluded": {
+      "ambiguous_synthesis_request": 12,
+      "missing_timestamp": 18,
+      "negative_latency": 10,
+      "unknown_transcript": 12
+     }
+    },
+    "faults": [
+     {
+      "count": 1,
+      "kind": "unavailable",
+      "source": "stt"
+     },
+     {
+      "count": 1,
+      "kind": "unavailable",
+      "source": "memory_ingest"
+     }
+    ],
+    "in_call_seconds": 1038.874,
+    "ingestion": {
+     "duration_seconds": {
+      "count": 1,
+      "max": 11.45,
+      "p50": 11.45,
+      "p95": 11.45
+     },
+     "empty": 0,
+     "episodes": 1,
+     "facts": 0,
+     "failed": 1
+    },
+    "ingestion_outcome": "failed",
+    "interruptions": {
+     "speech_to_stop_seconds": {
+      "count": 1,
+      "max": 2.751,
+      "p50": 2.751,
+      "p95": 2.751
+     },
+     "triggers": {}
+    },
+    "journal": {
+     "corrupt_lines": 0
+    },
+    "latency": {
+     "agent_to_first_sentence_seconds": {
+      "count": 11,
+      "max": 3.548,
+      "p50": 1.319,
+      "p95": 3.502
+     },
+     "agent_to_first_text_seconds": {
+      "count": 11,
+      "max": 3.548,
+      "p50": 1.319,
+      "p95": 3.502
+     },
+     "agent_to_reply_seconds": {
+      "count": 10,
+      "max": 7.82,
+      "p50": 5.347,
+      "p95": 7.437
+     },
+     "final_to_agent_seconds": {
+      "count": 11,
+      "max": 1.285,
+      "p50": 0.616,
+      "p95": 1.098
+     },
+     "final_to_first_sentence_seconds": {
+      "count": 11,
+      "max": 4.207,
+      "p50": 2.06,
+      "p95": 3.833
+     },
+     "final_to_reply_seconds": {
+      "count": 10,
+      "max": 7.879,
+      "p50": 5.944,
+      "p95": 7.854
+     },
+     "first_sentence_to_first_pcm_seconds": {
+      "count": 11,
+      "max": 0.265,
+      "p50": 0.214,
+      "p95": 0.251
+     },
+     "reply_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "speech_stopped_to_final_seconds": {
+      "count": 14,
+      "max": 3.178,
+      "p50": 1.335,
+      "p95": 2.886
+     },
+     "speech_stopped_to_first_pcm_seconds": {
+      "count": 11,
+      "max": 6.853,
+      "p50": 3.538,
+      "p95": 6.253
+     }
+    },
+    "meet_actions": {
+     "actions": [],
+     "counts": {},
+     "duration_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "rejections": {}
+    },
+    "participation": {
+     "answers": 10,
+     "attributed_utterances": 13,
+     "attribution_coverage": 0.929,
+     "observer_methods": {},
+     "policy": {
+      "reply": 15
+     },
+     "policy_reasons": {
+      "judge_reply": 15
+     },
+     "policy_sources": {
+      "judge": 15
+     },
+     "unknown_reasons": {
+      "overlap": 1
+     },
+     "utterances_recorded": 14
+    },
+    "perception": {
+     "budget_exhausted": 0,
+     "chat_lines": 2,
+     "interpreter_disabled": 0,
+     "readings": {
+      "failed": 0,
+      "finished": 1,
+      "p95_ms": 7573.417,
+      "skipped": 0
+     },
+     "rejected_inputs": 0,
+     "screens": {
+      "merged": 0,
+      "new": 1,
+      "revisited": 0
+     },
+     "signals": 2,
+     "views": {
+      "emitted": 15,
+      "with_image": 0
+     }
+    },
+    "replies": {
+     "interrupted": 1,
+     "spoken": 13,
+     "trailing_questions": 1
+    },
+    "result": {
+     "detail": "guest left the call [stt_degraded: unavailablex1]",
+     "exit_code": 0,
+     "phase": "ended",
+     "terminal_reason": "stopped_by_owner"
+    },
+    "session_outcome": "completed",
+    "startup": {
+     "admission_to_listening_seconds": 0.221,
+     "admission_to_microphone_seconds": 0.22,
+     "audio_ready_at_admission": true,
+     "audio_startup_seconds": null,
+     "join_status": "admitted",
+     "lobby_wait_seconds": 40.978
+    },
+    "stt_quality": {
+     "capture_engines": {},
+     "drain_gaps": 0,
+     "first_interim_to_final_ms": {
+      "count": 14,
+      "max": 14529.9,
+      "p50": 4676.9,
+      "p95": 12814.81
+     },
+     "order_inversions": 0,
+     "tap_slot_drops": 0,
+     "tap_slot_rescues": 0,
+     "turn_interims": {
+      "count": 14,
+      "max": 11.0,
+      "p50": 8.0,
+      "p95": 10.35
+     }
+    },
+    "tools": {}
+   },
+   "scorecard": {
+    "failed": [
+     "first_audio_p50_seconds",
+     "faults_per_hour"
+    ],
+    "metrics": {
+     "admission_to_listening_seconds": {
+      "max": 5.0,
+      "passed": true,
+      "value": 0.221
+     },
+     "attribution_coverage": {
+      "min": 0.9,
+      "passed": true,
+      "value": 0.929
+     },
+     "faults_per_hour": {
+      "max": 6.0,
+      "passed": false,
+      "value": 6.931
+     },
+     "first_audio_p50_seconds": {
+      "max": 3.5,
+      "passed": false,
+      "value": 3.538
+     },
+     "first_audio_p95_seconds": {
+      "max": 6.5,
+      "passed": true,
+      "value": 6.253
+     },
+     "session_completed": {
+      "min": 1.0,
+      "passed": true,
+      "value": 1.0
+     },
+     "trailing_question_rate": {
+      "max": 0.1,
+      "passed": true,
+      "value": 0.077
+     },
+     "watchdog_failures_per_hour": {
+      "max": 20.0,
+      "passed": true,
+      "value": 0.0
+     }
+    },
+    "passed": false,
+    "unscored": [],
+    "version": 1
+   }
+  },
+  "rustfs-live-5": {
+   "report": {
+    "browser": {
+     "watchdog_failures": 0
+    },
+    "cancellation": {
+     "completed": 0,
+     "requested": 0
+    },
+    "evidence": {
+     "excluded": {}
+    },
+    "faults": [
+     {
+      "count": 1,
+      "kind": "unavailable",
+      "source": "preflight"
+     }
+    ],
+    "in_call_seconds": null,
+    "ingestion": {
+     "duration_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "empty": 0,
+     "episodes": 0,
+     "facts": 0,
+     "failed": 0
+    },
+    "ingestion_outcome": "completed",
+    "interruptions": {
+     "speech_to_stop_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "triggers": {}
+    },
+    "journal": {
+     "corrupt_lines": 0
+    },
+    "latency": {
+     "agent_to_first_sentence_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "agent_to_first_text_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "agent_to_reply_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_agent_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_first_sentence_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_reply_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "first_sentence_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "reply_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "speech_stopped_to_final_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "speech_stopped_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     }
+    },
+    "meet_actions": {
+     "actions": [],
+     "counts": {},
+     "duration_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "rejections": {}
+    },
+    "participation": {
+     "answers": 0,
+     "attributed_utterances": 0,
+     "attribution_coverage": null,
+     "observer_methods": {},
+     "policy": {},
+     "policy_reasons": {},
+     "policy_sources": {},
+     "unknown_reasons": {},
+     "utterances_recorded": 0
+    },
+    "perception": {
+     "budget_exhausted": 0,
+     "chat_lines": 0,
+     "interpreter_disabled": 0,
+     "readings": {
+      "failed": 0,
+      "finished": 0,
+      "p95_ms": null,
+      "skipped": 0
+     },
+     "rejected_inputs": 0,
+     "screens": {
+      "merged": 0,
+      "new": 0,
+      "revisited": 0
+     },
+     "signals": 0,
+     "views": {
+      "emitted": 0,
+      "with_image": 0
+     }
+    },
+    "replies": {
+     "interrupted": 0,
+     "spoken": 0,
+     "trailing_questions": 0
+    },
+    "result": {
+     "detail": "preflight_unreachable: <url> [preflight_degraded: unavailablex1]",
+     "exit_code": 3,
+     "phase": "ended",
+     "terminal_reason": "infra_failure"
+    },
+    "session_outcome": "failed",
+    "startup": {
+     "admission_to_listening_seconds": null,
+     "admission_to_microphone_seconds": null,
+     "audio_ready_at_admission": null,
+     "audio_startup_seconds": null,
+     "join_status": null,
+     "lobby_wait_seconds": null
+    },
+    "stt_quality": {
+     "capture_engines": {},
+     "drain_gaps": 0,
+     "first_interim_to_final_ms": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "order_inversions": 0,
+     "tap_slot_drops": 0,
+     "tap_slot_rescues": 0,
+     "turn_interims": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     }
+    },
+    "tools": {}
+   },
+   "scorecard": {
+    "failed": [
+     "session_completed"
+    ],
+    "metrics": {
+     "admission_to_listening_seconds": {
+      "max": 5.0,
+      "passed": null,
+      "value": null
+     },
+     "attribution_coverage": {
+      "min": 0.9,
+      "passed": null,
+      "value": null
+     },
+     "faults_per_hour": {
+      "max": 6.0,
+      "passed": null,
+      "value": null
+     },
+     "first_audio_p50_seconds": {
+      "max": 3.5,
+      "passed": null,
+      "value": null
+     },
+     "first_audio_p95_seconds": {
+      "max": 6.5,
+      "passed": null,
+      "value": null
+     },
+     "session_completed": {
+      "min": 1.0,
+      "passed": false,
+      "value": 0.0
+     },
+     "trailing_question_rate": {
+      "max": 0.1,
+      "passed": null,
+      "value": null
+     },
+     "watchdog_failures_per_hour": {
+      "max": 20.0,
+      "passed": null,
+      "value": null
+     }
+    },
+    "passed": false,
+    "unscored": [
+     "first_audio_p50_seconds",
+     "first_audio_p95_seconds",
+     "trailing_question_rate",
+     "faults_per_hour",
+     "watchdog_failures_per_hour",
+     "attribution_coverage",
+     "admission_to_listening_seconds"
+    ],
+    "version": 1
+   }
+  },
+  "rustfs-live-6": {
+   "report": {
+    "browser": {
+     "watchdog_failures": 0
+    },
+    "cancellation": {
+     "completed": 2,
+     "requested": 2
+    },
+    "evidence": {
+     "excluded": {
+      "ambiguous_synthesis_request": 14,
+      "missing_timestamp": 19,
+      "negative_latency": 6,
+      "unknown_transcript": 21,
+      "unobserved_finish": 1
+     }
+    },
+    "faults": [],
+    "in_call_seconds": 444.96,
+    "ingestion": {
+     "duration_seconds": {
+      "count": 4,
+      "max": 38.176,
+      "p50": 36.259,
+      "p95": 37.988
+     },
+     "empty": 1,
+     "episodes": 4,
+     "facts": 7,
+     "failed": 0
+    },
+    "ingestion_outcome": "completed",
+    "interruptions": {
+     "speech_to_stop_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "triggers": {
+      "interim": 2
+     }
+    },
+    "journal": {
+     "corrupt_lines": 0
+    },
+    "latency": {
+     "agent_to_first_sentence_seconds": {
+      "count": 6,
+      "max": 3.601,
+      "p50": 1.827,
+      "p95": 3.325
+     },
+     "agent_to_first_text_seconds": {
+      "count": 6,
+      "max": 3.459,
+      "p50": 1.797,
+      "p95": 3.218
+     },
+     "agent_to_reply_seconds": {
+      "count": 6,
+      "max": 11.34,
+      "p50": 6.518,
+      "p95": 10.42
+     },
+     "final_to_agent_seconds": {
+      "count": 7,
+      "max": 3.011,
+      "p50": 0.702,
+      "p95": 2.501
+     },
+     "final_to_first_sentence_seconds": {
+      "count": 6,
+      "max": 6.613,
+      "p50": 2.539,
+      "p95": 5.912
+     },
+     "final_to_reply_seconds": {
+      "count": 6,
+      "max": 14.351,
+      "p50": 6.924,
+      "p95": 12.918
+     },
+     "first_sentence_to_first_pcm_seconds": {
+      "count": 6,
+      "max": 1.274,
+      "p50": 0.268,
+      "p95": 1.041
+     },
+     "reply_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "speech_stopped_to_final_seconds": {
+      "count": 10,
+      "max": 4.822,
+      "p50": 1.421,
+      "p95": 3.948
+     },
+     "speech_stopped_to_first_pcm_seconds": {
+      "count": 6,
+      "max": 12.709,
+      "p50": 3.971,
+      "p95": 10.809
+     }
+    },
+    "meet_actions": {
+     "actions": [
+      {
+       "action": "send_chat",
+       "action_id": "1f11ba8a4b15178abb986e84b9b377ad",
+       "attempts": 1,
+       "duration_ms": null,
+       "observed": false,
+       "outcome": "finished",
+       "reason": null
+      },
+      {
+       "action": "leave",
+       "action_id": "afac8e0a5fe2952b26febb56747b66bd",
+       "attempts": 1,
+       "duration_ms": null,
+       "observed": false,
+       "outcome": "finished",
+       "reason": null
+      }
+     ],
+     "counts": {
+      "leave": {
+       "finished": 1
+      },
+      "send_chat": {
+       "finished": 1
+      }
+     },
+     "duration_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "rejections": {}
+    },
+    "participation": {
+     "answers": 6,
+     "attributed_utterances": 10,
+     "attribution_coverage": 1.0,
+     "observer_methods": {
+      "dom_mining": 1
+     },
+     "policy": {
+      "reply": 10
+     },
+     "policy_reasons": {
+      "judge_reply": 10
+     },
+     "policy_sources": {
+      "judge": 10
+     },
+     "unknown_reasons": {},
+     "utterances_recorded": 10
+    },
+    "perception": {
+     "budget_exhausted": 0,
+     "chat_lines": 1,
+     "interpreter_disabled": 0,
+     "readings": {
+      "failed": 0,
+      "finished": 1,
+      "p95_ms": 6266.454,
+      "skipped": 0
+     },
+     "rejected_inputs": 0,
+     "screens": {
+      "merged": 0,
+      "new": 1,
+      "revisited": 1
+     },
+     "signals": 5,
+     "views": {
+      "emitted": 12,
+      "with_image": 0
+     }
+    },
+    "replies": {
+     "interrupted": 1,
+     "spoken": 8,
+     "trailing_questions": 0
+    },
+    "result": {
+     "detail": "twin already left the call on request",
+     "exit_code": 0,
+     "phase": "ended",
+     "terminal_reason": "left_by_participant"
+    },
+    "session_outcome": "completed",
+    "startup": {
+     "admission_to_listening_seconds": 3.1,
+     "admission_to_microphone_seconds": 0.116,
+     "audio_ready_at_admission": true,
+     "audio_startup_seconds": null,
+     "join_status": "admitted",
+     "lobby_wait_seconds": 10.971
+    },
+    "stt_quality": {
+     "capture_engines": {},
+     "drain_gaps": 0,
+     "first_interim_to_final_ms": {
+      "count": 10,
+      "max": 7982.2,
+      "p50": 4145.15,
+      "p95": 7651.54
+     },
+     "order_inversions": 0,
+     "tap_slot_drops": 0,
+     "tap_slot_rescues": 0,
+     "turn_interims": {
+      "count": 10,
+      "max": 16.0,
+      "p50": 7.5,
+      "p95": 13.75
+     }
+    },
+    "tools": {}
+   },
+   "scorecard": {
+    "failed": [
+     "first_audio_p50_seconds",
+     "first_audio_p95_seconds"
+    ],
+    "metrics": {
+     "admission_to_listening_seconds": {
+      "max": 5.0,
+      "passed": true,
+      "value": 3.1
+     },
+     "attribution_coverage": {
+      "min": 0.9,
+      "passed": true,
+      "value": 1.0
+     },
+     "faults_per_hour": {
+      "max": 6.0,
+      "passed": true,
+      "value": 0.0
+     },
+     "first_audio_p50_seconds": {
+      "max": 3.5,
+      "passed": false,
+      "value": 3.971
+     },
+     "first_audio_p95_seconds": {
+      "max": 6.5,
+      "passed": false,
+      "value": 10.809
+     },
+     "session_completed": {
+      "min": 1.0,
+      "passed": true,
+      "value": 1.0
+     },
+     "trailing_question_rate": {
+      "max": 0.1,
+      "passed": true,
+      "value": 0.0
+     },
+     "watchdog_failures_per_hour": {
+      "max": 20.0,
+      "passed": true,
+      "value": 0.0
+     }
+    },
+    "passed": false,
+    "unscored": [],
+    "version": 1
+   }
+  },
+  "rustfs-live-7": {
+   "report": {
+    "browser": {
+     "watchdog_failures": 0
+    },
+    "cancellation": {
+     "completed": 0,
+     "requested": 0
+    },
+    "evidence": {
+     "excluded": {}
+    },
+    "faults": [],
+    "in_call_seconds": null,
+    "ingestion": {
+     "duration_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "empty": 0,
+     "episodes": 0,
+     "facts": 0,
+     "failed": 0
+    },
+    "ingestion_outcome": "completed",
+    "interruptions": {
+     "speech_to_stop_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "triggers": {}
+    },
+    "journal": {
+     "corrupt_lines": 0
+    },
+    "latency": {
+     "agent_to_first_sentence_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "agent_to_first_text_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "agent_to_reply_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_agent_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_first_sentence_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_reply_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "first_sentence_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "reply_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "speech_stopped_to_final_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "speech_stopped_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     }
+    },
+    "meet_actions": {
+     "actions": [],
+     "counts": {},
+     "duration_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "rejections": {}
+    },
+    "participation": {
+     "answers": 0,
+     "attributed_utterances": 0,
+     "attribution_coverage": null,
+     "observer_methods": {},
+     "policy": {},
+     "policy_reasons": {},
+     "policy_sources": {},
+     "unknown_reasons": {},
+     "utterances_recorded": 0
+    },
+    "perception": {
+     "budget_exhausted": 0,
+     "chat_lines": 0,
+     "interpreter_disabled": 0,
+     "readings": {
+      "failed": 0,
+      "finished": 0,
+      "p95_ms": null,
+      "skipped": 0
+     },
+     "rejected_inputs": 0,
+     "screens": {
+      "merged": 0,
+      "new": 0,
+      "revisited": 0
+     },
+     "signals": 0,
+     "views": {
+      "emitted": 0,
+      "with_image": 0
+     }
+    },
+    "replies": {
+     "interrupted": 0,
+     "spoken": 0,
+     "trailing_questions": 0
+    },
+    "result": {
+     "detail": "still waiting for admission after 300.0 seconds",
+     "exit_code": 0,
+     "phase": "ended",
+     "terminal_reason": "lobby_timeout_reached"
+    },
+    "session_outcome": "completed",
+    "startup": {
+     "admission_to_listening_seconds": null,
+     "admission_to_microphone_seconds": null,
+     "audio_ready_at_admission": null,
+     "audio_startup_seconds": null,
+     "join_status": "timeout",
+     "lobby_wait_seconds": 319.714
+    },
+    "stt_quality": {
+     "capture_engines": {},
+     "drain_gaps": 0,
+     "first_interim_to_final_ms": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "order_inversions": 0,
+     "tap_slot_drops": 0,
+     "tap_slot_rescues": 0,
+     "turn_interims": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     }
+    },
+    "tools": {}
+   },
+   "scorecard": {
+    "failed": [],
+    "metrics": {
+     "admission_to_listening_seconds": {
+      "max": 5.0,
+      "passed": null,
+      "value": null
+     },
+     "attribution_coverage": {
+      "min": 0.9,
+      "passed": null,
+      "value": null
+     },
+     "faults_per_hour": {
+      "max": 6.0,
+      "passed": null,
+      "value": null
+     },
+     "first_audio_p50_seconds": {
+      "max": 3.5,
+      "passed": null,
+      "value": null
+     },
+     "first_audio_p95_seconds": {
+      "max": 6.5,
+      "passed": null,
+      "value": null
+     },
+     "session_completed": {
+      "min": 1.0,
+      "passed": true,
+      "value": 1.0
+     },
+     "trailing_question_rate": {
+      "max": 0.1,
+      "passed": null,
+      "value": null
+     },
+     "watchdog_failures_per_hour": {
+      "max": 20.0,
+      "passed": null,
+      "value": null
+     }
+    },
+    "passed": false,
+    "unscored": [
+     "first_audio_p50_seconds",
+     "first_audio_p95_seconds",
+     "trailing_question_rate",
+     "faults_per_hour",
+     "watchdog_failures_per_hour",
+     "attribution_coverage",
+     "admission_to_listening_seconds"
+    ],
+    "version": 1
+   }
+  },
+  "rustfs-live-8": {
+   "report": {
+    "browser": {
+     "watchdog_failures": 0
+    },
+    "cancellation": {
+     "completed": 0,
+     "requested": 0
+    },
+    "evidence": {
+     "excluded": {}
+    },
+    "faults": [],
+    "in_call_seconds": null,
+    "ingestion": {
+     "duration_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "empty": 0,
+     "episodes": 0,
+     "facts": 0,
+     "failed": 0
+    },
+    "ingestion_outcome": "completed",
+    "interruptions": {
+     "speech_to_stop_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "triggers": {}
+    },
+    "journal": {
+     "corrupt_lines": 0
+    },
+    "latency": {
+     "agent_to_first_sentence_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "agent_to_first_text_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "agent_to_reply_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_agent_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_first_sentence_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_reply_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "first_sentence_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "reply_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "speech_stopped_to_final_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "speech_stopped_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     }
+    },
+    "meet_actions": {
+     "actions": [],
+     "counts": {},
+     "duration_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "rejections": {}
+    },
+    "participation": {
+     "answers": 0,
+     "attributed_utterances": 0,
+     "attribution_coverage": null,
+     "observer_methods": {},
+     "policy": {},
+     "policy_reasons": {},
+     "policy_sources": {},
+     "unknown_reasons": {},
+     "utterances_recorded": 0
+    },
+    "perception": {
+     "budget_exhausted": 0,
+     "chat_lines": 0,
+     "interpreter_disabled": 0,
+     "readings": {
+      "failed": 0,
+      "finished": 0,
+      "p95_ms": null,
+      "skipped": 0
+     },
+     "rejected_inputs": 0,
+     "screens": {
+      "merged": 0,
+      "new": 0,
+      "revisited": 0
+     },
+     "signals": 0,
+     "views": {
+      "emitted": 0,
+      "with_image": 0
+     }
+    },
+    "replies": {
+     "interrupted": 0,
+     "spoken": 0,
+     "trailing_questions": 0
+    },
+    "result": {
+     "detail": "platform blocked the guest",
+     "exit_code": 0,
+     "phase": "ended",
+     "terminal_reason": "blocked_by_platform"
+    },
+    "session_outcome": "completed",
+    "startup": {
+     "admission_to_listening_seconds": null,
+     "admission_to_microphone_seconds": null,
+     "audio_ready_at_admission": null,
+     "audio_startup_seconds": null,
+     "join_status": "blocked",
+     "lobby_wait_seconds": 8.71
+    },
+    "stt_quality": {
+     "capture_engines": {},
+     "drain_gaps": 0,
+     "first_interim_to_final_ms": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "order_inversions": 0,
+     "tap_slot_drops": 0,
+     "tap_slot_rescues": 0,
+     "turn_interims": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     }
+    },
+    "tools": {}
+   },
+   "scorecard": {
+    "failed": [],
+    "metrics": {
+     "admission_to_listening_seconds": {
+      "max": 5.0,
+      "passed": null,
+      "value": null
+     },
+     "attribution_coverage": {
+      "min": 0.9,
+      "passed": null,
+      "value": null
+     },
+     "faults_per_hour": {
+      "max": 6.0,
+      "passed": null,
+      "value": null
+     },
+     "first_audio_p50_seconds": {
+      "max": 3.5,
+      "passed": null,
+      "value": null
+     },
+     "first_audio_p95_seconds": {
+      "max": 6.5,
+      "passed": null,
+      "value": null
+     },
+     "session_completed": {
+      "min": 1.0,
+      "passed": true,
+      "value": 1.0
+     },
+     "trailing_question_rate": {
+      "max": 0.1,
+      "passed": null,
+      "value": null
+     },
+     "watchdog_failures_per_hour": {
+      "max": 20.0,
+      "passed": null,
+      "value": null
+     }
+    },
+    "passed": false,
+    "unscored": [
+     "first_audio_p50_seconds",
+     "first_audio_p95_seconds",
+     "trailing_question_rate",
+     "faults_per_hour",
+     "watchdog_failures_per_hour",
+     "attribution_coverage",
+     "admission_to_listening_seconds"
+    ],
+    "version": 1
+   }
+  },
+  "rustfs-live-9": {
+   "report": {
+    "browser": {
+     "watchdog_failures": 0
+    },
+    "cancellation": {
+     "completed": 0,
+     "requested": 0
+    },
+    "evidence": {
+     "excluded": {}
+    },
+    "faults": [],
+    "in_call_seconds": null,
+    "ingestion": {
+     "duration_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "empty": 0,
+     "episodes": 0,
+     "facts": 0,
+     "failed": 0
+    },
+    "ingestion_outcome": "completed",
+    "interruptions": {
+     "speech_to_stop_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "triggers": {}
+    },
+    "journal": {
+     "corrupt_lines": 0
+    },
+    "latency": {
+     "agent_to_first_sentence_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "agent_to_first_text_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "agent_to_reply_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_agent_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_first_sentence_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "final_to_reply_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "first_sentence_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "reply_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "speech_stopped_to_final_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "speech_stopped_to_first_pcm_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     }
+    },
+    "meet_actions": {
+     "actions": [],
+     "counts": {},
+     "duration_seconds": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "rejections": {}
+    },
+    "participation": {
+     "answers": 0,
+     "attributed_utterances": 0,
+     "attribution_coverage": null,
+     "observer_methods": {},
+     "policy": {},
+     "policy_reasons": {},
+     "policy_sources": {},
+     "unknown_reasons": {},
+     "utterances_recorded": 0
+    },
+    "perception": {
+     "budget_exhausted": 0,
+     "chat_lines": 0,
+     "interpreter_disabled": 0,
+     "readings": {
+      "failed": 0,
+      "finished": 0,
+      "p95_ms": null,
+      "skipped": 0
+     },
+     "rejected_inputs": 0,
+     "screens": {
+      "merged": 0,
+      "new": 0,
+      "revisited": 0
+     },
+     "signals": 0,
+     "views": {
+      "emitted": 0,
+      "with_image": 0
+     }
+    },
+    "replies": {
+     "interrupted": 0,
+     "spoken": 0,
+     "trailing_questions": 0
+    },
+    "result": {
+     "detail": "clicking 'name field' failed after 10 attempts: locator never became visible",
+     "exit_code": 1,
+     "phase": "ended",
+     "terminal_reason": "browser_failure"
+    },
+    "session_outcome": "failed",
+    "startup": {
+     "admission_to_listening_seconds": null,
+     "admission_to_microphone_seconds": null,
+     "audio_ready_at_admission": null,
+     "audio_startup_seconds": null,
+     "join_status": "failed",
+     "lobby_wait_seconds": 99.189
+    },
+    "stt_quality": {
+     "capture_engines": {},
+     "drain_gaps": 0,
+     "first_interim_to_final_ms": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     },
+     "order_inversions": 0,
+     "tap_slot_drops": 0,
+     "tap_slot_rescues": 0,
+     "turn_interims": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p95": null
+     }
+    },
+    "tools": {}
+   },
+   "scorecard": {
+    "failed": [
+     "session_completed"
+    ],
+    "metrics": {
+     "admission_to_listening_seconds": {
+      "max": 5.0,
+      "passed": null,
+      "value": null
+     },
+     "attribution_coverage": {
+      "min": 0.9,
+      "passed": null,
+      "value": null
+     },
+     "faults_per_hour": {
+      "max": 6.0,
+      "passed": null,
+      "value": null
+     },
+     "first_audio_p50_seconds": {
+      "max": 3.5,
+      "passed": null,
+      "value": null
+     },
+     "first_audio_p95_seconds": {
+      "max": 6.5,
+      "passed": null,
+      "value": null
+     },
+     "session_completed": {
+      "min": 1.0,
+      "passed": false,
+      "value": 0.0
+     },
+     "trailing_question_rate": {
+      "max": 0.1,
+      "passed": null,
+      "value": null
+     },
+     "watchdog_failures_per_hour": {
+      "max": 20.0,
+      "passed": null,
+      "value": null
+     }
+    },
+    "passed": false,
+    "unscored": [
+     "first_audio_p50_seconds",
+     "first_audio_p95_seconds",
+     "trailing_question_rate",
+     "faults_per_hour",
+     "watchdog_failures_per_hour",
+     "attribution_coverage",
+     "admission_to_listening_seconds"
+    ],
+    "version": 1
+   }
+  }
+ }
+}

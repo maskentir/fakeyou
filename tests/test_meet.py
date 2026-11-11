@@ -371,6 +371,24 @@ async def test_request_guest_join_fails_without_name_field() -> None:
     assert "name field" in result.detail
 
 
+async def test_a_missing_name_field_names_the_controls_the_page_showed() -> None:
+    page = meet_page(
+        [],
+        counts={NAME_SELECTOR: [0]},
+        labels={"button[aria-label]": ["Return to home screen", "Submit feedback"]},
+    )
+    clock = FakeClock()
+
+    result = await request_guest_join(
+        page,
+        _request(),
+        polling=JoinPolling(clock.sleep, clock.monotonic),
+    )
+
+    assert result.status == "failed"
+    assert "Return to home screen" in result.detail
+
+
 async def test_request_guest_join_waits_out_meet_getting_ready() -> None:
     page = meet_page([IN_CALL], wait_flaky={NAME_SELECTOR: 6})
     clock = FakeClock()

@@ -29,7 +29,9 @@ Correlate authorization with the actual output using transcript identity, senten
 
 Write one `fault_recorded` event per occurrence. Keep grouped in-memory summaries with the first detail and cumulative count. V2 reports retain operation so two timeout sources remain distinguishable. Keep the 6.0 faults/hour budget.
 
-New journal rows carry `scorecard_version: 2`. Select the report contract from the first available session lifecycle row, or the first row when no lifecycle exists. A new ingestion event appended to an old session must not upgrade that session. Preserve v1 targets in `session_targets_v1.json` and preserve v1 report calculations for historical journals, including live-22. Historical faults suppressed before journaling cannot be reconstructed.
+New journal rows carry `answer_boundary: true`, the marker that the journal records the answer output boundary and the question provenance. A journal without that marker cannot be measured by the gates that need those events: they stay unscored instead of passing or failing. A new ingestion event appended to an old session must not upgrade it.
+
+There is one report contract. The earlier contract's numbers are kept as an archive, `docs/reports/2026-11-11-contract-v1-scorecards.json`, because the journals that were measured under it stay readable but can no longer be recomputed with it. Historical faults suppressed before journaling cannot be reconstructed.
 
 ## Validation
 
