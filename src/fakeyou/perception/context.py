@@ -13,7 +13,7 @@ from fakeyou.foundation.participation import mentions_whole_phrase
 from fakeyou.foundation.triggers import current_trigger, meeting_event_of
 from fakeyou.observability.journal import Journal
 from fakeyou.observability.provider_faults import ProviderFault
-from fakeyou.perception.interpreter import CAMERA_SOURCE, SCREEN_SOURCE, PerceptionInterpreter
+from fakeyou.perception.interpreter import SCREEN_SOURCE, PerceptionInterpreter
 from fakeyou.perception.roster import MeetingState
 from fakeyou.perception.timeline import MeetingTimeline, TimelineSnapshot
 from fakeyou.perception.view import (
@@ -116,17 +116,25 @@ class PerceptionContext:
         return _look_result("ok", lines=lines[-limit:])
 
     async def look_at_participant(self, participant: str, question: str) -> str:
+        del question
         person = resolve_participant(self.timeline.snapshot(), participant)
         if person is None:
             return _look_result("unknown_participant", participant=participant)
         data = self.timeline.camera_frames.get(person.participant_id)
         if data is None:
             return _look_result("camera_unavailable", participant=person.ref)
-        return await self._look(
-            data,
-            question,
-            source=CAMERA_SOURCE.format(name=person.name),
-            subject={"participant": person.ref},
+        if self.interpreter is None:
+            return _look_result("budget_exhausted", participant=person.ref)
+        evidence = await self.interpreter.camera_observation(person.participant_id, data)
+        if evidence is None:
+            return _look_result("budget_exhausted", participant=person.ref)
+        return _look_result(
+            "ok",
+            answer=evidence.observation.as_evidence(),
+            participant=person.ref,
+            resolution=evidence.resolution,
+            age_ms=evidence.age_ms,
+            vision_latency_ms=evidence.vision_latency_ms,
         )
 
     async def _look(
@@ -191,7 +199,9 @@ class MeetingEvidence:
         self._context = context
         self._journal = journal or Journal("", echo=False)
 
-    async def __call__(self, question: str, needs: tuple[str, ...]) -> dict[str, Any]:
+    async def __call__(
+        self, question: str, needs: tuple[str, ...], transcript_id: str | None = None
+    ) -> dict[str, Any]:
         evidence = await gather_evidence(self._context, question, needs)
         if evidence:
             self._journal.record(
@@ -200,6 +210,19 @@ class MeetingEvidence:
                 needs=sorted(evidence),
                 codes=[str(result.get("code")) for result in evidence.values()],
             )
+            for need, result in evidence.items():
+                resolution = result.get("resolution")
+                if resolution is None:
+                    continue
+                self._journal.record(
+                    "perception_evidence_resolved",
+                    source="perception",
+                    transcript_id=transcript_id or "",
+                    evidence_kind=need,
+                    resolution=str(resolution),
+                    age_ms=int(result.get("age_ms") or 0),
+                    vision_latency_ms=int(result.get("vision_latency_ms") or 0),
+                )
         return evidence
 
 

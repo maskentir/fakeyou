@@ -7,6 +7,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from fakeyou.conversation.agent import create_meeting_agent
 from fakeyou.perception.budget import PerceptionBudget
+from fakeyou.perception.camera_evidence import CameraObservation
 from fakeyou.perception.context import (
     MEETING_EVIDENCE,
     OBSERVE_MEETING,
@@ -46,7 +47,23 @@ def _context(
     timeline: MeetingTimeline, *, answers: tuple[str, ...] = (), max_calls: int = 10
 ) -> PerceptionContext:
     budget = PerceptionBudget(budget_usd=1.0, max_calls=max_calls)
-    interpreter = PerceptionInterpreter(vision_model(answers=answers), budget, max_concurrent=1)
+    interpreter = PerceptionInterpreter(
+        vision_model(
+            answers=answers,
+            observations=(
+                CameraObservation(
+                    participant_id="person#2",
+                    observed_at=START,
+                    clothing="light ivory shirt",
+                    visible_objects=[],
+                    background="indoor room",
+                    appearance="a person speaking",
+                ),
+            ),
+        ),
+        budget,
+        max_concurrent=1,
+    )
     return PerceptionContext(
         timeline, interpreter, max_chars=6000, clock=lambda: START + timedelta(minutes=2)
     )
@@ -179,7 +196,10 @@ async def test_looking_reports_why_it_could_not_see() -> None:
     assert broke == {"code": "budget_exhausted", "screen": "screen#1"}
     assert nobody == {"code": "unknown_participant", "participant": "Zed"}
     assert no_camera == {"code": "camera_unavailable", "participant": "person#1"}
-    assert camera == {"code": "ok", "answer": "A mockup.", "participant": "person#2"}
+    assert camera["code"] == "ok"
+    assert camera["participant"] == "person#2"
+    assert camera["resolution"] == "fresh"
+    assert "light ivory shirt" in camera["answer"]
 
 
 async def test_a_screen_whose_frame_is_gone_cannot_be_looked_at() -> None:

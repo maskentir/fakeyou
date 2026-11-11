@@ -7,6 +7,7 @@ from langchain_core.messages import HumanMessage
 
 from fakeyou.perception import context as context_module
 from fakeyou.perception.budget import PerceptionBudget
+from fakeyou.perception.camera_evidence import CameraObservation
 from fakeyou.perception.context import PerceptionContext, gather_evidence
 from fakeyou.perception.interpreter import PerceptionInterpreter
 from fakeyou.perception.timeline import MeetingTimeline
@@ -25,7 +26,19 @@ def trigger(text: str, *needs: str, kind: str = "speech") -> HumanMessage:
 
 def context(timeline: MeetingTimeline, *answers: str) -> PerceptionContext:
     interpreter = PerceptionInterpreter(
-        vision_model(answers=answers),
+        vision_model(
+            answers=answers,
+            observations=(
+                CameraObservation(
+                    participant_id="person#1",
+                    observed_at=START,
+                    clothing="light ivory shirt",
+                    visible_objects=[],
+                    background="indoor room",
+                    appearance="a person speaking",
+                ),
+            ),
+        ),
         PerceptionBudget(budget_usd=1.0, max_calls=10),
         max_concurrent=1,
     )
@@ -81,7 +94,8 @@ async def test_the_only_person_in_the_meeting_is_looked_at_without_a_name() -> N
     )
 
     assert evidence["participant"]["code"] == "ok"
-    assert evidence["participant"]["answer"] == "A dark blue shirt."
+    assert "light ivory shirt" in evidence["participant"]["answer"]
+    assert evidence["participant"]["resolution"] == "fresh"
 
 
 async def test_unknown_needs_are_ignored_and_chat_history_needs_no_model() -> None:

@@ -290,8 +290,10 @@ def test_an_unknown_language_adds_no_language_note() -> None:
 
 
 async def test_a_failed_look_tells_the_reply_not_to_claim_it_saw_anything() -> None:
-    async def looks(question: str, needs: tuple[str, ...]) -> dict[str, object]:
-        del question, needs
+    async def looks(
+        question: str, needs: tuple[str, ...], transcript_id: str | None = None
+    ) -> dict[str, object]:
+        del question, needs, transcript_id
         return {"participant": {"code": "unknown_participant"}, "screen": {"code": "ok"}}
 
     runtime = TurnTestContext(speaker=SilentSpeaker(), journal=RecordingJournal(), evidence=looks)

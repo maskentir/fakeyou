@@ -220,7 +220,10 @@ async def test_evidence_is_gathered_once_for_the_heard_question_before_the_reply
     asked: list[tuple[str, tuple[str, ...]]] = []
     gathered = {"screen": {"code": "ok", "answer": "A launch timeline."}}
 
-    async def evidence(question: str, needs: tuple[str, ...]) -> Mapping[str, object]:
+    async def evidence(
+        question: str, needs: tuple[str, ...], transcript_id: str | None = None
+    ) -> Mapping[str, object]:
+        del transcript_id
         asked.append((question, needs))
         return gathered
 

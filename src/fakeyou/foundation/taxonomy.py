@@ -52,6 +52,7 @@ EventVerb = Literal[
     "requested",
     "required",
     "rescued",
+    "resolved",
     "rejoined",
     "resumed",
     "scored",

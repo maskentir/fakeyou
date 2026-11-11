@@ -205,7 +205,7 @@ class TurnPlanning(Protocol):
 
 
 StateSpeech = Callable[[StateQuestion, str | None], str | None]
-EvidencePort = Callable[[str, tuple[str, ...]], Awaitable[Mapping[str, object]]]
+EvidencePort = Callable[[str, tuple[str, ...], str | None], Awaitable[Mapping[str, object]]]
 
 
 class CommandPort(Protocol):
@@ -924,7 +924,7 @@ async def with_evidence(
 ) -> TranscriptEvent:
     if runtime.evidence is None or not event.evidence_needs:
         return event
-    evidence = await runtime.evidence(question, event.evidence_needs)
+    evidence = await runtime.evidence(question, event.evidence_needs, event.id)
     notes = [
         failed_look_note(need, str(result.get("code")))
         for need, result in evidence.items()
