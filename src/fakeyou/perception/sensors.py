@@ -363,7 +363,7 @@ class PerceptionSensors:
             return
         if self.epoch != epoch or not self._assignment_current(frame, device_id):
             self._journal.record(
-                "perception_frame_dropped_stale",
+                "perception_frame_dropped",
                 source="perception",
                 stream_id=frame.stream_id,
                 role=frame.role,
