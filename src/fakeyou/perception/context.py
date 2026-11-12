@@ -136,8 +136,8 @@ class PerceptionContext:
             return _look_result(
                 "budget_exhausted", participant=person.ref, resolution="unavailable"
             )
-        frame = self.timeline.camera_frames.get(person.participant_id)
-        if frame is None:
+        snapshot = self.timeline.camera_frames.snapshot(person.participant_id)
+        if snapshot is None:
             self.interpreter.drop_camera_observation(person.participant_id)
             return _look_result(
                 "camera_unavailable", participant=person.ref, resolution="unavailable"
@@ -146,8 +146,8 @@ class PerceptionContext:
         camera_on = meeting.cameras_on if meeting is not None else None
         live = (
             (camera_on is None or person.participant_id in camera_on)
-            and frame.epoch == self._camera_epoch()
-            and self._camera_monotonic() - frame.seen_at <= CAMERA_LIVENESS_TIMEOUT_SECONDS
+            and snapshot.epoch == self._camera_epoch()
+            and self._camera_monotonic() - snapshot.frame.seen_at <= CAMERA_LIVENESS_TIMEOUT_SECONDS
         )
         if not live:
             self.interpreter.drop_camera_observation(person.participant_id)
@@ -155,12 +155,30 @@ class PerceptionContext:
                 "camera_unavailable", participant=person.ref, resolution="unavailable"
             )
         try:
-            evidence = await self.interpreter.camera_answer(
-                person.participant_id,
-                question,
-                frame.data,
-                source=CAMERA_SOURCE.format(name=person.name),
-                captured_at=frame.captured_at,
+            async with asyncio.timeout(LOOK_TIMEOUT_SECONDS):
+                evidence = await self.interpreter.camera_answer(
+                    person.participant_id,
+                    question,
+                    snapshot,
+                    source=CAMERA_SOURCE.format(name=person.name),
+                )
+        except TimeoutError:
+            self.interpreter.drop_camera_observation(person.participant_id)
+            return _look_result(
+                "look_failed",
+                error_type="TimeoutError",
+                participant=person.ref,
+                resolution="unavailable",
+                strategy="targeted_vision",
+            )
+        except (ProviderFault, FakeYouError, OSError) as error:
+            self.interpreter.drop_camera_observation(person.participant_id)
+            return _look_result(
+                "look_failed",
+                error_type=type(error).__name__,
+                participant=person.ref,
+                resolution="unavailable",
+                strategy="targeted_vision",
             )
         except StaleEvidence:
             self.interpreter.drop_camera_observation(person.participant_id)

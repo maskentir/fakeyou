@@ -35,7 +35,9 @@ def _interpreter(
     model: FakeVisionModel, *, budget_usd: float = 1.0, max_calls: int = 10
 ) -> PerceptionInterpreter:
     budget = PerceptionBudget(budget_usd=budget_usd, max_calls=max_calls)
-    return PerceptionInterpreter(model, budget, max_concurrent=2)
+    return PerceptionInterpreter(
+        model, budget, max_concurrent=2, snapshots=MeetingTimeline().camera_frames
+    )
 
 
 def _sent_image(message: HumanMessage) -> Image.Image:

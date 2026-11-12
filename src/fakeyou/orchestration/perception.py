@@ -16,6 +16,7 @@ from fakeyou.perception.percepts import ChatLine, MeetingSignal, ScreenSegment
 from fakeyou.perception.roster import MeetRoster
 from fakeyou.perception.sensors import PerceptionSensors
 from fakeyou.perception.timeline import (
+    CameraFrameStore,
     ChatReceived,
     MeetingTimeline,
     ScreenRead,
@@ -124,7 +125,7 @@ class PerceptionStack:
 
 
 def create_perception_interpreter(
-    settings: Settings, *, journal: Journal
+    settings: Settings, *, journal: Journal, snapshots: CameraFrameStore
 ) -> PerceptionInterpreter | None:
     perception = settings.perception
     try:
@@ -143,6 +144,7 @@ def create_perception_interpreter(
         model,
         budget,
         max_concurrent=perception.interpreter.max_concurrent,
+        snapshots=snapshots,
         journal=journal,
     )
 
@@ -161,7 +163,9 @@ def create_perception_stack(
     timeline = MeetingTimeline(journal=journal)
     archive = PerceptionArchive(timeline, record=record, screens_dir=screens_dir)
     timeline.subscribe(archive)
-    interpreter = create_perception_interpreter(settings, journal=journal)
+    interpreter = create_perception_interpreter(
+        settings, journal=journal, snapshots=timeline.camera_frames
+    )
     reader = ScreenReader(timeline, interpreter, journal=journal) if interpreter else None
 
     def on_camera_invalidate(participant_id: str | None) -> None:

@@ -1,6 +1,6 @@
 from collections import OrderedDict
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Literal
 
@@ -127,18 +127,58 @@ class CameraFrame:
     captured_at: datetime
     epoch: int
     seen_at: float
+    sequence: int = 0
+    generation: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class CameraSnapshot:
+    participant_id: str
+    frame: CameraFrame
+    store_epoch: int
+
+    @property
+    def stream_id(self) -> str:
+        return self.frame.stream_id
+
+    @property
+    def epoch(self) -> int:
+        return self.frame.epoch
+
+    @property
+    def sequence(self) -> int:
+        return self.frame.sequence
+
+    @property
+    def generation(self) -> int:
+        return self.frame.generation
+
+    @property
+    def captured_at(self) -> datetime:
+        return self.frame.captured_at
 
 
 class CameraFrameStore:
     def __init__(self, *, capacity: int = CAMERA_FRAME_CACHE_SIZE) -> None:
         self._capacity = capacity
         self._frames: OrderedDict[str, CameraFrame] = OrderedDict()
+        self._sequences: dict[str, int] = {}
+        self._generations: dict[str, int] = {}
+        self._epoch = 0
 
-    def put(self, participant_id: str, frame: CameraFrame) -> None:
-        self._frames[participant_id] = frame
+    def put(self, participant_id: str, frame: CameraFrame) -> CameraFrame:
+        sequence = self._sequences.get(participant_id, 0) + 1
+        self._sequences[participant_id] = sequence
+        stored = replace(
+            frame,
+            sequence=sequence,
+            generation=self._generations.get(participant_id, 0),
+        )
+        self._frames[participant_id] = stored
         self._frames.move_to_end(participant_id)
         while len(self._frames) > self._capacity:
             self._frames.popitem(last=False)
+        return stored
 
     def get(self, participant_id: str) -> CameraFrame | None:
         frame = self._frames.get(participant_id)
@@ -146,24 +186,32 @@ class CameraFrameStore:
             self._frames.move_to_end(participant_id)
         return frame
 
+    def snapshot(self, participant_id: str) -> CameraSnapshot | None:
+        frame = self.get(participant_id)
+        if frame is None:
+            return None
+        return CameraSnapshot(participant_id=participant_id, frame=frame, store_epoch=self._epoch)
+
     def touch(self, participant_id: str, *, seen_at: float) -> None:
         frame = self._frames.get(participant_id)
         if frame is None:
             return
-        self._frames[participant_id] = CameraFrame(
-            data=frame.data,
-            stream_id=frame.stream_id,
-            captured_at=frame.captured_at,
-            epoch=frame.epoch,
-            seen_at=seen_at,
-        )
+        self._frames[participant_id] = replace(frame, seen_at=seen_at)
         self._frames.move_to_end(participant_id)
 
     def drop(self, participant_id: str) -> None:
+        self._generations[participant_id] = self._generations.get(participant_id, 0) + 1
         self._frames.pop(participant_id, None)
 
     def clear(self) -> None:
+        self._epoch += 1
         self._frames.clear()
+
+    def current_generation(self, participant_id: str) -> int:
+        return self._generations.get(participant_id, 0)
+
+    def current_epoch(self) -> int:
+        return self._epoch
 
 
 class MeetingTimeline:

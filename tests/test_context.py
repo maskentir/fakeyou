@@ -51,6 +51,7 @@ def _context(
         vision_model(answers=answers),
         budget,
         max_concurrent=1,
+        snapshots=timeline.camera_frames,
     )
     return PerceptionContext(
         timeline, interpreter, max_chars=6000, clock=lambda: START + timedelta(minutes=2)

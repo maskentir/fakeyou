@@ -47,11 +47,11 @@ The branch `refactor/unified-evidence-engine` carries the fixes so the baseline 
 
 | File | Responsibility after this plan |
 | --- | --- |
-| `src/fakeyou/perception/snapshots.py` | New. `VisualSnapshot` and `SnapshotStore`: frame bytes, stream identity, epoch, capture time, liveness heartbeat, generation counter |
+| `src/fakeyou/perception/timeline.py` | Owns the snapshot identity: `CameraFrame` carries its sequence and generation, `CameraFrameStore` assigns them and invalidates them. This is the `SnapshotStore` of Phase 2, not a third store |
 | `src/fakeyou/perception/evidence.py` | New. `VisualInspection`, `EvidenceResult`, `EvidenceStore`: inspection verdicts with provenance and validity |
 | `src/fakeyou/perception/resolver.py` | New. `EvidenceResolver`: reuse, inspection, budget, invalidation, generation checks |
 | `src/fakeyou/perception/inspector.py` | New. `VisionInspector`: one model call that returns a structured verdict for a question about a frame |
-| `src/fakeyou/perception/camera_evidence.py` | Shrinks to the domain model only. The regex classifier and the generic observation cache leave this file |
+| `src/fakeyou/perception/camera_evidence.py` | The answer cache only: one answer per participant, keyed by question and snapshot identity. It owns no identity counters |
 | `src/fakeyou/perception/context.py` | Adapter. Validates the request, calls the resolver, shapes the evidence payload. No regex, no cache algorithm |
 | `src/fakeyou/perception/interpreter.py` | Keeps screen reading and reply planning helpers. Camera observation moves to the inspector |
 | `src/fakeyou/observability/report_contract.py` | One contract for current journals, one legacy adapter module for historical journals |
@@ -64,7 +64,11 @@ The branch `refactor/unified-evidence-engine` carries the fixes so the baseline 
 
 **Release condition:** an inference that started before a camera-off, a participant leave, a stream change or a browser rejoin can never publish evidence, and can never be served to a later turn.
 
-**Status: implemented.** The generation token lives in `CameraCache` as a pair of an epoch counter and a per-participant counter. `drop` bumps the participant counter and `clear` bumps the epoch, so an invalidation never waits for an in-flight inference and an inference that resumes afterwards is rejected with `StaleEvidence`.
+**Status: implemented.** The snapshot identity lives with the snapshot, not with the answer cache. `CameraFrameStore` assigns every stored frame a `sequence` and stamps it with the participant `generation`; `drop` bumps the generation and `clear` bumps the store epoch. The answer cache in `camera_evidence.py` owns no counters at all.
+
+The ticket is captured before the first asynchronous operation: the context reads the snapshot synchronously and the interpreter builds the ticket from it before the JPEG preprocessing is scheduled. After the inference the ticket is re-validated against the store on five points: the store epoch, the participant generation, the active frame sequence, the active frame generation and the stream identity. A mismatch raises `StaleEvidence`, the answer is neither cached nor returned, and the turn reports the camera as unavailable.
+
+The camera inspection is bounded: the context wraps the whole inspection in `asyncio.timeout(LOOK_TIMEOUT_SECONDS)`, a provider failure becomes `look_failed` with the error type, and a budget rejection stays `budget_exhausted`. A cancellation is never converted into a result.
 
 **Files:**
 - Modify: `src/fakeyou/perception/camera_evidence.py`
@@ -109,53 +113,101 @@ async def test_an_inference_that_finishes_after_an_invalidation_is_not_published
 Run: `uv run pytest -q tests/test_camera_evidence.py -k invalidation`
 Expected: FAIL, the cache entry is published after the invalidation.
 
-- [ ] **Step 3: Add the generation token**
+- [ ] **Step 3: Add the snapshot identity to the frame store**
 
-In `src/fakeyou/perception/camera_evidence.py`:
+In `src/fakeyou/perception/timeline.py`:
 
 ```python
 @dataclass(frozen=True, slots=True)
-class Generation:
+class CameraFrame:
+    data: bytes
+    stream_id: str
+    captured_at: datetime
     epoch: int
-    participant: int
+    seen_at: float
+    sequence: int = 0
+    generation: int = 0
 
 
-class StaleEvidence(Exception):
-    pass
+@dataclass(frozen=True, slots=True)
+class CameraSnapshot:
+    participant_id: str
+    frame: CameraFrame
+    store_epoch: int
 
 
-@dataclass(slots=True)
-class CameraCache:
-    entries: dict[str, CameraCacheEntry] = field(default_factory=dict)
-    locks: dict[str, asyncio.Lock] = field(default_factory=dict)
-    epoch: int = 0
-    participants: dict[str, int] = field(default_factory=dict)
+class CameraFrameStore:
+    def __init__(self, *, capacity: int = CAMERA_FRAME_CACHE_SIZE) -> None:
+        self._capacity = capacity
+        self._frames: OrderedDict[str, CameraFrame] = OrderedDict()
+        self._sequences: dict[str, int] = {}
+        self._generations: dict[str, int] = {}
+        self._epoch = 0
 
-    def generation(self, participant_id: str) -> Generation:
-        return Generation(self.epoch, self.participants.get(participant_id, 0))
+    def put(self, participant_id: str, frame: CameraFrame) -> CameraFrame:
+        sequence = self._sequences.get(participant_id, 0) + 1
+        self._sequences[participant_id] = sequence
+        stored = replace(
+            frame,
+            sequence=sequence,
+            generation=self._generations.get(participant_id, 0),
+        )
+        self._frames[participant_id] = stored
+        self._frames.move_to_end(participant_id)
+        while len(self._frames) > self._capacity:
+            self._frames.popitem(last=False)
+        return stored
+
+    def snapshot(self, participant_id: str) -> CameraSnapshot | None:
+        frame = self.get(participant_id)
+        if frame is None:
+            return None
+        return CameraSnapshot(participant_id=participant_id, frame=frame, store_epoch=self._epoch)
+
+    def touch(self, participant_id: str, *, seen_at: float) -> None:
+        frame = self._frames.get(participant_id)
+        if frame is None:
+            return
+        self._frames[participant_id] = replace(frame, seen_at=seen_at)
+        self._frames.move_to_end(participant_id)
 
     def drop(self, participant_id: str) -> None:
-        self.participants[participant_id] = self.participants.get(participant_id, 0) + 1
-        self.entries.pop(participant_id, None)
+        self._generations[participant_id] = self._generations.get(participant_id, 0) + 1
+        self._frames.pop(participant_id, None)
 
     def clear(self) -> None:
-        self.epoch += 1
-        self.entries.clear()
+        self._epoch += 1
+        self._frames.clear()
 ```
+
+A heartbeat `touch` keeps the sequence, because the picture did not change. A new picture gets a new sequence, an invalidation gets a new generation.
 
 - [ ] **Step 4: Reject a stale inference in the interpreter**
 
 In `src/fakeyou/perception/interpreter.py`, inside `camera_answer`:
 
 ```python
-            generation = self._camera_cache.generation(participant_id)
-            cached = self._camera_cache.get(participant_id, question)
-            ...
-            answer = await self.answer(image, question, source=source)
+            answer = await self.answer(snapshot.frame.data, question, source=source)
             if answer is None:
                 return None
-            if self._camera_cache.generation(participant_id) != generation:
+            if not self._snapshot_current(participant_id, snapshot):
                 raise StaleEvidence
+```
+
+with
+
+```python
+    def _snapshot_current(self, participant_id: str, snapshot: CameraSnapshot) -> bool:
+        current = self._snapshots.snapshot(participant_id)
+        if current is None:
+            return False
+        return (
+            current.store_epoch == snapshot.store_epoch
+            and current.sequence == snapshot.sequence
+            and current.generation == snapshot.generation
+            and current.stream_id == snapshot.stream_id
+            and current.epoch == snapshot.epoch
+        )
 ```
 
 - [ ] **Step 5: Run the test to verify it passes**
@@ -190,21 +242,36 @@ async def test_a_stale_camera_look_reports_the_camera_as_unavailable() -> None:
 Run: `uv run pytest -q tests/test_camera_evidence.py -k unavailable`
 Expected: FAIL, the stale error escapes the context.
 
-- [ ] **Step 3: Catch the stale error in the context**
+- [ ] **Step 3: Catch the stale error and keep the boundary**
 
 In `src/fakeyou/perception/context.py`:
 
 ```python
         try:
-            evidence = await self.interpreter.camera_answer(
-                person.participant_id,
-                question,
-                frame.data,
-                source=CAMERA_SOURCE.format(name=person.name),
-                captured_at=frame.captured_at,
+            async with asyncio.timeout(LOOK_TIMEOUT_SECONDS):
+                evidence = await self.interpreter.camera_answer(
+                    person.participant_id,
+                    question,
+                    snapshot,
+                    source=CAMERA_SOURCE.format(name=person.name),
+                )
+        except TimeoutError:
+            return _look_result(
+                "look_failed",
+                error_type="TimeoutError",
+                participant=person.ref,
+                resolution="unavailable",
+                strategy="targeted_vision",
+            )
+        except (ProviderFault, FakeYouError, OSError) as error:
+            return _look_result(
+                "look_failed",
+                error_type=type(error).__name__,
+                participant=person.ref,
+                resolution="unavailable",
+                strategy="targeted_vision",
             )
         except StaleEvidence:
-            self.interpreter.drop_camera_observation(person.participant_id)
             return _look_result(
                 "camera_unavailable",
                 participant=person.ref,
@@ -212,6 +279,8 @@ In `src/fakeyou/perception/context.py`:
                 strategy="targeted_vision",
             )
 ```
+
+`TimeoutError` is caught before `OSError` because it is a subclass of it, and a cancellation is not caught at all, so it propagates.
 
 - [ ] **Step 4: Run the test to verify it passes**
 
@@ -247,10 +316,11 @@ git commit -m "fix(perception): reject camera evidence from an invalidated strea
 
 **Release condition:** camera and screen reach the conversation runtime through one domain interface, and every evidence payload carries its snapshot provenance.
 
+**No third store.** `CameraFrameStore` already owns the frame bytes, the stream identity, the epoch, the capture time and, after Phase 1, the sequence and the generation. It is the `SnapshotStore`. `CameraCache` is the answer cache and owns no identity. Phase 2 formalises both, it does not add a store that manages the same identity and liveness twice.
+
 **Files:**
-- Create: `src/fakeyou/perception/snapshots.py`
-- Create: `src/fakeyou/perception/evidence.py`
 - Modify: `src/fakeyou/perception/timeline.py`
+- Create: `src/fakeyou/perception/evidence.py`
 - Modify: `src/fakeyou/perception/context.py`
 - Test: `tests/test_snapshots.py`
 - Test: `tests/test_evidence.py`
@@ -317,7 +387,9 @@ Expected: PASS.
 
 ```python
 def test_an_inspection_result_reports_status_and_provenance() -> None:
-    inspection = VisualInspection(status="supported", answer="Harun's shirt is red.", observed_facts=["red shirt"])
+    inspection = VisualInspection(
+        status="supported", answer="Harun's shirt is red.", observed_facts=["red shirt"]
+    )
 
     result = EvidenceResult(
         source="camera",
@@ -386,8 +458,12 @@ Expected: PASS.
 async def test_a_camera_question_and_a_screen_question_use_one_resolver() -> None:
     resolver = resolver_with(vision_model())
 
-    camera = await resolver.resolve(question="What is he wearing?", source="camera", subject_id="person#1", turn_id="t1")
-    screen = await resolver.resolve(question="What is on the slide?", source="screen", subject_id="screen#1", turn_id="t2")
+    camera = await resolver.resolve(
+        question="What is he wearing?", source="camera", subject_id="person#1", turn_id="t1"
+    )
+    screen = await resolver.resolve(
+        question="What is on the slide?", source="screen", subject_id="screen#1", turn_id="t2"
+    )
 
     assert camera.source == "camera"
     assert screen.source == "screen"
@@ -402,15 +478,27 @@ Expected: FAIL, `EvidenceResolver` is not defined.
 
 ```python
 class EvidenceResolver:
-    def __init__(self, store: EvidenceStore, inspector: VisionInspector, snapshots: SnapshotStore) -> None:
+    def __init__(
+        self, store: EvidenceStore, inspector: VisionInspector, snapshots: SnapshotStore
+    ) -> None:
         self._store = store
         self._inspector = inspector
         self._snapshots = snapshots
 
-    async def resolve(self, *, question: str, source: Source, subject_id: str, turn_id: str) -> EvidenceResult:
+    async def resolve(
+        self, *, question: str, source: Source, subject_id: str, turn_id: str
+    ) -> EvidenceResult:
         snapshot = self._snapshots.current(source, subject_id)
         if snapshot is None:
-            return EvidenceResult(source=source, subject_id=subject_id, strategy="targeted_vision", acquisition="inference", status="unavailable", answer=None, snapshot_id="")
+            return EvidenceResult(
+                source=source,
+                subject_id=subject_id,
+                strategy="targeted_vision",
+                acquisition="inference",
+                status="unavailable",
+                answer=None,
+                snapshot_id="",
+            )
         reused = self._store.find(snapshot, question)
         if reused is not None:
             return reused
@@ -446,6 +534,8 @@ git commit -m "feat(perception): resolve camera and screen evidence through one 
 ## Phase 3 — Question-aware inspection without keyword routing
 
 **Release condition:** no keyword routing exists on the critical path. Every camera question is answered by one inspection of the live frame, cached by snapshot identity and question identity, and the perception layer never guesses what a question means.
+
+**Live implication of the strict snapshot check.** The camera is sampled every four seconds and a frame is only emitted when at least twelve of the 144 signature blocks changed, so the stored frame changes on substantial movement rather than on every sample. A question that lands while the participant moves on can therefore be rejected as stale, which is the intended behaviour: the answer describes the frame that was current when the inspection started, or it is not published at all. Phase 5 measures how often that happens.
 
 **Status: implemented (camera path).** The classifier is gone. A camera question is sent to the vision model with the question itself and the participant's camera as the source, the answer is cached per participant, question and frame, and the perception layer no longer decides whether the evidence answers the question.
 
@@ -484,55 +574,53 @@ Expected: FAIL, the current code routes the question to the generic observation.
 In `src/fakeyou/perception/interpreter.py`:
 
 ```python
-    async def camera_answer(
-        self,
-        participant_id: str,
-        question: str,
-        image: bytes,
-        *,
-        source: str,
-        captured_at: datetime | None = None,
-    ) -> CameraEvidence | None:
-        keyframe = await asyncio.to_thread(
-            keyframe_from_jpeg, image, captured_at=captured_at or datetime.now(UTC)
-        )
-        async with self._camera_cache.lock_for(participant_id):
-            generation = self._camera_cache.generation(participant_id)
-            cached = self._camera_cache.get(participant_id, question)
-            if cached is not None:
-                age = self._monotonic() - cached.stored_at
-                if age <= CAMERA_CACHE_TTL_SECONDS and observations_match(
-                    cached.keyframe, keyframe
-                ):
-                    return CameraEvidence(
-                        answer=cached.answer,
-                        resolution="cache_hit",
-                        age_ms=round(age * 1000),
-                        vision_latency_ms=0,
-                        generation=generation.participant,
-                    )
-            started = self._monotonic()
-            answer = await self.answer(image, question, source=source)
-            if answer is None:
-                return None
-            if self._camera_cache.generation(participant_id) != generation:
-                raise StaleEvidence
-            self._camera_cache.put(
-                participant_id,
-                CameraCacheEntry(
-                    question=question,
-                    answer=answer,
-                    keyframe=keyframe,
-                    stored_at=self._monotonic(),
-                ),
-            )
-            return CameraEvidence(
+async def camera_answer(
+    self,
+    participant_id: str,
+    question: str,
+    image: bytes,
+    *,
+    source: str,
+    captured_at: datetime | None = None,
+) -> CameraEvidence | None:
+    keyframe = await asyncio.to_thread(
+        keyframe_from_jpeg, image, captured_at=captured_at or datetime.now(UTC)
+    )
+    async with self._camera_cache.lock_for(participant_id):
+        generation = self._camera_cache.generation(participant_id)
+        cached = self._camera_cache.get(participant_id, question)
+        if cached is not None:
+            age = self._monotonic() - cached.stored_at
+            if age <= CAMERA_CACHE_TTL_SECONDS and observations_match(cached.keyframe, keyframe):
+                return CameraEvidence(
+                    answer=cached.answer,
+                    resolution="cache_hit",
+                    age_ms=round(age * 1000),
+                    vision_latency_ms=0,
+                    generation=generation.participant,
+                )
+        started = self._monotonic()
+        answer = await self.answer(image, question, source=source)
+        if answer is None:
+            return None
+        if self._camera_cache.generation(participant_id) != generation:
+            raise StaleEvidence
+        self._camera_cache.put(
+            participant_id,
+            CameraCacheEntry(
+                question=question,
                 answer=answer,
-                resolution="fresh",
-                age_ms=0,
-                vision_latency_ms=round((self._monotonic() - started) * 1000),
-                generation=generation.participant,
-            )
+                keyframe=keyframe,
+                stored_at=self._monotonic(),
+            ),
+        )
+        return CameraEvidence(
+            answer=answer,
+            resolution="fresh",
+            age_ms=0,
+            vision_latency_ms=round((self._monotonic() - started) * 1000),
+            generation=generation.participant,
+        )
 ```
 
 In `src/fakeyou/perception/context.py`:
@@ -668,6 +756,24 @@ git commit -m "refactor(observability): read every journal with one contract and
 ```
 
 ---
+
+## Phase 4b — Measured limits of the current cache
+
+**Known limit.** The answer cache holds one entry per participant and matches the question by exact string. A follow-up with the same wording on an unchanged frame is served from the cache; a paraphrase or a different question costs a new inspection. With the strict snapshot contract of Phase 1 the cache also requires the same frame sequence, so the hit rate is bounded by how often the picture stays identical.
+
+**Release condition for this limit:** the hit rate is measured before any change. `evidence_cache.hit_rate` already exists in the report. Phase 5 records it for the benchmark conversations, and only then is it decided whether a question-similarity index or a per-subject fact store is worth it. Semantic matching is explicitly out of scope until the measurement exists.
+
+## Phase 4c — The memory prefetch lifecycle (tracked separately)
+
+**Finding.** `tests/test_persona_join.py::test_join_hung_recall_never_blocks_the_reply_and_keeps_listening` asserted exactly two memory timeout faults. The count is not a product invariant.
+
+The memory prefetch runs as a background task. Each finalized transcript schedules one prefetch, and each prefetch search is bounded by `recall.timeout_seconds`. When the session stops, `RecallListener.close` cancels the prefetch that is still in flight. Whether that prefetch records a timeout fault or a cancellation therefore depends on whether the recall timeout fires before the teardown, which under load depends on the event loop's timer latency.
+
+The product contract is the one the stop test already proves: a stop cancels the recall and no late reply follows. The fault count at teardown is a consequence of that contract, not a guarantee.
+
+**Change.** The join test now asserts the invariant that matters, that at least one memory timeout was recorded and that every recorded memory fault is a timeout. Two deterministic contract tests in `tests/test_memory_prefetch.py` pin the behaviour: an expired prefetch records a memory timeout fault, and closing the listener cancels an in-flight prefetch before its timeout.
+
+**Release condition:** the reply is never blocked by a hung recall, the search is always cancelled or timed out, and the memory outcome is always journalled. The fault record at teardown stays best effort by design.
 
 ## Phase 5 — Live end-to-end correctness and cost benchmark
 

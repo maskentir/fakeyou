@@ -30,6 +30,7 @@ def context(timeline: MeetingTimeline, *answers: str) -> PerceptionContext:
         vision_model(answers=answers),
         PerceptionBudget(budget_usd=1.0, max_calls=10),
         max_concurrent=1,
+        snapshots=timeline.camera_frames,
     )
     return PerceptionContext(
         timeline, interpreter, max_chars=6000, clock=lambda: START + timedelta(minutes=2)

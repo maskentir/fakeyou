@@ -2,6 +2,7 @@ import asyncio
 import base64
 import io
 import json
+import threading
 import time
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -10,6 +11,8 @@ import pytest
 
 from fakeyou.config.settings import PerceptionSettings
 from fakeyou.observability.journal import Journal
+from fakeyou.observability.provider_faults import ProviderFault
+from fakeyou.perception import context as context_module
 from fakeyou.perception.budget import PerceptionBudget
 from fakeyou.perception.camera_evidence import StaleEvidence
 from fakeyou.perception.context import (
@@ -17,7 +20,9 @@ from fakeyou.perception.context import (
     MeetingEvidence,
     PerceptionContext,
 )
+from fakeyou.perception.frames import keyframe_from_jpeg
 from fakeyou.perception.interpreter import PerceptionInterpreter
+from fakeyou.perception.percepts import Keyframe
 from fakeyou.perception.sensors import (
     ActiveSampler,
     DrainBatch,
@@ -25,7 +30,12 @@ from fakeyou.perception.sensors import (
     DrainedMessage,
     PerceptionSensors,
 )
-from fakeyou.perception.timeline import CameraFrame, MeetingTimeline
+from fakeyou.perception.timeline import (
+    CameraFrame,
+    CameraFrameStore,
+    CameraSnapshot,
+    MeetingTimeline,
+)
 from tests._meet_protocol_fakes import collection_payload, output, user_info
 from tests._perception_fakes import FakeVisionModel, vision_model
 from tests._persistence_fakes import RecordingJournal
@@ -42,24 +52,46 @@ SOURCE = "the live camera of the participant Budi, so the person shown is Budi"
 
 
 def interpreter_with(
-    model: FakeVisionModel, *, journal: RecordingJournal | None = None
+    model: FakeVisionModel,
+    store: CameraFrameStore,
+    *,
+    journal: RecordingJournal | None = None,
+    max_calls: int = 50,
 ) -> PerceptionInterpreter:
     return PerceptionInterpreter(
         model,
-        PerceptionBudget(budget_usd=10.0, max_calls=50),
+        PerceptionBudget(budget_usd=10.0, max_calls=max_calls),
         max_concurrent=2,
+        snapshots=store,
         journal=journal,
     )
 
 
-def _context_with(interpreter: PerceptionInterpreter) -> PerceptionContext:
+def camera_stack(
+    model: FakeVisionModel,
+    *,
+    journal: RecordingJournal | None = None,
+    max_calls: int = 50,
+) -> tuple[MeetingTimeline, PerceptionContext, PerceptionInterpreter]:
     timeline = MeetingTimeline()
     timeline.participant("device-p1", "Budi")
+    interpreter = interpreter_with(
+        model, timeline.camera_frames, journal=journal, max_calls=max_calls
+    )
+    context = PerceptionContext(timeline, interpreter, max_chars=6000)
+    return timeline, context, interpreter
+
+
+def put_frame(
+    timeline: MeetingTimeline, data: bytes, *, stream_id: str = "stream-p1"
+) -> CameraSnapshot:
     timeline.camera_frames.put(
         "device-p1",
-        CameraFrame(jpeg_of((140, 130, 120)), "stream-p1", datetime.now(UTC), 0, time.monotonic()),
+        CameraFrame(data, stream_id, datetime.now(UTC), 0, time.monotonic()),
     )
-    return PerceptionContext(timeline, interpreter, max_chars=6000)
+    snapshot = timeline.camera_frames.snapshot("device-p1")
+    assert snapshot is not None
+    return snapshot
 
 
 def jpeg_of(color: tuple[int, int, int]) -> bytes:
@@ -73,11 +105,11 @@ def jpeg_of(color: tuple[int, int, int]) -> bytes:
 
 async def test_the_same_question_on_the_same_frame_is_answered_once() -> None:
     model = vision_model(answers=["A dark blue shirt."])
-    interpreter = interpreter_with(model)
-    frame = jpeg_of((200, 180, 160))
+    timeline, _context, interpreter = camera_stack(model)
+    snapshot = put_frame(timeline, jpeg_of((200, 180, 160)))
 
-    first = await interpreter.camera_answer("p1", QUESTION, frame, source=SOURCE)
-    second = await interpreter.camera_answer("p1", QUESTION, frame, source=SOURCE)
+    first = await interpreter.camera_answer("device-p1", QUESTION, snapshot, source=SOURCE)
+    second = await interpreter.camera_answer("device-p1", QUESTION, snapshot, source=SOURCE)
 
     assert first is not None
     assert first.resolution == "fresh"
@@ -90,11 +122,13 @@ async def test_the_same_question_on_the_same_frame_is_answered_once() -> None:
 
 async def test_a_different_frame_is_inspected_again() -> None:
     model = vision_model(answers=["A dark blue shirt.", "A red shirt."])
-    interpreter = interpreter_with(model)
+    timeline, _context, interpreter = camera_stack(model)
 
-    await interpreter.camera_answer("p1", QUESTION, jpeg_of((10, 10, 10)), source=SOURCE)
+    await interpreter.camera_answer(
+        "device-p1", QUESTION, put_frame(timeline, jpeg_of((10, 10, 10))), source=SOURCE
+    )
     second = await interpreter.camera_answer(
-        "p1", QUESTION, jpeg_of((250, 250, 250)), source=SOURCE
+        "device-p1", QUESTION, put_frame(timeline, jpeg_of((250, 250, 250))), source=SOURCE
     )
 
     assert second is not None
@@ -105,11 +139,18 @@ async def test_a_different_frame_is_inspected_again() -> None:
 
 async def test_another_participant_is_answered_separately() -> None:
     model = vision_model(answers=["A dark blue shirt.", "A red shirt."])
-    interpreter = interpreter_with(model)
-    frame = jpeg_of((120, 120, 120))
+    timeline, _context, interpreter = camera_stack(model)
+    snapshot = put_frame(timeline, jpeg_of((120, 120, 120)))
+    timeline.participant("device-p2", "Ayu")
+    timeline.camera_frames.put(
+        "device-p2",
+        CameraFrame(jpeg_of((120, 120, 120)), "stream-p2", datetime.now(UTC), 0, time.monotonic()),
+    )
+    other_snapshot = timeline.camera_frames.snapshot("device-p2")
+    assert other_snapshot is not None
 
-    await interpreter.camera_answer("p1", QUESTION, frame, source=SOURCE)
-    other = await interpreter.camera_answer("p2", QUESTION, frame, source=SOURCE)
+    await interpreter.camera_answer("device-p1", QUESTION, snapshot, source=SOURCE)
+    other = await interpreter.camera_answer("device-p2", QUESTION, other_snapshot, source=SOURCE)
 
     assert other is not None
     assert other.resolution == "fresh"
@@ -118,12 +159,12 @@ async def test_another_participant_is_answered_separately() -> None:
 
 async def test_two_identical_questions_about_one_frame_share_one_vision_call() -> None:
     model = vision_model(answers=["A dark blue shirt."])
-    interpreter = interpreter_with(model)
-    frame = jpeg_of((90, 90, 90))
+    timeline, _context, interpreter = camera_stack(model)
+    snapshot = put_frame(timeline, jpeg_of((90, 90, 90)))
 
     first, second = await asyncio.gather(
-        interpreter.camera_answer("p1", QUESTION, frame, source=SOURCE),
-        interpreter.camera_answer("p1", QUESTION, frame, source=SOURCE),
+        interpreter.camera_answer("device-p1", QUESTION, snapshot, source=SOURCE),
+        interpreter.camera_answer("device-p1", QUESTION, snapshot, source=SOURCE),
     )
 
     assert first is not None
@@ -134,12 +175,14 @@ async def test_two_identical_questions_about_one_frame_share_one_vision_call() -
 
 async def test_two_different_questions_about_one_frame_get_their_own_answers() -> None:
     model = vision_model(answers=["A dark blue shirt.", "The shirt says HELLO."])
-    interpreter = interpreter_with(model)
-    frame = jpeg_of((90, 90, 90))
+    timeline, _context, interpreter = camera_stack(model)
+    snapshot = put_frame(timeline, jpeg_of((90, 90, 90)))
 
-    first = await interpreter.camera_answer("p1", "What color is the shirt?", frame, source=SOURCE)
+    first = await interpreter.camera_answer(
+        "device-p1", "What color is the shirt?", snapshot, source=SOURCE
+    )
     second = await interpreter.camera_answer(
-        "p1", "What text is on the shirt?", frame, source=SOURCE
+        "device-p1", "What text is on the shirt?", snapshot, source=SOURCE
     )
 
     assert first is not None
@@ -153,13 +196,13 @@ async def test_two_different_questions_about_one_frame_get_their_own_answers() -
 async def test_a_stale_answer_is_not_reused() -> None:
     clock = [0.0]
     model = vision_model(answers=["A dark blue shirt.", "A red shirt."])
-    interpreter = interpreter_with(model)
+    timeline, _context, interpreter = camera_stack(model)
     object.__setattr__(interpreter, "_monotonic", lambda: clock[0])
-    frame = jpeg_of((60, 60, 60))
+    snapshot = put_frame(timeline, jpeg_of((60, 60, 60)))
 
-    await interpreter.camera_answer("p1", QUESTION, frame, source=SOURCE)
+    await interpreter.camera_answer("device-p1", QUESTION, snapshot, source=SOURCE)
     clock[0] = 3600.0
-    later = await interpreter.camera_answer("p1", QUESTION, frame, source=SOURCE)
+    later = await interpreter.camera_answer("device-p1", QUESTION, snapshot, source=SOURCE)
 
     assert later is not None
     assert later.resolution == "fresh"
@@ -168,9 +211,9 @@ async def test_a_stale_answer_is_not_reused() -> None:
 
 async def test_resolving_evidence_is_journalled_with_its_resolution() -> None:
     model = vision_model(answers=["A dark blue shirt."])
-    interpreter = interpreter_with(model)
     journal = RecordingJournal()
-    context = _context_with(interpreter)
+    timeline, context, interpreter = camera_stack(model, journal=journal)
+    put_frame(timeline, jpeg_of((140, 130, 120)))
     evidence = MeetingEvidence(context, journal=journal)
 
     await evidence("what colour is the shirt?", ("participant",), "t1")
@@ -183,27 +226,10 @@ async def test_resolving_evidence_is_journalled_with_its_resolution() -> None:
     assert resolved["strategy"] == "targeted_vision"
 
 
-def live_context(
-    model: FakeVisionModel, *, max_calls: int = 10, journal: RecordingJournal | None = None
-) -> PerceptionContext:
-    timeline = MeetingTimeline()
-    timeline.participant("device-p1", "Budi")
-    timeline.camera_frames.put(
-        "device-p1",
-        CameraFrame(jpeg_of((140, 130, 120)), "stream-p1", datetime.now(UTC), 0, time.monotonic()),
-    )
-    interpreter = PerceptionInterpreter(
-        model,
-        PerceptionBudget(budget_usd=10.0, max_calls=max_calls),
-        max_concurrent=2,
-        journal=journal,
-    )
-    return PerceptionContext(timeline, interpreter, max_chars=6000)
-
-
 async def test_a_camera_question_is_answered_by_one_inspection_of_the_live_frame() -> None:
     model = vision_model(answers=["A dark blue shirt."])
-    context = live_context(model)
+    timeline, context, _interpreter = camera_stack(model)
+    put_frame(timeline, jpeg_of((140, 130, 120)))
 
     result = json.loads(await context.look_at_participant("Budi", "What color is his shirt?"))
 
@@ -217,7 +243,8 @@ async def test_a_camera_question_is_answered_by_one_inspection_of_the_live_frame
 
 async def test_the_same_camera_question_is_answered_from_the_cache() -> None:
     model = vision_model(answers=["A dark blue shirt."])
-    context = live_context(model)
+    timeline, context, _interpreter = camera_stack(model)
+    put_frame(timeline, jpeg_of((140, 130, 120)))
 
     await context.look_at_participant("Budi", "What color is his shirt?")
     result = json.loads(await context.look_at_participant("Budi", "What color is his shirt?"))
@@ -230,7 +257,8 @@ async def test_the_same_camera_question_is_answered_from_the_cache() -> None:
 
 async def test_another_camera_question_is_inspected_again() -> None:
     model = vision_model(answers=["A dark blue shirt.", "The shirt says HELLO."])
-    context = live_context(model)
+    timeline, context, _interpreter = camera_stack(model)
+    put_frame(timeline, jpeg_of((140, 130, 120)))
 
     await context.look_at_participant("Budi", "What color is his shirt?")
     result = json.loads(await context.look_at_participant("Budi", "What text is on the shirt?"))
@@ -243,7 +271,8 @@ async def test_another_camera_question_is_inspected_again() -> None:
 
 async def test_a_camera_question_the_model_cannot_see_keeps_the_model_answer() -> None:
     model = vision_model(answers=["The text is not visible in the frame."])
-    context = live_context(model)
+    timeline, context, _interpreter = camera_stack(model)
+    put_frame(timeline, jpeg_of((140, 130, 120)))
 
     result = json.loads(await context.look_at_participant("Budi", "What text is on his shirt?"))
 
@@ -255,7 +284,8 @@ async def test_a_camera_question_the_model_cannot_see_keeps_the_model_answer() -
 
 async def test_budget_exhausted_for_camera_does_not_guess() -> None:
     model = vision_model(answers=["A dark blue shirt."])
-    context = live_context(model, max_calls=0)
+    timeline, context, _interpreter = camera_stack(model, max_calls=0)
+    put_frame(timeline, jpeg_of((140, 130, 120)))
 
     result = json.loads(await context.look_at_participant("Budi", "What color is his shirt?"))
 
@@ -263,116 +293,150 @@ async def test_budget_exhausted_for_camera_does_not_guess() -> None:
     assert result["strategy"] == "targeted_vision"
 
 
-async def test_an_inference_that_finishes_after_an_invalidation_is_not_published() -> None:
-    model = vision_model(answers=["A dark blue shirt."])
-    interpreter = interpreter_with(model)
-    frame = jpeg_of((120, 120, 120))
-    started = asyncio.Event()
-    release = asyncio.Event()
-    original = interpreter.answer
-
-    async def answered(image: bytes, question: str, *, source: str) -> str | None:
-        started.set()
-        await release.wait()
-        return await original(image, question, source=source)
-
-    object.__setattr__(interpreter, "answer", answered)
-
-    task = asyncio.create_task(interpreter.camera_answer("p1", QUESTION, frame, source=SOURCE))
-    await started.wait()
-    interpreter.drop_camera_observation("p1")
-    release.set()
-
-    with pytest.raises(StaleEvidence):
-        await task
-    cache = object.__getattribute__(interpreter, "_camera_cache")
-    assert cache.get("p1", QUESTION) is None
-
-
-async def test_an_inference_that_finishes_after_a_rejoin_is_not_published() -> None:
-    model = vision_model(answers=["A dark blue shirt."])
-    interpreter = interpreter_with(model)
-    frame = jpeg_of((120, 120, 120))
-    started = asyncio.Event()
-    release = asyncio.Event()
-    original = interpreter.answer
-
-    async def answered(image: bytes, question: str, *, source: str) -> str | None:
-        started.set()
-        await release.wait()
-        return await original(image, question, source=source)
-
-    object.__setattr__(interpreter, "answer", answered)
-
-    task = asyncio.create_task(interpreter.camera_answer("p1", QUESTION, frame, source=SOURCE))
-    await started.wait()
-    interpreter.clear_camera_observations()
-    release.set()
-
-    with pytest.raises(StaleEvidence):
-        await task
-    cache = object.__getattribute__(interpreter, "_camera_cache")
-    assert cache.get("p1", QUESTION) is None
-
-
-async def test_a_rejected_inference_leaves_the_cache_ready_for_a_new_look() -> None:
-    model = vision_model(answers=["A dark blue shirt.", "A red shirt."])
-    interpreter = interpreter_with(model)
-    frame = jpeg_of((120, 120, 120))
-    started = asyncio.Event()
-    release = asyncio.Event()
-    original = interpreter.answer
-
-    async def answered(image: bytes, question: str, *, source: str) -> str | None:
-        started.set()
-        await release.wait()
-        return await original(image, question, source=source)
-
-    object.__setattr__(interpreter, "answer", answered)
-
-    task = asyncio.create_task(interpreter.camera_answer("p1", QUESTION, frame, source=SOURCE))
-    await started.wait()
-    interpreter.drop_camera_observation("p1")
-    release.set()
-
-    with pytest.raises(StaleEvidence):
-        await task
-
-    again = await interpreter.camera_answer("p1", QUESTION, frame, source=SOURCE)
-
-    assert again is not None
-    assert again.resolution == "fresh"
-    assert again.answer == "A red shirt."
-
-
-async def test_a_stale_camera_look_reports_the_camera_as_unavailable() -> None:
-    model = vision_model(answers=["A dark blue shirt."])
-    interpreter = interpreter_with(model)
-    context = _context_with(interpreter)
-    original = interpreter.answer
-
-    async def answered(image: bytes, question: str, *, source: str) -> str | None:
-        interpreter.drop_camera_observation("device-p1")
-        return await original(image, question, source=source)
-
-    object.__setattr__(interpreter, "answer", answered)
-
-    result = json.loads(await context.look_at_participant("Budi", "What color is his shirt?"))
-
-    assert result["code"] == "camera_unavailable"
-    assert result["resolution"] == "unavailable"
-
-
 async def test_participant_resolution_journals_the_strategy() -> None:
     model = vision_model(answers=["A dark blue shirt."])
     journal = RecordingJournal()
-    context = live_context(model, journal=journal)
+    timeline, context, _interpreter = camera_stack(model, journal=journal)
+    put_frame(timeline, jpeg_of((140, 130, 120)))
     evidence = MeetingEvidence(context, journal=journal)
 
     await evidence("What color is his shirt?", ("participant",), "t1")
 
     [resolved] = journal.events("perception_evidence_resolved")
     assert resolved["strategy"] == "targeted_vision"
+
+
+async def test_an_invalidation_before_the_inference_rejects_the_answer() -> None:
+    model = vision_model(answers=["A dark blue shirt."])
+    timeline, _context, interpreter = camera_stack(model)
+    snapshot = put_frame(timeline, jpeg_of((120, 120, 120)))
+    original = interpreter.answer
+
+    async def answered(image: bytes, question: str, *, source: str) -> str | None:
+        timeline.camera_frames.drop("device-p1")
+        return await original(image, question, source=source)
+
+    object.__setattr__(interpreter, "answer", answered)
+
+    with pytest.raises(StaleEvidence):
+        await interpreter.camera_answer("device-p1", QUESTION, snapshot, source=SOURCE)
+
+    cache = object.__getattribute__(interpreter, "_camera_cache")
+    assert cache.get("device-p1") is None
+
+
+async def test_an_invalidation_during_the_preprocessing_rejects_the_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = vision_model(answers=["A dark blue shirt."])
+    timeline, _context, interpreter = camera_stack(model)
+    snapshot = put_frame(timeline, jpeg_of((120, 120, 120)))
+    started = threading.Event()
+    release = threading.Event()
+    original = keyframe_from_jpeg
+
+    def slow_keyframe(data: bytes, *, captured_at: datetime) -> Keyframe:
+        started.set()
+        release.wait(2)
+        return original(data, captured_at=captured_at)
+
+    monkeypatch.setattr("fakeyou.perception.interpreter.keyframe_from_jpeg", slow_keyframe)
+
+    task = asyncio.create_task(
+        interpreter.camera_answer("device-p1", QUESTION, snapshot, source=SOURCE)
+    )
+    await asyncio.sleep(0.05)
+    assert started.wait(2)
+    timeline.camera_frames.drop("device-p1")
+    release.set()
+
+    with pytest.raises(StaleEvidence):
+        await task
+
+    cache = object.__getattribute__(interpreter, "_camera_cache")
+    assert cache.get("device-p1") is None
+
+
+async def test_a_new_frame_during_the_inference_rejects_the_answer() -> None:
+    model = vision_model(answers=["A dark blue shirt."])
+    timeline, _context, interpreter = camera_stack(model)
+    snapshot = put_frame(timeline, jpeg_of((120, 120, 120)))
+    original = interpreter.answer
+
+    async def answered(image: bytes, question: str, *, source: str) -> str | None:
+        timeline.camera_frames.put(
+            "device-p1",
+            CameraFrame(
+                jpeg_of((200, 200, 200)), "stream-p1", datetime.now(UTC), 0, time.monotonic()
+            ),
+        )
+        return await original(image, question, source=source)
+
+    object.__setattr__(interpreter, "answer", answered)
+
+    with pytest.raises(StaleEvidence):
+        await interpreter.camera_answer("device-p1", QUESTION, snapshot, source=SOURCE)
+
+    cache = object.__getattribute__(interpreter, "_camera_cache")
+    assert cache.get("device-p1") is None
+
+
+async def test_a_provider_failure_reports_a_failed_look() -> None:
+    model = vision_model(answers=["A dark blue shirt."])
+    timeline, context, interpreter = camera_stack(model)
+    put_frame(timeline, jpeg_of((140, 130, 120)))
+
+    async def failing(_image: bytes, _question: str, **_kwargs: Any) -> str | None:
+        raise ProviderFault("perception", "unknown")
+
+    object.__setattr__(interpreter, "answer", failing)
+
+    result = json.loads(await context.look_at_participant("Budi", "What color is his shirt?"))
+
+    assert result["code"] == "look_failed"
+    assert result["error_type"] == "ProviderFault"
+    assert result["resolution"] == "unavailable"
+    assert result["strategy"] == "targeted_vision"
+
+
+async def test_a_hanging_provider_times_out_the_camera_look(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = vision_model(answers=["A dark blue shirt."])
+    timeline, context, interpreter = camera_stack(model)
+    put_frame(timeline, jpeg_of((140, 130, 120)))
+    monkeypatch.setattr(context_module, "LOOK_TIMEOUT_SECONDS", 0.05)
+
+    async def hanging(_image: bytes, _question: str, **_kwargs: Any) -> str | None:
+        await asyncio.sleep(30)
+        return "never"
+
+    object.__setattr__(interpreter, "answer", hanging)
+
+    result = json.loads(await context.look_at_participant("Budi", "What color is his shirt?"))
+
+    assert result["code"] == "look_failed"
+    assert result["error_type"] == "TimeoutError"
+    assert result["resolution"] == "unavailable"
+
+
+async def test_a_cancelled_camera_look_propagates_the_cancellation() -> None:
+    model = vision_model(answers=["A dark blue shirt."])
+    timeline, context, interpreter = camera_stack(model)
+    put_frame(timeline, jpeg_of((140, 130, 120)))
+
+    async def hanging(_image: bytes, _question: str, **_kwargs: Any) -> str | None:
+        await asyncio.sleep(30)
+        return "never"
+
+    object.__setattr__(interpreter, "answer", hanging)
+
+    task = asyncio.create_task(context.look_at_participant("Budi", "What color is his shirt?"))
+    await asyncio.sleep(0.05)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
 
 
 def liveness_jpeg(color: tuple[int, int, int]) -> bytes:
@@ -423,6 +487,7 @@ class CameraStack:
             self.model,
             PerceptionBudget(budget_usd=10.0, max_calls=50),
             max_concurrent=2,
+            snapshots=self.timeline.camera_frames,
             journal=self.journal,
             monotonic=lambda: self.clock[0],
         )
