@@ -775,6 +775,16 @@ The product contract is the one the stop test already proves: a stop cancels the
 
 **Release condition:** the reply is never blocked by a hung recall, the search is always cancelled or timed out, and the memory outcome is always journalled. The fault record at teardown stays best effort by design.
 
+## Phase 4d — The simulator cassette is timing brittle (tracked separately)
+
+**Finding.** The first CI run of `d08283d` failed the Meeting simulator on `sim-s1` with a cassette miss: the turn judge request scored 0.72 against the recorded focus, below the 0.75 similarity threshold. The same commit passes when the same run is repeated, and it passes locally with the same image.
+
+The sim-s1 cassette holds two recorded judge requests that differ only in whether the transcript was still partial. The replay matches on a word level similarity of the last twelve words or the whole focus. Any additional or shifted model call, for example the twin's proactive turn landing inside the scenario window, produces a focus that falls below the threshold and the scenario fails even though the behaviour is correct.
+
+**Status.** Not caused by the perception change, but it makes the simulator gate unreliable, and a gate that fails for the wrong reason is worse than no gate.
+
+**Release condition for this item:** the replay either records enough variants of a request to cover the legitimate orderings, or the similarity threshold is scoped per route so that a shifted-but-equivalent request is served rather than missed. Tracked apart from the perception work.
+
 ## Phase 5 — Live end-to-end correctness and cost benchmark
 
 **Release condition:** grounded answers, measured latency, measured vision calls and measured CPU from a real meeting, across general questions, follow-up questions, small objects, visual change, several participants, screen share, speaker change and failed streams.
