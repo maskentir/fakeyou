@@ -14,8 +14,8 @@ from fakeyou.foundation.participation import mentions_whole_phrase
 from fakeyou.foundation.triggers import current_trigger, meeting_event_of
 from fakeyou.observability.journal import Journal
 from fakeyou.observability.provider_faults import ProviderFault
-from fakeyou.perception.camera_evidence import observation_sufficient, question_need
-from fakeyou.perception.interpreter import SCREEN_SOURCE, PerceptionInterpreter
+from fakeyou.perception.camera_evidence import StaleEvidence
+from fakeyou.perception.interpreter import CAMERA_SOURCE, SCREEN_SOURCE, PerceptionInterpreter
 from fakeyou.perception.roster import MeetingState
 from fakeyou.perception.timeline import MeetingTimeline, TimelineSnapshot
 from fakeyou.perception.view import (
@@ -136,8 +136,8 @@ class PerceptionContext:
             return _look_result(
                 "budget_exhausted", participant=person.ref, resolution="unavailable"
             )
-        frame = self.timeline.camera_frames.get(person.participant_id)
-        if frame is None:
+        snapshot = self.timeline.camera_frames.snapshot(person.participant_id)
+        if snapshot is None:
             self.interpreter.drop_camera_observation(person.participant_id)
             return _look_result(
                 "camera_unavailable", participant=person.ref, resolution="unavailable"
@@ -146,98 +146,62 @@ class PerceptionContext:
         camera_on = meeting.cameras_on if meeting is not None else None
         live = (
             (camera_on is None or person.participant_id in camera_on)
-            and frame.epoch == self._camera_epoch()
-            and self._camera_monotonic() - frame.seen_at <= CAMERA_LIVENESS_TIMEOUT_SECONDS
+            and snapshot.epoch == self._camera_epoch()
+            and self._camera_monotonic() - snapshot.frame.seen_at <= CAMERA_LIVENESS_TIMEOUT_SECONDS
         )
         if not live:
             self.interpreter.drop_camera_observation(person.participant_id)
             return _look_result(
                 "camera_unavailable", participant=person.ref, resolution="unavailable"
             )
-        need = question_need(question)
-        if need.reason == "change":
+        try:
+            async with asyncio.timeout(LOOK_TIMEOUT_SECONDS):
+                evidence = await self.interpreter.camera_answer(
+                    person.participant_id,
+                    question,
+                    snapshot,
+                    source=CAMERA_SOURCE.format(name=person.name),
+                )
+        except TimeoutError:
+            self.interpreter.drop_camera_observation(person.participant_id)
             return _look_result(
-                "insufficient_evidence",
+                "look_failed",
+                error_type="TimeoutError",
                 participant=person.ref,
                 resolution="unavailable",
-                age_ms=0,
-                vision_latency_ms=0,
-                sufficiency="insufficient",
-                strategy="structured_observation",
+                strategy="targeted_vision",
             )
-        if need.strategy == "targeted_vision":
-            return await self._targeted_participant_look(person.ref, frame.data, question)
-        evidence = await self.interpreter.camera_observation(
-            person.participant_id, frame.data, captured_at=frame.captured_at
-        )
+        except (ProviderFault, FakeYouError, OSError) as error:
+            self.interpreter.drop_camera_observation(person.participant_id)
+            return _look_result(
+                "look_failed",
+                error_type=type(error).__name__,
+                participant=person.ref,
+                resolution="unavailable",
+                strategy="targeted_vision",
+            )
+        except StaleEvidence:
+            self.interpreter.drop_camera_observation(person.participant_id)
+            return _look_result(
+                "camera_unavailable",
+                participant=person.ref,
+                resolution="unavailable",
+                strategy="targeted_vision",
+            )
         if evidence is None:
             return _look_result(
                 "budget_exhausted",
                 participant=person.ref,
                 resolution="unavailable",
-                strategy="structured_observation",
-            )
-        if observation_sufficient(evidence.observation, need):
-            return _look_result(
-                "ok",
-                answer=evidence.observation.as_evidence(),
-                participant=person.ref,
-                resolution=evidence.resolution,
-                age_ms=evidence.age_ms,
-                vision_latency_ms=evidence.vision_latency_ms,
-                sufficiency="sufficient",
-                strategy="structured_observation",
-            )
-        return _look_result(
-            "insufficient_evidence",
-            participant=person.ref,
-            resolution=evidence.resolution,
-            age_ms=evidence.age_ms,
-            vision_latency_ms=evidence.vision_latency_ms,
-            sufficiency="insufficient",
-            strategy="structured_observation",
-        )
-
-    async def _targeted_participant_look(self, participant: str, data: bytes, question: str) -> str:
-        assert self.interpreter is not None
-        started = time.monotonic()
-        try:
-            async with asyncio.timeout(LOOK_TIMEOUT_SECONDS):
-                answer = await self.interpreter.answer(data, question, source="camera")
-        except (ProviderFault, FakeYouError, OSError, TimeoutError) as error:
-            return _look_result(
-                "look_failed",
-                error_type=type(error).__name__,
-                participant=participant,
-                resolution="unavailable",
-                strategy="targeted_vision",
-            )
-        if answer is None:
-            return _look_result(
-                "budget_exhausted",
-                participant=participant,
-                resolution="unavailable",
-                strategy="targeted_vision",
-            )
-        vision_latency_ms = round((time.monotonic() - started) * 1000)
-        if _detail_not_visible(answer):
-            return _look_result(
-                "insufficient_evidence",
-                participant=participant,
-                resolution="fresh",
-                age_ms=0,
-                vision_latency_ms=vision_latency_ms,
-                sufficiency="insufficient",
                 strategy="targeted_vision",
             )
         return _look_result(
             "ok",
-            answer=answer,
-            participant=participant,
-            resolution="fresh",
-            age_ms=0,
-            vision_latency_ms=vision_latency_ms,
-            sufficiency="sufficient",
+            answer=evidence.answer,
+            participant=person.ref,
+            resolution=evidence.resolution,
+            age_ms=evidence.age_ms,
+            vision_latency_ms=evidence.vision_latency_ms,
             strategy="targeted_vision",
         )
 
@@ -268,25 +232,6 @@ class PerceptionContext:
             vision_latency_ms=vision_latency_ms,
             **subject,
         )
-
-
-def _detail_not_visible(answer: str) -> bool:
-    lowered = answer.casefold()
-    markers = (
-        "not visible",
-        "cannot see",
-        "can't see",
-        "not legible",
-        "cannot read",
-        "can't read",
-        "unreadable",
-        "tidak terlihat",
-        "tidak terbaca",
-        "tidak bisa melihat",
-        "tidak bisa membaca",
-        "tidak jelas",
-    )
-    return any(marker in lowered for marker in markers)
 
 
 def _gathered(trigger: HumanMessage) -> dict[str, Any]:

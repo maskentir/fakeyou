@@ -14,7 +14,6 @@ from langchain_core.outputs import ChatResult
 from langchain_core.runnables import Runnable, RunnableLambda
 from PIL import Image, ImageDraw, ImageFont
 
-from fakeyou.perception.camera_evidence import CameraObservation
 from fakeyou.perception.frames import keyframe_from_jpeg
 from fakeyou.perception.percepts import Keyframe, ScreenFigure, ScreenReading
 from fakeyou.perception.timeline import MeetingTimeline
@@ -88,7 +87,6 @@ def _messages_of(model_input: LanguageModelInput) -> list[BaseMessage]:
 
 class FakeVisionModel(FakeMessagesListChatModel):
     readings: list[ScreenReading | None] = []
-    observations: list[CameraObservation | None] = []
     reading_tokens: int = 1500
     seen: list[list[BaseMessage]] = []
     structured_seen: list[list[BaseMessage]] = []
@@ -110,11 +108,7 @@ class FakeVisionModel(FakeMessagesListChatModel):
     ) -> Runnable[LanguageModelInput, dict[str, Any] | Any]:
         def respond(model_input: LanguageModelInput) -> dict[str, Any]:
             self.structured_seen.append(_messages_of(model_input))
-            parsed: Any = None
-            if schema is CameraObservation:
-                parsed = self.observations.pop(0) if self.observations else None
-            else:
-                parsed = self.readings.pop(0) if self.readings else None
+            parsed: Any = self.readings.pop(0) if self.readings else None
             raw = AIMessage(content="", usage_metadata=usage(self.reading_tokens))
             return {"raw": raw, "parsed": parsed, "parsing_error": None}
 
@@ -126,13 +120,11 @@ def vision_model(
     answers: Sequence[str] = (),
     *,
     reading_tokens: int = 1500,
-    observations: Sequence[CameraObservation | None] = (),
 ) -> FakeVisionModel:
     return FakeVisionModel(
         responses=[AIMessage(content=answer, usage_metadata=usage(900)) for answer in answers]
         or [AIMessage(content="unused")],
         readings=list(readings),
-        observations=list(observations),
         reading_tokens=reading_tokens,
         seen=[],
         structured_seen=[],

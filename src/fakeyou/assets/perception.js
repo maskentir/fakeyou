@@ -311,7 +311,7 @@
     return [...samplers.values()].map((state) => ({
       stream_id: state.id,
       role: state.role,
-      page_ms: state.lastSamplePageMs || bridge.pageNow(),
+      last_sample_page_ms: state.lastSamplePageMs,
     }));
   }
 

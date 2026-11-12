@@ -2,7 +2,7 @@ import asyncio
 import base64
 import binascii
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, Protocol, override
 
@@ -75,7 +75,7 @@ class DrainedFrame(DrainPart):
 class ActiveSampler(DrainPart):
     stream_id: str
     role: Literal["screen", "camera"]
-    page_ms: float
+    last_sample_page_ms: float = 0
 
 
 class DrainBatch(DrainPart):
@@ -130,10 +130,26 @@ class PerceptionSensors:
         self._own_status: int | None = None
         self._audio_outputs: set[tuple[str, str]] = set()
         self._admitted_at: datetime | None = None
+        self._sampler_samples: dict[str, float] = {}
 
     def _invalidate_camera(self, participant_id: str | None = None) -> None:
         if self._on_camera_invalidate is not None:
             self._on_camera_invalidate(participant_id)
+
+    def _camera_assignments(self) -> dict[str, str]:
+        return {
+            item.device_id: item.stream_id
+            for item in self.roster.assignments()
+            if item.role == "camera"
+        }
+
+    def _invalidate_changed_assignments(self, before: Mapping[str, str]) -> None:
+        after = self._camera_assignments()
+        for device_id, stream_id in before.items():
+            if after.get(device_id) == stream_id:
+                continue
+            self.timeline.camera_frames.drop(device_id)
+            self._invalidate_camera(device_id)
 
     async def accept_batch(self, batch: DrainBatch) -> None:
         self.drained_at = self.monotonic()
@@ -169,7 +185,10 @@ class PerceptionSensors:
         self.roster.mark_synced()
         self.synced_at = self.monotonic()
         self.heartbeats += 1
-        self._apply_changes(self.roster.apply_snapshot(users), self._clock())
+        before = self._camera_assignments()
+        changes = self.roster.apply_snapshot(users)
+        self._invalidate_changed_assignments(before)
+        self._apply_changes(changes, self._clock())
         self._observe_own_status()
         self._share_roster()
 
@@ -197,6 +216,7 @@ class PerceptionSensors:
         self._apply_update(update, page_time(message.page_ms))
 
     def _apply_update(self, update: CollectionUpdate, at: datetime) -> None:
+        before = self._camera_assignments()
         self._journal_audio_outputs(update.outputs)
         if update.skipped:
             self._journal.record(
@@ -207,6 +227,7 @@ class PerceptionSensors:
             )
         changes = self.roster.apply_users(update.users)
         changes += self.roster.apply_outputs(update.outputs)
+        self._invalidate_changed_assignments(before)
         self._apply_changes(changes, at)
         self._observe_own_status()
         if update.users or update.outputs:
@@ -274,6 +295,7 @@ class PerceptionSensors:
     def begin_epoch(self) -> None:
         self.epoch += 1
         self.timeline.camera_frames.clear()
+        self._sampler_samples.clear()
         self._invalidate_camera(None)
         self.roster.begin_epoch()
         self.drained_at = None
@@ -293,7 +315,18 @@ class PerceptionSensors:
             frame = self.timeline.camera_frames.get(assignment.device_id)
             if frame is None or frame.stream_id != sampler.stream_id or frame.epoch != self.epoch:
                 continue
+            if not self._sampling_advanced(sampler):
+                continue
             self.timeline.camera_frames.touch(assignment.device_id, seen_at=seen)
+
+    def _sampling_advanced(self, sampler: ActiveSampler) -> bool:
+        if sampler.last_sample_page_ms <= 0:
+            return False
+        previous = self._sampler_samples.get(sampler.stream_id)
+        if previous is not None and sampler.last_sample_page_ms <= previous:
+            return False
+        self._sampler_samples[sampler.stream_id] = sampler.last_sample_page_ms
+        return True
 
     def mark_admitted(self, at: datetime) -> None:
         if self._admitted_at is None:
@@ -326,6 +359,7 @@ class PerceptionSensors:
         )
 
     async def _accept_frame(self, frame: DrainedFrame) -> None:
+        epoch = self.epoch
         assignment = self.roster.assignment_for(frame.stream_id)
         if assignment is None or assignment.role != frame.role:
             self._journal.record(
@@ -338,6 +372,8 @@ class PerceptionSensors:
                 ),
             )
             return
+        device_id = assignment.device_id
+        revision = self.timeline.camera_frames.current_generation(device_id)
         try:
             data = base64.b64decode(frame.jpeg_b64, validate=True)
             keyframe = await asyncio.to_thread(
@@ -346,8 +382,22 @@ class PerceptionSensors:
         except (binascii.Error, OSError, ValueError) as error:
             self._reject("frame", error)
             return
+        if (
+            self.epoch != epoch
+            or self.timeline.camera_frames.current_generation(device_id) != revision
+            or not self._assignment_current(frame, device_id)
+        ):
+            self._journal.record(
+                "perception_frame_dropped",
+                source="perception",
+                stream_id=frame.stream_id,
+                role=frame.role,
+                epoch=epoch,
+                current_epoch=self.epoch,
+            )
+            return
         self.frames_seen += 1
-        person = self._person(assignment.device_id)
+        person = self._person(device_id)
         if frame.role == "screen":
             self.timeline.show_screen(keyframe, person, data=data)
         else:
@@ -365,6 +415,14 @@ class PerceptionSensors:
                     seen_at=self.monotonic(),
                 ),
             )
+
+    def _assignment_current(self, frame: DrainedFrame, device_id: str) -> bool:
+        assignment = self.roster.assignment_for(frame.stream_id)
+        if assignment is None or assignment.device_id != device_id:
+            return False
+        if assignment.role != frame.role:
+            return False
+        return device_id in self.roster.people()
 
     def _reject(self, kind: str, error: Exception) -> None:
         self.rejected_messages += 1

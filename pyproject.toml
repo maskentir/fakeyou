@@ -154,6 +154,7 @@ raises-require-match-for = [
 # V0 replay: the conversation is wired with the models it answers on.
 "src/fakeyou/orchestration/assembly.py" = ["PLR0913"]
 "src/fakeyou/perception/context.py" = ["PLR0913"]
+"src/fakeyou/perception/interpreter.py" = ["PLR0913"]
 "src/fakeyou/perception/sensors.py" = ["PLR0913"]
 
 [tool.pytest.ini_options]
