@@ -445,6 +445,46 @@ async def test_a_turn_never_waits_for_the_recall_search(
     await listener.close()
 
 
+async def test_an_expired_prefetch_records_a_memory_timeout_fault(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    memory = stored_memory(monkeypatch, search_gate=asyncio.Event())
+    faults = Faults()
+    agent, model, listener = listener_agent(
+        memory,
+        [AIMessage(content="Now.")],
+        recall=RecallSettings(timeout_seconds=0.01),
+        faults=faults,
+    )
+
+    listener.observe_final("t1", ("When is the demo?",))
+    await listener.idle()
+
+    assert [fault.kind for fault in faults.recorded] == ["timeout"]
+    assert memory.search_cancelled.is_set()
+    await listener.close()
+
+
+async def test_closing_the_listener_cancels_the_prefetch_before_its_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    memory = stored_memory(monkeypatch, search_gate=asyncio.Event())
+    faults = Faults()
+    agent, model, listener = listener_agent(
+        memory,
+        [AIMessage(content="Now.")],
+        recall=RecallSettings(timeout_seconds=30.0),
+        faults=faults,
+    )
+
+    listener.observe_final("t1", ("When is the demo?",))
+    await memory.search_started.wait()
+    await listener.close()
+
+    assert memory.search_cancelled.is_set()
+    assert faults.recorded == []
+
+
 async def test_prefetch_ignores_messages_that_are_not_meeting_speech(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
