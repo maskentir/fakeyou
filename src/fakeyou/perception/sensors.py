@@ -2,7 +2,7 @@ import asyncio
 import base64
 import binascii
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, Protocol, override
 
@@ -136,6 +136,21 @@ class PerceptionSensors:
         if self._on_camera_invalidate is not None:
             self._on_camera_invalidate(participant_id)
 
+    def _camera_assignments(self) -> dict[str, str]:
+        return {
+            item.device_id: item.stream_id
+            for item in self.roster.assignments()
+            if item.role == "camera"
+        }
+
+    def _invalidate_changed_assignments(self, before: Mapping[str, str]) -> None:
+        after = self._camera_assignments()
+        for device_id, stream_id in before.items():
+            if after.get(device_id) == stream_id:
+                continue
+            self.timeline.camera_frames.drop(device_id)
+            self._invalidate_camera(device_id)
+
     async def accept_batch(self, batch: DrainBatch) -> None:
         self.drained_at = self.monotonic()
         self._observe_peers(tuple(batch.peers))
@@ -170,7 +185,10 @@ class PerceptionSensors:
         self.roster.mark_synced()
         self.synced_at = self.monotonic()
         self.heartbeats += 1
-        self._apply_changes(self.roster.apply_snapshot(users), self._clock())
+        before = self._camera_assignments()
+        changes = self.roster.apply_snapshot(users)
+        self._invalidate_changed_assignments(before)
+        self._apply_changes(changes, self._clock())
         self._observe_own_status()
         self._share_roster()
 
@@ -198,6 +216,7 @@ class PerceptionSensors:
         self._apply_update(update, page_time(message.page_ms))
 
     def _apply_update(self, update: CollectionUpdate, at: datetime) -> None:
+        before = self._camera_assignments()
         self._journal_audio_outputs(update.outputs)
         if update.skipped:
             self._journal.record(
@@ -208,6 +227,7 @@ class PerceptionSensors:
             )
         changes = self.roster.apply_users(update.users)
         changes += self.roster.apply_outputs(update.outputs)
+        self._invalidate_changed_assignments(before)
         self._apply_changes(changes, at)
         self._observe_own_status()
         if update.users or update.outputs:
@@ -303,7 +323,7 @@ class PerceptionSensors:
         if sampler.last_sample_page_ms <= 0:
             return False
         previous = self._sampler_samples.get(sampler.stream_id)
-        if previous is not None and sampler.last_sample_page_ms == previous:
+        if previous is not None and sampler.last_sample_page_ms <= previous:
             return False
         self._sampler_samples[sampler.stream_id] = sampler.last_sample_page_ms
         return True
@@ -353,6 +373,7 @@ class PerceptionSensors:
             )
             return
         device_id = assignment.device_id
+        revision = self.timeline.camera_frames.current_generation(device_id)
         try:
             data = base64.b64decode(frame.jpeg_b64, validate=True)
             keyframe = await asyncio.to_thread(
@@ -361,7 +382,11 @@ class PerceptionSensors:
         except (binascii.Error, OSError, ValueError) as error:
             self._reject("frame", error)
             return
-        if self.epoch != epoch or not self._assignment_current(frame, device_id):
+        if (
+            self.epoch != epoch
+            or self.timeline.camera_frames.current_generation(device_id) != revision
+            or not self._assignment_current(frame, device_id)
+        ):
             self._journal.record(
                 "perception_frame_dropped",
                 source="perception",

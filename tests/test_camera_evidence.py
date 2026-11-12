@@ -556,14 +556,14 @@ class CameraStack:
             DrainBatch(messages=[msg], frames=[liveness_frame("stream-budi", data)])
         )
 
-    async def heartbeat(self, *, advance: bool = True) -> None:
+    async def heartbeat(self, *, advance: bool = True, stream_id: str = "stream-budi") -> None:
         if advance:
             self.sample_ms += 4000
         await self.sensors.accept_batch(
             DrainBatch(
                 active=[
                     ActiveSampler(
-                        stream_id="stream-budi",
+                        stream_id=stream_id,
                         role="camera",
                         last_sample_page_ms=self.sample_ms,
                     )
@@ -843,10 +843,135 @@ async def test_a_frame_from_a_reassigned_stream_is_dropped(
     release.set()
     await task
 
-    frame = stack.timeline.camera_frames.get(BUDI)
-    assert frame is not None
-    assert frame.sequence == 1
-    assert frame.stream_id == "stream-budi"
+    assert stack.timeline.camera_frames.get(BUDI) is None
+
+
+async def test_a_reassigned_camera_drops_the_frame_and_the_cached_answer() -> None:
+    stack = CameraStack()
+    data = liveness_jpeg((120, 120, 120))
+    await stack.setup_camera(data)
+    await stack.heartbeat()
+    first = await stack.look()
+    assert first["code"] == "ok"
+    seen = len(stack.model.seen)
+
+    rebound = collection_payload(
+        users=[
+            user_info(AYU, "Ayu"),
+            user_info(BUDI, "Budi"),
+            user_info(TWIN, "Twin", current=True),
+        ],
+        outputs=[output(BUDI, "stream-budi-2")],
+    )
+    await stack.sensors.accept_batch(
+        DrainBatch(
+            messages=[
+                DrainedMessage(
+                    channel="collections",
+                    page_ms=JOINED_MS + 3000,
+                    b64=base64.b64encode(rebound).decode(),
+                )
+            ]
+        )
+    )
+
+    assert stack.timeline.camera_frames.get(BUDI) is None
+
+    unavailable = await stack.look()
+    assert unavailable["code"] == "camera_unavailable"
+    assert len(stack.model.seen) == seen
+
+    await stack.sensors.accept_batch(
+        DrainBatch(
+            frames=[
+                liveness_frame("stream-budi-2", data, at_ms=JOINED_MS + 4000),
+            ]
+        )
+    )
+    await stack.heartbeat(stream_id="stream-budi-2")
+
+    fresh = await stack.look()
+    assert fresh["code"] == "ok"
+    assert fresh["resolution"] == "fresh"
+    assert len(stack.model.seen) == seen + 1
+
+
+async def test_a_frame_decoded_across_a_camera_off_and_on_is_dropped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stack = CameraStack()
+    data = liveness_jpeg((120, 120, 120))
+    await stack.setup_camera(data)
+    task, release = await _frame_in_flight(stack, monkeypatch, data)
+
+    off = DrainedMessage(
+        channel="collections",
+        page_ms=JOINED_MS + 3000,
+        b64=base64.b64encode(liveness_people(budi_camera=False)).decode(),
+    )
+    await stack.sensors.accept_batch(DrainBatch(messages=[off]))
+    on = DrainedMessage(
+        channel="collections",
+        page_ms=JOINED_MS + 3500,
+        b64=base64.b64encode(liveness_people(budi_camera=True)).decode(),
+    )
+    await stack.sensors.accept_batch(DrainBatch(messages=[on]))
+    release.set()
+    await task
+
+    assert stack.timeline.camera_frames.get(BUDI) is None
+
+
+async def test_a_frame_decoded_across_a_stream_cycle_is_dropped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stack = CameraStack()
+    data = liveness_jpeg((120, 120, 120))
+    await stack.setup_camera(data)
+    task, release = await _frame_in_flight(stack, monkeypatch, data)
+
+    rebound = collection_payload(
+        users=[
+            user_info(AYU, "Ayu"),
+            user_info(BUDI, "Budi"),
+            user_info(TWIN, "Twin", current=True),
+        ],
+        outputs=[output(BUDI, "stream-budi-2")],
+    )
+    await stack.sensors.accept_batch(
+        DrainBatch(
+            messages=[
+                DrainedMessage(
+                    channel="collections",
+                    page_ms=JOINED_MS + 3000,
+                    b64=base64.b64encode(rebound).decode(),
+                )
+            ]
+        )
+    )
+    back = collection_payload(
+        users=[
+            user_info(AYU, "Ayu"),
+            user_info(BUDI, "Budi"),
+            user_info(TWIN, "Twin", current=True),
+        ],
+        outputs=[output(BUDI, "stream-budi")],
+    )
+    await stack.sensors.accept_batch(
+        DrainBatch(
+            messages=[
+                DrainedMessage(
+                    channel="collections",
+                    page_ms=JOINED_MS + 3500,
+                    b64=base64.b64encode(back).decode(),
+                )
+            ]
+        )
+    )
+    release.set()
+    await task
+
+    assert stack.timeline.camera_frames.get(BUDI) is None
 
 
 async def test_a_new_stream_replaces_the_old_observation() -> None:

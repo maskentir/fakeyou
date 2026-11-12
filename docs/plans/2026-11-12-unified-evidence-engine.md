@@ -72,9 +72,11 @@ The camera inspection is bounded: the context wraps the whole inspection in `asy
 
 The same validation runs twice. It runs before the cache lookup and before the vision call, so a request that captured an older snapshot can neither reuse a cached answer nor start an inspection for it, and it runs again after the inference, so an answer produced for a snapshot that has since been replaced is never published.
 
-**The ingestion boundary.** `PerceptionSensors._accept_frame` captures the epoch and the assignment identity before it decodes the JPEG, and re-validates both after the decode. A frame that was decoded across an epoch change, a camera-off, a participant leave or a stream reassignment is dropped instead of entering the store, because a frame that arrives late must never look like the current picture.
+**The ingestion boundary.** `PerceptionSensors._accept_frame` captures the epoch, the assignment identity and the participant generation before it decodes the JPEG, and re-validates all three after the decode. The participant generation is monotonic, so an assignment that goes away and comes back, the ABA case, is caught even though the final state looks identical. A frame that was decoded across an epoch change, a camera-off, a participant leave or a stream reassignment is dropped instead of entering the store, because a frame that arrives late must never look like the current picture.
 
-**The heartbeat contract.** Liveness is the progress of the sampling, not the arrival of the drain. The page reports the timestamp of the last sample it took for each stream, and the store refreshes `seen_at` only when that timestamp moves forward. A stream that keeps sampling keeps the frame live even when the picture never changes, a stream whose sampling timestamp stops moving goes unavailable after the liveness timeout, and a browser epoch resets the recorded timestamps so the new page clock starts clean.
+**Immediate invalidation on an assignment change.** The camera assignment identity is compared before and after every roster update. When a participant's camera stream changes, its frame is dropped and its answer cache is cleared at once, without waiting for the first JPEG of the new stream, so an answer from the old stream can never be served while the new stream is still arriving.
+
+**The heartbeat contract.** Liveness is the progress of the sampling, not the arrival of the drain. The page reports the timestamp of the last sample it took for each stream, and the store refreshes `seen_at` only when that timestamp moves forward. A timestamp that stands still or moves backwards is not progress. A stream that keeps sampling keeps the frame live even when the picture never changes, a stream whose sampling timestamp stops moving goes unavailable after the liveness timeout, and a browser epoch resets the recorded timestamps so the new page clock starts clean.
 
 **Files:**
 - Modify: `src/fakeyou/perception/camera_evidence.py`
@@ -377,7 +379,119 @@ with
 Run: `uv run pytest -q tests/test_camera_evidence.py`
 Expected: PASS.
 
-### Task 1.5: Tie liveness to the sampling progress
+### Task 1.5: Invalidate the frame and the answer cache on an assignment change
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+async def test_a_reassigned_camera_drops_the_frame_and_the_cached_answer() -> None:
+    stack = CameraStack()
+    data = liveness_jpeg((120, 120, 120))
+    await stack.setup_camera(data)
+    await stack.heartbeat()
+    first = await stack.look()
+    assert first["code"] == "ok"
+    seen = len(stack.model.seen)
+
+    rebound = collection_payload(
+        users=[
+            user_info(AYU, "Ayu"),
+            user_info(BUDI, "Budi"),
+            user_info(TWIN, "Twin", current=True),
+        ],
+        outputs=[output(BUDI, "stream-budi-2")],
+    )
+    await stack.sensors.accept_batch(
+        DrainBatch(
+            messages=[
+                DrainedMessage(
+                    channel="collections",
+                    page_ms=JOINED_MS + 3000,
+                    b64=base64.b64encode(rebound).decode(),
+                )
+            ]
+        )
+    )
+
+    assert stack.timeline.camera_frames.get(BUDI) is None
+
+    unavailable = await stack.look()
+    assert unavailable["code"] == "camera_unavailable"
+    assert len(stack.model.seen) == seen
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `uv run pytest -q tests/test_camera_evidence.py -k reassigned_camera`
+Expected: FAIL, the old frame and the cached answer survive the reassignment.
+
+- [ ] **Step 3: Compare the camera assignments around every roster update**
+
+In `src/fakeyou/perception/sensors.py`:
+
+```python
+def _camera_assignments(self) -> dict[str, str]:
+    return {
+        item.device_id: item.stream_id
+        for item in self.roster.assignments()
+        if item.role == "camera"
+    }
+
+
+def _invalidate_changed_assignments(self, before: Mapping[str, str]) -> None:
+    after = self._camera_assignments()
+    for device_id, stream_id in before.items():
+        if after.get(device_id) == stream_id:
+            continue
+        self.timeline.camera_frames.drop(device_id)
+        self._invalidate_camera(device_id)
+```
+
+- [ ] **Step 4: Run the test to verify it passes**
+
+Run: `uv run pytest -q tests/test_camera_evidence.py`
+Expected: PASS.
+
+### Task 1.6: Make the ingestion check ABA safe
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+async def test_a_frame_decoded_across_a_camera_off_and_on_is_dropped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None: ...
+
+
+async def test_a_frame_decoded_across_a_stream_cycle_is_dropped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None: ...
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `uv run pytest -q tests/test_camera_evidence.py -k decoded_across`
+Expected: FAIL, the late frame is accepted because the final assignment matches.
+
+- [ ] **Step 3: Validate the monotonic generation after the decode**
+
+```python
+        revision = self.timeline.camera_frames.current_generation(device_id)
+        try:
+            ...
+        if (
+            self.epoch != epoch
+            or self.timeline.camera_frames.current_generation(device_id) != revision
+            or not self._assignment_current(frame, device_id)
+        ):
+            ...drop...
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `uv run pytest -q tests/test_camera_evidence.py`
+Expected: PASS.
+
+### Task 1.7: Tie liveness to the sampling progress
 
 - [ ] **Step 1: Write the failing test**
 
@@ -434,7 +548,7 @@ In `src/fakeyou/perception/sensors.py` the model carries the same field and the 
 Run: `uv run pytest -q tests/test_camera_evidence.py tests/test_sensors.py`
 Expected: PASS.
 
-### Task 1.6: Commit the phase
+### Task 1.8: Commit the phase
 
 - [ ] **Step 1: Run the gates**
 
