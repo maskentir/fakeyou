@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Literal
 
+from fakeyou.perception.evidence import SnapshotRef
 from fakeyou.perception.frames import compare_screens
 from fakeyou.perception.percepts import Keyframe
 
@@ -12,25 +12,13 @@ def observations_match(left: Keyframe, right: Keyframe) -> bool:
     return compare_screens(left, right) in {"same", "minor"}
 
 
-@dataclass(frozen=True, slots=True)
-class CameraEvidence:
-    answer: str
-    resolution: Literal["cache_hit", "fresh"]
-    age_ms: int
-    vision_latency_ms: int
-    sequence: int = 0
-    generation: int = 0
-
-
 @dataclass(slots=True)
-class CameraCacheEntry:
+class AnswerEntry:
     question: str
     answer: str
+    ref: SnapshotRef
     keyframe: Keyframe
     stored_at: float
-    sequence: int
-    generation: int
-    stream_id: str
 
 
 class StaleEvidence(Exception):
@@ -38,8 +26,8 @@ class StaleEvidence(Exception):
 
 
 @dataclass(slots=True)
-class CameraCache:
-    entries: dict[str, CameraCacheEntry] = field(default_factory=dict)
+class AnswerCache:
+    entries: dict[str, AnswerEntry] = field(default_factory=dict)
     locks: dict[str, asyncio.Lock] = field(default_factory=dict)
 
     def lock_for(self, participant_id: str) -> asyncio.Lock:
@@ -49,10 +37,10 @@ class CameraCache:
             self.locks[participant_id] = lock
         return lock
 
-    def get(self, participant_id: str) -> CameraCacheEntry | None:
+    def get(self, participant_id: str) -> AnswerEntry | None:
         return self.entries.get(participant_id)
 
-    def put(self, participant_id: str, entry: CameraCacheEntry) -> None:
+    def put(self, participant_id: str, entry: AnswerEntry) -> None:
         self.entries[participant_id] = entry
 
     def drop(self, participant_id: str) -> None:

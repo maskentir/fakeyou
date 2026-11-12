@@ -17,7 +17,7 @@ from fakeyou.perception.context import (
 )
 from fakeyou.perception.interpreter import PerceptionInterpreter
 from fakeyou.perception.percepts import IncomingChat
-from fakeyou.perception.timeline import CameraFrame, MeetingTimeline
+from fakeyou.perception.timeline import CameraSample, MeetingTimeline
 from fakeyou.perception.view import VIEW_PREFIX
 from tests._conversation_fakes import ToolCallingFakeModel
 from tests._perception_fakes import (
@@ -175,32 +175,39 @@ async def test_looking_reports_why_it_could_not_see() -> None:
     seeing = _context(timeline, answers=("A mockup.",))
     timeline.camera_frames.put(
         "device-budi",
-        CameraFrame(slide_jpeg("Mockup"), "stream-budi", START, 0, time.monotonic()),
+        CameraSample(
+            data=slide_jpeg("Mockup"),
+            stream_id="stream-budi",
+            captured_at=START,
+            epoch=0,
+            seen_at=time.monotonic(),
+        ),
     )
 
-    unknown = json.loads(await exhausted.look_at_screen("screen#9", "what?"))
-    broke = json.loads(await exhausted.look_at_screen("current", "what?"))
-    nobody = json.loads(await exhausted.look_at_participant("Zed", "what?"))
-    no_camera = json.loads(await exhausted.look_at_participant("Ayu", "what?"))
-    camera = json.loads(await seeing.look_at_participant("budi", "What is he wearing?"))
+    unknown = await exhausted.look_at_screen("screen#9", "what?")
+    broke = await exhausted.look_at_screen("current", "what?")
+    nobody = await exhausted.look_at_participant("Zed", "what?")
+    no_camera = await exhausted.look_at_participant("Ayu", "what?")
+    camera = await seeing.look_at_participant("budi", "What is he wearing?")
 
-    assert unknown == {"code": "unknown_screen", "screen": "screen#9", "resolution": "unavailable"}
-    assert broke == {"code": "budget_exhausted", "screen": "screen#1", "resolution": "unavailable"}
-    assert nobody == {
-        "code": "unknown_participant",
-        "participant": "Zed",
-        "resolution": "unavailable",
-    }
-    assert no_camera == {
-        "code": "camera_unavailable",
-        "participant": "person#1",
-        "resolution": "unavailable",
-    }
-    assert camera["code"] == "ok"
-    assert camera["participant"] == "person#2"
-    assert camera["resolution"] == "fresh"
-    assert camera["strategy"] == "targeted_vision"
-    assert camera["answer"] == "A mockup."
+    assert unknown.code == "unknown_screen"
+    assert unknown.subject_id == "screen#9"
+    assert unknown.status == "unavailable"
+    assert broke.code == "budget_exhausted"
+    assert broke.subject_id == "screen#1"
+    assert broke.status == "unavailable"
+    assert nobody.code == "unknown_participant"
+    assert nobody.subject_id == "Zed"
+    assert nobody.status == "unavailable"
+    assert no_camera.code == "camera_unavailable"
+    assert no_camera.subject_id == "person#1"
+    assert no_camera.status == "unavailable"
+    assert camera.code == "ok"
+    assert camera.subject_id == "person#2"
+    assert camera.acquisition == "inference"
+    assert camera.strategy == "targeted_vision"
+    assert camera.answer == "A mockup."
+    assert camera.verification == "unverified"
 
 
 async def test_a_screen_whose_frame_is_gone_cannot_be_looked_at() -> None:
@@ -208,13 +215,11 @@ async def test_a_screen_whose_frame_is_gone_cannot_be_looked_at() -> None:
     timeline.show_screen(keyframe(slide_jpeg("Launch Timeline")), None)
     timeline.read_screen("screen#1", reading("Launch Timeline", text="Beta 17 March 2027"))
 
-    result = json.loads(await _context(timeline).look_at_screen("current", "what?"))
+    result = await _context(timeline).look_at_screen("current", "what?")
 
-    assert result == {
-        "code": "frame_unavailable",
-        "screen": "screen#1",
-        "resolution": "unavailable",
-    }
+    assert result.code == "frame_unavailable"
+    assert result.subject_id == "screen#1"
+    assert result.status == "unavailable"
 
 
 async def test_looking_at_a_dashboard_answers_from_the_image() -> None:
@@ -225,14 +230,14 @@ async def test_looking_at_a_dashboard_answers_from_the_image() -> None:
     )
     context = _context(timeline, answers=("Receipt 1450-6289 Rp899,900",))
 
-    result = json.loads(await context.look_at_screen("current", "what was paid?"))
+    result = await context.look_at_screen("current", "what was paid?")
 
-    assert result["code"] == "ok"
-    assert result["screen"] == "screen#1"
-    assert result["answer"] == "Receipt 1450-6289 Rp899,900"
-    assert result["resolution"] == "fresh"
-    assert result["age_ms"] == 0
-    assert result["vision_latency_ms"] >= 0
+    assert result.code == "ok"
+    assert result.subject_id == "screen#1"
+    assert result.answer == "Receipt 1450-6289 Rp899,900"
+    assert result.acquisition == "inference"
+    assert result.age_ms == 0
+    assert result.vision_latency_ms >= 0
     assert context.interpreter is not None
     assert context.interpreter.budget.calls == 1
 
@@ -241,13 +246,11 @@ async def test_looking_at_an_unread_screen_is_refused() -> None:
     timeline = shown_timeline(TIMELINE)
     context = _context(timeline, answers=("anything",))
 
-    result = json.loads(await context.look_at_screen("current", "what?"))
+    result = await context.look_at_screen("current", "what?")
 
-    assert result == {
-        "code": "not_meeting_content",
-        "screen": "screen#1",
-        "resolution": "unavailable",
-    }
+    assert result.code == "not_meeting_content"
+    assert result.subject_id == "screen#1"
+    assert result.status == "unavailable"
     assert context.interpreter is not None
     assert context.interpreter.budget.calls == 0
 
@@ -271,7 +274,7 @@ async def test_look_back_chat_returns_only_pre_join_lines() -> None:
     )
     timeline.add_chat(IncomingChat(message_id="new", sender=budi, text="live one", sent_at=START))
 
-    result = json.loads(_context(timeline).backlog_chat())
+    result = _context(timeline).backlog_chat()
 
     assert result["code"] == "ok"
     assert [line["text"] for line in result["lines"]] == ["asked before you joined"]
