@@ -75,7 +75,7 @@ class DrainedFrame(DrainPart):
 class ActiveSampler(DrainPart):
     stream_id: str
     role: Literal["screen", "camera"]
-    page_ms: float
+    last_sample_page_ms: float = 0
 
 
 class DrainBatch(DrainPart):
@@ -130,6 +130,7 @@ class PerceptionSensors:
         self._own_status: int | None = None
         self._audio_outputs: set[tuple[str, str]] = set()
         self._admitted_at: datetime | None = None
+        self._sampler_samples: dict[str, float] = {}
 
     def _invalidate_camera(self, participant_id: str | None = None) -> None:
         if self._on_camera_invalidate is not None:
@@ -274,6 +275,7 @@ class PerceptionSensors:
     def begin_epoch(self) -> None:
         self.epoch += 1
         self.timeline.camera_frames.clear()
+        self._sampler_samples.clear()
         self._invalidate_camera(None)
         self.roster.begin_epoch()
         self.drained_at = None
@@ -293,7 +295,18 @@ class PerceptionSensors:
             frame = self.timeline.camera_frames.get(assignment.device_id)
             if frame is None or frame.stream_id != sampler.stream_id or frame.epoch != self.epoch:
                 continue
+            if not self._sampling_advanced(sampler):
+                continue
             self.timeline.camera_frames.touch(assignment.device_id, seen_at=seen)
+
+    def _sampling_advanced(self, sampler: ActiveSampler) -> bool:
+        if sampler.last_sample_page_ms <= 0:
+            return False
+        previous = self._sampler_samples.get(sampler.stream_id)
+        if previous is not None and sampler.last_sample_page_ms == previous:
+            return False
+        self._sampler_samples[sampler.stream_id] = sampler.last_sample_page_ms
+        return True
 
     def mark_admitted(self, at: datetime) -> None:
         if self._admitted_at is None:
@@ -326,6 +339,7 @@ class PerceptionSensors:
         )
 
     async def _accept_frame(self, frame: DrainedFrame) -> None:
+        epoch = self.epoch
         assignment = self.roster.assignment_for(frame.stream_id)
         if assignment is None or assignment.role != frame.role:
             self._journal.record(
@@ -338,6 +352,7 @@ class PerceptionSensors:
                 ),
             )
             return
+        device_id = assignment.device_id
         try:
             data = base64.b64decode(frame.jpeg_b64, validate=True)
             keyframe = await asyncio.to_thread(
@@ -346,8 +361,18 @@ class PerceptionSensors:
         except (binascii.Error, OSError, ValueError) as error:
             self._reject("frame", error)
             return
+        if self.epoch != epoch or not self._assignment_current(frame, device_id):
+            self._journal.record(
+                "perception_frame_dropped_stale",
+                source="perception",
+                stream_id=frame.stream_id,
+                role=frame.role,
+                epoch=epoch,
+                current_epoch=self.epoch,
+            )
+            return
         self.frames_seen += 1
-        person = self._person(assignment.device_id)
+        person = self._person(device_id)
         if frame.role == "screen":
             self.timeline.show_screen(keyframe, person, data=data)
         else:
@@ -365,6 +390,14 @@ class PerceptionSensors:
                     seen_at=self.monotonic(),
                 ),
             )
+
+    def _assignment_current(self, frame: DrainedFrame, device_id: str) -> bool:
+        assignment = self.roster.assignment_for(frame.stream_id)
+        if assignment is None or assignment.device_id != device_id:
+            return False
+        if assignment.role != frame.role:
+            return False
+        return device_id in self.roster.people()
 
     def _reject(self, kind: str, error: Exception) -> None:
         self.rejected_messages += 1

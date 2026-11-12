@@ -70,6 +70,12 @@ The ticket is captured before the first asynchronous operation: the context read
 
 The camera inspection is bounded: the context wraps the whole inspection in `asyncio.timeout(LOOK_TIMEOUT_SECONDS)`, a provider failure becomes `look_failed` with the error type, and a budget rejection stays `budget_exhausted`. A cancellation is never converted into a result.
 
+The same validation runs twice. It runs before the cache lookup and before the vision call, so a request that captured an older snapshot can neither reuse a cached answer nor start an inspection for it, and it runs again after the inference, so an answer produced for a snapshot that has since been replaced is never published.
+
+**The ingestion boundary.** `PerceptionSensors._accept_frame` captures the epoch and the assignment identity before it decodes the JPEG, and re-validates both after the decode. A frame that was decoded across an epoch change, a camera-off, a participant leave or a stream reassignment is dropped instead of entering the store, because a frame that arrives late must never look like the current picture.
+
+**The heartbeat contract.** Liveness is the progress of the sampling, not the arrival of the drain. The page reports the timestamp of the last sample it took for each stream, and the store refreshes `seen_at` only when that timestamp moves forward. A stream that keeps sampling keeps the frame live even when the picture never changes, a stream whose sampling timestamp stops moving goes unavailable after the liveness timeout, and a browser epoch resets the recorded timestamps so the new page clock starts clean.
+
 **Files:**
 - Modify: `src/fakeyou/perception/camera_evidence.py`
 - Modify: `src/fakeyou/perception/interpreter.py`
@@ -298,7 +304,137 @@ Move every test in `tests/test_camera_liveness.py` into `tests/test_camera_evide
 Run: `uv run pytest -q tests/test_code_rules.py -k named_after`
 Expected: PASS. `camera_evidence` is a module name, so the merged file satisfies the rule.
 
-### Task 1.4: Commit the phase
+### Task 1.4: Reject a frame that was decoded across a state change
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+async def test_a_frame_from_the_previous_epoch_is_dropped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stack = CameraStack()
+    data = liveness_jpeg((120, 120, 120))
+    await stack.setup_camera(data)
+    task, release = await _frame_in_flight(stack, monkeypatch, data)
+
+    stack.sensors.begin_epoch()
+    release.set()
+    await task
+
+    assert stack.timeline.camera_frames.get(BUDI) is None
+```
+
+The same shape covers the camera-off, the participant leave and the stream reassignment.
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `uv run pytest -q tests/test_camera_evidence.py -k dropped`
+Expected: FAIL, the late frame is written into the store.
+
+- [ ] **Step 3: Re-validate the epoch and the assignment after the decode**
+
+In `src/fakeyou/perception/sensors.py`:
+
+```python
+        epoch = self.epoch
+        assignment = self.roster.assignment_for(frame.stream_id)
+        ...
+        device_id = assignment.device_id
+        try:
+            data = base64.b64decode(frame.jpeg_b64, validate=True)
+            keyframe = await asyncio.to_thread(
+                keyframe_from_jpeg, data, captured_at=page_time(frame.page_ms)
+            )
+        except (binascii.Error, OSError, ValueError) as error:
+            self._reject("frame", error)
+            return
+        if self.epoch != epoch or not self._assignment_current(frame, device_id):
+            self._journal.record(
+                "perception_frame_dropped_stale",
+                source="perception",
+                stream_id=frame.stream_id,
+                role=frame.role,
+                epoch=epoch,
+                current_epoch=self.epoch,
+            )
+            return
+```
+
+with
+
+```python
+    def _assignment_current(self, frame: DrainedFrame, device_id: str) -> bool:
+        assignment = self.roster.assignment_for(frame.stream_id)
+        if assignment is None or assignment.device_id != device_id:
+            return False
+        if assignment.role != frame.role:
+            return False
+        return device_id in self.roster.people()
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `uv run pytest -q tests/test_camera_evidence.py`
+Expected: PASS.
+
+### Task 1.5: Tie liveness to the sampling progress
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+async def test_a_stalled_sampling_stream_becomes_unavailable() -> None:
+    stack = CameraStack()
+    data = liveness_jpeg((30, 40, 50))
+    await stack.setup_camera(data)
+    await stack.heartbeat()
+    assert (await stack.look())["code"] == "ok"
+
+    for step in range(6):
+        stack.clock[0] = step * 4.5
+        await stack.heartbeat(advance=False)
+
+    result = await stack.look()
+    assert result["code"] == "camera_unavailable"
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `uv run pytest -q tests/test_camera_evidence.py -k stalled`
+Expected: FAIL, the drain keeps the frame live.
+
+- [ ] **Step 3: Report the last sampling timestamp**
+
+In `src/fakeyou/assets/perception.js` the active samplers report the timestamp of the last sample they took, with no fallback to the current page time:
+
+```javascript
+    return [...samplers.values()].map((state) => ({
+      stream_id: state.id,
+      role: state.role,
+      last_sample_page_ms: state.lastSamplePageMs,
+    }));
+```
+
+In `src/fakeyou/perception/sensors.py` the model carries the same field and the liveness follows its progress:
+
+```python
+    def _sampling_advanced(self, sampler: ActiveSampler) -> bool:
+        if sampler.last_sample_page_ms <= 0:
+            return False
+        previous = self._sampler_samples.get(sampler.stream_id)
+        if previous is not None and sampler.last_sample_page_ms == previous:
+            return False
+        self._sampler_samples[sampler.stream_id] = sampler.last_sample_page_ms
+        return True
+```
+
+`begin_epoch` clears the recorded timestamps so a new page clock starts clean.
+
+- [ ] **Step 4: Run the test to verify it passes**
+
+Run: `uv run pytest -q tests/test_camera_evidence.py tests/test_sensors.py`
+Expected: PASS.
+
+### Task 1.6: Commit the phase
 
 - [ ] **Step 1: Run the gates**
 

@@ -154,6 +154,8 @@ class PerceptionInterpreter:
             keyframe_from_jpeg, snapshot.frame.data, captured_at=snapshot.captured_at
         )
         async with self._camera_cache.lock_for(participant_id):
+            if not self._snapshot_current(participant_id, snapshot):
+                raise StaleEvidence
             cached = self._camera_cache.get(participant_id)
             if cached is not None:
                 age = self._monotonic() - cached.stored_at

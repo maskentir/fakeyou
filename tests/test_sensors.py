@@ -305,6 +305,13 @@ def test_the_perception_script_ships_with_the_bridge() -> None:
     assert script.index("__fakeyouRtc") < script.index("__fakeyouPerception")
 
 
+def test_the_drain_reports_the_last_sampling_timestamp() -> None:
+    script = load_perception_script()
+
+    assert "last_sample_page_ms: state.lastSamplePageMs" in script
+    assert "page_ms: state.lastSamplePageMs || bridge.pageNow()" not in script
+
+
 def test_the_drain_moves_a_bounded_payload_per_poll() -> None:
     script = load_perception_script()
 

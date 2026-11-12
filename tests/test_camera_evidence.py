@@ -381,6 +381,35 @@ async def test_a_new_frame_during_the_inference_rejects_the_answer() -> None:
     assert cache.get("device-p1") is None
 
 
+async def test_a_cache_hit_is_refused_when_the_frame_changed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = vision_model(answers=["A dark blue shirt."])
+    timeline, _context, interpreter = camera_stack(model)
+    snapshot = put_frame(timeline, jpeg_of((120, 120, 120)))
+    first = await interpreter.camera_answer("device-p1", QUESTION, snapshot, source=SOURCE)
+    assert first is not None
+    original = keyframe_from_jpeg
+
+    def replaced(data: bytes, *, captured_at: datetime) -> Keyframe:
+        timeline.camera_frames.put(
+            "device-p1",
+            CameraFrame(
+                jpeg_of((200, 200, 200)), "stream-p1", datetime.now(UTC), 0, time.monotonic()
+            ),
+        )
+        return original(data, captured_at=captured_at)
+
+    monkeypatch.setattr("fakeyou.perception.interpreter.keyframe_from_jpeg", replaced)
+
+    with pytest.raises(StaleEvidence):
+        await interpreter.camera_answer("device-p1", QUESTION, snapshot, source=SOURCE)
+
+    assert len(model.seen) == 1
+    cache = object.__getattribute__(interpreter, "_camera_cache")
+    assert cache.get("device-p1") is not None
+
+
 async def test_a_provider_failure_reports_a_failed_look() -> None:
     model = vision_model(answers=["A dark blue shirt."])
     timeline, context, interpreter = camera_stack(model)
@@ -480,6 +509,7 @@ def liveness_people(*, budi_camera: bool = True) -> bytes:
 class CameraStack:
     def __init__(self) -> None:
         self.clock = [0.0]
+        self.sample_ms = JOINED_MS
         self.journal = Journal("m1", emit=lambda _: None)
         self.timeline = MeetingTimeline(journal=self.journal)
         self.model = vision_model()
@@ -526,11 +556,17 @@ class CameraStack:
             DrainBatch(messages=[msg], frames=[liveness_frame("stream-budi", data)])
         )
 
-    async def heartbeat(self) -> None:
+    async def heartbeat(self, *, advance: bool = True) -> None:
+        if advance:
+            self.sample_ms += 4000
         await self.sensors.accept_batch(
             DrainBatch(
                 active=[
-                    ActiveSampler(stream_id="stream-budi", role="camera", page_ms=JOINED_MS + 2000)
+                    ActiveSampler(
+                        stream_id="stream-budi",
+                        role="camera",
+                        last_sample_page_ms=self.sample_ms,
+                    )
                 ]
             )
         )
@@ -654,6 +690,21 @@ async def test_a_stable_camera_stays_live_with_heartbeats() -> None:
     assert later["resolution"] == "fresh"
 
 
+async def test_a_stalled_sampling_stream_becomes_unavailable() -> None:
+    stack = CameraStack()
+    data = liveness_jpeg((30, 40, 50))
+    await stack.setup_camera(data)
+    await stack.heartbeat()
+    assert (await stack.look())["code"] == "ok"
+
+    for step in range(6):
+        stack.clock[0] = step * 4.5
+        await stack.heartbeat(advance=False)
+
+    result = await stack.look()
+    assert result["code"] == "camera_unavailable"
+
+
 async def test_a_stream_without_heartbeats_becomes_unavailable() -> None:
     stack = CameraStack()
     data = liveness_jpeg((30, 40, 50))
@@ -664,6 +715,138 @@ async def test_a_stream_without_heartbeats_becomes_unavailable() -> None:
     stack.clock[0] = CAMERA_LIVENESS_TIMEOUT_SECONDS + 1.0
     result = await stack.look()
     assert result["code"] == "camera_unavailable"
+
+
+def slow_decoder(monkeypatch: pytest.MonkeyPatch) -> tuple[threading.Event, threading.Event]:
+    started = threading.Event()
+    release = threading.Event()
+    original = keyframe_from_jpeg
+
+    def slow_keyframe(data: bytes, *, captured_at: datetime) -> Keyframe:
+        started.set()
+        release.wait(2)
+        return original(data, captured_at=captured_at)
+
+    monkeypatch.setattr("fakeyou.perception.sensors.keyframe_from_jpeg", slow_keyframe)
+    return started, release
+
+
+async def _frame_in_flight(
+    stack: CameraStack, monkeypatch: pytest.MonkeyPatch, data: bytes
+) -> tuple[asyncio.Task[None], threading.Event]:
+    started, release = slow_decoder(monkeypatch)
+    task = asyncio.create_task(
+        stack.sensors.accept_batch(
+            DrainBatch(frames=[liveness_frame("stream-budi", data, at_ms=JOINED_MS + 5000)])
+        )
+    )
+    await asyncio.sleep(0.05)
+    assert started.wait(2)
+    return task, release
+
+
+async def test_a_frame_from_the_previous_epoch_is_dropped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stack = CameraStack()
+    data = liveness_jpeg((120, 120, 120))
+    await stack.setup_camera(data)
+    task, release = await _frame_in_flight(stack, monkeypatch, data)
+
+    stack.sensors.begin_epoch()
+    release.set()
+    await task
+
+    assert stack.timeline.camera_frames.get(BUDI) is None
+
+
+async def test_a_frame_from_a_camera_that_went_off_is_dropped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stack = CameraStack()
+    data = liveness_jpeg((120, 120, 120))
+    await stack.setup_camera(data)
+    task, release = await _frame_in_flight(stack, monkeypatch, data)
+
+    off = DrainedMessage(
+        channel="collections",
+        page_ms=JOINED_MS + 3000,
+        b64=base64.b64encode(liveness_people(budi_camera=False)).decode(),
+    )
+    await stack.sensors.accept_batch(DrainBatch(messages=[off]))
+    release.set()
+    await task
+
+    assert stack.timeline.camera_frames.get(BUDI) is None
+
+
+async def test_a_frame_from_a_participant_that_left_is_dropped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stack = CameraStack()
+    data = liveness_jpeg((120, 120, 120))
+    await stack.setup_camera(data)
+    task, release = await _frame_in_flight(stack, monkeypatch, data)
+
+    leave = collection_payload(
+        users=[
+            user_info(AYU, "Ayu"),
+            user_info(BUDI, "Budi", status=2),
+            user_info(TWIN, "Twin", current=True),
+        ],
+        outputs=[],
+    )
+    await stack.sensors.accept_batch(
+        DrainBatch(
+            messages=[
+                DrainedMessage(
+                    channel="collections",
+                    page_ms=JOINED_MS + 3000,
+                    b64=base64.b64encode(leave).decode(),
+                )
+            ]
+        )
+    )
+    release.set()
+    await task
+
+    assert stack.timeline.camera_frames.get(BUDI) is None
+
+
+async def test_a_frame_from_a_reassigned_stream_is_dropped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stack = CameraStack()
+    data = liveness_jpeg((120, 120, 120))
+    await stack.setup_camera(data)
+    task, release = await _frame_in_flight(stack, monkeypatch, data)
+
+    rebound = collection_payload(
+        users=[
+            user_info(AYU, "Ayu"),
+            user_info(BUDI, "Budi"),
+            user_info(TWIN, "Twin", current=True),
+        ],
+        outputs=[output(BUDI, "stream-budi-2")],
+    )
+    await stack.sensors.accept_batch(
+        DrainBatch(
+            messages=[
+                DrainedMessage(
+                    channel="collections",
+                    page_ms=JOINED_MS + 3000,
+                    b64=base64.b64encode(rebound).decode(),
+                )
+            ]
+        )
+    )
+    release.set()
+    await task
+
+    frame = stack.timeline.camera_frames.get(BUDI)
+    assert frame is not None
+    assert frame.sequence == 1
+    assert frame.stream_id == "stream-budi"
 
 
 async def test_a_new_stream_replaces_the_old_observation() -> None:
@@ -700,7 +883,11 @@ async def test_a_new_stream_replaces_the_old_observation() -> None:
     await stack.sensors.accept_batch(
         DrainBatch(
             active=[
-                ActiveSampler(stream_id="stream-budi-2", role="camera", page_ms=JOINED_MS + 6200)
+                ActiveSampler(
+                    stream_id="stream-budi-2",
+                    role="camera",
+                    last_sample_page_ms=JOINED_MS + 6200,
+                )
             ]
         )
     )
