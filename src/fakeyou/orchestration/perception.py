@@ -168,20 +168,13 @@ def create_perception_stack(
     )
     reader = ScreenReader(timeline, interpreter, journal=journal) if interpreter else None
 
-    def on_camera_invalidate(participant_id: str | None) -> None:
-        if interpreter is None:
-            return
-        if participant_id is None:
-            interpreter.clear_camera_observations()
-        else:
-            interpreter.drop_camera_observation(participant_id)
-
+    if interpreter is not None:
+        timeline.camera_frames.set_invalidator(interpreter.invalidate_answers)
     sensors = PerceptionSensors(
         timeline,
         perception,
         joined_at=datetime.now(UTC),
         journal=journal,
-        on_camera_invalidate=on_camera_invalidate,
     )
     sensors.roster_listener = on_roster
     context = PerceptionContext(

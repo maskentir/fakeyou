@@ -27,7 +27,7 @@ from fakeyou.perception.meet_protocol import (
 )
 from fakeyou.perception.percepts import IncomingChat, ParticipantRef
 from fakeyou.perception.roster import MeetRoster, RosterChange, StreamAssignment
-from fakeyou.perception.timeline import CameraFrame, MeetingTimeline
+from fakeyou.perception.timeline import CameraSample, MeetingTimeline
 
 PERCEPTION_ASSET = "perception.js"
 PERCEPTION_DRAIN_JS = "() => window.__fakeyouPerception ? window.__fakeyouPerception.drain() : null"
@@ -313,7 +313,11 @@ class PerceptionSensors:
             if assignment is None or assignment.role != "camera":
                 continue
             frame = self.timeline.camera_frames.get(assignment.device_id)
-            if frame is None or frame.stream_id != sampler.stream_id or frame.epoch != self.epoch:
+            if (
+                frame is None
+                or frame.ref.stream_id != sampler.stream_id
+                or frame.ref.epoch != self.epoch
+            ):
                 continue
             if not self._sampling_advanced(sampler):
                 continue
@@ -403,11 +407,11 @@ class PerceptionSensors:
         else:
             participant_id = person.participant_id
             current = self.timeline.camera_frames.get(participant_id)
-            if current is not None and current.stream_id != frame.stream_id:
+            if current is not None and current.ref.stream_id != frame.stream_id:
                 self._invalidate_camera(participant_id)
             self.timeline.camera_frames.put(
                 participant_id,
-                CameraFrame(
+                CameraSample(
                     data=data,
                     stream_id=frame.stream_id,
                     captured_at=page_time(frame.page_ms),

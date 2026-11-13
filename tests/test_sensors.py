@@ -113,8 +113,8 @@ async def test_camera_frames_are_kept_per_participant_not_as_screens() -> None:
     stored = timeline.camera_frames.get(BUDI)
     assert stored is not None
     assert stored.data == data
-    assert stored.stream_id == "stream-budi"
-    assert stored.epoch == 0
+    assert stored.ref.stream_id == "stream-budi"
+    assert stored.ref.epoch == 0
 
 
 async def test_frames_from_unassigned_or_mismatched_streams_are_ignored() -> None:

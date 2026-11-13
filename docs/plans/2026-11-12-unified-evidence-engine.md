@@ -566,14 +566,65 @@ git commit -m "fix(perception): reject camera evidence from an invalidated strea
 
 **Release condition:** camera and screen reach the conversation runtime through one domain interface, and every evidence payload carries its snapshot provenance.
 
-**No third store.** `CameraFrameStore` already owns the frame bytes, the stream identity, the epoch, the capture time and, after Phase 1, the sequence and the generation. It is the `SnapshotStore`. `CameraCache` is the answer cache and owns no identity. Phase 2 formalises both, it does not add a store that manages the same identity and liveness twice.
+**Status: implemented.** `CameraFrameStore` remains the single source of truth for the camera snapshot. The evidence contract lives in `src/fakeyou/perception/evidence.py` and every look, camera or screen, produces it.
 
-**Files:**
-- Modify: `src/fakeyou/perception/timeline.py`
+### The coupling this phase removes
+
+The phase was written against the code as it stood, not against the architecture in the diagram. Three responsibilities were duplicated and are now single.
+
+| Duplication before | Where it hurt | Now |
+| --- | --- | --- |
+| The snapshot identity was copied field by field into the answer cache and compared field by field in two places. A new identity field would silently stop being compared. | `interpreter.py`, the cache entry | One `SnapshotRef` value object, produced only by the store, compared with one equality |
+| The frame store and the answer cache had separate lifecycles, so every invalidation site had to remember to clear both. Four sites did it, and one of them could forget. | `sensors.py`, `orchestration/perception.py` | The store owns the invalidation and notifies the answers through one registered invalidator. One call clears both |
+| The evidence a look produced was a hand built dictionary, projected again by hand into a journal event, so the provenance the model saw and the provenance the report read could drift apart. | `context.py`, `MeetingEvidence` | One typed `EvidenceResult`, projected once for the model and read once for the journal |
+
+What the phase deliberately does **not** add: there is no new store, and there is no `EvidenceResolver` wrapper class. The interpreter already resolves evidence and a wrapper would only rename it. Adding one would have been the kind of refactor that looks like architecture and removes nothing.
+
+### The contract
+
+```python
+@dataclass(frozen=True, slots=True)
+class SnapshotRef:
+    source: EvidenceSource
+    subject_id: str
+    stream_id: str
+    epoch: int
+    sequence: int
+    generation: int
+    captured_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceResult:
+    source: EvidenceSource
+    subject_id: str
+    snapshot: SnapshotRef | None
+    acquisition: Acquisition
+    status: EvidenceStatus
+    verification: Verification
+    strategy: EvidenceStrategy
+    code: EvidenceCode
+    answer: str | None
+    observed_at: datetime
+    age_ms: int = 0
+    vision_latency_ms: int = 0
+    error_type: str | None = None
+```
+
+`verification` is the separation the review asked for: `unverified` means the model produced the text, `verified` means something checked it against the frame. Nothing verifies a claim yet, so every result today is `unverified` and the field says so where the model and the report can both read it. The verdict, the reason and the timestamp travel with the answer.
+
+The screen path uses the same contract. A screen has no stream lifecycle, so its `SnapshotRef` carries the keyframe digest as the identity and zero for the camera lifecycle fields. The camera fields only mean something for the camera.
+
+### Files**
+
 - Create: `src/fakeyou/perception/evidence.py`
+- Modify: `src/fakeyou/perception/timeline.py`
+- Modify: `src/fakeyou/perception/camera_evidence.py`
+- Modify: `src/fakeyou/perception/interpreter.py`
 - Modify: `src/fakeyou/perception/context.py`
-- Test: `tests/test_snapshots.py`
-- Test: `tests/test_evidence.py`
+- Modify: `src/fakeyou/orchestration/perception.py`
+- Test: `tests/test_camera_evidence.py`
+- Test: `tests/test_context_evidence.py`
 
 ### Task 2.1: Introduce the snapshot model
 
@@ -944,16 +995,31 @@ The inspector calls the model with `with_structured_output(VisualInspection)` an
 
 `perception_evidence_resolved` gains a `status` field carrying `supported`, `insufficient` or `unavailable`, and the reply layer reads the verdict instead of judging the answer text.
 
-## Phase 4 — One report contract with an isolated legacy adapter
+## Phase 4 — Canonical reporting architecture cleanup
 
-**Release condition:** the reporting path has no version branch, and every published historical scorecard stays identical.
+**Release condition:** one report contract, one scorecard path, no version branch, and the historical benchmark kept as an artefact rather than as runtime logic.
+
+**Release criteria.**
+
+1. `report_contract.py` has one active evidence classification algorithm.
+2. `scorecard.py` uses one canonical report contract with no v1 or v2 fallback.
+3. No `evidence_resolution_v2` marker and no historical marker survives in a runtime path.
+4. The baseline benchmark is stored with its commit, its configuration and its metric definitions, so a change in the numbers is never read as a performance improvement.
+
+**Historical evaluation.** No legacy evaluator is built, not even as a fixture based one, because that still maintains the historical algorithm. Historical scorecard outputs are stored as immutable JSON artefacts, the historical input is kept when it is needed to reproduce them, and the commit sha and the environment lock are recorded with them. Recomputing a historical score means checking out the historical commit in isolation. Historical outputs are not golden tests for the new evaluator, because the metric semantics may change; what is tested is the truth of the current contract.
+
+**Before a persisted format is removed**, a simple consumer inventory runs. If no compatibility obligation exists, it is removed directly. No migration framework is built.
+
+**Scope decided after the review of the evidence contract.** Fakeyou is in development, so backward compatibility is not an automatic requirement. The legacy report evaluator, the `evidence_resolution_v2` branching and the journal compatibility markers are removed rather than maintained. Historical benchmark results are archived as static fixtures so a later change can be compared against them, and the existing tests are updated to the new contract.
 
 **Files:**
-- Create: `src/fakeyou/observability/legacy_report.py`
 - Modify: `src/fakeyou/observability/report_contract.py`
 - Modify: `src/fakeyou/observability/journal.py`
 - Modify: `src/fakeyou/observability/scorecard.py`
 - Test: `tests/test_scorecard_contract.py`
+- Archive: `docs/reports/`
+
+**Not built:** a legacy journal adapter, a migration framework, or a compatibility shim for the old scorecard. If a consumer turns up that needs one, the boundary is defined then, not now.
 
 ### Task 4.1: Record the session contract once
 
@@ -1071,6 +1137,34 @@ git commit -m "test(evals): measure grounded answers, latency and vision cost"
 ```
 
 ---
+
+## Development stage policy
+
+The review of the evidence contract settled a policy that changes how the remaining phases are built.
+
+Backward compatibility is a product requirement, not an automatic engineering requirement. We keep compatibility because there are users, integrations or data to protect, not because deleting old code is frightening.
+
+| Area | Decision |
+| --- | --- |
+| Legacy report evaluator v1 and v2 | Removed |
+| `evidence_resolution_v2` branching | Removed |
+| Legacy journal adapter | Not built |
+| Old scorecard compatibility | Not required |
+| Canonical evidence contract | One implementation that is current |
+| Historical benchmark results | Kept as artefacts, not as runtime logic |
+| Existing unit and integration tests | Updated to the new contract |
+| Simulator cassettes | May be updated, with a correct replay validation |
+| Schema versioning | Minimal where data is persisted or crosses a process |
+
+Three things are never traded away: a breaking change may never hide a regression, the ability to compare quality before and after a change survives as static artefacts, and a public repository means persisted formats and public APIs are checked for consumers before they are removed.
+
+## Risks carried into the next phase
+
+These stay open after Phase 2 and are not closed by a green pipeline.
+
+1. **Semantic correctness is unproven.** The vision model still returns free text. `code="ok"` means the model answered, not that the answer is supported by the frame. The structured verdict is Phase 3b and needs the simulator cassettes re-recorded with provider credentials.
+2. **Liveness during an inference is decided, not yet proven.** The product decision is that evidence may describe what was visible when the frame was captured, but it may not be presented as a live condition without a liveness check at the moment it is used. The provenance timestamp is mandatory, a valid historical answer is not failed because someone moved, and the question "what is happening right now?" may not be answered from a stale frame as if it were live. The contract carries the capture time and the observation time; proving the rule is Phase 3b and the Live E2E benchmark.
+3. **The simulator replay is not a strong oracle.** The simulator is green at HEAD, but the cassette matching is timing brittle and a scenario can fail for the wrong reason. That is recorded as Phase 4d.
 
 ## Self-review
 

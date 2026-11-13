@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Literal
 
 from fakeyou.observability.journal import Journal
+from fakeyou.perception.evidence import SnapshotRef
 from fakeyou.perception.frames import compare_screens
 from fakeyou.perception.percepts import (
     CHAT_REF_PREFIX,
@@ -121,41 +122,19 @@ class KeyframeCache:
 
 
 @dataclass(frozen=True, slots=True)
-class CameraFrame:
+class CameraSample:
     data: bytes
     stream_id: str
     captured_at: datetime
     epoch: int
     seen_at: float
-    sequence: int = 0
-    generation: int = 0
 
 
 @dataclass(frozen=True, slots=True)
-class CameraSnapshot:
-    participant_id: str
-    frame: CameraFrame
-    store_epoch: int
-
-    @property
-    def stream_id(self) -> str:
-        return self.frame.stream_id
-
-    @property
-    def epoch(self) -> int:
-        return self.frame.epoch
-
-    @property
-    def sequence(self) -> int:
-        return self.frame.sequence
-
-    @property
-    def generation(self) -> int:
-        return self.frame.generation
-
-    @property
-    def captured_at(self) -> datetime:
-        return self.frame.captured_at
+class CameraFrame:
+    data: bytes
+    seen_at: float
+    ref: SnapshotRef
 
 
 class CameraFrameStore:
@@ -165,14 +144,26 @@ class CameraFrameStore:
         self._sequences: dict[str, int] = {}
         self._generations: dict[str, int] = {}
         self._epoch = 0
+        self._invalidator: Callable[[str | None], None] | None = None
 
-    def put(self, participant_id: str, frame: CameraFrame) -> CameraFrame:
+    def set_invalidator(self, invalidator: Callable[[str | None], None]) -> None:
+        self._invalidator = invalidator
+
+    def put(self, participant_id: str, sample: CameraSample) -> CameraFrame:
         sequence = self._sequences.get(participant_id, 0) + 1
         self._sequences[participant_id] = sequence
-        stored = replace(
-            frame,
-            sequence=sequence,
-            generation=self._generations.get(participant_id, 0),
+        stored = CameraFrame(
+            data=sample.data,
+            seen_at=sample.seen_at,
+            ref=SnapshotRef(
+                source="camera",
+                subject_id=participant_id,
+                stream_id=sample.stream_id,
+                epoch=sample.epoch,
+                sequence=sequence,
+                generation=self._generations.get(participant_id, 0),
+                captured_at=sample.captured_at,
+            ),
         )
         self._frames[participant_id] = stored
         self._frames.move_to_end(participant_id)
@@ -186,12 +177,6 @@ class CameraFrameStore:
             self._frames.move_to_end(participant_id)
         return frame
 
-    def snapshot(self, participant_id: str) -> CameraSnapshot | None:
-        frame = self.get(participant_id)
-        if frame is None:
-            return None
-        return CameraSnapshot(participant_id=participant_id, frame=frame, store_epoch=self._epoch)
-
     def touch(self, participant_id: str, *, seen_at: float) -> None:
         frame = self._frames.get(participant_id)
         if frame is None:
@@ -202,10 +187,14 @@ class CameraFrameStore:
     def drop(self, participant_id: str) -> None:
         self._generations[participant_id] = self._generations.get(participant_id, 0) + 1
         self._frames.pop(participant_id, None)
+        if self._invalidator is not None:
+            self._invalidator(participant_id)
 
     def clear(self) -> None:
         self._epoch += 1
         self._frames.clear()
+        if self._invalidator is not None:
+            self._invalidator(None)
 
     def current_generation(self, participant_id: str) -> int:
         return self._generations.get(participant_id, 0)

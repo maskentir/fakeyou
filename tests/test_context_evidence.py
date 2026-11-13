@@ -10,7 +10,7 @@ from fakeyou.perception import context as context_module
 from fakeyou.perception.budget import PerceptionBudget
 from fakeyou.perception.context import MeetingEvidence, PerceptionContext, gather_evidence
 from fakeyou.perception.interpreter import PerceptionInterpreter
-from fakeyou.perception.timeline import CameraFrame, MeetingTimeline
+from fakeyou.perception.timeline import CameraSample, MeetingTimeline
 from tests._perception_fakes import START, reading, shown_timeline, slide_jpeg, vision_model
 from tests._persistence_fakes import RecordingJournal
 
@@ -44,13 +44,15 @@ def read_timeline() -> MeetingTimeline:
 
 
 async def test_nothing_is_looked_at_unless_the_plan_named_it() -> None:
-    evidence = await gather_evidence(context(read_timeline(), "unused"), "When is beta?", ())
+    evidence, _results = await gather_evidence(
+        context(read_timeline(), "unused"), "When is beta?", ()
+    )
 
     assert evidence == {}
 
 
 async def test_a_planned_screen_look_answers_the_spoken_question() -> None:
-    evidence = await gather_evidence(
+    evidence, _results = await gather_evidence(
         context(read_timeline(), "Beta is 17 March 2027."), "When is beta?", ("screen",)
     )
 
@@ -83,21 +85,22 @@ async def test_a_participant_look_among_several_people_needs_a_name() -> None:
     timeline.participant("device-ayu", "Ayu")
     timeline.camera_frames.put(
         "device-budi",
-        CameraFrame(slide_jpeg("Mockup"), "stream-budi", START, 0, time.monotonic()),
+        CameraSample(
+            data=slide_jpeg("Mockup"),
+            stream_id="stream-budi",
+            captured_at=START,
+            epoch=0,
+            seen_at=time.monotonic(),
+        ),
     )
     seeing = context(timeline, "A paper mockup.")
 
-    named = await gather_evidence(seeing, "What is Budi wearing?", ("participant",))
-    unnamed = await gather_evidence(seeing, "What is he holding?", ("participant",))
+    named, _ = await gather_evidence(seeing, "What is Budi wearing?", ("participant",))
+    unnamed, _ = await gather_evidence(seeing, "What is he holding?", ("participant",))
 
     assert named["participant"]["code"] == "ok"
-    assert unnamed == {
-        "participant": {
-            "code": "unknown_participant",
-            "participant": "",
-            "resolution": "unavailable",
-        }
-    }
+    assert unnamed["participant"]["code"] == "unknown_participant"
+    assert unnamed["participant"]["resolution"] == "unavailable"
 
 
 async def test_the_only_person_in_the_meeting_is_looked_at_without_a_name() -> None:
@@ -105,11 +108,17 @@ async def test_the_only_person_in_the_meeting_is_looked_at_without_a_name() -> N
     timeline.participant("device-harun", "Harun")
     timeline.camera_frames.put(
         "device-harun",
-        CameraFrame(slide_jpeg("Shirt"), "stream-harun", START, 0, time.monotonic()),
+        CameraSample(
+            data=slide_jpeg("Shirt"),
+            stream_id="stream-harun",
+            captured_at=START,
+            epoch=0,
+            seen_at=time.monotonic(),
+        ),
     )
     seeing = context(timeline, "A dark blue shirt.")
 
-    evidence = await gather_evidence(
+    evidence, _results = await gather_evidence(
         seeing, "Can you see me? What color is my shirt?", ("participant",)
     )
 
@@ -120,7 +129,7 @@ async def test_the_only_person_in_the_meeting_is_looked_at_without_a_name() -> N
 
 
 async def test_unknown_needs_are_ignored_and_chat_history_needs_no_model() -> None:
-    evidence = await gather_evidence(
+    evidence, _results = await gather_evidence(
         context(read_timeline()), "What did they say?", ("chat_history", "memory", "bogus")
     )
 
@@ -145,7 +154,7 @@ async def test_a_stalled_look_reports_failure_instead_of_holding_the_turn(
         clock=lambda: START + timedelta(minutes=2),
     )
 
-    evidence = await gather_evidence(stalled, "When is beta?", ("screen", "chat_history"))
+    evidence, _results = await gather_evidence(stalled, "When is beta?", ("screen", "chat_history"))
 
     assert evidence["screen"]["code"] == "look_failed"
     assert evidence["screen"]["error_type"] == "TimeoutError"

@@ -4,6 +4,7 @@ import io
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -15,17 +16,17 @@ from fakeyou.observability.journal import Journal
 from fakeyou.observability.provider_faults import ProviderFault, classify_exception
 from fakeyou.perception.budget import PerceptionBudget, estimate_image_tokens, tokens_used
 from fakeyou.perception.camera_evidence import (
-    CameraCache,
-    CameraCacheEntry,
-    CameraEvidence,
+    AnswerCache,
+    AnswerEntry,
     StaleEvidence,
     observations_match,
 )
+from fakeyou.perception.evidence import EvidenceResult
 from fakeyou.perception.frames import keyframe_from_jpeg
 from fakeyou.perception.percepts import ScreenReading
 from fakeyou.perception.timeline import (
+    CameraFrame,
     CameraFrameStore,
-    CameraSnapshot,
     MeetingTimeline,
     ScreenShown,
     TimelineEvent,
@@ -75,6 +76,10 @@ def image_payload(data: bytes) -> ImagePayload:
     return ImagePayload(data=buffer.getvalue(), width=image.width, height=image.height)
 
 
+class EmptyVisionResponse(Exception):
+    pass
+
+
 class PerceptionInterpreter:
     def __init__(
         self,
@@ -91,18 +96,18 @@ class PerceptionInterpreter:
         self._journal = journal or Journal("", echo=False)
         self._monotonic = monotonic
         self._semaphore = asyncio.Semaphore(max_concurrent)
-        self._camera_cache = CameraCache()
+        self._camera_cache = AnswerCache()
         self._snapshots = snapshots
 
     @property
     def budget(self) -> PerceptionBudget:
         return self._budget
 
-    def drop_camera_observation(self, participant_id: str) -> None:
-        self._camera_cache.drop(participant_id)
-
-    def clear_camera_observations(self) -> None:
-        self._camera_cache.clear()
+    def invalidate_answers(self, participant_id: str | None) -> None:
+        if participant_id is None:
+            self._camera_cache.clear()
+        else:
+            self._camera_cache.drop(participant_id)
 
     async def read_screen(
         self, image: bytes, *, previous_title: str | None = None
@@ -140,21 +145,25 @@ class PerceptionInterpreter:
         with reservation:
             response = await self._invoke(lambda: self._model.ainvoke([message]))
             reservation.charge(tokens_used(response.usage_metadata, estimate))
-        return response.text.strip() or None
+        text = str(response.text).strip()
+        if not text:
+            raise EmptyVisionResponse
+        return text
 
     async def camera_answer(
         self,
         participant_id: str,
+        subject_id: str,
         question: str,
-        snapshot: CameraSnapshot,
+        frame: CameraFrame,
         *,
         source: str,
-    ) -> CameraEvidence | None:
+    ) -> EvidenceResult:
         keyframe = await asyncio.to_thread(
-            keyframe_from_jpeg, snapshot.frame.data, captured_at=snapshot.captured_at
+            keyframe_from_jpeg, frame.data, captured_at=frame.ref.captured_at
         )
         async with self._camera_cache.lock_for(participant_id):
-            if not self._snapshot_current(participant_id, snapshot):
+            if not self._snapshot_current(participant_id, frame):
                 raise StaleEvidence
             cached = self._camera_cache.get(participant_id)
             if cached is not None:
@@ -162,57 +171,70 @@ class PerceptionInterpreter:
                 if (
                     age <= CAMERA_CACHE_TTL_SECONDS
                     and cached.question == question
-                    and cached.sequence == snapshot.sequence
-                    and cached.generation == snapshot.generation
-                    and cached.stream_id == snapshot.stream_id
+                    and cached.ref == frame.ref
                     and observations_match(cached.keyframe, keyframe)
                 ):
-                    return CameraEvidence(
+                    return EvidenceResult(
+                        source="camera",
+                        subject_id=subject_id,
+                        snapshot=cached.ref,
+                        acquisition="reused",
+                        status="produced",
+                        verification="unverified",
+                        strategy="targeted_vision",
+                        code="ok",
                         answer=cached.answer,
-                        resolution="cache_hit",
+                        observed_at=cached.ref.captured_at,
                         age_ms=round(age * 1000),
                         vision_latency_ms=0,
-                        sequence=cached.sequence,
-                        generation=cached.generation,
                     )
             started = self._monotonic()
-            answer = await self.answer(snapshot.frame.data, question, source=source)
+            answer = await self.answer(frame.data, question, source=source)
             if answer is None:
-                return None
-            if not self._snapshot_current(participant_id, snapshot):
+                return EvidenceResult(
+                    source="camera",
+                    subject_id=subject_id,
+                    snapshot=frame.ref,
+                    acquisition="not_attempted",
+                    status="unavailable",
+                    verification="unverified",
+                    strategy="targeted_vision",
+                    code="budget_exhausted",
+                    answer=None,
+                    observed_at=datetime.now(UTC),
+                )
+            if not self._snapshot_current(participant_id, frame):
                 raise StaleEvidence
             self._camera_cache.put(
                 participant_id,
-                CameraCacheEntry(
+                AnswerEntry(
                     question=question,
                     answer=answer,
+                    ref=frame.ref,
                     keyframe=keyframe,
                     stored_at=self._monotonic(),
-                    sequence=snapshot.sequence,
-                    generation=snapshot.generation,
-                    stream_id=snapshot.stream_id,
                 ),
             )
-            return CameraEvidence(
+            return EvidenceResult(
+                source="camera",
+                subject_id=subject_id,
+                snapshot=frame.ref,
+                acquisition="inference",
+                status="produced",
+                verification="unverified",
+                strategy="targeted_vision",
+                code="ok",
                 answer=answer,
-                resolution="fresh",
+                observed_at=frame.ref.captured_at,
                 age_ms=0,
                 vision_latency_ms=round((self._monotonic() - started) * 1000),
-                sequence=snapshot.sequence,
-                generation=snapshot.generation,
             )
 
-    def _snapshot_current(self, participant_id: str, snapshot: CameraSnapshot) -> bool:
-        current = self._snapshots.snapshot(participant_id)
+    def _snapshot_current(self, participant_id: str, frame: CameraFrame) -> bool:
+        current = self._snapshots.get(participant_id)
         if current is None:
             return False
-        return (
-            current.store_epoch == snapshot.store_epoch
-            and current.sequence == snapshot.sequence
-            and current.generation == snapshot.generation
-            and current.stream_id == snapshot.stream_id
-            and current.epoch == snapshot.epoch
-        )
+        return current.ref == frame.ref
 
     async def _invoke(self, call: Callable[[], Any]) -> Any:
         try:
