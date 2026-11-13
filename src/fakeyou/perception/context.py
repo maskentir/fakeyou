@@ -15,7 +15,13 @@ from fakeyou.foundation.triggers import current_trigger, meeting_event_of
 from fakeyou.observability.journal import Journal
 from fakeyou.observability.provider_faults import ProviderFault
 from fakeyou.perception.camera_evidence import StaleEvidence
-from fakeyou.perception.evidence import EvidenceResult, EvidenceStrategy, Look, SnapshotRef
+from fakeyou.perception.evidence import (
+    EvidenceResult,
+    EvidenceStrategy,
+    SnapshotRef,
+    evidence_payload,
+    evidence_resolution,
+)
 from fakeyou.perception.interpreter import CAMERA_SOURCE, SCREEN_SOURCE, PerceptionInterpreter
 from fakeyou.perception.roster import MeetingState
 from fakeyou.perception.timeline import MeetingTimeline, TimelineSnapshot
@@ -66,32 +72,39 @@ def _look_result(code: LookCode, **fields: Any) -> str:
 
 
 def _unavailable(
-    source: Literal["camera", "screen"], subject_id: str, code: LookCode
+    source: Literal["camera", "screen"],
+    subject_id: str,
+    code: LookCode,
+    *,
+    snapshot: SnapshotRef | None = None,
+    strategy: EvidenceStrategy | None = None,
+    subject_label: str | None = None,
 ) -> EvidenceResult:
     return EvidenceResult(
         source=source,
         subject_id=subject_id,
-        snapshot=None,
-        acquisition="inference",
+        snapshot=snapshot,
+        acquisition="not_attempted",
         status="unavailable",
         verification="unverified",
-        strategy="targeted_vision" if source == "camera" else "screen_reading",
+        strategy=strategy,
         code=code,
         answer=None,
         observed_at=datetime.now(UTC),
+        subject_label=subject_label,
     )
 
 
 def _failed(
-    ref: SnapshotRef | None,
+    ref: SnapshotRef,
     subject_id: str,
-    code: Literal["look_failed", "budget_exhausted"],
+    code: Literal["look_failed"],
     strategy: EvidenceStrategy,
     *,
     error_type: str | None = None,
 ) -> EvidenceResult:
     return EvidenceResult(
-        source=ref.source if ref is not None else "camera",
+        source=ref.source,
         subject_id=subject_id,
         snapshot=ref,
         acquisition="inference",
@@ -103,33 +116,6 @@ def _failed(
         observed_at=datetime.now(UTC),
         error_type=error_type,
     )
-
-
-def _resolution(result: EvidenceResult) -> str:
-    if result.status == "unavailable":
-        return "unavailable"
-    return "cache_hit" if result.acquisition == "reused" else "fresh"
-
-
-def _payload(result: EvidenceResult, **extra: Any) -> dict[str, Any]:
-    fields: dict[str, Any] = {
-        "code": result.code,
-        "resolution": _resolution(result),
-        "status": result.status,
-        "acquisition": result.acquisition,
-        "verification": result.verification,
-        "age_ms": result.age_ms,
-        "vision_latency_ms": result.vision_latency_ms,
-        "strategy": result.strategy,
-    }
-    if result.answer is not None:
-        fields["answer"] = result.answer
-    if result.error_type is not None:
-        fields["error_type"] = result.error_type
-    if result.source == "screen":
-        fields["screen"] = result.subject_id
-    fields.update(extra)
-    return fields
 
 
 class PerceptionContext:
@@ -162,33 +148,21 @@ class PerceptionContext:
             presenter=meeting.presenter if meeting is not None else None,
         )
 
-    async def look_at_screen(self, screen: str, question: str) -> Look:
+    async def look_at_screen(self, screen: str, question: str) -> EvidenceResult:
         segment = resolve_screen(self.timeline.snapshot(), screen)
         if segment is None:
-            return Look(
-                _unavailable("screen", screen, "unknown_screen"),
-                {"code": "unknown_screen", "screen": screen, "resolution": "unavailable"},
-            )
+            return _unavailable("screen", screen, "unknown_screen")
         reading = segment.reading
         if reading is None or not reading.is_meeting_content:
-            payload: dict[str, Any] = {
-                "code": "not_meeting_content",
-                "screen": segment.ref,
-                "resolution": "unavailable",
-            }
-            if reading is not None:
-                payload["title"] = reading.title
-            return Look(_unavailable("screen", segment.ref, "not_meeting_content"), payload)
+            return _unavailable(
+                "screen",
+                segment.ref,
+                "not_meeting_content",
+                subject_label=reading.title if reading is not None else None,
+            )
         data = self.timeline.keyframes.get(segment.keyframe.sha256)
         if data is None:
-            return Look(
-                _unavailable("screen", segment.ref, "frame_unavailable"),
-                {
-                    "code": "frame_unavailable",
-                    "screen": segment.ref,
-                    "resolution": "unavailable",
-                },
-            )
+            return _unavailable("screen", segment.ref, "frame_unavailable")
         return await self._look(
             data,
             question,
@@ -218,37 +192,16 @@ class PerceptionContext:
         ]
         return {"code": "ok", "lines": lines[-limit:]}
 
-    async def look_at_participant(self, participant: str, question: str) -> Look:
+    async def look_at_participant(self, participant: str, question: str) -> EvidenceResult:
         person = resolve_participant(self.timeline.snapshot(), participant)
         if person is None:
-            return Look(
-                _unavailable("camera", participant, "unknown_participant"),
-                {
-                    "code": "unknown_participant",
-                    "participant": participant,
-                    "resolution": "unavailable",
-                },
-            )
+            return _unavailable("camera", participant, "unknown_participant")
         if self.interpreter is None:
-            return Look(
-                _failed(None, person.ref, "budget_exhausted", "targeted_vision"),
-                {
-                    "code": "budget_exhausted",
-                    "participant": person.ref,
-                    "resolution": "unavailable",
-                },
-            )
+            return _unavailable("camera", person.ref, "budget_exhausted")
         frame = self.timeline.camera_frames.get(person.participant_id)
         if frame is None:
             self.interpreter.invalidate_answers(person.participant_id)
-            return Look(
-                _unavailable("camera", person.ref, "camera_unavailable"),
-                {
-                    "code": "camera_unavailable",
-                    "participant": person.ref,
-                    "resolution": "unavailable",
-                },
-            )
+            return _unavailable("camera", person.ref, "camera_unavailable")
         meeting = self._state() if self._state is not None else None
         camera_on = meeting.cameras_on if meeting is not None else None
         live = (
@@ -258,14 +211,7 @@ class PerceptionContext:
         )
         if not live:
             self.interpreter.invalidate_answers(person.participant_id)
-            return Look(
-                _unavailable("camera", person.ref, "camera_unavailable"),
-                {
-                    "code": "camera_unavailable",
-                    "participant": person.ref,
-                    "resolution": "unavailable",
-                },
-            )
+            return _unavailable("camera", person.ref, "camera_unavailable")
         try:
             async with asyncio.timeout(LOOK_TIMEOUT_SECONDS):
                 result = await self.interpreter.camera_answer(
@@ -277,63 +223,28 @@ class PerceptionContext:
                 )
         except TimeoutError:
             self.interpreter.invalidate_answers(person.participant_id)
-            return Look(
-                _failed(
-                    frame.ref,
-                    person.ref,
-                    "look_failed",
-                    "targeted_vision",
-                    error_type="TimeoutError",
-                ),
-                {
-                    "code": "look_failed",
-                    "error_type": "TimeoutError",
-                    "participant": person.ref,
-                    "resolution": "unavailable",
-                    "strategy": "targeted_vision",
-                },
+            return _failed(
+                frame.ref,
+                person.ref,
+                "look_failed",
+                "targeted_vision",
+                error_type="TimeoutError",
             )
         except (ProviderFault, FakeYouError, OSError) as error:
             self.interpreter.invalidate_answers(person.participant_id)
-            return Look(
-                _failed(
-                    frame.ref,
-                    person.ref,
-                    "look_failed",
-                    "targeted_vision",
-                    error_type=type(error).__name__,
-                ),
-                {
-                    "code": "look_failed",
-                    "error_type": type(error).__name__,
-                    "participant": person.ref,
-                    "resolution": "unavailable",
-                    "strategy": "targeted_vision",
-                },
+            return _failed(
+                frame.ref,
+                person.ref,
+                "look_failed",
+                "targeted_vision",
+                error_type=type(error).__name__,
             )
         except StaleEvidence:
             self.interpreter.invalidate_answers(person.participant_id)
-            return Look(
-                _unavailable("camera", person.ref, "camera_unavailable"),
-                {
-                    "code": "camera_unavailable",
-                    "participant": person.ref,
-                    "resolution": "unavailable",
-                    "strategy": "targeted_vision",
-                },
+            return _unavailable(
+                "camera", person.ref, "camera_unavailable", strategy="targeted_vision"
             )
-        return Look(
-            result,
-            {
-                "code": "ok",
-                "answer": result.answer,
-                "participant": person.ref,
-                "resolution": _resolution(result),
-                "age_ms": result.age_ms,
-                "vision_latency_ms": result.vision_latency_ms,
-                "strategy": "targeted_vision",
-            },
-        )
+        return result
 
     async def _look(
         self,
@@ -343,69 +254,37 @@ class PerceptionContext:
         source: str,
         subject_id: str,
         ref: SnapshotRef,
-    ) -> Look:
+    ) -> EvidenceResult:
         if self.interpreter is None:
-            return Look(
-                _failed(ref, subject_id, "budget_exhausted", "screen_reading"),
-                {
-                    "code": "budget_exhausted",
-                    "screen": subject_id,
-                    "resolution": "unavailable",
-                },
-            )
+            return _unavailable("screen", subject_id, "budget_exhausted")
         started = time.monotonic()
         try:
             async with asyncio.timeout(LOOK_TIMEOUT_SECONDS):
                 answer = await self.interpreter.answer(data, question, source=source)
         except (ProviderFault, FakeYouError, OSError, TimeoutError) as error:
-            return Look(
-                _failed(
-                    ref,
-                    subject_id,
-                    "look_failed",
-                    "screen_reading",
-                    error_type=type(error).__name__,
-                ),
-                {
-                    "code": "look_failed",
-                    "error_type": type(error).__name__,
-                    "screen": subject_id,
-                    "resolution": "unavailable",
-                },
+            return _failed(
+                ref,
+                subject_id,
+                "look_failed",
+                "screen_reading",
+                error_type=type(error).__name__,
             )
         if answer is None:
-            return Look(
-                _failed(ref, subject_id, "budget_exhausted", "screen_reading"),
-                {
-                    "code": "budget_exhausted",
-                    "screen": subject_id,
-                    "resolution": "unavailable",
-                },
-            )
+            return _unavailable("screen", subject_id, "budget_exhausted")
         vision_latency_ms = round((time.monotonic() - started) * 1000)
-        return Look(
-            EvidenceResult(
-                source="screen",
-                subject_id=subject_id,
-                snapshot=ref,
-                acquisition="inference",
-                status="supported",
-                verification="unverified",
-                strategy="screen_reading",
-                code="ok",
-                answer=answer,
-                observed_at=ref.captured_at,
-                age_ms=0,
-                vision_latency_ms=vision_latency_ms,
-            ),
-            {
-                "code": "ok",
-                "answer": answer,
-                "screen": subject_id,
-                "resolution": "fresh",
-                "age_ms": 0,
-                "vision_latency_ms": vision_latency_ms,
-            },
+        return EvidenceResult(
+            source="screen",
+            subject_id=subject_id,
+            snapshot=ref,
+            acquisition="inference",
+            status="produced",
+            verification="unverified",
+            strategy="screen_reading",
+            code="ok",
+            answer=answer,
+            observed_at=ref.captured_at,
+            age_ms=0,
+            vision_latency_ms=vision_latency_ms,
         )
 
 
@@ -431,21 +310,14 @@ def _sole_participant(snapshot: TimelineSnapshot) -> str | None:
     return people[0].ref if len(people) == 1 else None
 
 
-async def _look_for(context: PerceptionContext, need: str, question: str) -> Look | None:
+async def _look_for(context: PerceptionContext, need: str, question: str) -> EvidenceResult | None:
     if need == "screen":
         return await context.look_at_screen("current", question)
     if need == "participant":
         snapshot = context.timeline.snapshot()
         target = _mentioned(snapshot, question) or _sole_participant(snapshot)
         if target is None:
-            return Look(
-                _unavailable("camera", "", "unknown_participant"),
-                {
-                    "code": "unknown_participant",
-                    "participant": "",
-                    "resolution": "unavailable",
-                },
-            )
+            return _unavailable("camera", "", "unknown_participant")
         return await context.look_at_participant(target, question)
     return None
 
@@ -461,8 +333,8 @@ async def gather_evidence(
         if look is None:
             payloads[need] = context.backlog_chat()
             continue
-        payloads[need] = look.payload
-        results[need] = look.result
+        payloads[need] = evidence_payload(look)
+        results[need] = look
     return payloads, results
 
 
@@ -483,18 +355,25 @@ class MeetingEvidence:
                 codes=[str(payload["code"]) for payload in payloads.values()],
             )
             for need, result in results.items():
+                fields: dict[str, Any] = {
+                    "transcript_id": transcript_id or "",
+                    "evidence_kind": need,
+                    "resolution": evidence_resolution(result),
+                    "status": result.status,
+                    "acquisition": result.acquisition,
+                    "verification": result.verification,
+                    "strategy": result.strategy or "none",
+                    "age_ms": result.age_ms,
+                    "vision_latency_ms": result.vision_latency_ms,
+                    "observed_at": result.observed_at.isoformat(),
+                }
+                if result.snapshot is not None:
+                    fields["snapshot_id"] = result.snapshot.correlation_id
+                    fields["captured_at"] = result.snapshot.captured_at.isoformat()
                 self._journal.record(
                     "perception_evidence_resolved",
                     source="perception",
-                    transcript_id=transcript_id or "",
-                    evidence_kind=need,
-                    resolution=_resolution(result),
-                    status=result.status,
-                    acquisition=result.acquisition,
-                    verification=result.verification,
-                    strategy=result.strategy,
-                    age_ms=result.age_ms,
-                    vision_latency_ms=result.vision_latency_ms,
+                    **fields,
                 )
         return payloads
 
