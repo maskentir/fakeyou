@@ -995,16 +995,20 @@ The inspector calls the model with `with_structured_output(VisualInspection)` an
 
 `perception_evidence_resolved` gains a `status` field carrying `supported`, `insufficient` or `unavailable`, and the reply layer reads the verdict instead of judging the answer text.
 
-## Phase 4 — One report contract with an isolated legacy adapter
+## Phase 4 — Canonical reporting architecture cleanup
 
-**Release condition:** the reporting path has no version branch, and every published historical scorecard stays identical.
+**Release condition:** one report contract, one scorecard path, no version branch, and the historical benchmark kept as an artefact rather than as runtime logic.
+
+**Scope decided after the review of the evidence contract.** Fakeyou is in development, so backward compatibility is not an automatic requirement. The legacy report evaluator, the `evidence_resolution_v2` branching and the journal compatibility markers are removed rather than maintained. Historical benchmark results are archived as static fixtures so a later change can be compared against them, and the existing tests are updated to the new contract.
 
 **Files:**
-- Create: `src/fakeyou/observability/legacy_report.py`
 - Modify: `src/fakeyou/observability/report_contract.py`
 - Modify: `src/fakeyou/observability/journal.py`
 - Modify: `src/fakeyou/observability/scorecard.py`
 - Test: `tests/test_scorecard_contract.py`
+- Archive: `docs/reports/`
+
+**Not built:** a legacy journal adapter, a migration framework, or a compatibility shim for the old scorecard. If a consumer turns up that needs one, the boundary is defined then, not now.
 
 ### Task 4.1: Record the session contract once
 
@@ -1122,6 +1126,26 @@ git commit -m "test(evals): measure grounded answers, latency and vision cost"
 ```
 
 ---
+
+## Development stage policy
+
+The review of the evidence contract settled a policy that changes how the remaining phases are built.
+
+Backward compatibility is a product requirement, not an automatic engineering requirement. We keep compatibility because there are users, integrations or data to protect, not because deleting old code is frightening.
+
+| Area | Decision |
+| --- | --- |
+| Legacy report evaluator v1 and v2 | Removed |
+| `evidence_resolution_v2` branching | Removed |
+| Legacy journal adapter | Not built |
+| Old scorecard compatibility | Not required |
+| Canonical evidence contract | One implementation that is current |
+| Historical benchmark results | Kept as artefacts, not as runtime logic |
+| Existing unit and integration tests | Updated to the new contract |
+| Simulator cassettes | May be updated, with a correct replay validation |
+| Schema versioning | Minimal where data is persisted or crosses a process |
+
+Three things are never traded away: a breaking change may never hide a regression, the ability to compare quality before and after a change survives as static artefacts, and a public repository means persisted formats and public APIs are checked for consumers before they are removed.
 
 ## Risks carried into the next phase
 
