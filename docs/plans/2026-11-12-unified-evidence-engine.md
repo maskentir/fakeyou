@@ -964,36 +964,26 @@ git add src tests
 git commit -m "refactor(perception): answer camera questions with one question-aware inspection"
 ```
 
-## Phase 3b — Structured inspection verdict
+## Phase 3b-A — Offline verdict contract and evaluation harness
 
-**Release condition:** the vision model returns a verdict (`supported`, `not_visible`, `unclear`) instead of free text, and the perception layer reports that verdict without reading the answer text.
+Runs after Phase 4 is merged. Define `VisualInspection.verdict` as `supported`,
+`not_visible`, or `unclear`, separately from acquisition/status telemetry. Build a
+controlled image dataset with expected answers and evidence annotations, independent
+of the evaluated model. Deterministic scoring measures answer correctness, grounding,
+false claims, and abstention; a model's `supported` verdict never supplies ground truth.
 
-**Blocked by:** the meeting simulator replays recorded provider responses. The recorded camera response is free text for the targeted camera prompt, so a structured request would replay a response that cannot be parsed and the turn would fail. This phase needs the simulator cassettes re-recorded against the live provider, which needs provider credentials.
+The standalone contract, synthetic dataset, fake-model tests, metric denominators,
+limitations, and acquisition-activity semantics are described in
+[`2026-11-14-offline-visual-evaluation.md`](2026-11-14-offline-visual-evaluation.md).
+This work needs no provider credentials and changes no production prompt or cassette.
 
-**Files:**
-- Create: `src/fakeyou/perception/inspector.py`
-- Modify: `src/fakeyou/perception/interpreter.py`
-- Modify: `src/fakeyou/observability/journal.py`
-- Test: `tests/test_inspector.py`
+## Phase 3b-B — Provider integration
 
-### Task 3b.1: Define the verdict model
-
-```python
-class VisualInspection(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    status: Literal["supported", "not_visible", "unclear"]
-    answer: str | None = None
-    observed_facts: list[str] = field(default_factory=list)
-```
-
-### Task 3b.2: Inspect with the verdict schema
-
-The inspector calls the model with `with_structured_output(VisualInspection)` and the same targeted prompt, so the answer stays comparable with the recorded cassette once the cassette is re-recorded.
-
-### Task 3b.3: Report the verdict
-
-`perception_evidence_resolved` gains a `status` field carrying `supported`, `insufficient` or `unavailable`, and the reply layer reads the verdict instead of judging the answer text.
+After credentials are available, integrate the verdict contract with an actual vision
+model, validate provider structured output, measure parsing failures, and re-record
+cassettes from valid provider interactions. Keep model verdicts separate from independent
+evaluation labels and from `EvidenceResult.status` (`produced`, `insufficient`, `unavailable`).
+Do not infer production vision quality from successful fake-model tests.
 
 ## Phase 4 — Canonical reporting architecture cleanup
 
