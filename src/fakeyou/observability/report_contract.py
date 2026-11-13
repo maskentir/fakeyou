@@ -162,35 +162,55 @@ def _evidence_observations(
     rows: list[dict[str, Any]],
 ) -> dict[str, list[tuple[str, str, str]]]:
     observations: dict[str, list[tuple[str, str, str]]] = {}
+    attempts: dict[str, object] = {}
     for row in rows:
+        transcript_id = row.get("transcript_id")
+        if not isinstance(transcript_id, str) or not transcript_id:
+            continue
+        if row.get("event") == "perception_evidence_started":
+            attempt = row.get("attempt_id")
+            previous = attempts.get(transcript_id)
+            attempts[transcript_id] = attempt
+            observations[transcript_id] = []
+            if not isinstance(attempt, str) or not attempt or attempt == previous:
+                observations[transcript_id].append(("invalid_attempt", "", ""))
         if row.get("event") != "perception_evidence_resolved":
             continue
-        transcript_id = row.get("transcript_id")
         kind = row.get("evidence_kind")
-        if isinstance(transcript_id, str) and transcript_id and isinstance(kind, str):
-            observations.setdefault(transcript_id, []).append(
-                (kind, str(row.get("acquisition")), str(row.get("status")))
-            )
+        if transcript_id not in attempts or row.get("attempt_id") != attempts[transcript_id]:
+            kind = "invalid_attempt"
+        observations.setdefault(transcript_id, []).append(
+            (str(kind), str(row.get("acquisition")), str(row.get("status")))
+        )
     return observations
 
 
 def _classify(turn: _Turn, observations: dict[str, list[tuple[str, str, str]]]) -> str:
     visual_requested = [need for need in turn.evidence if need in VISUAL_NEEDS]
-    seen = [
-        (acquisition, status)
-        for kind, acquisition, status in observations.get(turn.transcript_id, [])
-        if kind in VISUAL_NEEDS
-    ]
+    events = observations.get(turn.transcript_id, [])
+    counts = Counter(kind for kind, _, _ in events)
+    if any(counts[need] != 1 for need in visual_requested) or any(
+        count > 1 for count in counts.values()
+    ):
+        return "unclassified"
+    classified_states = {
+        ("inference", "produced"),
+        ("reused", "produced"),
+        ("inference", "unavailable"),
+        ("not_attempted", "unavailable"),
+    }
+    if any(
+        kind not in VISUAL_NEEDS or (acquisition, status) not in classified_states
+        for kind, acquisition, status in events
+    ):
+        return "unclassified"
+    seen = [(acquisition, status) for _, acquisition, status in events]
     if any(acquisition == "inference" and status == "produced" for acquisition, status in seen):
         return "visual_fresh"
     if any(acquisition == "reused" for acquisition, _ in seen):
         return "visual_cached"
     if seen and all(status == "unavailable" for _, status in seen):
         return "visual_unavailable"
-    if visual_requested and len(seen) < len(visual_requested):
-        return "unclassified"
-    if visual_requested and not seen:
-        return "unclassified"
     return "no_visual"
 
 

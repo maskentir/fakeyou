@@ -1,10 +1,12 @@
 {
  "archived_on": "2026-11-14",
+ "artifact_type": "archived metric snapshot",
+ "scope": "Selected per-session metrics and live observations, not complete scorecard copies. Null values are retained as archived; omitted metrics and evaluator markers cannot be recovered from this snapshot.",
  "baseline": {
   "branch": "main",
   "commit": "bb34875e081eedfb03aad891f816705870fab7bd",
-  "scorecard_contract": "canonical evidence contract, per path gates",
-  "scorecard_contract_version": 4
+  "scorecard_contract": "historical resolution-based evaluator with journal-marker-dependent path gates",
+  "scorecard_contract_version": 3
  },
  "configuration": {
   "perception": {
@@ -62,7 +64,7 @@
      "max": 20.0
     }
    },
-   "version": 4
+   "version": 3
   }
  },
  "environment": {
@@ -218,15 +220,19 @@
  "metric_definitions": {
   "admission_to_listening_seconds": "seconds from admission to the listening phase",
   "answer_audio_coverage": "share of expected answers that produced audio",
-  "attribution_coverage": "share of spoken turns attributed to a participant",
-  "evidence_cache": "the reuse rate of the visual evidence cache",
-  "evidence_provenance": "the acquisition, status and verification counts of the evidence the turns used",
-  "first_answer_audio_p50_no_visual_seconds": "the answer latency gate for turns with no visual evidence",
+  "attribution_coverage": "attributed utterances divided by recorded utterances, rounded to three decimals; null when no utterances were recorded",
+  "evidence_cache": "historical resolution-based hits / (hits + misses): cache_hit counted as a hit, fresh as a miss; unavailable excluded",
+  "first_answer_audio_p50_no_visual_seconds": "median answer latency for the historical no_visual group; gated only when evidence_paths was true",
   "first_answer_audio_p50_seconds": "median seconds from the end of speech to the first audio of the answer",
-  "first_answer_audio_p50_visual_cached_seconds": "the answer latency gate for turns served from cached visual evidence",
+  "first_answer_audio_p50_visual_cached_seconds": "median answer latency for the historical visual_cached group, including the legacy screen-request fallback; gated only when evidence_paths was true",
   "first_answer_audio_p95_seconds": "p95 of the same measurement",
   "first_audio_p50_seconds": "median seconds from the end of speech to the first audio of the turn",
   "first_audio_p95_seconds": "p95 of the same measurement"
  },
- "note": "Baseline frozen before the canonical reporting cleanup. The scorecard numbers are kept as a reference to compare against, not as an oracle for the new evaluator: the metric semantics change when the evidence contract changes. The legacy evaluator that produced these numbers is removed, so recomputing them means checking out the baseline commit."
+ "historical_evaluator": {
+  "path_classification": "Used resolution, not acquisition/status. Without evidence_resolution_v2, the last recognized fresh/cache_hit event selected the path; absent such an event, a screen request fell back to visual_cached, all other turns to no_visual. With evidence_resolution_v2, fresh took precedence over cache_hit, then all-unavailable, then count-based missing telemetry detection; partial telemetry could be hidden by successful evidence.",
+  "scorecard_gating": "session_targets.json was version 3. Path gates required evidence_paths=true; without that marker the evaluator omitted path gates and returned scorecard version 2. evidence_classification was unscored only when evidence_resolution_v2=true and evidence_unclassified was nonzero.",
+  "comparison_limits": "The snapshot does not retain per-session journal markers or full scorecards, so it cannot establish the effective scorecard version or path algorithm used for every session. The canonical acquisition/status-based evaluator and evidence_provenance report were introduced after this baseline."
+ },
+ "note": "Archived metric snapshot frozen before Phase 4 reporting cleanup. Selected numbers are references, not complete scorecards or golden outputs for the canonical evaluator. Null does not mean zero or passed. Metric and classification semantics differ; numeric changes alone do not establish a performance improvement. Recomputing historical results requires the baseline commit and original session inputs."
 }

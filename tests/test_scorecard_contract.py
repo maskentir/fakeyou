@@ -173,6 +173,7 @@ def test_journals_without_the_answer_boundary_leave_the_new_gates_unscored() -> 
 
 def test_evidence_paths_are_scored_and_reported_per_path() -> None:
     rows = session()
+    rows.append(row(11.9, "perception_evidence_started", transcript_id="t1", attempt_id="a1"))
     rows.append(
         row(
             12,
@@ -180,6 +181,7 @@ def test_evidence_paths_are_scored_and_reported_per_path() -> None:
             source="perception",
             transcript_id="t1",
             evidence_kind="participant",
+            attempt_id="a1",
             acquisition="reused",
             status="produced",
             verification="unverified",
@@ -250,6 +252,7 @@ def test_a_no_visual_session_passes_without_visual_cached_answers() -> None:
 
 def test_a_visual_cached_session_passes_without_no_visual_answers() -> None:
     rows = fast_session(evidence=("screen",))
+    rows.append(row(11.9, "perception_evidence_started", transcript_id="t1", attempt_id="a1"))
     rows.append(
         row(
             12,
@@ -257,6 +260,7 @@ def test_a_visual_cached_session_passes_without_no_visual_answers() -> None:
             source="perception",
             transcript_id="t1",
             evidence_kind="screen",
+            attempt_id="a1",
             acquisition="reused",
             status="produced",
             verification="unverified",
@@ -293,6 +297,7 @@ def test_an_expected_answer_without_measured_audio_cannot_pass() -> None:
 
 def test_a_session_without_expected_answers_in_gated_paths_follows_global_gates() -> None:
     rows = fast_session(evidence=("participant",))
+    rows.append(row(11.9, "perception_evidence_started", transcript_id="t1", attempt_id="a1"))
     rows.append(
         row(
             12,
@@ -300,6 +305,7 @@ def test_a_session_without_expected_answers_in_gated_paths_follows_global_gates(
             source="perception",
             transcript_id="t1",
             evidence_kind="participant",
+            attempt_id="a1",
             acquisition="inference",
             status="produced",
             verification="unverified",
@@ -467,6 +473,7 @@ def canonical_session(
         row(11.0, "thinking_cue_audio_started", transcript_id="t1"),
         row(11.5, "reply_plan_observed", transcript_id="t1", intent="answer"),
         row(11.5, "agent_finished", request_id="t1:1"),
+        row(11.9, "perception_evidence_started", transcript_id="t1", attempt_id="a1"),
     ]
     for index, (kind, acquisition, status) in enumerate(observations):
         rows.append(
@@ -476,6 +483,7 @@ def canonical_session(
                 source="perception",
                 transcript_id="t1",
                 evidence_kind=kind,
+                attempt_id="a1",
                 acquisition=acquisition,
                 status=status,
                 verification="unverified",
@@ -593,6 +601,111 @@ def test_visual_requested_without_telemetry_is_unclassified() -> None:
     assert card["passed"] is False
 
 
+@pytest.mark.parametrize(
+    "observations",
+    [
+        (("screen", "inference", "produced"),),
+        (("screen", "reused", "produced"),),
+        (("screen", "not_attempted", "unavailable"),),
+        (("screen", "inference", "produced"), ("screen", "inference", "produced")),
+        (
+            ("screen", "inference", "produced"),
+            ("screen", "reused", "produced"),
+            ("participant", "reused", "produced"),
+        ),
+    ],
+    ids=["partial-fresh", "partial-cached", "partial-unavailable", "wrong-kind", "duplicate"],
+)
+def test_incomplete_or_duplicate_visual_telemetry_is_unclassified(
+    observations: tuple[tuple[str, str, str], ...],
+) -> None:
+    report = build_session_report(
+        canonical_session(evidence=("screen", "participant"), observations=observations)
+    )
+    assert report["evidence_unclassified"] == 1
+    assert all(
+        group["expected_answers"] == 0 for group in report["latency_by_evidence_path"].values()
+    )
+    card = score_session(report)
+    assert "evidence_classification" in card["unscored"]
+    assert card["passed"] is False
+
+
+@pytest.mark.parametrize(
+    ("acquisition", "status"),
+    [
+        ("unknown", "produced"),
+        ("unknown", "unavailable"),
+        ("reused", "unknown"),
+        ("inference", "unknown"),
+        ("not_attempted", "produced"),
+        ("reused", "unavailable"),
+        ("inference", "insufficient"),
+        ("reused", "insufficient"),
+        ("not_attempted", "insufficient"),
+    ],
+)
+@pytest.mark.parametrize("other_acquisition", [None, "inference", "reused"])
+def test_invalid_visual_telemetry_cannot_be_hidden_by_successful_evidence(
+    acquisition: str, status: str, other_acquisition: str | None
+) -> None:
+    observations: tuple[tuple[str, str, str], ...] = (("participant", acquisition, status),)
+    evidence: tuple[str, ...] = ("participant",)
+    if other_acquisition is not None:
+        observations += (("screen", other_acquisition, "produced"),)
+        evidence += ("screen",)
+    report = build_session_report(canonical_session(evidence=evidence, observations=observations))
+    assert report["evidence_unclassified"] == 1
+    assert score_session(report)["passed"] is False
+
+
+@pytest.mark.parametrize("field", ["evidence_kind", "acquisition", "status"])
+@pytest.mark.parametrize("value", [None, "", "unknown"])
+def test_malformed_telemetry_is_not_discarded_before_classification(
+    field: str, value: str | None
+) -> None:
+    rows = canonical_session(
+        evidence=("screen", "participant"),
+        observations=(
+            ("screen", "inference", "produced"),
+            ("participant", "reused", "produced"),
+        ),
+    )
+    event = next(entry for entry in rows if entry.get("evidence_kind") == "participant")
+    if value is None:
+        del event[field]
+    else:
+        event[field] = value
+    report = build_session_report(rows)
+    assert report["evidence_unclassified"] == 1
+    assert score_session(report)["passed"] is False
+
+
+@pytest.mark.parametrize(
+    ("acquisition", "status", "expected_path"),
+    [
+        ("inference", "produced", "visual_fresh"),
+        ("reused", "produced", "visual_cached"),
+        ("inference", "unavailable", "visual_unavailable"),
+        ("not_attempted", "unavailable", "visual_unavailable"),
+    ],
+)
+def test_valid_visual_telemetry_preserves_path_priority(
+    acquisition: str, status: str, expected_path: str
+) -> None:
+    report = build_session_report(
+        canonical_session(
+            evidence=("screen", "participant"),
+            observations=(
+                ("screen", acquisition, status),
+                ("participant", "inference", "unavailable"),
+            ),
+        )
+    )
+    assert report["evidence_unclassified"] == 0
+    assert path_of(report) == expected_path
+
+
 def test_the_report_keeps_the_provenance_of_the_evidence_it_read() -> None:
     report = build_session_report(
         canonical_session(
@@ -602,6 +715,57 @@ def test_the_report_keeps_the_provenance_of_the_evidence_it_read() -> None:
     assert report["evidence_provenance"]["acquisition"] == {"reused": 1}
     assert report["evidence_provenance"]["status"] == {"produced": 1}
     assert report["evidence_provenance"]["verification"] == {"unverified": 1}
+
+
+@pytest.mark.parametrize("missing", ["start", "result-id", "both-ids", "start-and-result-id"])
+def test_orphan_or_unidentified_evidence_is_unclassified(missing: str) -> None:
+    rows = canonical_session(
+        evidence=("screen",), observations=(("screen", "inference", "produced"),)
+    )
+    if missing in {"start", "start-and-result-id"}:
+        rows = [entry for entry in rows if entry["event"] != "perception_evidence_started"]
+    for entry in rows:
+        if entry["event"] == "perception_evidence_resolved" and missing != "start":
+            del entry["attempt_id"]
+        if entry["event"] == "perception_evidence_started" and missing == "both-ids":
+            del entry["attempt_id"]
+    assert build_session_report(rows)["evidence_unclassified"] == 1
+
+
+@pytest.mark.parametrize("latest", ["complete", "empty", "missing", "duplicate", "wrong-attempt"])
+def test_retry_classification_uses_only_the_explicit_latest_evidence_attempt(latest: str) -> None:
+    rows = canonical_session(
+        evidence=("screen", "participant"),
+        observations=(
+            ("screen", "inference", "produced"),
+            ("participant", "inference", "produced"),
+        ),
+    )
+    rows.insert(-1, row(21, "perception_evidence_started", transcript_id="t1", attempt_id="a2"))
+    kinds: tuple[str, ...] = ("screen", "participant") if latest != "missing" else ("screen",)
+    if latest == "empty":
+        kinds = ()
+    if latest == "duplicate":
+        kinds += ("screen",)
+    for kind in kinds:
+        rows.insert(
+            -1,
+            row(
+                22,
+                "perception_evidence_resolved",
+                transcript_id="t1",
+                attempt_id="a1" if latest == "wrong-attempt" else "a2",
+                evidence_kind=kind,
+                acquisition="reused",
+                status="produced",
+            ),
+        )
+    report = build_session_report(rows)
+    if latest == "complete":
+        assert report["evidence_unclassified"] == 0
+        assert path_of(report) == "visual_cached"
+    else:
+        assert report["evidence_unclassified"] == 1
 
 
 def test_an_unclassified_turn_still_counts_in_global_coverage() -> None:

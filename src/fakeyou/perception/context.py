@@ -357,6 +357,13 @@ class MeetingEvidence:
     async def __call__(
         self, question: str, needs: tuple[str, ...], transcript_id: str | None = None
     ) -> dict[str, Any]:
+        attempt_id = uuid4().hex
+        self._journal.record(
+            "perception_evidence_started",
+            source="perception",
+            transcript_id=transcript_id or "",
+            attempt_id=attempt_id,
+        )
         payloads, results = await gather_evidence(self._context, question, needs)
         if payloads:
             self._journal.record(
@@ -368,6 +375,7 @@ class MeetingEvidence:
             for need, result in results.items():
                 fields: dict[str, Any] = {
                     "transcript_id": transcript_id or "",
+                    "attempt_id": attempt_id,
                     "evidence_kind": need,
                     "resolution": evidence_resolution(result),
                     "status": result.status,
