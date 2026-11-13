@@ -1,0 +1,232 @@
+{
+ "archived_on": "2026-11-14",
+ "baseline": {
+  "branch": "main",
+  "commit": "bb34875e081eedfb03aad891f816705870fab7bd",
+  "scorecard_contract": "canonical evidence contract, per path gates",
+  "scorecard_contract_version": 4
+ },
+ "configuration": {
+  "perception": {
+   "camera_cache_ttl_seconds": 60.0,
+   "camera_liveness_timeout_seconds": 10.0,
+   "camera_refresh_ms": 120000,
+   "camera_sampling_ms": 4000,
+   "look_timeout_seconds": 6.0
+  },
+  "session_targets": {
+   "metrics": {
+    "admission_to_listening_seconds": {
+     "max": 5.0
+    },
+    "answer_audio_coverage": {
+     "min": 1.0
+    },
+    "attribution_coverage": {
+     "min": 0.9
+    },
+    "faults_per_hour": {
+     "max": 6.0
+    },
+    "first_answer_audio_p50_no_visual_seconds": {
+     "max": 3.5
+    },
+    "first_answer_audio_p50_seconds": {
+     "max": 3.5
+    },
+    "first_answer_audio_p50_visual_cached_seconds": {
+     "max": 3.5
+    },
+    "first_answer_audio_p95_no_visual_seconds": {
+     "max": 6.5
+    },
+    "first_answer_audio_p95_seconds": {
+     "max": 6.5
+    },
+    "first_answer_audio_p95_visual_cached_seconds": {
+     "max": 6.5
+    },
+    "first_audio_p50_seconds": {
+     "max": 3.5
+    },
+    "first_audio_p95_seconds": {
+     "max": 6.5
+    },
+    "session_completed": {
+     "min": 1.0
+    },
+    "unnecessary_question_rate": {
+     "max": 0.1
+    },
+    "watchdog_failures_per_hour": {
+     "max": 20.0
+    }
+   },
+   "version": 4
+  }
+ },
+ "environment": {
+  "platform": "linux, meeting worker container",
+  "python": "3.12",
+  "uv_lock_sha256": "264901ee07917460a700b6e821c6b84418ed863ae9e4fbfb3377584872b0f92e"
+ },
+ "live_observations": {
+  "rustfs-live-22": {
+   "admission_to_listening_seconds": 4.03,
+   "attribution_coverage": 1.0,
+   "faults_per_hour": 6.871,
+   "first_audio_p50_seconds": 8.245,
+   "first_audio_p95_seconds": 9.693,
+   "note": "the answer that needed a camera evidence cost 7 to 8 seconds, the vision call 3.1 to 4.6 seconds",
+   "trailing_question_rate": 0.167
+  },
+  "rustfs-live-38": {
+   "answer_audio_coverage": 1.0,
+   "first_answer_audio_p50_seconds": 7.71,
+   "first_audio_p50_seconds": 2.03,
+   "note": "a fresh vision inference costs 3 to 4.6 seconds, which is what holds the answer gate"
+  }
+ },
+ "measured": {
+  "rustfs-live-1": {
+   "admission_to_listening_seconds": null,
+   "attribution_coverage": null,
+   "first_audio_p50_seconds": null,
+   "first_audio_p95_seconds": null
+  },
+  "rustfs-live-10": {
+   "admission_to_listening_seconds": 2.619,
+   "attribution_coverage": 1.0,
+   "first_audio_p50_seconds": 6.095,
+   "first_audio_p95_seconds": 15.108
+  },
+  "rustfs-live-11": {
+   "admission_to_listening_seconds": null,
+   "attribution_coverage": null,
+   "first_audio_p50_seconds": null,
+   "first_audio_p95_seconds": null
+  },
+  "rustfs-live-12": {
+   "admission_to_listening_seconds": null,
+   "attribution_coverage": null,
+   "first_audio_p50_seconds": null,
+   "first_audio_p95_seconds": null
+  },
+  "rustfs-live-13": {
+   "admission_to_listening_seconds": null,
+   "attribution_coverage": null,
+   "first_audio_p50_seconds": null,
+   "first_audio_p95_seconds": null
+  },
+  "rustfs-live-14": {
+   "admission_to_listening_seconds": null,
+   "attribution_coverage": 0.444,
+   "first_audio_p50_seconds": null,
+   "first_audio_p95_seconds": null
+  },
+  "rustfs-live-15": {
+   "admission_to_listening_seconds": null,
+   "attribution_coverage": 0.0,
+   "first_audio_p50_seconds": null,
+   "first_audio_p95_seconds": null
+  },
+  "rustfs-live-16": {
+   "admission_to_listening_seconds": null,
+   "attribution_coverage": null,
+   "first_audio_p50_seconds": null,
+   "first_audio_p95_seconds": null
+  },
+  "rustfs-live-17": {
+   "admission_to_listening_seconds": 62.249,
+   "attribution_coverage": 0.0,
+   "first_audio_p50_seconds": null,
+   "first_audio_p95_seconds": null
+  },
+  "rustfs-live-18": {
+   "admission_to_listening_seconds": null,
+   "attribution_coverage": null,
+   "first_audio_p50_seconds": null,
+   "first_audio_p95_seconds": null
+  },
+  "rustfs-live-19": {
+   "admission_to_listening_seconds": null,
+   "attribution_coverage": null,
+   "first_audio_p50_seconds": null,
+   "first_audio_p95_seconds": null
+  },
+  "rustfs-live-2": {
+   "admission_to_listening_seconds": null,
+   "attribution_coverage": null,
+   "first_audio_p50_seconds": null,
+   "first_audio_p95_seconds": null
+  },
+  "rustfs-live-20": {
+   "admission_to_listening_seconds": null,
+   "attribution_coverage": null,
+   "first_audio_p50_seconds": null,
+   "first_audio_p95_seconds": null
+  },
+  "rustfs-live-21": {
+   "admission_to_listening_seconds": null,
+   "attribution_coverage": null,
+   "first_audio_p50_seconds": null,
+   "first_audio_p95_seconds": null
+  },
+  "rustfs-live-22": {
+   "admission_to_listening_seconds": 4.028,
+   "attribution_coverage": 1.0,
+   "first_audio_p50_seconds": 8.245,
+   "first_audio_p95_seconds": 9.693
+  },
+  "rustfs-live-3": {
+   "admission_to_listening_seconds": 0.221,
+   "attribution_coverage": 0.929,
+   "first_audio_p50_seconds": 3.538,
+   "first_audio_p95_seconds": 6.253
+  },
+  "rustfs-live-5": {
+   "admission_to_listening_seconds": null,
+   "attribution_coverage": null,
+   "first_audio_p50_seconds": null,
+   "first_audio_p95_seconds": null
+  },
+  "rustfs-live-6": {
+   "admission_to_listening_seconds": 3.1,
+   "attribution_coverage": 1.0,
+   "first_audio_p50_seconds": 3.971,
+   "first_audio_p95_seconds": 10.809
+  },
+  "rustfs-live-7": {
+   "admission_to_listening_seconds": null,
+   "attribution_coverage": null,
+   "first_audio_p50_seconds": null,
+   "first_audio_p95_seconds": null
+  },
+  "rustfs-live-8": {
+   "admission_to_listening_seconds": null,
+   "attribution_coverage": null,
+   "first_audio_p50_seconds": null,
+   "first_audio_p95_seconds": null
+  },
+  "rustfs-live-9": {
+   "admission_to_listening_seconds": null,
+   "attribution_coverage": null,
+   "first_audio_p50_seconds": null,
+   "first_audio_p95_seconds": null
+  }
+ },
+ "metric_definitions": {
+  "admission_to_listening_seconds": "seconds from admission to the listening phase",
+  "answer_audio_coverage": "share of expected answers that produced audio",
+  "attribution_coverage": "share of spoken turns attributed to a participant",
+  "evidence_cache": "the reuse rate of the visual evidence cache",
+  "evidence_provenance": "the acquisition, status and verification counts of the evidence the turns used",
+  "first_answer_audio_p50_no_visual_seconds": "the answer latency gate for turns with no visual evidence",
+  "first_answer_audio_p50_seconds": "median seconds from the end of speech to the first audio of the answer",
+  "first_answer_audio_p50_visual_cached_seconds": "the answer latency gate for turns served from cached visual evidence",
+  "first_answer_audio_p95_seconds": "p95 of the same measurement",
+  "first_audio_p50_seconds": "median seconds from the end of speech to the first audio of the turn",
+  "first_audio_p95_seconds": "p95 of the same measurement"
+ },
+ "note": "Baseline frozen before the canonical reporting cleanup. The scorecard numbers are kept as a reference to compare against, not as an oracle for the new evaluator: the metric semantics change when the evidence contract changes. The legacy evaluator that produced these numbers is removed, so recomputing them means checking out the baseline commit."
+}

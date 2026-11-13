@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "metrics": {
     "session_completed": {"min": 1.0},
     "first_audio_p50_seconds": {"max": 3.5},

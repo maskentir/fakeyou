@@ -19,7 +19,6 @@ def session(*, answer_at: float | None = 8.0) -> list[dict[str, Any]]:
             source="runtime",
             status="admitted",
             answer_boundary=True,
-            evidence_paths=True,
         ),
         row(1, "conversation_bound", source="runtime"),
         row(10, "speech_stopped"),
@@ -42,7 +41,7 @@ def test_cue_and_answer_have_independent_gates() -> None:
     report = build_session_report(session())
     card = score_session(report)
 
-    assert card["version"] == 3
+    assert card["version"] == 4
     assert card["metrics"]["first_audio_p50_seconds"]["value"] == 1.5
     assert card["metrics"]["first_answer_audio_p50_seconds"]["value"] == 8.0
     assert card["metrics"]["first_answer_audio_p50_seconds"]["passed"] is False
@@ -172,21 +171,6 @@ def test_journals_without_the_answer_boundary_leave_the_new_gates_unscored() -> 
     assert card["failed"] == []
 
 
-def test_a_journal_without_evidence_paths_keeps_the_earlier_scorecard() -> None:
-    rows = [
-        {
-            key: value
-            for key, value in entry.items()
-            if key not in {"evidence_paths", "evidence_resolution_v2"}
-        }
-        for entry in session()
-    ]
-    card = score_session(build_session_report(rows))
-
-    assert card["version"] == 2
-    assert "first_answer_audio_p50_visual_cached_seconds" not in card["metrics"]
-
-
 def test_evidence_paths_are_scored_and_reported_per_path() -> None:
     rows = session()
     rows.append(
@@ -196,7 +180,9 @@ def test_evidence_paths_are_scored_and_reported_per_path() -> None:
             source="perception",
             transcript_id="t1",
             evidence_kind="participant",
-            resolution="cache_hit",
+            acquisition="reused",
+            status="produced",
+            verification="unverified",
             age_ms=4300,
             vision_latency_ms=0,
         )
@@ -204,11 +190,10 @@ def test_evidence_paths_are_scored_and_reported_per_path() -> None:
     report = build_session_report(rows)
     card = score_session(report)
 
-    assert report["evidence_paths"] is True
     assert report["evidence_cache"]["hits"] == 1
     assert report["evidence_cache"]["hit_rate"] == 1.0
     assert report["latency_by_evidence_path"]["visual_cached"]["expected_answers"] == 1
-    assert card["version"] == 3
+    assert card["version"] == 4
     assert card["metrics"]["first_answer_audio_p50_visual_cached_seconds"]["value"] == 8.0
     assert card["metrics"]["first_answer_audio_p50_visual_cached_seconds"]["status"] == "failed"
 
@@ -221,7 +206,6 @@ def fast_session(*, answer_at: float = 2.0, evidence: tuple[str, ...] = ()) -> l
             source="runtime",
             status="admitted",
             answer_boundary=True,
-            evidence_paths=True,
         ),
         row(1, "conversation_bound", source="runtime"),
         row(10, "speech_stopped"),
@@ -266,6 +250,20 @@ def test_a_no_visual_session_passes_without_visual_cached_answers() -> None:
 
 def test_a_visual_cached_session_passes_without_no_visual_answers() -> None:
     rows = fast_session(evidence=("screen",))
+    rows.append(
+        row(
+            12,
+            "perception_evidence_resolved",
+            source="perception",
+            transcript_id="t1",
+            evidence_kind="screen",
+            acquisition="reused",
+            status="produced",
+            verification="unverified",
+            age_ms=0,
+            vision_latency_ms=0,
+        )
+    )
     card = score_session(build_session_report(rows))
 
     assert card["passed"] is True
@@ -302,7 +300,9 @@ def test_a_session_without_expected_answers_in_gated_paths_follows_global_gates(
             source="perception",
             transcript_id="t1",
             evidence_kind="participant",
-            resolution="fresh",
+            acquisition="inference",
+            status="produced",
+            verification="unverified",
             age_ms=0,
             vision_latency_ms=3000,
         )
@@ -316,25 +316,6 @@ def test_a_session_without_expected_answers_in_gated_paths_follows_global_gates(
     )
     assert card["metrics"]["first_answer_audio_p50_seconds"]["status"] == "passed"
     assert card["passed"] is True
-
-
-def test_historical_journals_without_evidence_paths_keep_their_behaviour() -> None:
-    rows = fast_session()
-    rows = [
-        {
-            key: value
-            for key, value in entry.items()
-            if key not in {"evidence_paths", "evidence_resolution_v2"}
-        }
-        for entry in rows
-    ]
-    card = score_session(build_session_report(rows))
-
-    assert card["version"] == 2
-    assert "first_answer_audio_p50_visual_cached_seconds" not in card["metrics"]
-    assert "first_answer_audio_p50_no_visual_seconds" not in card["metrics"]
-    assert card["passed"] is True
-    assert card["metrics"]["first_answer_audio_p50_seconds"]["status"] == "passed"
 
 
 def test_new_journal_rows_declare_the_answer_boundary() -> None:
@@ -457,10 +438,10 @@ def test_a_question_followed_by_a_statement_is_still_an_unnecessary_question() -
     assert replies["unnecessary_questions"] == 1
 
 
-def v2_session(
+def canonical_session(
     *,
     evidence: tuple[str, ...] = (),
-    resolutions: tuple[tuple[str, str, str], ...] = (),
+    observations: tuple[tuple[str, str, str], ...] = (),
     answer_at: float | None = 2.0,
 ) -> list[dict[str, Any]]:
     rows = [
@@ -470,8 +451,6 @@ def v2_session(
             source="runtime",
             status="admitted",
             answer_boundary=True,
-            evidence_paths=True,
-            evidence_resolution_v2=True,
         ),
         row(1, "conversation_bound", source="runtime"),
         row(10, "speech_stopped"),
@@ -489,7 +468,7 @@ def v2_session(
         row(11.5, "reply_plan_observed", transcript_id="t1", intent="answer"),
         row(11.5, "agent_finished", request_id="t1:1"),
     ]
-    for index, (kind, resolution, _at_offset) in enumerate(resolutions):
+    for index, (kind, acquisition, status) in enumerate(observations):
         rows.append(
             row(
                 12 + index * 0.1,
@@ -497,9 +476,11 @@ def v2_session(
                 source="perception",
                 transcript_id="t1",
                 evidence_kind=kind,
-                resolution=resolution,
+                acquisition=acquisition,
+                status=status,
+                verification="unverified",
                 age_ms=0,
-                vision_latency_ms=100 if resolution == "fresh" else 0,
+                vision_latency_ms=100 if acquisition == "inference" else 0,
             )
         )
     if answer_at is not None:
@@ -518,58 +499,71 @@ def path_of(report: dict[str, Any]) -> str | None:
     return str(used[0])
 
 
-def test_v2_no_visual_request_is_no_visual() -> None:
-    report = build_session_report(v2_session())
+def test_no_visual_request_is_no_visual() -> None:
+    report = build_session_report(canonical_session())
     assert path_of(report) == "no_visual"
     assert score_session(report)["passed"] is True
 
 
-def test_v2_fresh_screen_look_is_visual_fresh() -> None:
+def test_a_fresh_screen_look_is_visual_fresh() -> None:
     report = build_session_report(
-        v2_session(evidence=("screen",), resolutions=(("screen", "fresh", "12"),))
+        canonical_session(evidence=("screen",), observations=(("screen", "inference", "produced"),))
     )
     assert path_of(report) == "visual_fresh"
 
 
-def test_v2_cached_screen_description_is_visual_cached() -> None:
+def test_a_cached_screen_description_is_visual_cached() -> None:
     report = build_session_report(
-        v2_session(evidence=("screen",), resolutions=(("screen", "cache_hit", "12"),))
+        canonical_session(evidence=("screen",), observations=(("screen", "reused", "produced"),))
     )
     assert path_of(report) == "visual_cached"
     assert score_session(report)["passed"] is True
 
 
-def test_v2_camera_cache_hit_is_visual_cached() -> None:
+def test_a_camera_cache_hit_is_visual_cached() -> None:
     report = build_session_report(
-        v2_session(evidence=("participant",), resolutions=(("participant", "cache_hit", "12"),))
+        canonical_session(
+            evidence=("participant",), observations=(("participant", "reused", "produced"),)
+        )
     )
     assert path_of(report) == "visual_cached"
 
 
-def test_v2_camera_miss_is_visual_fresh() -> None:
+def test_a_camera_miss_is_visual_fresh() -> None:
     report = build_session_report(
-        v2_session(evidence=("participant",), resolutions=(("participant", "fresh", "12"),))
+        canonical_session(
+            evidence=("participant",), observations=(("participant", "inference", "produced"),)
+        )
     )
     assert path_of(report) == "visual_fresh"
 
 
-def test_v2_fresh_dominates_cached_regardless_of_order() -> None:
+def test_fresh_dominates_cached_regardless_of_order() -> None:
     fresh_first = build_session_report(
-        v2_session(
+        canonical_session(
             evidence=("screen", "participant"),
-            resolutions=(("screen", "fresh", "12"), ("participant", "cache_hit", "12.1")),
+            observations=(
+                ("screen", "inference", "produced"),
+                ("participant", "reused", "produced"),
+            ),
         )
     )
     cached_first = build_session_report(
-        v2_session(
+        canonical_session(
             evidence=("screen", "participant"),
-            resolutions=(("participant", "cache_hit", "12"), ("screen", "fresh", "12.1")),
+            observations=(
+                ("participant", "reused", "produced"),
+                ("screen", "inference", "produced"),
+            ),
         )
     )
     other_pair = build_session_report(
-        v2_session(
+        canonical_session(
             evidence=("screen", "participant"),
-            resolutions=(("screen", "cache_hit", "12"), ("participant", "fresh", "12.1")),
+            observations=(
+                ("screen", "reused", "produced"),
+                ("participant", "inference", "produced"),
+            ),
         )
     )
     assert path_of(fresh_first) == "visual_fresh"
@@ -577,41 +571,41 @@ def test_v2_fresh_dominates_cached_regardless_of_order() -> None:
     assert path_of(other_pair) == "visual_fresh"
 
 
-def test_v2_all_visual_evidence_unavailable_is_visual_unavailable() -> None:
+def test_all_visual_evidence_unavailable_is_visual_unavailable() -> None:
     report = build_session_report(
-        v2_session(
+        canonical_session(
             evidence=("screen", "participant"),
-            resolutions=(("screen", "unavailable", "12"), ("participant", "unavailable", "12.1")),
+            observations=(
+                ("screen", "not_attempted", "unavailable"),
+                ("participant", "not_attempted", "unavailable"),
+            ),
         )
     )
     assert path_of(report) == "visual_unavailable"
     assert report["latency_by_evidence_path"]["visual_cached"]["expected_answers"] == 0
 
 
-def test_v2_visual_requested_without_telemetry_is_unclassified() -> None:
-    report = build_session_report(v2_session(evidence=("screen",)))
+def test_visual_requested_without_telemetry_is_unclassified() -> None:
+    report = build_session_report(canonical_session(evidence=("screen",)))
     card = score_session(report)
     assert report["evidence_unclassified"] == 1
     assert "evidence_classification" in card["unscored"]
     assert card["passed"] is False
 
 
-def test_v2_historical_evidence_paths_journal_keeps_old_classification() -> None:
-    rows = v2_session(evidence=("screen",))
-    rows = [
-        {key: value for key, value in entry.items() if key != "evidence_resolution_v2"}
-        for entry in rows
-    ]
-    report = build_session_report(rows)
-    card = score_session(report)
-    assert report["evidence_resolution_v2"] is False
-    assert report["latency_by_evidence_path"]["visual_cached"]["expected_answers"] == 1
-    assert report["latency_by_evidence_path"].get("visual_unavailable") is None
-    assert card["passed"] is True
+def test_the_report_keeps_the_provenance_of_the_evidence_it_read() -> None:
+    report = build_session_report(
+        canonical_session(
+            evidence=("participant",), observations=(("participant", "reused", "produced"),)
+        )
+    )
+    assert report["evidence_provenance"]["acquisition"] == {"reused": 1}
+    assert report["evidence_provenance"]["status"] == {"produced": 1}
+    assert report["evidence_provenance"]["verification"] == {"unverified": 1}
 
 
-def test_v2_unclassified_turn_still_counts_in_global_coverage() -> None:
-    rows = v2_session(evidence=("screen",), answer_at=None)
+def test_an_unclassified_turn_still_counts_in_global_coverage() -> None:
+    rows = canonical_session(evidence=("screen",), answer_at=None)
     rows.insert(-1, row(12, "agent_failed", request_id="t1:1"))
     report = build_session_report(rows)
     assert report["replies"]["expected_answers"] == 1

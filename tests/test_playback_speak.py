@@ -313,8 +313,6 @@ async def test_speak_retry_is_journaled(
             "at": retries[0]["at"],
             "source": "playback",
             "answer_boundary": True,
-            "evidence_paths": True,
-            "evidence_resolution_v2": True,
             "attempt": 2,
             "streaming": True,
             "reason": "timeout",

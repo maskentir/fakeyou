@@ -19,6 +19,7 @@ from fakeyou.observability.provider_faults import ProviderFault, trim_detail
 JOURNAL_BACKUP_COUNT = 2
 JOURNAL_MAX_BYTES = 1_048_576
 
+
 _SENSITIVE = {
     "authorization",
     "api_key",
@@ -134,8 +135,6 @@ class Journal:
                 "at": at,
                 "source": source,
                 "answer_boundary": True,
-                "evidence_paths": True,
-                "evidence_resolution_v2": True,
             }
             if self.trace_id is not None:
                 row["trace_id"] = self.trace_id

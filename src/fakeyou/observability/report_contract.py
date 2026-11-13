@@ -154,68 +154,53 @@ def measures_output(rows: list[dict[str, Any]]) -> bool:
     return any(row.get("answer_boundary") is True for row in rows)
 
 
-EVIDENCE_PATHS = ("no_visual", "visual_cached", "visual_fresh")
-EVIDENCE_PATHS_V2 = ("no_visual", "visual_cached", "visual_fresh", "visual_unavailable")
+EVIDENCE_PATHS = ("no_visual", "visual_cached", "visual_fresh", "visual_unavailable")
 VISUAL_NEEDS = frozenset({"screen", "participant"})
 
 
-def _evidence_resolutions(rows: list[dict[str, Any]]) -> dict[str, str]:
-    resolutions: dict[str, str] = {}
-    for row in rows:
-        if row.get("event") != "perception_evidence_resolved":
-            continue
-        transcript_id = row.get("transcript_id")
-        resolution = row.get("resolution")
-        if isinstance(transcript_id, str) and transcript_id:
-            if resolution == "cache_hit":
-                resolutions[transcript_id] = "visual_cached"
-            elif resolution == "fresh":
-                resolutions[transcript_id] = "visual_fresh"
-    return resolutions
-
-
-def _path_of(turn: _Turn, resolutions: dict[str, str]) -> str:
-    if turn.transcript_id in resolutions:
-        return resolutions[turn.transcript_id]
-    if "screen" in turn.evidence:
-        return "visual_cached"
-    return "no_visual"
-
-
-def _evidence_observations(rows: list[dict[str, Any]]) -> dict[str, list[tuple[str, str]]]:
-    observations: dict[str, list[tuple[str, str]]] = {}
+def _evidence_observations(
+    rows: list[dict[str, Any]],
+) -> dict[str, list[tuple[str, str, str]]]:
+    observations: dict[str, list[tuple[str, str, str]]] = {}
     for row in rows:
         if row.get("event") != "perception_evidence_resolved":
             continue
         transcript_id = row.get("transcript_id")
         kind = row.get("evidence_kind")
-        resolution = row.get("resolution")
         if isinstance(transcript_id, str) and transcript_id and isinstance(kind, str):
-            observations.setdefault(transcript_id, []).append((kind, str(resolution)))
+            observations.setdefault(transcript_id, []).append(
+                (kind, str(row.get("acquisition")), str(row.get("status")))
+            )
     return observations
 
 
-def _classify_v2(turn: _Turn, observations: dict[str, list[tuple[str, str]]]) -> str:
-    visual_requested = tuple(need for need in turn.evidence if need in VISUAL_NEEDS)
-    seen = observations.get(turn.transcript_id, [])
-    resolutions = [resolution for kind, resolution in seen if kind in VISUAL_NEEDS]
-    if "fresh" in resolutions:
+def _classify(turn: _Turn, observations: dict[str, list[tuple[str, str, str]]]) -> str:
+    visual_requested = [need for need in turn.evidence if need in VISUAL_NEEDS]
+    seen = [
+        (acquisition, status)
+        for kind, acquisition, status in observations.get(turn.transcript_id, [])
+        if kind in VISUAL_NEEDS
+    ]
+    if any(acquisition == "inference" and status == "produced" for acquisition, status in seen):
         return "visual_fresh"
-    if "cache_hit" in resolutions:
+    if any(acquisition == "reused" for acquisition, _ in seen):
         return "visual_cached"
-    if visual_requested and resolutions and all(r == "unavailable" for r in resolutions):
+    if seen and all(status == "unavailable" for _, status in seen):
         return "visual_unavailable"
-    if visual_requested and len(resolutions) < len(visual_requested):
+    if visual_requested and len(seen) < len(visual_requested):
         return "unclassified"
-    if visual_requested and not resolutions:
+    if visual_requested and not seen:
         return "unclassified"
     return "no_visual"
 
 
-def _latency_by_path(turns: list[_Turn], resolutions: dict[str, str]) -> dict[str, Any]:
+def _latency_by_path(
+    turns: list[_Turn], observations: dict[str, list[tuple[str, str, str]]]
+) -> dict[str, Any]:
     groups: dict[str, list[_Turn]] = {path: [] for path in EVIDENCE_PATHS}
+    groups["unclassified"] = []
     for turn in turns:
-        groups[_path_of(turn, resolutions)].append(turn)
+        groups[_classify(turn, observations)].append(turn)
     return {
         path: {
             "expected_answers": len(group),
@@ -230,24 +215,20 @@ def _latency_by_path(turns: list[_Turn], resolutions: dict[str, str]) -> dict[st
     }
 
 
-def _latency_by_path_v2(
-    turns: list[_Turn], observations: dict[str, list[tuple[str, str]]]
-) -> dict[str, Any]:
-    groups: dict[str, list[_Turn]] = {path: [] for path in EVIDENCE_PATHS_V2}
-    groups["unclassified"] = []
-    for turn in turns:
-        groups[_classify_v2(turn, observations)].append(turn)
+def _evidence_breakdown(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    acquisition: Counter[str] = Counter()
+    status: Counter[str] = Counter()
+    verification: Counter[str] = Counter()
+    for row in rows:
+        if row.get("event") != "perception_evidence_resolved":
+            continue
+        acquisition[str(row.get("acquisition"))] += 1
+        status[str(row.get("status"))] += 1
+        verification[str(row.get("verification"))] += 1
     return {
-        path: {
-            "expected_answers": len(group),
-            "first_audio_seconds": summarize(
-                [value for turn in group if (value := _latency(turn, turn.response_at)) is not None]
-            ),
-            "first_answer_audio_seconds": summarize(
-                [value for turn in group if (value := _latency(turn, turn.answer_at)) is not None]
-            ),
-        }
-        for path, group in groups.items()
+        "acquisition": dict(sorted(acquisition.items())),
+        "status": dict(sorted(status.items())),
+        "verification": dict(sorted(verification.items())),
     }
 
 
@@ -259,10 +240,10 @@ def _cache_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
     for row in rows:
         if row.get("event") != "perception_evidence_resolved":
             continue
-        resolution = row.get("resolution")
-        if resolution == "cache_hit":
+        acquisition = row.get("acquisition")
+        if acquisition == "reused":
             hits += 1
-        elif resolution == "fresh":
+        elif acquisition == "inference":
             misses += 1
         age = row.get("age_ms")
         if isinstance(age, int):
@@ -315,19 +296,13 @@ def apply_contract(report: dict[str, Any], rows: list[dict[str, Any]]) -> dict[s
             turn_report[RESPONSE_STAGE] = _latency(turn, turn.response_at)
             turn_report[ANSWER_STAGE] = _latency(turn, turn.answer_at)
     report["latency_by_evidence"] = _evidence_latencies(expected)
-    report["evidence_paths"] = any(row.get("evidence_paths") is True for row in rows)
-    v2 = any(row.get("evidence_resolution_v2") is True for row in rows)
-    report["evidence_resolution_v2"] = v2
-    if v2:
-        observations = _evidence_observations(rows)
-        paths = _latency_by_path_v2(expected, observations)
-        report["latency_by_evidence_path"] = {
-            path: group for path, group in paths.items() if path in EVIDENCE_PATHS_V2
-        }
-        report["evidence_unclassified"] = paths.get("unclassified", {}).get("expected_answers", 0)
-    else:
-        resolutions = _evidence_resolutions(rows)
-        report["latency_by_evidence_path"] = _latency_by_path(expected, resolutions)
+    observations = _evidence_observations(rows)
+    paths = _latency_by_path(expected, observations)
+    report["latency_by_evidence_path"] = {
+        path: group for path, group in paths.items() if path in EVIDENCE_PATHS
+    }
+    report["evidence_unclassified"] = paths.get("unclassified", {}).get("expected_answers", 0)
+    report["evidence_provenance"] = _evidence_breakdown(rows)
     report["evidence_cache"] = _cache_report(rows)
     report["latency"][RESPONSE_STAGE] = summarize([v for v in response_values if v is not None])
     report["latency"][ANSWER_STAGE] = summarize([v for v in answer_values if v is not None])
