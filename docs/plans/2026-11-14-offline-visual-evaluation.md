@@ -35,6 +35,22 @@ Each image has a SHA-256 digest; stale hashes, duplicate case IDs, invalid answe
 and bounding boxes outside images fail loading. The generator writes images only; it
 does not infer or rewrite evaluation labels from predictions.
 
+## Determinism contract for the controlled images
+
+Two invariants hold the controlled images, and they are deliberately separate.
+
+- Fixture identity: every image the dataset labels is pinned by the SHA-256 digest
+  recorded in `cases.json`. The committed bytes are the approved artifact; a replaced
+  or regenerated image fails loading until that digest is updated deliberately.
+- Generator correctness: `evals/_visual_images.py` must draw the same picture as the
+  committed images, compared as decoded pixels rather than encoded files.
+
+PNG bytes are not a portable artifact. The macOS Pillow wheel bundles zlib-ng and the
+manylinux wheel bundles zlib, so identical pixels compress into different IDAT streams
+and one generator writes different files on different machines. Pixel equality is the
+meaningful contract; byte equality is not. The drawing itself is stable: the pinned
+Pillow build rasterizes the bundled font identically on both platforms.
+
 The fake inspector receives only image bytes and the question. It cannot access expected
 verdicts, expected answers, annotations, or reasons through the evaluation interface.
 `fake-predictions.json` is a separate scripted response fixture. Its successful score tests
@@ -98,10 +114,17 @@ Run the focused check with:
 uv run --no-sync pytest tests/test_inspector.py evals/test_visual_inspection_eval.py -q
 ```
 
-Regenerate images with `uv run --no-sync python -m evals._visual_images`. Digest changes
-require inspecting the images and reviewing independent labels before updating hashes.
+Regenerate images with `uv run --no-sync python -m evals._visual_images`. Regeneration is
+for inspection, not for replacement: another zlib build rewrites the committed files
+without changing the picture, so keep the committed bytes and their digests unless the
+picture itself changed. A changed picture requires inspecting the images and reviewing
+the independent labels before updating digests.
 
 Phase 3b-B remains separate: actual vision calls, prompt/schema integration, observed
-provider parsing errors, and cassettes recorded with valid provider credentials. Phase 5
-measures live groundedness/abstention, latency p50/p95, vision calls per turn, and meeting
-cost. This phase changes no production prompt, runtime acquisition path, or cassette.
+provider parsing errors, and cassettes recorded with valid provider credentials. The
+evaluator classifies `RuntimeError` and `TimeoutError` as `model_error`; the runtime
+`ProviderFault` is neither, so the provider adapter must turn a genuine provider fault
+into a case-level error instead of failing the whole evaluation, while programming
+errors stay visible as harness failures. Phase 5 measures live groundedness/abstention,
+latency p50/p95, vision calls per turn, and meeting cost. This phase changes no
+production prompt, runtime acquisition path, or cassette.

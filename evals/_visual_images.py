@@ -1,6 +1,9 @@
+import hashlib
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
+
+VISUAL_IMAGE_NAMES = ("screen.png", "occluded-screen.png", "schematic-camera.png")
 
 
 def generate_visual_images(root: Path) -> None:
@@ -21,6 +24,11 @@ def generate_visual_images(root: Path) -> None:
     draw.rectangle((470, 230, 540, 330), fill=(230, 0, 0))
     draw.ellipse((520, 245, 570, 310), outline=(230, 0, 0), width=10)
     camera.save(root / "schematic-camera.png")
+
+
+def image_pixel_digest(path: Path) -> str:
+    with Image.open(path) as image:
+        return hashlib.sha256(image.convert("RGB").tobytes()).hexdigest()
 
 
 if __name__ == "__main__":

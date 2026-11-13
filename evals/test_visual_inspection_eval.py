@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from evals._visual_images import generate_visual_images
+from evals._visual_images import (
+    VISUAL_IMAGE_NAMES,
+    generate_visual_images,
+    image_pixel_digest,
+)
 from evals._visual_inspection import FIXTURE, evaluate_inspections, load_visual_fixture
 
 
@@ -123,7 +127,16 @@ def test_the_dataset_rejects_relabelled_images_with_stale_hashes(tmp_path: Path)
         load_visual_fixture(target, image_root=FIXTURE.parent)
 
 
-def test_controlled_images_can_be_regenerated_without_changing_the_dataset(tmp_path: Path) -> None:
+def test_the_controlled_images_are_pinned_by_the_dataset_digests() -> None:
+    raw = json.loads(FIXTURE.read_text())
+    pinned = {case["image"]: case["image_sha256"] for case in raw["cases"]}
+    assert set(pinned) == set(VISUAL_IMAGE_NAMES)
+    for image, digest in pinned.items():
+        assert hashlib.sha256((FIXTURE.parent / image).read_bytes()).hexdigest() == digest
+
+
+def test_the_generator_reproduces_the_committed_images(tmp_path: Path) -> None:
     generate_visual_images(tmp_path)
-    for image in ("screen.png", "occluded-screen.png", "schematic-camera.png"):
-        assert (tmp_path / image).read_bytes() == (FIXTURE.parent / image).read_bytes()
+    assert {path.name for path in tmp_path.iterdir()} == set(VISUAL_IMAGE_NAMES)
+    for image in VISUAL_IMAGE_NAMES:
+        assert image_pixel_digest(tmp_path / image) == image_pixel_digest(FIXTURE.parent / image)
