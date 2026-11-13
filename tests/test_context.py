@@ -190,24 +190,24 @@ async def test_looking_reports_why_it_could_not_see() -> None:
     no_camera = await exhausted.look_at_participant("Ayu", "what?")
     camera = await seeing.look_at_participant("budi", "What is he wearing?")
 
-    assert unknown.code == "unknown_screen"
-    assert unknown.subject_id == "screen#9"
-    assert unknown.status == "unavailable"
-    assert broke.code == "budget_exhausted"
-    assert broke.subject_id == "screen#1"
-    assert broke.status == "unavailable"
-    assert nobody.code == "unknown_participant"
-    assert nobody.subject_id == "Zed"
-    assert nobody.status == "unavailable"
-    assert no_camera.code == "camera_unavailable"
-    assert no_camera.subject_id == "person#1"
-    assert no_camera.status == "unavailable"
-    assert camera.code == "ok"
-    assert camera.subject_id == "person#2"
-    assert camera.acquisition == "inference"
-    assert camera.strategy == "targeted_vision"
-    assert camera.answer == "A mockup."
-    assert camera.verification == "unverified"
+    assert unknown.result.code == "unknown_screen"
+    assert unknown.result.subject_id == "screen#9"
+    assert unknown.result.status == "unavailable"
+    assert broke.result.code == "budget_exhausted"
+    assert broke.result.subject_id == "screen#1"
+    assert broke.result.status == "unavailable"
+    assert nobody.result.code == "unknown_participant"
+    assert nobody.result.subject_id == "Zed"
+    assert nobody.result.status == "unavailable"
+    assert no_camera.result.code == "camera_unavailable"
+    assert no_camera.result.subject_id == "person#1"
+    assert no_camera.result.status == "unavailable"
+    assert camera.result.code == "ok"
+    assert camera.result.subject_id == "person#2"
+    assert camera.result.acquisition == "inference"
+    assert camera.result.strategy == "targeted_vision"
+    assert camera.result.answer == "A mockup."
+    assert camera.result.verification == "unverified"
 
 
 async def test_a_screen_whose_frame_is_gone_cannot_be_looked_at() -> None:
@@ -217,9 +217,9 @@ async def test_a_screen_whose_frame_is_gone_cannot_be_looked_at() -> None:
 
     result = await _context(timeline).look_at_screen("current", "what?")
 
-    assert result.code == "frame_unavailable"
-    assert result.subject_id == "screen#1"
-    assert result.status == "unavailable"
+    assert result.result.code == "frame_unavailable"
+    assert result.result.subject_id == "screen#1"
+    assert result.result.status == "unavailable"
 
 
 async def test_looking_at_a_dashboard_answers_from_the_image() -> None:
@@ -232,12 +232,12 @@ async def test_looking_at_a_dashboard_answers_from_the_image() -> None:
 
     result = await context.look_at_screen("current", "what was paid?")
 
-    assert result.code == "ok"
-    assert result.subject_id == "screen#1"
-    assert result.answer == "Receipt 1450-6289 Rp899,900"
-    assert result.acquisition == "inference"
-    assert result.age_ms == 0
-    assert result.vision_latency_ms >= 0
+    assert result.result.code == "ok"
+    assert result.result.subject_id == "screen#1"
+    assert result.result.answer == "Receipt 1450-6289 Rp899,900"
+    assert result.result.acquisition == "inference"
+    assert result.result.age_ms == 0
+    assert result.result.vision_latency_ms >= 0
     assert context.interpreter is not None
     assert context.interpreter.budget.calls == 1
 
@@ -248,9 +248,9 @@ async def test_looking_at_an_unread_screen_is_refused() -> None:
 
     result = await context.look_at_screen("current", "what?")
 
-    assert result.code == "not_meeting_content"
-    assert result.subject_id == "screen#1"
-    assert result.status == "unavailable"
+    assert result.result.code == "not_meeting_content"
+    assert result.result.subject_id == "screen#1"
+    assert result.result.status == "unavailable"
     assert context.interpreter is not None
     assert context.interpreter.budget.calls == 0
 

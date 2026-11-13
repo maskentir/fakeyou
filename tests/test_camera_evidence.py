@@ -19,7 +19,7 @@ from fakeyou.perception.context import (
     MeetingEvidence,
     PerceptionContext,
 )
-from fakeyou.perception.evidence import EvidenceResult
+from fakeyou.perception.evidence import Look
 from fakeyou.perception.frames import keyframe_from_jpeg
 from fakeyou.perception.interpreter import PerceptionInterpreter
 from fakeyou.perception.percepts import Keyframe
@@ -257,11 +257,11 @@ async def test_a_camera_question_is_answered_by_one_inspection_of_the_live_frame
 
     result = await context.look_at_participant("Budi", "What color is his shirt?")
 
-    assert result.code == "ok"
-    assert result.answer == "A dark blue shirt."
-    assert result.acquisition == "inference"
-    assert result.strategy == "targeted_vision"
-    assert result.vision_latency_ms >= 0
+    assert result.result.code == "ok"
+    assert result.result.answer == "A dark blue shirt."
+    assert result.result.acquisition == "inference"
+    assert result.result.strategy == "targeted_vision"
+    assert result.result.vision_latency_ms >= 0
     assert len(model.seen) == 1
 
 
@@ -273,9 +273,9 @@ async def test_the_same_camera_question_is_answered_from_the_cache() -> None:
     await context.look_at_participant("Budi", "What color is his shirt?")
     result = await context.look_at_participant("Budi", "What color is his shirt?")
 
-    assert result.code == "ok"
-    assert result.acquisition == "reused"
-    assert result.vision_latency_ms == 0
+    assert result.result.code == "ok"
+    assert result.result.acquisition == "reused"
+    assert result.result.vision_latency_ms == 0
     assert len(model.seen) == 1
 
 
@@ -287,9 +287,9 @@ async def test_another_camera_question_is_inspected_again() -> None:
     await context.look_at_participant("Budi", "What color is his shirt?")
     result = await context.look_at_participant("Budi", "What text is on the shirt?")
 
-    assert result.code == "ok"
-    assert result.acquisition == "inference"
-    assert result.answer == "The shirt says HELLO."
+    assert result.result.code == "ok"
+    assert result.result.acquisition == "inference"
+    assert result.result.answer == "The shirt says HELLO."
     assert len(model.seen) == 2
 
 
@@ -300,9 +300,9 @@ async def test_a_camera_question_the_model_cannot_see_keeps_the_model_answer() -
 
     result = await context.look_at_participant("Budi", "What text is on his shirt?")
 
-    assert result.code == "ok"
-    assert result.answer == "The text is not visible in the frame."
-    assert result.strategy == "targeted_vision"
+    assert result.result.code == "ok"
+    assert result.result.answer == "The text is not visible in the frame."
+    assert result.result.strategy == "targeted_vision"
     assert len(model.seen) == 1
 
 
@@ -313,8 +313,8 @@ async def test_budget_exhausted_for_camera_does_not_guess() -> None:
 
     result = await context.look_at_participant("Budi", "What color is his shirt?")
 
-    assert result.code == "budget_exhausted"
-    assert result.strategy == "targeted_vision"
+    assert result.result.code == "budget_exhausted"
+    assert result.result.strategy == "targeted_vision"
 
 
 async def test_participant_resolution_journals_the_strategy() -> None:
@@ -451,19 +451,19 @@ async def test_the_evidence_result_carries_its_provenance() -> None:
 
     result = await context.look_at_participant("Budi", "What color is his shirt?")
 
-    assert result.source == "camera"
-    assert result.subject_id == "person#1"
-    assert result.snapshot is not None
-    assert result.snapshot.subject_id == "device-p1"
-    assert result.snapshot.stream_id == "stream-p1"
-    assert result.snapshot.sequence == 1
-    assert result.snapshot.generation == 0
-    assert result.acquisition == "inference"
-    assert result.status == "supported"
-    assert result.verification == "unverified"
-    assert result.observed_at == result.snapshot.captured_at
-    assert result.vision_latency_ms >= 0
-    assert result.answer == "A dark blue shirt."
+    assert result.result.source == "camera"
+    assert result.result.subject_id == "person#1"
+    assert result.result.snapshot is not None
+    assert result.result.snapshot.subject_id == "device-p1"
+    assert result.result.snapshot.stream_id == "stream-p1"
+    assert result.result.snapshot.sequence == 1
+    assert result.result.snapshot.generation == 0
+    assert result.result.acquisition == "inference"
+    assert result.result.status == "supported"
+    assert result.result.verification == "unverified"
+    assert result.result.observed_at == result.result.snapshot.captured_at
+    assert result.result.vision_latency_ms >= 0
+    assert result.result.answer == "A dark blue shirt."
 
 
 async def test_dropping_the_frame_clears_the_cached_answer() -> None:
@@ -507,10 +507,10 @@ async def test_a_provider_failure_reports_a_failed_look() -> None:
 
     result = await context.look_at_participant("Budi", "What color is his shirt?")
 
-    assert result.code == "look_failed"
-    assert result.error_type == "ProviderFault"
-    assert result.status == "unavailable"
-    assert result.strategy == "targeted_vision"
+    assert result.result.code == "look_failed"
+    assert result.result.error_type == "ProviderFault"
+    assert result.result.status == "unavailable"
+    assert result.result.strategy == "targeted_vision"
 
 
 async def test_a_hanging_provider_times_out_the_camera_look(
@@ -529,9 +529,9 @@ async def test_a_hanging_provider_times_out_the_camera_look(
 
     result = await context.look_at_participant("Budi", "What color is his shirt?")
 
-    assert result.code == "look_failed"
-    assert result.error_type == "TimeoutError"
-    assert result.status == "unavailable"
+    assert result.result.code == "look_failed"
+    assert result.result.error_type == "TimeoutError"
+    assert result.result.status == "unavailable"
 
 
 async def test_a_cancelled_camera_look_propagates_the_cancellation() -> None:
@@ -650,7 +650,7 @@ class CameraStack:
             )
         )
 
-    async def look(self) -> EvidenceResult:
+    async def look(self) -> Look:
         return await self.context.look_at_participant("Budi", "what are they wearing?")
 
 
@@ -661,7 +661,7 @@ async def test_camera_off_makes_evidence_unavailable_and_invalidates_cache() -> 
     await stack.heartbeat()
 
     first = await stack.look()
-    assert first.code == "ok"
+    assert first.result.code == "ok"
 
     off = DrainedMessage(
         channel="collections",
@@ -671,7 +671,7 @@ async def test_camera_off_makes_evidence_unavailable_and_invalidates_cache() -> 
     await stack.sensors.accept_batch(DrainBatch(messages=[off]))
 
     unavailable = await stack.look()
-    assert unavailable.code == "camera_unavailable"
+    assert unavailable.result.code == "camera_unavailable"
     assert stack.timeline.camera_frames.get(BUDI) is None
 
     await stack.sensors.accept_batch(
@@ -689,8 +689,8 @@ async def test_camera_off_makes_evidence_unavailable_and_invalidates_cache() -> 
     await stack.heartbeat()
 
     fresh = await stack.look()
-    assert fresh.code == "ok"
-    assert fresh.acquisition == "inference"
+    assert fresh.result.code == "ok"
+    assert fresh.result.acquisition == "inference"
 
 
 async def test_participant_leave_invalidates_frame_and_cache() -> None:
@@ -698,7 +698,7 @@ async def test_participant_leave_invalidates_frame_and_cache() -> None:
     data = liveness_jpeg((120, 120, 120))
     await stack.setup_camera(data)
     await stack.heartbeat()
-    assert (await stack.look()).code == "ok"
+    assert (await stack.look()).result.code == "ok"
 
     leave = collection_payload(
         users=[
@@ -722,7 +722,7 @@ async def test_participant_leave_invalidates_frame_and_cache() -> None:
     )
 
     result = await stack.look()
-    assert result.code in {"camera_unavailable", "unknown_participant"}
+    assert result.result.code in {"camera_unavailable", "unknown_participant"}
     assert stack.timeline.camera_frames.get(BUDI) is None
     assert BUDI not in vars(stack.interpreter)["_camera_cache"].entries
 
@@ -732,17 +732,17 @@ async def test_rejoin_epoch_rejects_previous_frame() -> None:
     data = liveness_jpeg((90, 90, 90))
     await stack.setup_camera(data)
     await stack.heartbeat()
-    assert (await stack.look()).code == "ok"
+    assert (await stack.look()).result.code == "ok"
 
     stack.sensors.begin_epoch()
     unavailable = await stack.look()
-    assert unavailable.code == "camera_unavailable"
+    assert unavailable.result.code == "camera_unavailable"
 
     await stack.setup_camera(data)
     await stack.heartbeat()
     fresh = await stack.look()
-    assert fresh.code == "ok"
-    assert fresh.acquisition == "inference"
+    assert fresh.result.code == "ok"
+    assert fresh.result.acquisition == "inference"
 
 
 async def test_a_stable_camera_stays_live_with_heartbeats() -> None:
@@ -757,13 +757,13 @@ async def test_a_stable_camera_stays_live_with_heartbeats() -> None:
     await stack.heartbeat()
 
     result = await stack.look()
-    assert result.code == "ok"
+    assert result.result.code == "ok"
 
     stack.clock[0] = 90.0 + 61.0
     await stack.heartbeat()
     later = await stack.look()
-    assert later.code == "ok"
-    assert later.acquisition == "inference"
+    assert later.result.code == "ok"
+    assert later.result.acquisition == "inference"
 
 
 async def test_a_stalled_sampling_stream_becomes_unavailable() -> None:
@@ -771,14 +771,14 @@ async def test_a_stalled_sampling_stream_becomes_unavailable() -> None:
     data = liveness_jpeg((30, 40, 50))
     await stack.setup_camera(data)
     await stack.heartbeat()
-    assert (await stack.look()).code == "ok"
+    assert (await stack.look()).result.code == "ok"
 
     for step in range(6):
         stack.clock[0] = step * 4.5
         await stack.heartbeat(advance=False)
 
     result = await stack.look()
-    assert result.code == "camera_unavailable"
+    assert result.result.code == "camera_unavailable"
 
 
 async def test_a_stream_without_heartbeats_becomes_unavailable() -> None:
@@ -786,11 +786,11 @@ async def test_a_stream_without_heartbeats_becomes_unavailable() -> None:
     data = liveness_jpeg((30, 40, 50))
     await stack.setup_camera(data)
     await stack.heartbeat()
-    assert (await stack.look()).code == "ok"
+    assert (await stack.look()).result.code == "ok"
 
     stack.clock[0] = CAMERA_LIVENESS_TIMEOUT_SECONDS + 1.0
     result = await stack.look()
-    assert result.code == "camera_unavailable"
+    assert result.result.code == "camera_unavailable"
 
 
 def slow_decoder(monkeypatch: pytest.MonkeyPatch) -> tuple[threading.Event, threading.Event]:
@@ -928,7 +928,7 @@ async def test_a_reassigned_camera_drops_the_frame_and_the_cached_answer() -> No
     await stack.setup_camera(data)
     await stack.heartbeat()
     first = await stack.look()
-    assert first.code == "ok"
+    assert first.result.code == "ok"
     seen = len(stack.model.seen)
 
     rebound = collection_payload(
@@ -954,7 +954,7 @@ async def test_a_reassigned_camera_drops_the_frame_and_the_cached_answer() -> No
     assert stack.timeline.camera_frames.get(BUDI) is None
 
     unavailable = await stack.look()
-    assert unavailable.code == "camera_unavailable"
+    assert unavailable.result.code == "camera_unavailable"
     assert len(stack.model.seen) == seen
 
     await stack.sensors.accept_batch(
@@ -967,8 +967,8 @@ async def test_a_reassigned_camera_drops_the_frame_and_the_cached_answer() -> No
     await stack.heartbeat(stream_id="stream-budi-2")
 
     fresh = await stack.look()
-    assert fresh.code == "ok"
-    assert fresh.acquisition == "inference"
+    assert fresh.result.code == "ok"
+    assert fresh.result.acquisition == "inference"
     assert len(stack.model.seen) == seen + 1
 
 
@@ -1055,7 +1055,7 @@ async def test_a_new_stream_replaces_the_old_observation() -> None:
     data = liveness_jpeg((10, 20, 30))
     await stack.setup_camera(data)
     await stack.heartbeat()
-    assert (await stack.look()).code == "ok"
+    assert (await stack.look()).result.code == "ok"
 
     rebound = collection_payload(
         users=[
@@ -1094,5 +1094,5 @@ async def test_a_new_stream_replaces_the_old_observation() -> None:
     )
 
     result = await stack.look()
-    assert result.code == "ok"
-    assert result.acquisition == "inference"
+    assert result.result.code == "ok"
+    assert result.result.acquisition == "inference"

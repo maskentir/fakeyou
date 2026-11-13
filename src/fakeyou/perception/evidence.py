@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 EvidenceSource = Literal["camera", "screen"]
 Acquisition = Literal["reused", "inference"]
@@ -31,6 +31,12 @@ class SnapshotRef:
     sequence: int
     generation: int
     captured_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class Look:
+    result: EvidenceResult
+    payload: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
