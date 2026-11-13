@@ -17,6 +17,10 @@ from fakeyou.conversation.turn_graph import PlannedTurn
 from fakeyou.conversation.turn_judge import JudgeWindow, TurnJudgement
 from fakeyou.foundation.transcript import AttentionContext, EventSource, TranscriptEvent
 from fakeyou.observability.diagnostics import Diagnostics
+from fakeyou.perception.budget import PerceptionBudget
+from fakeyou.perception.context import MeetingEvidence, PerceptionContext
+from fakeyou.perception.interpreter import PerceptionInterpreter
+from fakeyou.perception.timeline import MeetingTimeline
 from fakeyou.session.commands import CommandOutcome, CommandSpec
 from fakeyou.session.intent import Reading, intent_of
 from fakeyou.session.planner import plan_turn
@@ -24,6 +28,7 @@ from fakeyou.session.policy import Actor, Channel, Grant, authorize
 from tests._audio_fakes import FakeReplyAudio
 from tests._conversation_fakes import FakeResponder, ScriptedJudge, judged
 from tests._conversation_support import event
+from tests._perception_fakes import vision_model
 from tests._persistence_fakes import RecordingJournal
 
 TWIN = "Rani Twin"
@@ -355,6 +360,52 @@ async def test_a_paused_chat_turn_is_cancelled_in_the_journal() -> None:
     assert [row["reason"] for row in journal.events("agent_cancelled")] == ["paused"]
     assert not journal.events("agent_finished")
     await turns.close()
+
+
+async def test_a_retried_chat_turn_gathers_evidence_under_a_new_attempt() -> None:
+    journal = RecordingJournal()
+    gate = asyncio.Event()
+    responder = FirstCallGatedResponder("The screen is unavailable.", gate)
+    timeline = MeetingTimeline()
+    seeing = PerceptionContext(
+        timeline,
+        PerceptionInterpreter(
+            vision_model(),
+            PerceptionBudget(budget_usd=1.0, max_calls=10),
+            max_concurrent=1,
+            snapshots=timeline.camera_frames,
+        ),
+        max_chars=6000,
+    )
+    chat = FakeChat()
+    turns, _ = lanes(
+        responder,
+        journal=journal,
+        interaction=interaction(
+            commands=chat,
+            planning=chat_permitted,
+            judge=ScriptedJudge(lambda _window: judged("reply", evidence=("screen",))),
+            evidence=MeetingEvidence(seeing, journal=journal),
+        ),
+    )
+    try:
+        assert turns.receive_chat(meeting_input("c1", f"{TWIN}, what is shown?", "meeting_chat"))
+        await asyncio.wait_for(responder.started.wait(), timeout=5)
+        await turns.pause()
+        gate.set()
+        await turns.actor.wait_idle()
+        turns.resume()
+        await settle(turns)
+
+        resolved = journal.events("perception_evidence_resolved")
+        assert len(resolved) == 2
+        assert [row["transcript_id"] for row in resolved] == ["c1", "c1"]
+        assert [row["evidence_kind"] for row in resolved] == ["screen", "screen"]
+        assert resolved[0]["attempt_id"] != resolved[1]["attempt_id"]
+        assert chat.sent == [("The screen is unavailable.", "device-budi")]
+    finally:
+        gate.set()
+        await turns.close()
 
 
 async def test_a_voice_interjection_waits_for_a_quiet_floor() -> None:

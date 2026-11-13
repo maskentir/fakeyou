@@ -66,7 +66,6 @@ def _session_completed(report: Report) -> float | None:
     return None if outcome == "unknown" else float(outcome == "completed")
 
 
-BASE_TARGETS_VERSION = 2
 PATH_GATES = (
     "first_answer_audio_p50_no_visual_seconds",
     "first_answer_audio_p95_no_visual_seconds",
@@ -145,9 +144,7 @@ class SessionTargets(BaseModel):
 SESSION_TARGETS = SessionTargets.model_validate_json(read_package_text("session_targets.json"))
 
 
-def _version(report: Report, targets: SessionTargets) -> int:
-    if any(name in PATH_GATES for name in targets.metrics) and not report.get("evidence_paths"):
-        return BASE_TARGETS_VERSION
+def _version(targets: SessionTargets) -> int:
     return targets.version
 
 
@@ -170,8 +167,6 @@ def score_session(report: Report, targets: SessionTargets | None = None) -> dict
         targets = SESSION_TARGETS
     metrics: dict[str, dict[str, Any]] = {}
     for name, target in targets.metrics.items():
-        if name in PATH_GATES and not report.get("evidence_paths"):
-            continue
         value = SCORED_METRICS[name](report)
         passed = None if value is None else target.accepts(value)
         status = _metric_status(name, report, value, passed=passed)
@@ -183,10 +178,10 @@ def score_session(report: Report, targets: SessionTargets | None = None) -> dict
         }
     failed = [name for name, metric in metrics.items() if metric["status"] == "failed"]
     unscored = [name for name, metric in metrics.items() if metric["status"] == "unscored"]
-    if report.get("evidence_resolution_v2") and report.get("evidence_unclassified"):
+    if report.get("evidence_unclassified"):
         unscored.append("evidence_classification")
     return {
-        "version": _version(report, targets),
+        "version": _version(targets),
         "passed": not failed and not unscored,
         "failed": failed,
         "unscored": unscored,

@@ -79,6 +79,22 @@ async def test_a_fresh_screen_look_emits_its_resolution() -> None:
     assert resolved["vision_latency_ms"] >= 0
 
 
+async def test_repeated_evidence_gathers_have_distinct_explicit_attempts() -> None:
+    journal = RecordingJournal()
+    evidence = MeetingEvidence(context(read_timeline(), "Beta is 17 March 2027."), journal=journal)
+
+    await evidence("When is beta?", ("screen", "screen"), "t1")
+    await evidence("When is beta?", ("screen",), "t1")
+
+    started = journal.events("perception_evidence_started")
+    resolved = journal.events("perception_evidence_resolved")
+    assert len(started) == len(resolved) == 2
+    assert started[0]["attempt_id"] != started[1]["attempt_id"]
+    assert [row["attempt_id"] for row in resolved] == [row["attempt_id"] for row in started]
+    assert [row["evidence_kind"] for row in resolved] == ["screen", "screen"]
+    assert all(row["transcript_id"] == "t1" for row in started + resolved)
+
+
 async def test_a_participant_look_among_several_people_needs_a_name() -> None:
     timeline = read_timeline()
     timeline.participant("device-budi", "Budi")

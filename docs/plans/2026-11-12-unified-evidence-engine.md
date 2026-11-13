@@ -1010,6 +1010,16 @@ The inspector calls the model with `with_structured_output(VisualInspection)` an
 
 **Before a persisted format is removed**, a simple consumer inventory runs. If no compatibility obligation exists, it is removed directly. No migration framework is built.
 
+**Status: implemented.** The inventory for this phase found one consumer of the report and the scorecard, the `GET /{meeting_id}/report` endpoint in `api/debrief.py`, and one consumer of the journal format, the report builder itself. The debrief report is a different schema and does not read the scorecard. The repository has no release tag and the package version is `0.1.0`, so no consumer has been promised a format. The two retired markers were therefore removed from the journal rows without a compatibility shim.
+
+**What was removed.** `report_contract.py` keeps one classification algorithm, derived from the acquisition and the status of the evidence events. The legacy resolution based classifier, the `evidence_resolution_v2` marker and the scorecard fallback that returned the older target version for a journal without the evidence paths are gone. The scorecard applies the path gates unconditionally and reports an absent path as not applicable.
+
+**What was added.** The report keeps the provenance the evidence contract produces: `evidence_provenance` counts the acquisition, the status and the verification of the evidence the turns used, next to `evidence_cache` and `evidence_unclassified`. A produced answer is never reported as a verified claim, and an acquisition of `not_attempted` is never counted as a vision call.
+
+**Retry identity.** Deferred turns can gather evidence again under the same transcript ID. Each gather records `perception_evidence_started` with a new `attempt_id` before acquisition; its resolved events carry that ID. Classification uses the latest started attempt and requires one valid event per requested visual kind. Missing, duplicate, invalid or mismatched telemetry remains unclassified. Evidence from an earlier attempt cannot fill gaps in a retry, including a retry interrupted before any result was recorded.
+
+**The baseline.** `docs/reports/2026-11-14-pre-phase4-benchmark.json` is an archived metric snapshot containing selected per-session values, the baseline commit, the environment lock, the configuration and historical evaluator definitions. It does not contain complete scorecards or per-session evaluator markers. The baseline commit used target contract version 3 and resolution-based classification; journals without the evidence-path marker could receive scorecard version 2. Phase 4 moves the current contract to version 4 without changing target values. Comparisons must account for these metric semantics before interpreting numeric differences as improvements.
+
 **Scope decided after the review of the evidence contract.** Fakeyou is in development, so backward compatibility is not an automatic requirement. The legacy report evaluator, the `evidence_resolution_v2` branching and the journal compatibility markers are removed rather than maintained. Historical benchmark results are archived as static fixtures so a later change can be compared against them, and the existing tests are updated to the new contract.
 
 **Files:**
