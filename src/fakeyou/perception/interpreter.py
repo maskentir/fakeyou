@@ -76,6 +76,10 @@ def image_payload(data: bytes) -> ImagePayload:
     return ImagePayload(data=buffer.getvalue(), width=image.width, height=image.height)
 
 
+class EmptyVisionResponse(Exception):
+    pass
+
+
 class PerceptionInterpreter:
     def __init__(
         self,
@@ -141,7 +145,10 @@ class PerceptionInterpreter:
         with reservation:
             response = await self._invoke(lambda: self._model.ainvoke([message]))
             reservation.charge(tokens_used(response.usage_metadata, estimate))
-        return response.text.strip() or None
+        text = str(response.text).strip()
+        if not text:
+            raise EmptyVisionResponse
+        return text
 
     async def camera_answer(
         self,

@@ -999,6 +999,17 @@ The inspector calls the model with `with_structured_output(VisualInspection)` an
 
 **Release condition:** one report contract, one scorecard path, no version branch, and the historical benchmark kept as an artefact rather than as runtime logic.
 
+**Release criteria.**
+
+1. `report_contract.py` has one active evidence classification algorithm.
+2. `scorecard.py` uses one canonical report contract with no v1 or v2 fallback.
+3. No `evidence_resolution_v2` marker and no historical marker survives in a runtime path.
+4. The baseline benchmark is stored with its commit, its configuration and its metric definitions, so a change in the numbers is never read as a performance improvement.
+
+**Historical evaluation.** No legacy evaluator is built, not even as a fixture based one, because that still maintains the historical algorithm. Historical scorecard outputs are stored as immutable JSON artefacts, the historical input is kept when it is needed to reproduce them, and the commit sha and the environment lock are recorded with them. Recomputing a historical score means checking out the historical commit in isolation. Historical outputs are not golden tests for the new evaluator, because the metric semantics may change; what is tested is the truth of the current contract.
+
+**Before a persisted format is removed**, a simple consumer inventory runs. If no compatibility obligation exists, it is removed directly. No migration framework is built.
+
 **Scope decided after the review of the evidence contract.** Fakeyou is in development, so backward compatibility is not an automatic requirement. The legacy report evaluator, the `evidence_resolution_v2` branching and the journal compatibility markers are removed rather than maintained. Historical benchmark results are archived as static fixtures so a later change can be compared against them, and the existing tests are updated to the new contract.
 
 **Files:**
@@ -1152,7 +1163,7 @@ Three things are never traded away: a breaking change may never hide a regressio
 These stay open after Phase 2 and are not closed by a green pipeline.
 
 1. **Semantic correctness is unproven.** The vision model still returns free text. `code="ok"` means the model answered, not that the answer is supported by the frame. The structured verdict is Phase 3b and needs the simulator cassettes re-recorded with provider credentials.
-2. **Liveness during an inference is not fully proven.** The snapshot identity is validated after the inference, but the heartbeat age is not re-read at that point. A stream whose sampling stops without a camera-off event can still produce an answer that was live when the request started and is not live when it is returned. The product has to decide whether the contract is "observed at capture time" or "live at publication". The recommendation is to publish the capture time in the evidence and let the reply layer judge, because the alternative turns every moving participant into a failed turn.
+2. **Liveness during an inference is decided, not yet proven.** The product decision is that evidence may describe what was visible when the frame was captured, but it may not be presented as a live condition without a liveness check at the moment it is used. The provenance timestamp is mandatory, a valid historical answer is not failed because someone moved, and the question "what is happening right now?" may not be answered from a stale frame as if it were live. The contract carries the capture time and the observation time; proving the rule is Phase 3b and the Live E2E benchmark.
 3. **The simulator replay is not a strong oracle.** The simulator is green at HEAD, but the cassette matching is timing brittle and a scenario can fail for the wrong reason. That is recorded as Phase 4d.
 
 ## Self-review

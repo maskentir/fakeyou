@@ -22,7 +22,12 @@ from fakeyou.perception.evidence import (
     evidence_payload,
     evidence_resolution,
 )
-from fakeyou.perception.interpreter import CAMERA_SOURCE, SCREEN_SOURCE, PerceptionInterpreter
+from fakeyou.perception.interpreter import (
+    CAMERA_SOURCE,
+    SCREEN_SOURCE,
+    EmptyVisionResponse,
+    PerceptionInterpreter,
+)
 from fakeyou.perception.roster import MeetingState
 from fakeyou.perception.timeline import MeetingTimeline, TimelineSnapshot
 from fakeyou.perception.view import (
@@ -230,7 +235,7 @@ class PerceptionContext:
                 "targeted_vision",
                 error_type="TimeoutError",
             )
-        except (ProviderFault, FakeYouError, OSError) as error:
+        except (ProviderFault, FakeYouError, OSError, EmptyVisionResponse) as error:
             self.interpreter.invalidate_answers(person.participant_id)
             return _failed(
                 frame.ref,
@@ -261,7 +266,13 @@ class PerceptionContext:
         try:
             async with asyncio.timeout(LOOK_TIMEOUT_SECONDS):
                 answer = await self.interpreter.answer(data, question, source=source)
-        except (ProviderFault, FakeYouError, OSError, TimeoutError) as error:
+        except (
+            ProviderFault,
+            FakeYouError,
+            OSError,
+            TimeoutError,
+            EmptyVisionResponse,
+        ) as error:
             return _failed(
                 ref,
                 subject_id,

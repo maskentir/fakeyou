@@ -590,6 +590,23 @@ async def test_the_journal_carries_the_snapshot_correlation() -> None:
     )
 
 
+async def test_an_empty_camera_answer_is_a_failed_inspection_not_a_budget_refusal() -> None:
+    model = vision_model(answers=["   "])
+    timeline, context, _interpreter = camera_stack(model)
+    put_frame(timeline, jpeg_of((140, 130, 120)))
+
+    result = await context.look_at_participant("Budi", "What color is his shirt?")
+
+    assert len(model.seen) == 1
+    assert result.code == "look_failed"
+    assert result.acquisition == "inference"
+    assert result.answer is None
+    payload = evidence_payload(result)
+    assert payload["code"] == "look_failed"
+    assert payload["acquisition"] == "inference"
+    assert "answer" not in payload
+
+
 async def test_a_provider_failure_reports_a_failed_look() -> None:
     model = vision_model(answers=["A dark blue shirt."])
     timeline, context, interpreter = camera_stack(model)

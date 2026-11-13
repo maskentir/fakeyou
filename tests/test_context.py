@@ -242,6 +242,23 @@ async def test_looking_at_a_dashboard_answers_from_the_image() -> None:
     assert context.interpreter.budget.calls == 1
 
 
+async def test_an_empty_screen_answer_is_a_failed_inspection_not_a_budget_refusal() -> None:
+    timeline = shown_timeline(TIMELINE)
+    timeline.read_screen(
+        "screen#1",
+        reading("Cartesia Usage", text="Receipt 1450-6289 Rp899,900", kind="dashboard"),
+    )
+    context = _context(timeline, answers=("   ",))
+
+    result = await context.look_at_screen("current", "what was paid?")
+
+    assert result.code == "look_failed"
+    assert result.acquisition == "inference"
+    assert result.answer is None
+    assert context.interpreter is not None
+    assert context.interpreter.budget.calls == 1
+
+
 async def test_looking_at_an_unread_screen_is_refused() -> None:
     timeline = shown_timeline(TIMELINE)
     context = _context(timeline, answers=("anything",))
