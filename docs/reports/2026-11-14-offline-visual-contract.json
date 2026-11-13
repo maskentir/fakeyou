@@ -1,0 +1,179 @@
+{
+  "evaluation_kind": "scripted fake-model contract check",
+  "limitation": "Validates schema and scorer only; does not measure an actual vision model.",
+  "report": {
+    "mode": "offline_closed_set",
+    "dataset_sha256": "882332afeb3743d0d7fd8496db510cd54bc70dd4d0acbc01fcca6e0c598e034b",
+    "label_source": "Fixture-author labels from controlled scene definitions, independent of evaluated outputs. Synthetic screens and a schematic camera scene; no claim of human review or natural-image validation.",
+    "cases": [
+      {
+        "case_id": "screen-date",
+        "expected_verdict": "supported",
+        "verdict": "supported",
+        "answer": "17 March 2027",
+        "observed_facts": [
+          "Beta: 17 March 2027"
+        ],
+        "answer_correct": true,
+        "abstained": false,
+        "grounded_assertions": 2,
+        "assertions": 2,
+        "false_claim": false,
+        "error": null
+      },
+      {
+        "case_id": "screen-owner",
+        "expected_verdict": "supported",
+        "verdict": "supported",
+        "answer": "Budi",
+        "observed_facts": [
+          "Owner: Budi"
+        ],
+        "answer_correct": true,
+        "abstained": false,
+        "grounded_assertions": 2,
+        "assertions": 2,
+        "false_claim": false,
+        "error": null
+      },
+      {
+        "case_id": "screen-title",
+        "expected_verdict": "supported",
+        "verdict": "supported",
+        "answer": "Orchid",
+        "observed_facts": [
+          "Project Orchid"
+        ],
+        "answer_correct": true,
+        "abstained": false,
+        "grounded_assertions": 2,
+        "assertions": 2,
+        "false_claim": false,
+        "error": null
+      },
+      {
+        "case_id": "screen-cost",
+        "expected_verdict": "not_visible",
+        "verdict": "not_visible",
+        "answer": null,
+        "observed_facts": [
+          "no budget is shown"
+        ],
+        "answer_correct": false,
+        "abstained": true,
+        "grounded_assertions": 1,
+        "assertions": 1,
+        "false_claim": false,
+        "error": null
+      },
+      {
+        "case_id": "camera-shirt",
+        "expected_verdict": "supported",
+        "verdict": "supported",
+        "answer": "blue",
+        "observed_facts": [
+          "blue shirt"
+        ],
+        "answer_correct": true,
+        "abstained": false,
+        "grounded_assertions": 2,
+        "assertions": 2,
+        "false_claim": false,
+        "error": null
+      },
+      {
+        "case_id": "camera-name",
+        "expected_verdict": "not_visible",
+        "verdict": "not_visible",
+        "answer": null,
+        "observed_facts": [
+          "no name is shown"
+        ],
+        "answer_correct": false,
+        "abstained": true,
+        "grounded_assertions": 1,
+        "assertions": 1,
+        "false_claim": false,
+        "error": null
+      },
+      {
+        "case_id": "occluded-date",
+        "expected_verdict": "unclear",
+        "verdict": "unclear",
+        "answer": null,
+        "observed_facts": [
+          "date is obscured"
+        ],
+        "answer_correct": false,
+        "abstained": true,
+        "grounded_assertions": 1,
+        "assertions": 1,
+        "false_claim": false,
+        "error": null
+      },
+      {
+        "case_id": "occluded-owner",
+        "expected_verdict": "supported",
+        "verdict": "supported",
+        "answer": "Budi",
+        "observed_facts": [
+          "Owner: Budi"
+        ],
+        "answer_correct": true,
+        "abstained": false,
+        "grounded_assertions": 2,
+        "assertions": 2,
+        "false_claim": false,
+        "error": null
+      }
+    ],
+    "metrics": {
+      "verdict_accuracy": {
+        "count": 8,
+        "of": 8,
+        "rate": 1.0
+      },
+      "answer_accuracy": {
+        "count": 5,
+        "of": 5,
+        "rate": 1.0
+      },
+      "grounding_precision": {
+        "count": 13,
+        "of": 13,
+        "rate": 1.0
+      },
+      "false_claim_rate": {
+        "count": 0,
+        "of": 8,
+        "rate": 0.0
+      },
+      "abstention_precision": {
+        "count": 3,
+        "of": 3,
+        "rate": 1.0
+      },
+      "abstention_recall": {
+        "count": 3,
+        "of": 3,
+        "rate": 1.0
+      },
+      "false_abstention_rate": {
+        "count": 0,
+        "of": 5,
+        "rate": 0.0
+      },
+      "invalid_output_rate": {
+        "count": 0,
+        "of": 8,
+        "rate": 0.0
+      },
+      "model_error_rate": {
+        "count": 0,
+        "of": 8,
+        "rate": 0.0
+      }
+    },
+    "passed": true
+  }
+}

@@ -1,0 +1,392 @@
+{
+  "label_source": "Fixture-author labels from controlled scene definitions, independent of evaluated outputs. Synthetic screens and a schematic camera scene; no claim of human review or natural-image validation.",
+  "cases": [
+    {
+      "id": "screen-date",
+      "image": "screen.png",
+      "image_sha256": "d00c03e8296fc47f3ae531d58e2ee5830a3a950d266833d27de102d281590f4e",
+      "question": "What is the beta date?",
+      "expected_verdict": "supported",
+      "expected_answers": [
+        "17 March 2027"
+      ],
+      "annotations": [
+        {
+          "region": [
+            35,
+            35,
+            460,
+            90
+          ],
+          "visibility": "visible",
+          "facts": [
+            "Project Orchid"
+          ]
+        },
+        {
+          "region": [
+            35,
+            120,
+            470,
+            185
+          ],
+          "visibility": "visible",
+          "facts": [
+            "Beta: 17 March 2027"
+          ]
+        },
+        {
+          "region": [
+            35,
+            220,
+            360,
+            280
+          ],
+          "visibility": "visible",
+          "facts": [
+            "Owner: Budi"
+          ]
+        }
+      ],
+      "rationale": "The beta date is legible in the annotated line."
+    },
+    {
+      "id": "screen-owner",
+      "image": "screen.png",
+      "image_sha256": "d00c03e8296fc47f3ae531d58e2ee5830a3a950d266833d27de102d281590f4e",
+      "question": "Who owns the project?",
+      "expected_verdict": "supported",
+      "expected_answers": [
+        "Budi"
+      ],
+      "annotations": [
+        {
+          "region": [
+            35,
+            35,
+            460,
+            90
+          ],
+          "visibility": "visible",
+          "facts": [
+            "Project Orchid"
+          ]
+        },
+        {
+          "region": [
+            35,
+            120,
+            470,
+            185
+          ],
+          "visibility": "visible",
+          "facts": [
+            "Beta: 17 March 2027"
+          ]
+        },
+        {
+          "region": [
+            35,
+            220,
+            360,
+            280
+          ],
+          "visibility": "visible",
+          "facts": [
+            "Owner: Budi"
+          ]
+        }
+      ],
+      "rationale": "The owner line names Budi."
+    },
+    {
+      "id": "screen-title",
+      "image": "screen.png",
+      "image_sha256": "d00c03e8296fc47f3ae531d58e2ee5830a3a950d266833d27de102d281590f4e",
+      "question": "What is the project name?",
+      "expected_verdict": "supported",
+      "expected_answers": [
+        "Orchid",
+        "Project Orchid"
+      ],
+      "annotations": [
+        {
+          "region": [
+            35,
+            35,
+            460,
+            90
+          ],
+          "visibility": "visible",
+          "facts": [
+            "Project Orchid"
+          ]
+        },
+        {
+          "region": [
+            35,
+            120,
+            470,
+            185
+          ],
+          "visibility": "visible",
+          "facts": [
+            "Beta: 17 March 2027"
+          ]
+        },
+        {
+          "region": [
+            35,
+            220,
+            360,
+            280
+          ],
+          "visibility": "visible",
+          "facts": [
+            "Owner: Budi"
+          ]
+        }
+      ],
+      "rationale": "The title explicitly names the project."
+    },
+    {
+      "id": "screen-cost",
+      "image": "screen.png",
+      "image_sha256": "d00c03e8296fc47f3ae531d58e2ee5830a3a950d266833d27de102d281590f4e",
+      "question": "What is the project budget?",
+      "expected_verdict": "not_visible",
+      "expected_answers": [],
+      "annotations": [
+        {
+          "region": [
+            35,
+            35,
+            460,
+            90
+          ],
+          "visibility": "visible",
+          "facts": [
+            "Project Orchid"
+          ]
+        },
+        {
+          "region": [
+            35,
+            120,
+            470,
+            185
+          ],
+          "visibility": "visible",
+          "facts": [
+            "Beta: 17 March 2027"
+          ]
+        },
+        {
+          "region": [
+            35,
+            220,
+            360,
+            280
+          ],
+          "visibility": "visible",
+          "facts": [
+            "Owner: Budi"
+          ]
+        },
+        {
+          "region": [
+            0,
+            0,
+            640,
+            360
+          ],
+          "visibility": "absent",
+          "facts": [
+            "no budget is shown"
+          ]
+        }
+      ],
+      "rationale": "The complete controlled slide has no budget field."
+    },
+    {
+      "id": "camera-shirt",
+      "image": "schematic-camera.png",
+      "image_sha256": "9ecf8cc93d3589243c722e6e49868f1c7b6f0750e43ea699049c82e30f5f739d",
+      "question": "What color is the shirt?",
+      "expected_verdict": "supported",
+      "expected_answers": [
+        "blue"
+      ],
+      "annotations": [
+        {
+          "region": [
+            200,
+            145,
+            440,
+            360
+          ],
+          "visibility": "visible",
+          "facts": [
+            "blue shirt"
+          ]
+        },
+        {
+          "region": [
+            470,
+            230,
+            575,
+            335
+          ],
+          "visibility": "visible",
+          "facts": [
+            "red mug"
+          ]
+        }
+      ],
+      "rationale": "The shirt region is uniformly blue in this schematic, not a real camera photograph."
+    },
+    {
+      "id": "camera-name",
+      "image": "schematic-camera.png",
+      "image_sha256": "9ecf8cc93d3589243c722e6e49868f1c7b6f0750e43ea699049c82e30f5f739d",
+      "question": "What is the name of the person?",
+      "expected_verdict": "not_visible",
+      "expected_answers": [],
+      "annotations": [
+        {
+          "region": [
+            200,
+            145,
+            440,
+            360
+          ],
+          "visibility": "visible",
+          "facts": [
+            "blue shirt"
+          ]
+        },
+        {
+          "region": [
+            470,
+            230,
+            575,
+            335
+          ],
+          "visibility": "visible",
+          "facts": [
+            "red mug"
+          ]
+        },
+        {
+          "region": [
+            0,
+            0,
+            640,
+            360
+          ],
+          "visibility": "absent",
+          "facts": [
+            "no name is shown"
+          ]
+        }
+      ],
+      "rationale": "The schematic carries no identity label; appearance does not establish a name."
+    },
+    {
+      "id": "occluded-date",
+      "image": "occluded-screen.png",
+      "image_sha256": "f53d8375cd68b11359ef3983f43c920c9cbb3543126d9fd319d840d0df7b69a9",
+      "question": "What is the beta date?",
+      "expected_verdict": "unclear",
+      "expected_answers": [],
+      "annotations": [
+        {
+          "region": [
+            35,
+            35,
+            460,
+            90
+          ],
+          "visibility": "visible",
+          "facts": [
+            "Project Orchid"
+          ]
+        },
+        {
+          "region": [
+            35,
+            120,
+            470,
+            185
+          ],
+          "visibility": "obscured",
+          "facts": [
+            "date is obscured"
+          ]
+        },
+        {
+          "region": [
+            35,
+            220,
+            360,
+            280
+          ],
+          "visibility": "visible",
+          "facts": [
+            "Owner: Budi"
+          ]
+        }
+      ],
+      "rationale": "The relevant beta date field is present but covered. The clean companion image is not an input to this case."
+    },
+    {
+      "id": "occluded-owner",
+      "image": "occluded-screen.png",
+      "image_sha256": "f53d8375cd68b11359ef3983f43c920c9cbb3543126d9fd319d840d0df7b69a9",
+      "question": "Who owns the project?",
+      "expected_verdict": "supported",
+      "expected_answers": [
+        "Budi"
+      ],
+      "annotations": [
+        {
+          "region": [
+            35,
+            35,
+            460,
+            90
+          ],
+          "visibility": "visible",
+          "facts": [
+            "Project Orchid"
+          ]
+        },
+        {
+          "region": [
+            35,
+            120,
+            470,
+            185
+          ],
+          "visibility": "obscured",
+          "facts": [
+            "date is obscured"
+          ]
+        },
+        {
+          "region": [
+            35,
+            220,
+            360,
+            280
+          ],
+          "visibility": "visible",
+          "facts": [
+            "Owner: Budi"
+          ]
+        }
+      ],
+      "rationale": "The owner remains legible despite the occluded date."
+    }
+  ]
+}

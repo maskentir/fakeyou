@@ -1,0 +1,55 @@
+{
+  "screen-date": {
+    "verdict": "supported",
+    "answer": "17 March 2027",
+    "observed_facts": [
+      "Beta: 17 March 2027"
+    ]
+  },
+  "screen-owner": {
+    "verdict": "supported",
+    "answer": "Budi",
+    "observed_facts": [
+      "Owner: Budi"
+    ]
+  },
+  "screen-title": {
+    "verdict": "supported",
+    "answer": "Orchid",
+    "observed_facts": [
+      "Project Orchid"
+    ]
+  },
+  "screen-cost": {
+    "verdict": "not_visible",
+    "observed_facts": [
+      "no budget is shown"
+    ]
+  },
+  "camera-shirt": {
+    "verdict": "supported",
+    "answer": "blue",
+    "observed_facts": [
+      "blue shirt"
+    ]
+  },
+  "camera-name": {
+    "verdict": "not_visible",
+    "observed_facts": [
+      "no name is shown"
+    ]
+  },
+  "occluded-date": {
+    "verdict": "unclear",
+    "observed_facts": [
+      "date is obscured"
+    ]
+  },
+  "occluded-owner": {
+    "verdict": "supported",
+    "answer": "Budi",
+    "observed_facts": [
+      "Owner: Budi"
+    ]
+  }
+}
