@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
 
+from fakeyou.perception.inspector import VisualInspection
+
 EvidenceSource = Literal["camera", "screen"]
 Acquisition = Literal["not_attempted", "reused", "inference"]
 EvidenceStatus = Literal["produced", "insufficient", "unavailable"]
@@ -66,6 +68,12 @@ class EvidenceResult:
     vision_latency_ms: int = 0
     error_type: str | None = None
     subject_label: str | None = None
+
+
+def inspection_outcome(inspection: VisualInspection) -> tuple[EvidenceStatus, EvidenceCode]:
+    if inspection.verdict == "supported":
+        return ("produced", "ok")
+    return ("insufficient", "insufficient_evidence")
 
 
 def evidence_resolution(result: EvidenceResult) -> str:

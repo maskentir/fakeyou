@@ -9,6 +9,7 @@ from langchain_core.messages import HumanMessage
 from fakeyou.perception import context as context_module
 from fakeyou.perception.budget import PerceptionBudget
 from fakeyou.perception.context import MeetingEvidence, PerceptionContext, gather_evidence
+from fakeyou.perception.inspector import VisualInspection
 from fakeyou.perception.interpreter import PerceptionInterpreter
 from fakeyou.perception.timeline import CameraSample, MeetingTimeline
 from tests._perception_fakes import START, reading, shown_timeline, slide_jpeg, vision_model
@@ -63,6 +64,26 @@ async def test_a_planned_screen_look_answers_the_spoken_question() -> None:
     assert screen["resolution"] == "fresh"
     assert screen["age_ms"] == 0
     assert screen["vision_latency_ms"] >= 0
+
+
+async def test_a_screen_look_that_abstains_reports_insufficient_evidence() -> None:
+    timeline = read_timeline()
+    interpreter = PerceptionInterpreter(
+        vision_model(inspections=[VisualInspection(verdict="not_visible")]),
+        PerceptionBudget(budget_usd=1.0, max_calls=10),
+        max_concurrent=1,
+        snapshots=timeline.camera_frames,
+    )
+    context = PerceptionContext(
+        timeline, interpreter, max_chars=6000, clock=lambda: START + timedelta(minutes=2)
+    )
+
+    evidence, _results = await gather_evidence(context, "When is beta?", ("screen",))
+
+    screen = evidence["screen"]
+    assert screen["code"] == "insufficient_evidence"
+    assert screen["status"] == "insufficient"
+    assert "answer" not in screen
 
 
 async def test_a_fresh_screen_look_emits_its_resolution() -> None:

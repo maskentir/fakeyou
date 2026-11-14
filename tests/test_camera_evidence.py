@@ -21,6 +21,7 @@ from fakeyou.perception.context import (
 )
 from fakeyou.perception.evidence import EvidenceResult, evidence_payload
 from fakeyou.perception.frames import keyframe_from_jpeg
+from fakeyou.perception.inspector import VisualInspection
 from fakeyou.perception.interpreter import PerceptionInterpreter
 from fakeyou.perception.percepts import Keyframe
 from fakeyou.perception.sensors import (
@@ -125,7 +126,7 @@ async def test_the_same_question_on_the_same_frame_is_answered_once() -> None:
     assert second is not None
     assert second.acquisition == "reused"
     assert second.vision_latency_ms == 0
-    assert len(model.seen) == 1
+    assert len(model.structured_seen) == 1
 
 
 async def test_a_different_frame_is_inspected_again() -> None:
@@ -150,7 +151,7 @@ async def test_a_different_frame_is_inspected_again() -> None:
     assert second is not None
     assert second.acquisition == "inference"
     assert second.answer == "A red shirt."
-    assert len(model.seen) == 2
+    assert len(model.structured_seen) == 2
 
 
 async def test_another_participant_is_answered_separately() -> None:
@@ -176,7 +177,7 @@ async def test_another_participant_is_answered_separately() -> None:
 
     assert other is not None
     assert other.acquisition == "inference"
-    assert len(model.seen) == 2
+    assert len(model.structured_seen) == 2
 
 
 async def test_two_identical_questions_about_one_frame_share_one_vision_call() -> None:
@@ -192,7 +193,7 @@ async def test_two_identical_questions_about_one_frame_share_one_vision_call() -
     assert first is not None
     assert second is not None
     assert {first.acquisition, second.acquisition} == {"reused", "inference"}
-    assert len(model.seen) == 1
+    assert len(model.structured_seen) == 1
 
 
 async def test_two_different_questions_about_one_frame_get_their_own_answers() -> None:
@@ -212,7 +213,7 @@ async def test_two_different_questions_about_one_frame_get_their_own_answers() -
     assert first.answer == "A dark blue shirt."
     assert second.answer == "The shirt says HELLO."
     assert second.acquisition == "inference"
-    assert len(model.seen) == 2
+    assert len(model.structured_seen) == 2
 
 
 async def test_a_stale_answer_is_not_reused() -> None:
@@ -262,7 +263,7 @@ async def test_a_camera_question_is_answered_by_one_inspection_of_the_live_frame
     assert result.acquisition == "inference"
     assert result.strategy == "targeted_vision"
     assert result.vision_latency_ms >= 0
-    assert len(model.seen) == 1
+    assert len(model.structured_seen) == 1
 
 
 async def test_the_same_camera_question_is_answered_from_the_cache() -> None:
@@ -276,7 +277,7 @@ async def test_the_same_camera_question_is_answered_from_the_cache() -> None:
     assert result.code == "ok"
     assert result.acquisition == "reused"
     assert result.vision_latency_ms == 0
-    assert len(model.seen) == 1
+    assert len(model.structured_seen) == 1
 
 
 async def test_another_camera_question_is_inspected_again() -> None:
@@ -290,7 +291,7 @@ async def test_another_camera_question_is_inspected_again() -> None:
     assert result.code == "ok"
     assert result.acquisition == "inference"
     assert result.answer == "The shirt says HELLO."
-    assert len(model.seen) == 2
+    assert len(model.structured_seen) == 2
 
 
 async def test_a_camera_question_the_model_cannot_see_keeps_the_model_answer() -> None:
@@ -303,7 +304,7 @@ async def test_a_camera_question_the_model_cannot_see_keeps_the_model_answer() -
     assert result.code == "ok"
     assert result.answer == "The text is not visible in the frame."
     assert result.strategy == "targeted_vision"
-    assert len(model.seen) == 1
+    assert len(model.structured_seen) == 1
 
 
 async def test_budget_exhausted_for_camera_does_not_guess() -> None:
@@ -336,7 +337,7 @@ async def test_an_invalidation_before_the_inference_rejects_the_answer() -> None
     snapshot = put_frame(timeline, jpeg_of((120, 120, 120)))
     original = interpreter.answer
 
-    async def answered(image: bytes, question: str, *, source: str) -> str | None:
+    async def answered(image: bytes, question: str, *, source: str) -> VisualInspection | None:
         timeline.camera_frames.drop("device-p1")
         return await original(image, question, source=source)
 
@@ -387,7 +388,7 @@ async def test_a_new_frame_during_the_inference_rejects_the_answer() -> None:
     snapshot = put_frame(timeline, jpeg_of((120, 120, 120)))
     original = interpreter.answer
 
-    async def answered(image: bytes, question: str, *, source: str) -> str | None:
+    async def answered(image: bytes, question: str, *, source: str) -> VisualInspection | None:
         timeline.camera_frames.put(
             "device-p1",
             CameraSample(
@@ -439,7 +440,7 @@ async def test_a_cache_hit_is_refused_when_the_frame_changed(
     with pytest.raises(StaleEvidence):
         await interpreter.camera_answer("device-p1", "device-p1", QUESTION, snapshot, source=SOURCE)
 
-    assert len(model.seen) == 1
+    assert len(model.structured_seen) == 1
     cache = object.__getattribute__(interpreter, "_camera_cache")
     assert cache.get("device-p1") is not None
 
@@ -591,13 +592,13 @@ async def test_the_journal_carries_the_snapshot_correlation() -> None:
 
 
 async def test_an_empty_camera_answer_is_a_failed_inspection_not_a_budget_refusal() -> None:
-    model = vision_model(answers=["   "])
+    model = vision_model(inspections=[None])
     timeline, context, _interpreter = camera_stack(model)
     put_frame(timeline, jpeg_of((140, 130, 120)))
 
     result = await context.look_at_participant("Budi", "What color is his shirt?")
 
-    assert len(model.seen) == 1
+    assert len(model.structured_seen) == 1
     assert result.code == "look_failed"
     assert result.acquisition == "inference"
     assert result.answer is None
@@ -605,6 +606,61 @@ async def test_an_empty_camera_answer_is_a_failed_inspection_not_a_budget_refusa
     assert payload["code"] == "look_failed"
     assert payload["acquisition"] == "inference"
     assert "answer" not in payload
+
+
+async def test_the_verdict_decides_the_evidence_status() -> None:
+    supported = vision_model(
+        inspections=[VisualInspection(verdict="supported", answer="A blue shirt.")]
+    )
+    timeline, _context, interpreter = camera_stack(supported)
+    frame = put_frame(timeline, jpeg_of((140, 130, 120)))
+
+    produced = await interpreter.camera_answer(
+        "device-p1", "device-p1", QUESTION, frame, source=SOURCE
+    )
+
+    assert produced.status == "produced"
+    assert produced.code == "ok"
+    assert produced.answer == "A blue shirt."
+    assert produced.verification == "unverified"
+
+
+async def test_an_abstention_is_insufficient_evidence_and_not_an_answer() -> None:
+    abstaining = vision_model(inspections=[VisualInspection(verdict="not_visible")])
+    timeline, _context, interpreter = camera_stack(abstaining)
+    frame = put_frame(timeline, jpeg_of((140, 130, 120)))
+
+    result = await interpreter.camera_answer(
+        "device-p1", "device-p1", QUESTION, frame, source=SOURCE
+    )
+
+    assert result.status == "insufficient"
+    assert result.code == "insufficient_evidence"
+    assert result.answer is None
+    assert result.verification == "unverified"
+
+
+async def test_a_cached_abstention_stays_an_abstention() -> None:
+    abstaining = vision_model(inspections=[VisualInspection(verdict="unclear")])
+    timeline, _context, interpreter = camera_stack(abstaining)
+    frame = put_frame(timeline, jpeg_of((140, 130, 120)))
+
+    first = await interpreter.camera_answer(
+        "device-p1", "device-p1", QUESTION, frame, source=SOURCE
+    )
+    second = await interpreter.camera_answer(
+        "device-p1", "device-p1", QUESTION, frame, source=SOURCE
+    )
+
+    assert first.status == "insufficient"
+    assert first.code == "insufficient_evidence"
+    assert first.answer is None
+    assert second.acquisition == "reused"
+    assert second.status == "insufficient"
+    assert second.code == "insufficient_evidence"
+    assert second.answer is None
+    assert second.verification == "unverified"
+    assert len(abstaining.structured_seen) == 1
 
 
 async def test_a_provider_failure_reports_a_failed_look() -> None:
@@ -709,7 +765,7 @@ class CameraStack:
         self.sample_ms = JOINED_MS
         self.journal = Journal("m1", emit=lambda _: None)
         self.timeline = MeetingTimeline(journal=self.journal)
-        self.model = vision_model()
+        self.model = vision_model(answers=["A person is visible."])
         self.interpreter = PerceptionInterpreter(
             self.model,
             PerceptionBudget(budget_usd=10.0, max_calls=50),
@@ -1041,7 +1097,7 @@ async def test_a_reassigned_camera_drops_the_frame_and_the_cached_answer() -> No
     await stack.heartbeat()
     first = await stack.look()
     assert first.code == "ok"
-    seen = len(stack.model.seen)
+    seen = len(stack.model.structured_seen)
 
     rebound = collection_payload(
         users=[
@@ -1067,7 +1123,7 @@ async def test_a_reassigned_camera_drops_the_frame_and_the_cached_answer() -> No
 
     unavailable = await stack.look()
     assert unavailable.code == "camera_unavailable"
-    assert len(stack.model.seen) == seen
+    assert len(stack.model.structured_seen) == seen
 
     await stack.sensors.accept_batch(
         DrainBatch(
@@ -1081,7 +1137,7 @@ async def test_a_reassigned_camera_drops_the_frame_and_the_cached_answer() -> No
     fresh = await stack.look()
     assert fresh.code == "ok"
     assert fresh.acquisition == "inference"
-    assert len(stack.model.seen) == seen + 1
+    assert len(stack.model.structured_seen) == seen + 1
 
 
 async def test_a_frame_decoded_across_a_camera_off_and_on_is_dropped(

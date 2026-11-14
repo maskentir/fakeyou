@@ -15,6 +15,7 @@ from fakeyou.perception.context import (
     PerceptionContext,
     create_perception_middleware,
 )
+from fakeyou.perception.inspector import VisualInspection
 from fakeyou.perception.interpreter import PerceptionInterpreter
 from fakeyou.perception.percepts import IncomingChat
 from fakeyou.perception.timeline import CameraSample, MeetingTimeline
@@ -44,11 +45,15 @@ def _participant(text: str, message_id: str) -> HumanMessage:
 
 
 def _context(
-    timeline: MeetingTimeline, *, answers: tuple[str, ...] = (), max_calls: int = 10
+    timeline: MeetingTimeline,
+    *,
+    answers: tuple[str, ...] = (),
+    inspections: tuple[VisualInspection | None, ...] = (),
+    max_calls: int = 10,
 ) -> PerceptionContext:
     budget = PerceptionBudget(budget_usd=1.0, max_calls=max_calls)
     interpreter = PerceptionInterpreter(
-        vision_model(answers=answers),
+        vision_model(answers=answers, inspections=inspections),
         budget,
         max_concurrent=1,
         snapshots=timeline.camera_frames,
@@ -248,7 +253,7 @@ async def test_an_empty_screen_answer_is_a_failed_inspection_not_a_budget_refusa
         "screen#1",
         reading("Cartesia Usage", text="Receipt 1450-6289 Rp899,900", kind="dashboard"),
     )
-    context = _context(timeline, answers=("   ",))
+    context = _context(timeline, inspections=(None,))
 
     result = await context.look_at_screen("current", "what was paid?")
 

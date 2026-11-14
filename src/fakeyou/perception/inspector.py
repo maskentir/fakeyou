@@ -4,6 +4,7 @@ from pydantic import BaseModel, ConfigDict, StringConstraints, model_validator
 
 VisualVerdict = Literal["supported", "not_visible", "unclear"]
 InspectionText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+VISUAL_INSPECTION_SCHEMA_VERSION = "visual-inspection/1"
 
 
 class VisualInspection(BaseModel):

@@ -108,15 +108,33 @@ async def test_answer_looks_at_the_image_for_a_specific_question() -> None:
     model = vision_model(answers=["The beta is on 17 March 2027."])
     interpreter = _interpreter(model)
 
-    answer = await interpreter.answer(
+    inspection = await interpreter.answer(
         slide_jpeg(*TIMELINE), "When is the beta?", source=CAMERA_SOURCE.format(name="Harun")
     )
 
-    [[message]] = model.seen
-    assert answer == "The beta is on 17 March 2027."
+    [[message]] = model.structured_seen
+    assert inspection is not None
+    assert inspection.verdict == "supported"
+    assert inspection.answer == "The beta is on 17 March 2027."
     assert "Question: When is the beta?" in content_block(message, 1)["text"]
     assert "the person shown is Harun" in content_block(message, 1)["text"]
     assert interpreter.budget.calls == 1
+
+
+async def test_an_unparsed_inspection_is_a_named_error_but_still_costs_tokens() -> None:
+    model = vision_model(inspections=[None])
+    interpreter = _interpreter(model)
+
+    with pytest.raises(FakeYouError, match="no usable visual inspection") as caught:
+        await interpreter.answer(
+            slide_jpeg(*TIMELINE),
+            "When is the beta?",
+            source=CAMERA_SOURCE.format(name="Harun"),
+        )
+
+    assert caught.value.code is ErrorCode.PERCEPTION_INSPECTION_UNPARSED
+    assert interpreter.budget.calls == 1
+    assert interpreter.budget.spent_usd > 0
 
 
 async def test_the_reader_reads_each_new_screen_once() -> None:

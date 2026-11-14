@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 
 from fakeyou.perception.evidence import SnapshotRef
 from fakeyou.perception.frames import compare_screens
+from fakeyou.perception.inspector import VisualInspection
 from fakeyou.perception.percepts import Keyframe
 
 
@@ -15,7 +16,7 @@ def observations_match(left: Keyframe, right: Keyframe) -> bool:
 @dataclass(slots=True)
 class AnswerEntry:
     question: str
-    answer: str
+    inspection: VisualInspection
     ref: SnapshotRef
     keyframe: Keyframe
     stored_at: float

@@ -26,11 +26,13 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
+from evals._visual_cassette import ExperimentBudget
 from fakeyou.config.settings import CartesiaTTS, GoogleReply, Settings
 from fakeyou.foundation.invariants import PLAYBACK_SAMPLE_RATE
+from fakeyou.perception.interpreter import INSPECTION_PROMPT_MARKER
 from fakeyou.speech.websocket import secure_scheme
 
-ProviderMode = Literal["live", "record", "replay"]
+ProviderMode = Literal["live", "record", "record_looks", "replay"]
 GOOGLE = "https://generativelanguage.googleapis.com"
 CASSETTES = Path(__file__).parent / "fixtures" / "simulator" / "cassettes"
 MIN_SIMILARITY = 0.75
@@ -50,6 +52,8 @@ SECRET_MASK = "**********"
 REPLY_ROLES = ("reply", "reply_strong", "reply_fallback", "debrief")
 DOUBLE_KEY = "double"
 STT_ROUTE = "stt"
+RECORDED_LOOK_MARKER = "Answer the question using only what is visible in the image"
+CONSERVATIVE_LOOK_USD = 0.01
 VOICE_LEVEL = 0.01
 QUIET_GAP_SECONDS = 0.6
 CLAIM_WINDOW_SECONDS = 3.0
@@ -66,9 +70,50 @@ VOLATILE = (
 
 def provider_mode() -> ProviderMode:
     mode = os.environ.get("SIMULATOR_PROVIDERS", "live")
-    if mode not in ("live", "record", "replay"):
-        raise ValueError(f"SIMULATOR_PROVIDERS must be live, record or replay, not {mode!r}")
+    if mode not in ("live", "record", "record_looks", "replay"):
+        raise ValueError(
+            f"SIMULATOR_PROVIDERS must be live, record, record_looks or replay, not {mode!r}"
+        )
     return cast(ProviderMode, mode)
+
+
+def _usage_from_body(body: str) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    try:
+        whole = json.loads(body)
+    except ValueError:
+        whole = None
+    if isinstance(whole, dict):
+        payload = whole
+    for line in body.splitlines() if not payload else ():
+        text = line.strip()
+        if text.startswith("data:"):
+            text = text[len("data:") :].strip()
+        if not text or text == "[DONE]":
+            continue
+        try:
+            parsed = json.loads(text)
+        except ValueError:
+            continue
+        if isinstance(parsed, dict):
+            payload = parsed
+    usage = payload.get("usageMetadata") or {}
+    return {
+        "input_tokens": int(usage.get("promptTokenCount") or 0),
+        "output_tokens": int(usage.get("candidatesTokenCount") or 0),
+        "total_tokens": int(usage.get("totalTokenCount") or 0),
+    }
+
+
+def _is_look_request(body: bytes) -> bool:
+    try:
+        request = json.loads(body)
+    except ValueError:
+        return False
+    contents = request.get("contents") or []
+    if not contents:
+        return False
+    return INSPECTION_PROMPT_MARKER in json.dumps(contents[-1], ensure_ascii=False)
 
 
 def _without_images(value: Any) -> Any:
@@ -166,6 +211,21 @@ class Cassette:
         self.entries.append(dict(entry))
         with self.path.open("a", encoding="utf-8") as file:
             file.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+    def replace_looks(self, route: str, entry: Mapping[str, Any]) -> None:
+        kept = [
+            item
+            for item in self.entries
+            if not (
+                item.get("route") == route and RECORDED_LOOK_MARKER in str(item.get("focus", ""))
+            )
+        ]
+        kept.append(dict(entry))
+        self.entries = kept
+        self.path.write_text(
+            "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in kept),
+            encoding="utf-8",
+        )
 
     def miss(self, detail: Mapping[str, Any]) -> None:
         self.misses.append(json.dumps(detail, ensure_ascii=False)[:400])
@@ -346,6 +406,23 @@ class ProviderDoubles:
             SNAPSHOT.write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n")
             self._stt_upstream = settings.stt.url
             return self._pointed(settings, None)
+        if self.mode == "record_looks":
+            snapshot = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
+            recorded = Settings.model_validate({**snapshot, "paths": settings.paths.model_dump()})
+            _require_google(recorded)
+            self._stt_upstream = recorded.stt.url
+            pointed = self._pointed(recorded, SecretStr(DOUBLE_KEY))
+            return pointed.model_copy(
+                update={
+                    "perception": pointed.perception.model_copy(
+                        update={
+                            "interpreter": pointed.perception.interpreter.model_copy(
+                                update={"api_key": settings.perception.interpreter.api_key}
+                            )
+                        }
+                    )
+                }
+            )
         snapshot = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
         recorded = Settings.model_validate({**snapshot, "paths": settings.paths.model_dump()})
         return self._pointed(recorded, SecretStr(DOUBLE_KEY))
@@ -426,7 +503,7 @@ class ProviderDoubles:
         body = await request.body()
         route = request.url.path
         key = RequestKey.of(body)
-        if self.mode == "record":
+        if self.mode == "record" or (self.mode == "record_looks" and _is_look_request(body)):
             return await self._record(request, route, body, key)
         entry = self.cassette.match(route, key)
         if entry is None:
@@ -442,10 +519,21 @@ class ProviderDoubles:
 
     async def _record(self, request: Request, route: str, body: bytes, key: RequestKey) -> Response:
         assert self._client is not None
+        guard = ExperimentBudget() if self.mode == "record_looks" else None
+        look = _is_look_request(body)
+        if guard is not None and not guard.allows(CONSERVATIVE_LOOK_USD):
+            return JSONResponse(
+                {"error": {"code": 429, "message": "experiment budget reached"}}, status_code=429
+            )
         headers = {
             name: request.headers[name] for name in FORWARDED_HEADERS if name in request.headers
         }
         started = time.monotonic()
+        attempt_id = (
+            guard.reserve({"source": "simulator", "route": route, "focus": key.focus[-200:]})
+            if guard is not None
+            else None
+        )
         upstream = await self._client.send(
             self._client.build_request(
                 "POST", GOOGLE + route, params=request.url.query, content=body, headers=headers
@@ -467,16 +555,25 @@ class ProviderDoubles:
                     yield chunk
             finally:
                 await upstream.aclose()
-                cassette.add(
-                    {
-                        "route": route,
-                        "system": key.system,
-                        "focus": key.focus,
-                        "status": upstream.status_code,
-                        "media_type": media_type,
-                        "chunks": chunks,
-                    }
-                )
+                recorded = "".join(text for _delay, text in chunks)
+                entry = {
+                    "route": route,
+                    "system": key.system,
+                    "focus": key.focus,
+                    "status": upstream.status_code,
+                    "media_type": media_type,
+                    "chunks": chunks,
+                }
+                if self.mode == "record_looks" and look:
+                    cassette.replace_looks(route, entry)
+                else:
+                    cassette.add(entry)
+                if guard is not None and attempt_id is not None:
+                    guard.settle(
+                        attempt_id,
+                        usage=_usage_from_body(recorded),
+                        inference=200 <= upstream.status_code < 300,
+                    )
 
         return StreamingResponse(relay(), status_code=upstream.status_code, media_type=media_type)
 

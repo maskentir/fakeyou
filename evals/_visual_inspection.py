@@ -8,6 +8,7 @@ from typing import Any, Literal
 from PIL import Image
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from fakeyou.observability.provider_faults import ProviderFault
 from fakeyou.perception.inspector import InspectionText, VisualInspection, VisualVerdict
 
 FIXTURE = Path(__file__).parent / "fixtures" / "visual-inspection" / "cases.json"
@@ -19,6 +20,7 @@ class EvidenceAnnotation(BaseModel):
     region: tuple[int, int, int, int]
     visibility: Literal["visible", "absent", "obscured"]
     facts: tuple[InspectionText, ...]
+    fact_aliases: tuple[InspectionText, ...] = ()
 
 
 class VisualCase(BaseModel):
@@ -77,6 +79,9 @@ def _normalized(text: str) -> str:
 def _score(case: VisualCase, result: VisualInspection) -> dict[str, Any]:
     accepted = {_normalized(answer) for answer in case.expected_answers}
     allowed_facts = {_normalized(fact) for region in case.annotations for fact in region.facts}
+    allowed_facts |= {
+        _normalized(alias) for region in case.annotations for alias in region.fact_aliases
+    }
     answer_correct = result.answer is not None and _normalized(result.answer) in accepted
     answer_grounded = result.answer is not None and (
         answer_correct or _normalized(result.answer) in allowed_facts
@@ -133,6 +138,10 @@ def _metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _is_programming_fault(fault: ProviderFault) -> bool:
+    return (fault.detail or "").startswith("internal:")
+
+
 async def evaluate_inspections(
     inspect: Callable[[bytes, str], Awaitable[str]], fixture: VisualFixture
 ) -> dict[str, Any]:
@@ -144,6 +153,10 @@ async def evaluate_inspections(
         error: str | None = None
         try:
             raw = await inspect(data, case.question)
+        except ProviderFault as fault:
+            if _is_programming_fault(fault):
+                raise
+            error = "model_error"
         except (RuntimeError, TimeoutError):
             error = "model_error"
         else:
