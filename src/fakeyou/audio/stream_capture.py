@@ -42,7 +42,7 @@ from fakeyou.observability.faults import (
 )
 from fakeyou.observability.journal import Journal
 from fakeyou.persistence.audio_persist import SlotAudioWriter
-from fakeyou.speech.contract import PreparedSpeech, PublicationSpeaker
+from fakeyou.speech.contract import PreparedSpeech, PublicationSpeaker, speak_no_visual
 
 CAPTURE_DRAIN_JS = (
     "() => { const capture = window.__fakeyouStreamCapture;"
@@ -624,6 +624,15 @@ class StreamFleetSession:
             transcript_id=transcript_id,
             language=language,
         )
+
+    async def speak_no_visual(
+        self,
+        text: str,
+        *,
+        transcript_id: str | None = None,
+        language: str | None = None,
+    ) -> None:
+        await speak_no_visual(self._voice(), text, transcript_id=transcript_id, language=language)
 
     async def stop_playback(self) -> None:
         await run_fleet_calls(

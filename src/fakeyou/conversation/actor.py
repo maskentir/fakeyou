@@ -71,7 +71,7 @@ from fakeyou.foundation.triggers import ReplyChannel
 from fakeyou.observability.faults import ConsumerSink, FaultReporter, capture_error, guard_observer
 from fakeyou.observability.journal import Journal, JournalSink
 from fakeyou.observability.provider_faults import classify_exception
-from fakeyou.speech.contract import PreparedSpeech, PublicationSpeaker
+from fakeyou.speech.contract import PreparedSpeech, PublicationSpeaker, speak_no_visual
 
 _ADMITTED = frozenset({"speak", "clarify"})
 _STOP_DATA: dict[str, list[str]] = json.loads(read_package_text("stop_phrases.json"))
@@ -1523,6 +1523,17 @@ class _ActorSpeaker:
             sentence_index=sentence_index,
             transcript_id=transcript_id,
             language=language,
+        )
+
+    async def speak_no_visual(
+        self,
+        utterance: str,
+        *,
+        transcript_id: str | None = None,
+        language: str | None = None,
+    ) -> None:
+        await speak_no_visual(
+            self._session(), utterance, transcript_id=transcript_id, language=language
         )
 
     async def stop_playback(self) -> None:

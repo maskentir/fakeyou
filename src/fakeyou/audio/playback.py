@@ -45,6 +45,7 @@ class Utterance:
     transcript_id: str | None = None
     sentence_index: int | None = None
     publication: SentenceBinding | None = None
+    no_visual: bool = False
 
 
 NO_UTTERANCE = Utterance()
@@ -595,17 +596,38 @@ class PlaybackEngine:
         transcript_id: str | None = None,
         language: str | None = None,
     ) -> None:
+        await self._speak_direct(text, sentence_index, transcript_id, language, no_visual=False)
+
+    async def speak_no_visual(
+        self,
+        text: str,
+        *,
+        transcript_id: str | None = None,
+        language: str | None = None,
+    ) -> None:
+        await self._speak_direct(text, None, transcript_id, language, no_visual=True)
+
+    async def _speak_direct(
+        self,
+        text: str,
+        sentence_index: int | None,
+        transcript_id: str | None,
+        language: str | None,
+        *,
+        no_visual: bool,
+    ) -> None:
         if self._closed:
             return
         if not any(char.isalnum() for char in text):
             self._emit("playback_dropped", text, "nothing_to_say")
             return
-        line = _Line(text, Utterance(transcript_id, sentence_index), language)
+        utterance = Utterance(transcript_id, sentence_index, no_visual=no_visual)
+        line = _Line(text, utterance, language)
         voicing = _Voicing()
         await self._play_queued(
             self._retryable_stream(line, self._generation, voicing),
             text,
-            utterance=line.utterance,
+            utterance=utterance,
             spoken=voicing,
         )
 
@@ -817,7 +839,7 @@ class PlaybackEngine:
         )
         if should_check:
             self._publication_checked.add(id(clip))
-            decision = await self._publication_decision(clip.publication)
+            decision = await self._publication_decision(clip)
             if generation != self._generation:
                 raise _PublicationPrevented("unknown", "cancelled")
             if not self._thawed.is_set():
@@ -835,11 +857,16 @@ class PlaybackEngine:
             self._emit("playback_audio_started", clip.text, cue=clip.cue, utterance=clip.utterance)
         self._clip_bytes += len(pcm)
 
-    async def _publication_decision(
-        self, binding: SentenceBinding | None
-    ) -> PublicationDecision | None:
+    async def _publication_decision(self, clip: _Clip) -> PublicationDecision | None:
         context = self._publication_context
-        if context is None or binding is None:
+        binding = clip.publication
+        if context is None:
+            return None
+        if binding is None:
+            if clip.utterance.no_visual:
+                return PublicationDecision(
+                    "valid", "declared_no_visual", context.now(), context.clock_domain
+                )
             return None
         gate = context.gate
         if gate is None:

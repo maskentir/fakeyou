@@ -110,6 +110,7 @@ from fakeyou.perception.sensors import (
 )
 from fakeyou.perception.timeline import ChatReceived, ScreenRead, ScreenShown, TimelineEvent
 from fakeyou.session.contracts import ChatObserved
+from fakeyou.speech.contract import speak_no_visual
 
 
 @asynccontextmanager
@@ -413,7 +414,7 @@ class MeetingWorker:
         audio.raise_if_failed()
         await self._start_capture_guarded(enabled=self.config.conversation.per_stream_enabled)
         if self.initial_speech:
-            await until_stopped(audio.speak(self.initial_speech), self.stop)
+            await until_stopped(speak_no_visual(audio, self.initial_speech), self.stop)
             self.initial_speech = None
         if self.stop.is_set():
             await self.close_capture_drain()

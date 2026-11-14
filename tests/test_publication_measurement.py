@@ -7,6 +7,7 @@ from fakeyou.foundation.publication import (
     AudioPublication,
     EvidenceBinding,
     PublicationDecision,
+    PublicationValidity,
     SentenceBinding,
     SnapshotRef,
     Validation,
@@ -258,3 +259,72 @@ def test_unknown_visual_prevention_keeps_its_distinct_outcome() -> None:
     )
     assert result["status"] == "prevented_unknown"
     assert result.get("compliant") is not True
+
+
+@pytest.mark.parametrize("validity", ["invalid", "unknown"])
+@pytest.mark.parametrize("local_write", [True, None])
+def test_vetoed_clip_heard_by_participant_is_observed_violation(
+    validity: PublicationValidity, *, local_write: bool | None
+) -> None:
+    result = measure_publication(
+        _binding(),
+        _publication(),
+        decision=PublicationDecision(validity, "scene_changed", 99.9, "fake"),
+        clock_domain="fake",
+        local_write_observed=local_write,
+    )
+    assert result["status"] == "observed_noncompliant"
+    assert result["compliant"] is False
+    assert result["reason"] == f"published_despite_gate_{validity}"
+    assert result["gate_reason"] == "scene_changed"
+
+
+def test_vetoed_clip_without_any_observation_is_not_measurable() -> None:
+    result = measure_publication(
+        _binding(),
+        None,
+        decision=PublicationDecision("invalid", "scene_changed", 99.9, "fake"),
+        clock_domain="fake",
+    )
+    assert result["status"] == "not_measurable"
+    assert result["reason"] == "publication_outcome_unknown"
+
+
+def test_vetoed_clip_with_conflicting_local_receipt_is_not_measurable() -> None:
+    result = measure_publication(
+        _binding(),
+        _publication(),
+        decision=PublicationDecision("invalid", "scene_changed", 99.9, "fake"),
+        clock_domain="fake",
+        local_write_observed=False,
+    )
+    assert result["status"] == "not_measurable"
+    assert result["reason"] == "publication_observation_conflict"
+
+
+@pytest.mark.parametrize(
+    ("observed", "reason"),
+    [
+        (replace(_publication(), participant_consent=None), "participant_consent_unknown"),
+        (
+            replace(_publication(), observation_kind="local_pcm_write"),
+            "local_write_is_not_observation",
+        ),
+        (replace(_publication(), clock_domain="other"), "participant_clock_unmeasurable"),
+        (replace(_publication(), transcript_id="other"), "publication_identity_mismatch"),
+        (replace(_publication(), ended_at=99.0), "participant_interval_invalid"),
+    ],
+)
+def test_vetoed_clip_with_insufficient_observation_is_not_measurable(
+    observed: AudioPublication, reason: str
+) -> None:
+    result = measure_publication(
+        _binding(),
+        observed,
+        decision=PublicationDecision("invalid", "scene_changed", 99.9, "fake"),
+        clock_domain="fake",
+        local_write_observed=True,
+    )
+    assert result["status"] == "not_measurable"
+    assert result["reason"] == reason
+    assert result.get("compliant") is not False

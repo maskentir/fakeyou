@@ -29,17 +29,12 @@ def measure_publication(
     **options: Unpack[MeasurementOptions],
 ) -> dict[str, Any]:
     result = _base_result(binding)
+    local_write = options.get("local_write_observed")
     if decision is not None and not decision.allows:
-        if options.get("local_write_observed") is False and publication is None:
-            result["status"] = (
-                "prevented_invalid" if decision.validity == "invalid" else "prevented_unknown"
-            )
-            result["reason"] = decision.reason
-            return result
-        return _not_measurable(result, "publication_outcome_unknown")
+        return _vetoed(binding, publication, decision, clock_domain, local_write=local_write)
     if publication is None:
         return _not_measurable(result, "no_participant_observation")
-    reason = _observation_reason(binding, publication, clock_domain)
+    reason = _observation_reason(binding, publication, clock_domain) or _provider_reason(binding)
     if reason is not None:
         return _not_measurable(result, reason)
     checks = _current_checks(binding, publication, decision, options.get("post_validations"))
@@ -68,6 +63,35 @@ def _base_result(binding: SentenceBinding) -> dict[str, Any]:
     }
 
 
+def _vetoed(
+    binding: SentenceBinding,
+    publication: AudioPublication | None,
+    decision: PublicationDecision,
+    clock_domain: str,
+    *,
+    local_write: bool | None,
+) -> dict[str, Any]:
+    result = _base_result(binding)
+    if publication is None:
+        if local_write is not False:
+            return _not_measurable(result, "publication_outcome_unknown")
+        result["status"] = (
+            "prevented_invalid" if decision.validity == "invalid" else "prevented_unknown"
+        )
+        result["reason"] = decision.reason
+        return result
+    if local_write is False:
+        return _not_measurable(result, "publication_observation_conflict")
+    reason = _observation_reason(binding, publication, clock_domain)
+    if reason is not None:
+        return _not_measurable(result, reason)
+    result["status"] = "observed_noncompliant"
+    result["compliant"] = False
+    result["reason"] = f"published_despite_gate_{decision.validity}"
+    result["gate_reason"] = decision.reason
+    return result
+
+
 def _observation_reason(
     binding: SentenceBinding, publication: AudioPublication, clock_domain: str
 ) -> str | None:
@@ -82,8 +106,6 @@ def _observation_reason(
         return "local_write_is_not_observation"
     if publication.participant_consent is not True:
         return "participant_consent_unknown"
-    if any(not item.provider or not item.provider_attempt_id for item in binding.evidence):
-        return "provider_identity_unmeasurable"
     if publication.clock_domain != clock_domain or not _valid_uncertainty(
         publication.uncertainty_seconds
     ):
@@ -94,6 +116,12 @@ def _observation_reason(
         or publication.ended_at < publication.started_at
     ):
         return "participant_interval_invalid"
+    return None
+
+
+def _provider_reason(binding: SentenceBinding) -> str | None:
+    if any(not item.provider or not item.provider_attempt_id for item in binding.evidence):
+        return "provider_identity_unmeasurable"
     return None
 
 

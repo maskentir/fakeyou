@@ -3,6 +3,7 @@ import random
 import sys
 from collections.abc import (
     AsyncIterator,
+    Awaitable,
     Callable,
     Coroutine,
     Sequence,
@@ -64,7 +65,12 @@ from fakeyou.observability.provider_faults import (
     ProviderFault,
     classify_exception,
 )
-from fakeyou.speech.contract import PreparedSpeech, PublicationSpeaker, SupportsWarmup
+from fakeyou.speech.contract import (
+    PreparedSpeech,
+    PublicationSpeaker,
+    SupportsWarmup,
+    speak_no_visual,
+)
 from fakeyou.speech.registry import build_speech_synthesizer
 from fakeyou.transcription.contract import (
     SpeechSinks,
@@ -521,9 +527,27 @@ class MeetingAudioSession:
             extra["transcript_id"] = transcript_id
         if language is not None:
             extra["language"] = language
+        await self._voice(text, self._engine.speak(text, **extra))
+
+    async def speak_no_visual(
+        self,
+        text: str,
+        *,
+        transcript_id: str | None = None,
+        language: str | None = None,
+    ) -> None:
+        self.raise_if_failed()
+        if self._stopping:
+            raise MeetingAudioError("meeting audio session is stopped")
+        await self._voice(
+            text,
+            speak_no_visual(self._engine, text, transcript_id=transcript_id, language=language),
+        )
+
+    async def _voice(self, text: str, speech: Awaitable[None]) -> None:
         with self._gate.own_speech.speaking(text):
             try:
-                await self._engine.speak(text, **extra)
+                await speech
             except (PlaybackError, OSError) as error:
                 if self._faults is not None:
                     self._faults.record(classify_exception("tts", error, operation="speak"))

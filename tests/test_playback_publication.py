@@ -491,3 +491,56 @@ async def test_visual_policy_allows_safe_scope_without_current_liveness(scope: s
         assert writer.written
     finally:
         await engine.close()
+
+
+async def test_declared_no_visual_direct_speech_plays_while_gate_is_active() -> None:
+    events: list[PlaybackEvent] = []
+    writer = FakeWriter()
+    engine = build_engine(FakeSynth(audio=b"\x01\x00" * FRAME_BYTES), writer, events)
+    gated: list[SentenceBinding] = []
+
+    async def gate(binding: SentenceBinding) -> PublicationDecision:
+        gated.append(binding)
+        return PublicationDecision("invalid", "scene_changed", 1.0, "test")
+
+    engine.configure_publication(PublicationContext("meeting", "test", gate, lambda: 1.0))
+    try:
+        await engine.speak_no_visual("Hi everyone, I just joined.")
+        assert writer.written
+        assert gated == []
+        [started] = [e for e in events if e.kind == "playback_audio_started"]
+        assert started.utterance.no_visual
+        assert started.utterance.publication is None
+    finally:
+        await engine.close()
+
+
+async def test_undeclared_direct_speech_stays_refused_while_gate_is_active() -> None:
+    events: list[PlaybackEvent] = []
+    writer = FakeWriter()
+    engine = build_engine(FakeSynth(audio=b"\x01\x00" * FRAME_BYTES), writer, events)
+    engine.configure_publication(PublicationContext("meeting", "test", None, lambda: 1.0))
+    try:
+        await engine.speak("The slide now shows the Q3 revenue chart.", transcript_id="t")
+        assert writer.written == []
+        assert events[-1].kind == "playback_dropped"
+        assert "unresolved" in events[-1].detail
+    finally:
+        await engine.close()
+
+
+async def test_unbound_prepared_reply_stays_refused_while_gate_is_active() -> None:
+    events: list[PlaybackEvent] = []
+    writer = FakeWriter()
+    engine = build_engine(FakeSynth(audio=b"\x01\x00" * FRAME_BYTES), writer, events)
+    engine.configure_publication(PublicationContext("meeting", "test", None, lambda: 1.0))
+    prepared = await engine.prepare(
+        "The slide now shows the Q3 revenue chart.", sentence_index=0, transcript_id="t"
+    )
+    assert prepared is not None
+    try:
+        await engine.speak_prepared(prepared)
+        assert writer.written == []
+        assert "unresolved" in events[-1].detail
+    finally:
+        await engine.close()

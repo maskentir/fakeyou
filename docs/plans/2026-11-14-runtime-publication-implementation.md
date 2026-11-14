@@ -36,6 +36,16 @@ awaiting revalidation. Invalid or unresolved current-state evidence prevents the
 original clip. Playback emits the prevented outcome; it does not rewrite the
 sentence or issue a provider request to refresh it.
 
+Direct speech that never passes through `TurnSink` has no sentence binding. A
+caller that knows its line carries no visual claim declares it with
+`speak_no_visual`. Playback admits that declared clip without consulting the
+visual gate. Undeclared direct speech and unbound prepared replies stay
+unresolved and are prevented while a context is active. The declared callers are
+the initial greeting, the recovery apology, and the attendance, participant
+count, and own-action state answers. Presenter and screen-title state answers
+stay undeclared because they describe the current screen; with a context active
+they are prevented until they carry their own evidence binding.
+
 Historical wording or an abstention requires separate upstream preparation and
 binding. A missing participant observer never blocks otherwise safe speech.
 Historical and no-visual scopes do not require a current-state liveness check.
@@ -54,6 +64,12 @@ attempt identity, a recent validation, and continuity proof through audible end.
 Known violations produce an observed noncompliant result. Missing proof or
 threshold-crossing clock uncertainty produces a not-measurable result. A prevented
 clip requires an explicit no-write receipt and preserves invalid versus unknown.
+A vetoed clip that a valid, consented participant observation still heard is an
+observed violation: the result is observed noncompliant with
+`published_despite_gate_invalid` or `published_despite_gate_unknown` and keeps the
+gate reason. A veto with no observation, an insufficient observation, or a local
+no-write receipt that contradicts the participant observation stays not
+measurable.
 
 ## Deterministic proof map
 
@@ -74,6 +90,13 @@ share a fixture or are covered by more than one regression test.
 | 16 — provenance before scrub, final binding afterward | `tests/test_context_evidence.py`; `tests/test_turn_graph_publication.py` |
 | 17 — repeated sentence, distinct publication attempts | `tests/test_playback_publication.py`; `tests/test_publication_measurement.py` |
 | 18, 19 — old capture/recent observation, missing capture mapping | `tests/test_playback_publication.py`; `tests/test_publication_freshness.py`; `tests/test_publication_measurement.py` |
+
+Review of #198 added two regressions outside the 19 design cases:
+
+| Case | Proof location |
+| --- | --- |
+| Declared no-visual direct speech plays under an active gate; undeclared direct speech and unbound prepared replies stay prevented | `tests/test_playback_publication.py`; `tests/test_audio_publication.py`; `tests/test_runtime_audio.py`; `tests/test_planner.py` |
+| Gate veto with a valid participant observation is observed noncompliant; without or with insufficient or conflicting observation it is not measurable | `tests/test_publication_measurement.py` |
 
 ## Remaining live integration gaps
 

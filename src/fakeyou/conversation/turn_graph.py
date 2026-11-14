@@ -86,7 +86,11 @@ from fakeyou.session.facts import StateQuestion
 from fakeyou.session.intent import EvidenceNeed, Reading, intent_of
 from fakeyou.session.planner import TurnPlan, plan_turn, with_language
 from fakeyou.session.policy import UNATTRIBUTED, Channel, Grant, authorize
-from fakeyou.speech.contract import PreparedSpeech, PublicationSpeaker
+from fakeyou.speech.contract import PreparedSpeech, PublicationSpeaker, speak_no_visual
+
+_NO_VISUAL_STATE: frozenset[StateQuestion] = frozenset(
+    {"attendance", "participant_count", "own_action_status"}
+)
 
 
 class Speaker(Protocol):
@@ -1057,7 +1061,10 @@ async def answer_state(
         return True
     _move_phase(runtime, "queued", final.id)
     language = runtime.sentences.language if runtime.sentences is not None else None
-    await runtime.speaker.speak(text, transcript_id=final.id, language=language)
+    if question in _NO_VISUAL_STATE:
+        await speak_no_visual(runtime.speaker, text, transcript_id=final.id, language=language)
+    else:
+        await runtime.speaker.speak(text, transcript_id=final.id, language=language)
     runtime.note_spoken(text)
     _move_phase(runtime, "listening", final.id)
     return True
@@ -1353,7 +1360,7 @@ async def recover_turn(
         return
     speaker = runtime.speaker
     _, speech_error = await capture_error(
-        lambda: speaker.speak(recovery.failed_line, transcript_id=transcript_id)
+        lambda: speak_no_visual(speaker, recovery.failed_line, transcript_id=transcript_id)
     )
     if speech_error is not None:
         _fail(runtime, speech_error)
