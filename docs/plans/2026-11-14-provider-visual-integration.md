@@ -25,17 +25,20 @@ Google, so the experiment costs code and credits instead of a new dependency.
 | `src/fakeyou/perception/interpreter.py` | modify | the look prompt asks for the verdict, `answer` returns a structured inspection, and the verdict maps to status and code |
 | `src/fakeyou/perception/camera_evidence.py` | modify | the cache entry stores the inspection instead of the answer text |
 | `src/fakeyou/perception/context.py` | modify | the on-demand screen look maps the same verdict to the same status and code |
+| `src/fakeyou/catalog/errors.py` | modify | name the error for a response that is not a usable inspection |
 | `src/fakeyou/observability/report_contract.py` | modify | classify `insufficient` evidence in the canonical report |
 | `src/fakeyou/session_targets.json` | modify | move the scorecard contract version, because the classification contract changed and no target value changed |
 | `evals/_visual_cassette.py` | create | record the controlled cases from the provider and replay them offline |
 | `evals/fixtures/visual-inspection/provider-cassette.jsonl` | create | the recorded provider responses, with usage and no credentials |
 | `evals/_visual_inspection.py` | modify | map a provider fault to a case-level error and keep a programming error visible |
-| `evals/_provider_doubles.py` | modify | record the look requests only, and replay everything else from the cassette |
-| `tests/test_interpreter.py` | modify | the structured look, the verdict mapping, and the provider failures |
-| `tests/test_camera_evidence.py` | modify | the cache keeps the verdict, and a cached abstention stays an abstention |
+| `evals/_provider_doubles.py` | modify | adapt a recorded look answer to the inspection contract, and record the look requests only |
+| `tests/_perception_fakes.py` | modify | the fake model serves scripted inspections |
+| `tests/test_interpreter.py` | modify | the structured look, the unparsed inspection, and the budget |
+| `tests/test_camera_evidence.py` | modify | the verdict mapping and the cache that keeps an abstention an abstention |
 | `tests/test_context_evidence.py` | modify | the on-demand screen look emits the same statuses |
+| `tests/test_context.py` | modify | the screen look scripts an inspection instead of free text |
+| `tests/test_provider_doubles_eval.py` | modify | the recorded look replays as a structured inspection |
 | `tests/test_scorecard_contract.py` | modify | `insufficient` evidence is classified, not unclassified |
-| `tests/test_report_perception.py` | modify | the report counts a valid abstention as perception, not as a missing look |
 
 No new abstraction is introduced. There is no `EvidenceResolver`, no evidence store, and no
 second inspection contract; the work stays inside the interpreter, the evidence contract,
@@ -196,18 +199,23 @@ reproducible without credentials and without spending credits.
 
 Two recorded look requests depend on the production look prompt: the camera look in
 `sim-s3-camera` and the screen look in `sim-s3-screen`. Both replay recorded free text, so
-a structured production prompt changes both the request and the expected response shape.
+a structured production prompt changes the shape of the expected response. The request
+still finds its recorded entry, because the prompt keeps its shape, so the recorded free
+text would be replayed and rejected by the structured parser.
 
 Re-recording a whole simulator scenario is not affordable: record mode relays every model
-call in the session, and the budget is twelve requests in total. The simulator therefore
-records only the look requests and replays everything else from the existing cassette. The
-two look responses are then real provider responses, recorded with the real frames and the
-real prompt, and the recorded provider bytes stay authoritative.
+call in the session, and the budget is twelve requests in total. The double therefore
+has two paths for a look request.
 
-A provider answer that differs in wording from the previous recording changes the text the
-twin receives. The recorded chat responses are matched on similarity, so a reworded answer
-can still match its recorded entry, but the simulator remains a behavioural double and not
-a quality measurement. Phase 5 measures quality against real sessions.
+In replay it adapts the recorded answer into the inspection contract. The recorded
+provider bytes stay untouched and the production path runs end to end, from the prompt to
+the verdict to the evidence status. The simulator remains a behavioural double and not a
+quality measurement.
+
+In `record_looks` mode it relays the look request to the provider and appends the real
+response to the cassette, while every other request still replays. The two look entries
+can therefore be replaced by real provider responses when credentials are available,
+without re-recording the whole scenario.
 
 ## The experiment budget
 
@@ -224,6 +232,50 @@ the two so the estimate cannot understate the cost.
 The planned spend is eight requests for the eight controlled cases, two requests to
 re-record the simulator look entries, and two requests held in reserve for a diagnostic
 retry. A live test never runs in CI.
+
+Recording the eight controlled cases needs Google credentials. The recorder enforces the
+approved budget itself: it stops at twelve requests, it never extends the quota, it never
+falls back to another provider, and it writes the provider-reported usage and the computed
+cost for every request. The cassette is committed only once it holds real provider
+responses; an empty or synthetic cassette is never presented as one.
+
+## Measured provider result
+
+The eight controlled cases were recorded from `gemini-3.8-flash` in nine attempts, one of
+which timed out, for a recorded cost of US$0.0124 against the approved US$1. Replaying the
+cassette offline produces:
+
+| Metric | Result |
+| --- | --- |
+| Verdict accuracy | 8 of 8 |
+| Answer accuracy | 5 of 5 |
+| Abstention recall | 3 of 3 |
+| Abstention precision | 3 of 3 |
+| False abstention rate | 0 of 5 |
+| Invalid output rate | 0 of 8 |
+| Model error rate | 0 of 8 |
+| Grounding precision | 5 of 15 |
+| False claim rate | 8 of 8 |
+
+The provider read the controlled scenes correctly. It named the beta date, the owner, the
+project title, the shirt colour, and it abstained on the budget, on the person's name, and
+on the obscured date, so the verdict and the answer are exact on every case.
+
+The grounding numbers are a property of the rubric, not a measurement of hallucination.
+The provider states each observation as a sentence, for example `The text displays 'Beta:
+17 March 2027'`, while the rubric accepts only `Beta: 17 March 2027`. Every observation is
+faithful, and every one of them is unlisted, so the closed rubric scores each as a false
+claim.
+
+This is the case the Phase 3b-A plan named: provider integration needs reviewed aliases or
+independent adjudication for previously unseen free-form assertions, and a model's own
+verdict cannot supply them. The dataset carries a `fact_aliases` field for that decision,
+and the alias list is a labelling decision, not an implementation detail. Until it is
+reviewed, the false claim rate measures rubric conformance and the report says so.
+
+The provider latency in the recording runs from 2.6 to 7.1 seconds per case, and one
+request timed out at the thirty second provider timeout. Phase 5 measures latency on real
+meetings.
 
 ## Honest reporting
 
