@@ -1,5 +1,4 @@
 import asyncio
-import hashlib
 import math
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import suppress
@@ -16,6 +15,7 @@ from fakeyou.foundation.publication import (
     PublicationContext,
     PublicationDecision,
     SentenceBinding,
+    sentence_digest,
 )
 from fakeyou.foundation.taxonomy import Subsystem
 from fakeyou.observability.cleanup import close_safely
@@ -338,7 +338,7 @@ def _fresh_publication_decision(
 ) -> PublicationDecision:
     if not decision.allows:
         return decision
-    if binding.scope != "current":
+    if binding.scope not in ("current", "state"):
         return decision
     checked_at = decision.checked_at
     now = context.now()
@@ -417,9 +417,7 @@ class PlaybackEngine:
         return self._publication_context
 
     def bind_publication(self, prepared: PreparedSpeech, binding: SentenceBinding) -> None:
-        normalized = " ".join(prepared.text.split())
-        digest = hashlib.sha256(normalized.encode()).hexdigest()
-        if binding.sentence_hash != digest:
+        if binding.sentence_hash != sentence_digest(prepared.text):
             raise ValueError("publication sentence hash does not match prepared speech")
         if binding.sentence_index != prepared.sentence_index:
             raise ValueError("publication sentence index does not match prepared speech")

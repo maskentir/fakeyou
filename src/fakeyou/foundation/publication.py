@@ -59,6 +59,25 @@ class EvidenceBinding:
 
 
 @dataclass(frozen=True, slots=True)
+class StateProvenance:
+    question: str
+    fact_id: str
+    namespace: str
+    modality: str
+    domain: str
+    revision: int
+    valid_from_seq: int
+    subject_id: str | None
+    claim: str
+    known: bool
+    source_health: str | None
+
+
+def sentence_digest(text: str) -> str:
+    return hashlib.sha256(" ".join(text.split()).encode()).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
 class SentenceBinding:
     publication_id: str
     meeting_id: str
@@ -71,10 +90,12 @@ class SentenceBinding:
     required_kinds: tuple[str, ...]
     evidence: tuple[EvidenceBinding, ...]
     scope: str
+    state: StateProvenance | None = None
 
     def __post_init__(self) -> None:
         _validate_sentence_identity(self)
         _validate_sentence_scope(self)
+        _validate_sentence_state(self)
         _validate_sentence_evidence(self)
 
 
@@ -96,7 +117,7 @@ def _validate_sentence_identity(binding: SentenceBinding) -> None:
 
 
 def _validate_sentence_scope(binding: SentenceBinding) -> None:
-    if binding.scope not in {"current", "historical", "no_visual"}:
+    if binding.scope not in {"current", "historical", "no_visual", "state"}:
         raise ValueError("unknown publication scope")
     if len(set(binding.required_kinds)) != len(binding.required_kinds):
         raise ValueError("required visual kinds must be unique")
@@ -107,10 +128,26 @@ def _validate_sentence_scope(binding: SentenceBinding) -> None:
         raise ValueError("required visual kinds are not covered by the evidence")
     if binding.scope == "no_visual" and (binding.evidence or binding.required_kinds):
         raise ValueError("a no-visual sentence carries no visual evidence")
+    if binding.scope == "state" and (binding.evidence or binding.required_kinds):
+        raise ValueError("a state sentence carries state provenance, not visual evidence")
+
+
+def _validate_sentence_state(binding: SentenceBinding) -> None:
+    state = binding.state
+    if binding.scope == "state":
+        if state is None or not state.known:
+            raise ValueError("a state sentence needs the known fact it was rendered from")
+        if not state.fact_id or not state.question or not state.claim:
+            raise ValueError("state provenance identity fields must be non-empty")
+        return
+    if state is None:
+        return
+    if state.known or binding.scope != "no_visual":
+        raise ValueError("only an abstention carries state provenance outside the state scope")
 
 
 def _validate_sentence_evidence(binding: SentenceBinding) -> None:
-    if binding.scope == "no_visual":
+    if binding.scope in {"no_visual", "state"}:
         return
     if not binding.evidence:
         raise ValueError("a scoped sentence needs the evidence it was gathered from")
@@ -203,6 +240,8 @@ async def evaluate_visual_publication(
 ) -> PublicationDecision:
     if binding.scope in {"no_visual", "historical"}:
         return PublicationDecision("valid", "ok", None, clock_domain)
+    if binding.scope == "state":
+        return _unknown("state_scope_needs_state_validation", now(), clock_domain)
     decisions = [
         await _evaluate_evidence(item, revalidate, now, clock_domain) for item in binding.evidence
     ]
@@ -227,6 +266,33 @@ async def evaluate_visual_publication(
         clock_domain,
         max(item.uncertainty_seconds for item in decisions),
     )
+
+
+def evaluate_state_publication(
+    binding: SentenceBinding,
+    latest: Callable[[StateProvenance], StateProvenance | None],
+    *,
+    now: Callable[[], float],
+    clock_domain: str,
+) -> PublicationDecision:
+    if binding.scope == "no_visual":
+        return PublicationDecision("valid", "ok", None, clock_domain)
+    claimed = binding.state
+    if binding.scope != "state" or claimed is None:
+        return _unknown("state_provenance_missing", now(), clock_domain)
+    current = latest(claimed)
+    checked_at = now()
+    if not _finite(checked_at):
+        return PublicationDecision("unknown", "invalid_check_time", None, clock_domain)
+    if current is None or not current.known:
+        return _unknown("state_source_unknown", checked_at, clock_domain)
+    if current.revision < claimed.revision or current.valid_from_seq < claimed.valid_from_seq:
+        return _unknown("state_revision_regressed", checked_at, clock_domain)
+    if current.subject_id != claimed.subject_id:
+        return PublicationDecision("invalid", "state_subject_changed", checked_at, clock_domain)
+    if current.claim != claimed.claim:
+        return PublicationDecision("invalid", "state_changed", checked_at, clock_domain)
+    return PublicationDecision("valid", "ok", checked_at, clock_domain)
 
 
 async def _evaluate_evidence(

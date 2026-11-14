@@ -7,6 +7,7 @@ from fakeyou.conversation import turn_graph
 from fakeyou.conversation.turn_graph import (
     OWNER_CLAIM_NOTE,
     PlannedTurn,
+    StateAnswer,
     failed_look_note,
     for_reply,
     language_note,
@@ -202,9 +203,9 @@ class RecordingSpeaker(PreparedSpeaker):
 
 async def test_a_state_question_is_spoken_from_the_renderer_not_the_model() -> None:
     speaker = RecordingSpeaker()
-    answers = {"participant_count": "Besides me, there are 2 people here."}
+    answers = {"participant_count": StateAnswer("Besides me, there are 2 people here.")}
 
-    def speech(question: str, _language: str | None) -> str | None:
+    def speech(question: str, _language: str | None) -> StateAnswer | None:
         return answers.get(question)
 
     planned = PlannedTurn(
@@ -233,7 +234,7 @@ async def test_without_a_locale_pack_the_state_question_falls_back_to_the_reply(
 
 async def test_the_state_answer_follows_the_language_of_the_turn() -> None:
     speaker = RecordingSpeaker()
-    answers = {"participant_count": "Besides me, there are 2 people here."}
+    answers = {"participant_count": StateAnswer("Besides me, there are 2 people here.")}
     planned = PlannedTurn(
         TurnPlan("p", "speech_only", output="speech", state_question="participant_count")
     )
@@ -342,7 +343,7 @@ async def test_only_non_screen_state_answers_are_declared_no_visual(
     state_runtime = TurnTestContext(
         speaker=speaker,
         journal=RecordingJournal(),
-        state_speech=lambda _question, _language: "Answer.",
+        state_speech=lambda _question, _language: StateAnswer("Answer."),
     )
 
     assert await turn_graph.answer_state(state_runtime, event("Question?"), planned, 0) is True

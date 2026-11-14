@@ -33,6 +33,15 @@ class SpokenLog:
                 "request_id": binding.request_id,
                 "gather_attempt_id": binding.gather_attempt_id,
                 "publication_scope": binding.scope,
+                **(
+                    {}
+                    if binding.state is None
+                    else {
+                        "state_fact_id": binding.state.fact_id,
+                        "state_revision": binding.state.revision,
+                        "state_known": binding.state.known,
+                    }
+                ),
             }
             if binding is not None
             else {}

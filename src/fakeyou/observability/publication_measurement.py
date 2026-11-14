@@ -60,6 +60,8 @@ def _base_result(binding: SentenceBinding) -> dict[str, Any]:
         "sentence_hash": binding.sentence_hash,
         "gather_attempt_id": binding.gather_attempt_id,
         "scope": binding.scope,
+        "state_fact_id": None if binding.state is None else binding.state.fact_id,
+        "state_revision": None if binding.state is None else binding.state.revision,
     }
 
 
@@ -131,6 +133,8 @@ def _current_checks(
     decision: PublicationDecision | None,
     post_validations: Mapping[str, Validation] | None,
 ) -> list[tuple[PublicationValidity, str]]:
+    if binding.scope == "state":
+        return [("unknown", "state_continuity_unmeasurable")]
     if binding.scope != "current":
         return []
     checks = [_prevalidation_check(publication, decision)]
