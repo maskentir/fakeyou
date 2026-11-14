@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 
@@ -5,8 +6,9 @@ import pytest
 
 from fakeyou.audio.playback import FRAME_BYTES, PlaybackEngine, PlaybackEvent
 from fakeyou.conversation import turn_graph
+from fakeyou.conversation.actor import ActorWiring, DeferredOptions, FloorActor
 from fakeyou.conversation.state_speech import render
-from fakeyou.conversation.turn_graph import PlannedTurn, StateAnswer
+from fakeyou.conversation.turn_graph import PlannedTurn, StateAnswer, build_turn_graph
 from fakeyou.foundation.publication import (
     AudioPublication,
     EvidenceBinding,
@@ -28,7 +30,9 @@ from fakeyou.session.contracts import (
     SourceHealthObserved,
 )
 from fakeyou.session.facts import StateQuestion, state_fact
+from fakeyou.session.intent import Reading
 from fakeyou.session.planner import TurnPlan
+from fakeyou.session.policy import Channel
 from fakeyou.session.state_publication import (
     CURRENT_STATE_QUESTIONS,
     latest_state_provenance,
@@ -38,9 +42,16 @@ from fakeyou.session.state_publication import (
 from fakeyou.session.world import SessionState
 from fakeyou.speech.contract import PreparedSpeech
 from tests._audio_support import FakeSynth, FakeWriter, build_engine
+from tests._model_responder import ModelResponder
 from tests._persistence_fakes import RecordingJournal
 from tests._turn_context import TurnTestContext
 from tests.test_facts import AYU, AYU_SCREEN, BUDI, IN_CALL, TWIN, replay
+from tests.test_turn_graph_whole_adapter import (
+    FakeJournal,
+    ToolPhaseState,
+    transcript,
+    unused_chunks,
+)
 
 BUDI_SCREEN = Endpoint(
     device_id="dev-budi-screen", display_name="Budi", present=True, parent_device_id="dev-budi"
@@ -68,6 +79,7 @@ class Meeting:
     before_playback: Callable[[], None] | None = None
     gated: bool = True
     engine: PlaybackEngine = field(init=False)
+    notes: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.engine = build_engine(
@@ -137,6 +149,15 @@ class Meeting:
     async def stop_playback(self) -> None:
         await self.engine.stop()
 
+    async def stop(self) -> None:
+        return None
+
+    def raise_if_failed(self) -> None:
+        return None
+
+    async def wait_failed(self) -> None:
+        await asyncio.Event().wait()
+
     async def ask(self, question: StateQuestion, transcript_id: str = "t1") -> None:
         planned = PlannedTurn(
             TurnPlan("p", "speech_only", output="speech", state_question=question)
@@ -154,6 +175,7 @@ class Meeting:
             speaker_evidence_id=None,
         )
         assert await turn_graph.answer_state(runtime, final, planned, 0) is True
+        self.notes.extend(runtime.notes)
 
     @property
     def dropped(self) -> str:
@@ -167,6 +189,7 @@ async def test_presenter_answer_with_matching_revision_is_published_with_its_bin
         await meeting.ask("presenter")
         [binding] = meeting.bindings
         assert meeting.writer.written
+        assert meeting.notes == ["Ayu is presenting."]
         assert binding.scope == "state"
         assert binding.publication_id == "publication-1"
         assert binding.request_id == "t1:0"
@@ -224,6 +247,7 @@ async def test_state_change_while_queued_prevents_the_old_claim(
         assert len(meeting.bindings) == 1
         assert meeting.writer.written == []
         assert reason in meeting.dropped
+        assert meeting.notes == []
     finally:
         await meeting.engine.close()
 
@@ -271,6 +295,7 @@ async def test_unknown_state_abstention_still_speaks(
         assert binding.state.subject_id is None
         assert binding.state.source_health == "stale"
         assert meeting.writer.written
+        assert len(meeting.notes) == 1
     finally:
         await meeting.engine.close()
 
@@ -294,6 +319,7 @@ async def test_factual_state_claim_without_a_gate_is_unresolved() -> None:
         await meeting.ask("presenter")
         assert meeting.writer.written == []
         assert "unresolved" in meeting.dropped
+        assert meeting.notes == []
     finally:
         await meeting.engine.close()
 
@@ -308,6 +334,43 @@ async def test_nobody_presenting_is_a_factual_claim_that_is_revalidated() -> Non
         assert binding.scope == "state"
         assert meeting.writer.written == []
     finally:
+        await meeting.engine.close()
+
+
+def _state_plan(event: TranscriptEvent, reading: Reading, channel: Channel) -> PlannedTurn:
+    del reading, channel
+    return PlannedTurn(
+        TurnPlan(f"plan-{event.id}", "speech_only", output="speech", state_question="presenter")
+    )
+
+
+@pytest.mark.parametrize("prevented", [True, False])
+async def test_actor_counts_a_state_answer_as_spoken_only_when_it_was_emitted(
+    *, prevented: bool
+) -> None:
+    meeting = Meeting()
+    if prevented:
+        meeting.before_playback = lambda: meeting.observe(BUDI_TAKES_OVER)
+    observed: list[str] = []
+    actor = FloorActor(
+        build_turn_graph(),
+        ActorWiring(
+            journal=FakeJournal(),
+            responder=ModelResponder(
+                chunks=unused_chunks, phase=ToolPhaseState(), max_sentences=3, language="en"
+            ),
+        ),
+    )
+    actor.observe_spoken(observed.append)
+    actor.bind(meeting)
+    actor.configure_deferred(DeferredOptions(planning=_state_plan, state_speech=meeting.speech))
+    try:
+        await actor.handle_final(transcript("f1", "Who is presenting?"))
+        assert len(meeting.bindings) == 1
+        assert bool(meeting.writer.written) is not prevented
+        assert observed == ([] if prevented else ["Ayu is presenting."])
+    finally:
+        await actor.close()
         await meeting.engine.close()
 
 

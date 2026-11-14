@@ -237,6 +237,7 @@ class _PreparedSpeech:
         self._chunks: asyncio.Queue[bytes | None] = asyncio.Queue()
         self._failure: BaseException | None = None
         self._closed = False
+        self.publication_prevented: str | None = None
         self._fill = asyncio.create_task(self._pull())
         self._fill.add_done_callback(self._capture)
 
@@ -1077,6 +1078,8 @@ class PlaybackEngine:
             )
             self._record_fault("playback", error)
         except _PublicationPrevented as prevented:
+            if isinstance(clip.audio, _PreparedSpeech):
+                clip.audio.publication_prevented = prevented.reason
             self._emit_dropped(clip, str(prevented), heard="")
         else:
             if played:

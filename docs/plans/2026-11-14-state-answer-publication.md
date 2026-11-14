@@ -60,7 +60,10 @@ before its first PCM write. It re-derives the fact from the latest session state
 | revision or sequence older than the binding | unknown, `state_revision_regressed` |
 
 Invalid and unknown both prevent the clip. Playback does not rewrite or re-answer
-the sentence. A `state` binding with no gate configured is unresolved and is
+the sentence. Playback marks the prepared clip as prevented, and `answer_state`
+notes a state answer as spoken only when it was emitted, so a prevented answer
+does not advance the actor's spoken-sentence count, quiet-floor activity, or the
+spoken observer. A `state` binding with no gate configured is unresolved and is
 prevented.
 
 ## Abstention
@@ -81,8 +84,10 @@ vetoed state claim that a valid observation still heard is observed noncompliant
 
 ## Deterministic proof
 
-All in `tests/test_state_publication.py`, driving `answer_state` through a real
-playback engine and real kernel state with fake synthesis and clocks.
+`tests/test_state_publication.py` drives `answer_state` through a real playback
+engine and real kernel state with fake synthesis and clocks.
+`tests/test_assembly_state_speech.py` takes the state speech that the production
+conversation builder wires into the actor, over a real kernel port.
 
 | Case | Test |
 | --- | --- |
@@ -95,6 +100,9 @@ playback engine and real kernel state with fake synthesis and clocks.
 | Repeated attempts get distinct publication IDs | `test_repeated_state_answers_get_distinct_publication_ids` |
 | Unknown-state abstention still speaks | `test_unknown_state_abstention_still_speaks` |
 | No silent regression under an active context | the published and abstention tests above |
+| Prevented answer is not counted as spoken | `test_actor_counts_a_state_answer_as_spoken_only_when_it_was_emitted`; note assertions in the cases above |
+| Production assembly supplies the provenance | `tests/test_assembly_state_speech.py` |
+| Non-visual state answers keep carrying none | `test_production_non_visual_state_answers_carry_no_provenance` |
 | No fabricated visual evidence | `test_state_provenance_never_fabricates_visual_evidence` |
 | No participant compliance claim | `test_participant_observation_of_a_state_claim_is_never_reported_compliant` |
 

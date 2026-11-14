@@ -85,7 +85,12 @@ from fakeyou.session.facts import StateQuestion
 from fakeyou.session.intent import EvidenceNeed, Reading, intent_of
 from fakeyou.session.planner import TurnPlan, plan_turn, with_language
 from fakeyou.session.policy import UNATTRIBUTED, Channel, Grant, authorize
-from fakeyou.speech.contract import PreparedSpeech, PublicationSpeaker, speak_no_visual
+from fakeyou.speech.contract import (
+    PreparedSpeech,
+    PublicationOutcome,
+    PublicationSpeaker,
+    speak_no_visual,
+)
 
 _NO_VISUAL_STATE: frozenset[StateQuestion] = frozenset(
     {"attendance", "participant_count", "own_action_status"}
@@ -1069,9 +1074,13 @@ async def answer_state(
     language = runtime.sentences.language if runtime.sentences is not None else None
     if question in _NO_VISUAL_STATE:
         await speak_no_visual(runtime.speaker, text, transcript_id=final.id, language=language)
-    elif not await _speak_state_bound(runtime, final.id, generation, answer, language):
+        outcome: StateSpeechOutcome = "spoken"
+    else:
+        outcome = await _speak_state_bound(runtime, final.id, generation, answer, language)
+    if outcome == "unbound":
         await runtime.speaker.speak(text, transcript_id=final.id, language=language)
-    runtime.note_spoken(text)
+    if outcome != "prevented":
+        runtime.note_spoken(text)
     _move_phase(runtime, "listening", final.id)
     return True
 
@@ -1352,25 +1361,28 @@ def _turn_dropped(runtime: TurnContext) -> None:
     _raise_if_failed(runtime)
 
 
+StateSpeechOutcome = Literal["unbound", "spoken", "prevented"]
+
+
 async def _speak_state_bound(
     runtime: TurnContext,
     transcript_id: str,
     generation: int,
     answer: StateAnswer,
     language: str | None,
-) -> bool:
+) -> StateSpeechOutcome:
     speaker = runtime.speaker
     provenance = answer.provenance
     if provenance is None or not isinstance(speaker, PublicationSpeaker):
-        return False
+        return "unbound"
     context = speaker.publication_context
     if context is None:
-        return False
+        return "unbound"
     prepared = await speaker.prepare(
         answer.text, sentence_index=0, transcript_id=transcript_id, language=language
     )
     if prepared is None:
-        return True
+        return "prevented"
     speaker.bind_publication(
         prepared,
         SentenceBinding(
@@ -1389,7 +1401,9 @@ async def _speak_state_bound(
         ),
     )
     await speaker.speak_prepared(prepared)
-    return True
+    if isinstance(prepared, PublicationOutcome) and prepared.publication_prevented is not None:
+        return "prevented"
+    return "spoken"
 
 
 async def recover_turn(
