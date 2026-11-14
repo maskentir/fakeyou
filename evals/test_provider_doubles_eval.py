@@ -40,6 +40,16 @@ def test_a_recorded_free_text_look_replays_as_a_structured_inspection() -> None:
     assert inspection.answer == "Harun's shirt is red."
 
 
+def test_a_recorded_structured_look_is_not_wrapped_twice() -> None:
+    already = json.dumps({"verdict": "unclear", "answer": None})
+    adapted = _adapt_look_to_inspection(_gemini_entry(already))
+
+    body = json.loads("".join(chunk[1] for chunk in adapted["chunks"]))
+    text = body["candidates"][0]["content"]["parts"][0]["text"]
+
+    assert json.loads(text) == {"verdict": "unclear", "answer": None}
+
+
 def test_a_look_request_is_recognised_by_the_inspection_prompt() -> None:
     look = json.dumps(
         {

@@ -94,8 +94,15 @@ def _adapt_look_to_inspection(entry: dict[str, Any]) -> dict[str, Any]:
     for candidate in payload.get("candidates") or []:
         for part in (candidate.get("content") or {}).get("parts") or []:
             text = part.get("text")
-            if isinstance(text, str) and text.strip():
-                part["text"] = json.dumps({"verdict": "supported", "answer": text.strip()})
+            if not isinstance(text, str) or not text.strip():
+                continue
+            try:
+                recorded = json.loads(text)
+            except ValueError:
+                recorded = None
+            if isinstance(recorded, dict) and "verdict" in recorded:
+                continue
+            part["text"] = json.dumps({"verdict": "supported", "answer": text.strip()})
     adapted = dict(entry)
     adapted["chunks"] = [[0.0, json.dumps(payload, ensure_ascii=False)]]
     return adapted
