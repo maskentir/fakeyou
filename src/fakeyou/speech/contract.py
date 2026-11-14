@@ -2,6 +2,8 @@ from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
+from fakeyou.foundation.publication import PublicationContext, SentenceBinding
+
 
 @dataclass(frozen=True, slots=True)
 class WordTiming:
@@ -63,3 +65,11 @@ class PreparedSpeech(Protocol):
     async def __anext__(self) -> bytes: ...
 
     async def aclose(self) -> None: ...
+
+
+@runtime_checkable
+class PublicationSpeaker(Protocol):
+    @property
+    def publication_context(self) -> PublicationContext | None: ...
+
+    def bind_publication(self, prepared: PreparedSpeech, binding: SentenceBinding) -> None: ...

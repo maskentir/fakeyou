@@ -31,6 +31,7 @@ from fakeyou.config.settings import DEFAULTS
 from fakeyou.foundation.invariants import POLL_TIMEOUT_MULTIPLIER
 from fakeyou.foundation.numbers import real_number
 from fakeyou.foundation.polling import PageEvaluator, PollingLoop
+from fakeyou.foundation.publication import PublicationContext, SentenceBinding
 from fakeyou.foundation.resources import load_bridged_script
 from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
 from fakeyou.observability.faults import (
@@ -41,7 +42,7 @@ from fakeyou.observability.faults import (
 )
 from fakeyou.observability.journal import Journal
 from fakeyou.persistence.audio_persist import SlotAudioWriter
-from fakeyou.speech.contract import PreparedSpeech
+from fakeyou.speech.contract import PreparedSpeech, PublicationSpeaker
 
 CAPTURE_DRAIN_JS = (
     "() => { const capture = window.__fakeyouStreamCapture;"
@@ -670,6 +671,17 @@ class StreamFleetSession:
         if session is None:
             session = self._voice()
         await session.speak_prepared(prepared)
+
+    @property
+    def publication_context(self) -> PublicationContext | None:
+        session = self._voice()
+        return session.publication_context if isinstance(session, PublicationSpeaker) else None
+
+    def bind_publication(self, prepared: PreparedSpeech, binding: SentenceBinding) -> None:
+        session = self._prepared_sessions.get(prepared)
+        if not isinstance(session, PublicationSpeaker):
+            raise MeetingAudioError("prepared audio does not support publication binding")
+        session.bind_publication(prepared, binding)
 
     def raise_if_failed(self) -> None:
         failures: list[MeetingAudioError] = []

@@ -10,7 +10,9 @@ from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResp
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, ToolMessage
 
 from fakeyou.catalog.errors import FakeYouError
+from fakeyou.foundation.gathered_evidence import GatheredEvidence
 from fakeyou.foundation.participation import mentions_whole_phrase
+from fakeyou.foundation.publication import EvidenceBinding
 from fakeyou.foundation.triggers import current_trigger, meeting_event_of
 from fakeyou.observability.journal import Journal
 from fakeyou.observability.provider_faults import ProviderFault
@@ -358,7 +360,7 @@ class MeetingEvidence:
 
     async def __call__(
         self, question: str, needs: tuple[str, ...], transcript_id: str | None = None
-    ) -> dict[str, Any]:
+    ) -> GatheredEvidence:
         attempt_id = uuid4().hex
         self._journal.record(
             "perception_evidence_started",
@@ -396,7 +398,24 @@ class MeetingEvidence:
                     source="perception",
                     **fields,
                 )
-        return payloads
+        provenance = tuple(
+            EvidenceBinding(
+                kind=need,
+                gather_attempt_id=attempt_id,
+                snapshot=result.snapshot,
+                observed_at=result.observed_at.timestamp(),
+                provider=None,
+                provider_attempt_id=None,
+                inference=result.acquisition,
+                capture_monotonic=None,
+                capture_clock_domain="utc" if result.snapshot is not None else None,
+                capture_time_origin="snapshot_ref_reported",
+                capture_mapping_uncertainty_seconds=None,
+                observation_clock_domain="utc",
+            )
+            for need, result in results.items()
+        )
+        return GatheredEvidence(payloads, attempt_id, provenance)
 
 
 class PerceptionContextMiddleware(AgentMiddleware[Any, Any, Any]):

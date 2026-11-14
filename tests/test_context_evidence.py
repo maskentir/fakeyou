@@ -1,11 +1,13 @@
 import asyncio
+import json
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import cast
 
 import pytest
 from langchain_core.messages import HumanMessage
 
+from fakeyou.foundation.gathered_evidence import GatheredEvidence
 from fakeyou.perception import context as context_module
 from fakeyou.perception.budget import PerceptionBudget
 from fakeyou.perception.context import MeetingEvidence, PerceptionContext, gather_evidence
@@ -98,6 +100,28 @@ async def test_a_fresh_screen_look_emits_its_resolution() -> None:
     assert resolved["resolution"] == "fresh"
     assert resolved["transcript_id"] == "t1"
     assert resolved["vision_latency_ms"] >= 0
+
+
+async def test_gathered_provenance_stays_out_of_model_payload_and_keeps_capture_unmapped() -> None:
+    journal = RecordingJournal()
+    seeing = context(read_timeline(), "Beta is 17 March 2027.")
+    gathered = await MeetingEvidence(seeing, journal=journal)("When is beta?", ("screen",), "t1")
+
+    assert isinstance(gathered, GatheredEvidence)
+    [provenance] = gathered.provenance
+    [resolved] = journal.events("perception_evidence_resolved")
+    assert provenance.gather_attempt_id == gathered.gather_attempt_id == resolved["attempt_id"]
+    assert provenance.kind == "screen"
+    assert provenance.snapshot is not None
+    assert provenance.snapshot.captured_at.isoformat() == resolved["captured_at"]
+    assert provenance.capture_monotonic is None
+    assert provenance.capture_mapping_uncertainty_seconds is None
+    assert provenance.provider_attempt_id is None
+    assert provenance.observation_clock_domain == "utc"
+    assert provenance.observed_at == datetime.fromisoformat(resolved["observed_at"]).timestamp()
+    payload = json.dumps(dict(gathered))
+    assert "gather_attempt_id" not in payload
+    assert "capture_monotonic" not in payload
 
 
 async def test_repeated_evidence_gathers_have_distinct_explicit_attempts() -> None:

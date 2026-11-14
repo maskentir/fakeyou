@@ -63,6 +63,7 @@ from fakeyou.foundation.participation import (
     is_vocative,
     mentions_whole_phrase,
 )
+from fakeyou.foundation.publication import PublicationContext, SentenceBinding
 from fakeyou.foundation.resources import read_package_text
 from fakeyou.foundation.speakers import UNIDENTIFIED_PARTICIPANT
 from fakeyou.foundation.transcript import TranscriptEvent, attention_line, transcript_stamp
@@ -70,7 +71,7 @@ from fakeyou.foundation.triggers import ReplyChannel
 from fakeyou.observability.faults import ConsumerSink, FaultReporter, capture_error, guard_observer
 from fakeyou.observability.journal import Journal, JournalSink
 from fakeyou.observability.provider_faults import classify_exception
-from fakeyou.speech.contract import PreparedSpeech
+from fakeyou.speech.contract import PreparedSpeech, PublicationSpeaker
 
 _ADMITTED = frozenset({"speak", "clarify"})
 _STOP_DATA: dict[str, list[str]] = json.loads(read_package_text("stop_phrases.json"))
@@ -1488,6 +1489,17 @@ class FloorActor:
 class _ActorSpeaker:
     def __init__(self, actor: FloorActor) -> None:
         self._actor = actor
+
+    @property
+    def publication_context(self) -> PublicationContext | None:
+        session = self._actor.session
+        return session.publication_context if isinstance(session, PublicationSpeaker) else None
+
+    def bind_publication(self, prepared: PreparedSpeech, binding: SentenceBinding) -> None:
+        session = self._session()
+        if not isinstance(session, PublicationSpeaker):
+            raise ConversationError("audio session does not support publication binding")
+        session.bind_publication(prepared, binding)
 
     @property
     def is_speaking(self) -> bool:

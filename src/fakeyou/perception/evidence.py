@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
 
+from fakeyou.foundation.publication import EvidenceSource as EvidenceSource
+from fakeyou.foundation.publication import SnapshotRef as SnapshotRef
 from fakeyou.perception.inspector import VisualInspection
 
-EvidenceSource = Literal["camera", "screen"]
 Acquisition = Literal["not_attempted", "reused", "inference"]
 EvidenceStatus = Literal["produced", "insufficient", "unavailable"]
 Verification = Literal["unverified", "verified"]
@@ -23,33 +23,6 @@ EvidenceCode = Literal[
     "frame_unavailable",
     "unknown_participant",
 ]
-
-
-@dataclass(frozen=True, slots=True)
-class SnapshotRef:
-    source: EvidenceSource
-    subject_id: str
-    stream_id: str
-    epoch: int
-    sequence: int
-    generation: int
-    captured_at: datetime
-
-    @property
-    def correlation_id(self) -> str:
-        digest = hashlib.sha256(
-            "|".join(
-                (
-                    self.source,
-                    self.subject_id,
-                    self.stream_id,
-                    str(self.epoch),
-                    str(self.sequence),
-                    str(self.generation),
-                )
-            ).encode()
-        ).hexdigest()
-        return digest[:16]
 
 
 @dataclass(frozen=True, slots=True)

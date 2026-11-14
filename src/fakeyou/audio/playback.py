@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import math
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -10,6 +12,11 @@ import numpy as np
 from fakeyou.foundation.invariants import PLAYBACK_SAMPLE_RATE
 from fakeyou.foundation.pcm import PCM16_SAMPLE_BYTES, VoicedClip, voiced_clip
 from fakeyou.foundation.protocols import SupportsAclose
+from fakeyou.foundation.publication import (
+    PublicationContext,
+    PublicationDecision,
+    SentenceBinding,
+)
 from fakeyou.foundation.taxonomy import Subsystem
 from fakeyou.observability.cleanup import close_safely
 from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
@@ -37,6 +44,7 @@ PlaybackEventKind = Literal[
 class Utterance:
     transcript_id: str | None = None
     sentence_index: int | None = None
+    publication: SentenceBinding | None = None
 
 
 NO_UTTERANCE = Utterance()
@@ -76,6 +84,13 @@ CLEANUP_TIMEOUT_SECONDS = 5.0
 
 class PlaybackError(RuntimeError):
     pass
+
+
+class _PublicationPrevented(RuntimeError):
+    def __init__(self, validity: str, reason: str) -> None:
+        super().__init__(f"publication_prevented:{validity}:{reason}")
+        self.validity = validity
+        self.reason = reason
 
 
 def _is_timeout(error: BaseException) -> bool:
@@ -203,6 +218,7 @@ class _Clip:
     utterance: Utterance = NO_UTTERANCE
     epoch: int = 0
     spoken: SpokenWords = field(default_factory=_Voicing)
+    publication: SentenceBinding | None = None
 
 
 class _PreparedSpeech:
@@ -314,6 +330,32 @@ def _pcm_last_sample(pcm: bytes) -> int:
     return int.from_bytes(pcm[-PCM16_SAMPLE_BYTES:], "little", signed=True)
 
 
+def _fresh_publication_decision(
+    decision: PublicationDecision,
+    binding: SentenceBinding,
+    context: PublicationContext,
+) -> PublicationDecision:
+    if not decision.allows:
+        return decision
+    if binding.scope != "current":
+        return decision
+    checked_at = decision.checked_at
+    now = context.now()
+    stale = (
+        checked_at is None
+        or decision.clock_domain != context.clock_domain
+        or not math.isfinite(checked_at)
+        or not math.isfinite(now)
+        or not math.isfinite(decision.uncertainty_seconds)
+        or not 0 <= decision.uncertainty_seconds <= 0.05
+        or checked_at > now
+        or now - checked_at + decision.uncertainty_seconds > 0.25
+    )
+    if stale:
+        return PublicationDecision("unknown", "validation_stale", now, context.clock_domain)
+    return decision
+
+
 async def _pcm_chunks(pcm: bytes) -> AsyncIterator[bytes]:
     for start in range(0, len(pcm), CUE_CHUNK_BYTES):
         yield pcm[start : start + CUE_CHUNK_BYTES]
@@ -361,6 +403,38 @@ class PlaybackEngine:
         self._turn: _OpenTurn | None = None
         self._turn_endings: set[asyncio.Task[None]] = set()
         self._clip_bytes = 0
+        self._publication_context: PublicationContext | None = None
+        self._publication_bindings: dict[PreparedSpeech, SentenceBinding] = {}
+        self._publication_ids: set[str] = set()
+        self._publication_checked: set[int] = set()
+
+    def configure_publication(self, context: PublicationContext | None) -> None:
+        self._publication_context = context
+
+    @property
+    def publication_context(self) -> PublicationContext | None:
+        return self._publication_context
+
+    def bind_publication(self, prepared: PreparedSpeech, binding: SentenceBinding) -> None:
+        normalized = " ".join(prepared.text.split())
+        digest = hashlib.sha256(normalized.encode()).hexdigest()
+        if binding.sentence_hash != digest:
+            raise ValueError("publication sentence hash does not match prepared speech")
+        if binding.sentence_index != prepared.sentence_index:
+            raise ValueError("publication sentence index does not match prepared speech")
+        if binding.transcript_id != prepared.transcript_id:
+            raise ValueError("publication transcript identity does not match prepared speech")
+        if (
+            self._publication_context is not None
+            and binding.meeting_id != self._publication_context.meeting_id
+        ):
+            raise ValueError("publication meeting identity does not match context")
+        if binding.publication_id in self._publication_ids:
+            raise ValueError("publication identity must be unique")
+        if prepared in self._publication_bindings:
+            raise ValueError("prepared speech already has a publication binding")
+        self._publication_ids.add(binding.publication_id)
+        self._publication_bindings[prepared] = binding
 
     @property
     def is_speaking(self) -> bool:
@@ -563,7 +637,11 @@ class PlaybackEngine:
         await self._play_queued(
             prepared,
             prepared.text,
-            utterance=Utterance(prepared.transcript_id, prepared.sentence_index),
+            utterance=Utterance(
+                prepared.transcript_id,
+                prepared.sentence_index,
+                self._publication_bindings.pop(prepared, None),
+            ),
             spoken=prepared,
         )
 
@@ -613,7 +691,16 @@ class PlaybackEngine:
     ) -> None:
         loop = asyncio.get_running_loop()
         done: asyncio.Future[None] = loop.create_future()
-        clip = _Clip(audio, text, done, cue, utterance, self._stop_epoch, spoken or _Voicing())
+        clip = _Clip(
+            audio,
+            text,
+            done,
+            cue,
+            utterance,
+            self._stop_epoch,
+            spoken or _Voicing(),
+            utterance.publication,
+        )
         await self._queue.put(clip)
         self._ensure_worker()
         try:
@@ -699,16 +786,20 @@ class PlaybackEngine:
                 while len(pending) >= FRAME_BYTES:
                     frame, pending = pending[:FRAME_BYTES], pending[FRAME_BYTES:]
                     if generation != self._generation:
+                        if self._publication_context is not None and not clip.cue:
+                            return False
                         await self._writer.write(_faded(frame))
                         return False
-                    await self._write_frame(frame, clip, gain=gain)
+                    await self._write_frame(frame, clip, generation, gain=gain)
             rest = _whole_samples(pending)
             if not rest:
                 return generation == self._generation
             if generation != self._generation:
+                if self._publication_context is not None and not clip.cue:
+                    return False
                 await self._writer.write(_faded(rest))
                 return False
-            await self._write_frame(rest, clip, gain=gain)
+            await self._write_frame(rest, clip, generation, gain=gain)
         except asyncio.CancelledError:
             await self._fade_out()
             raise
@@ -717,14 +808,95 @@ class PlaybackEngine:
         finally:
             await self._close_audio(audio)
 
-    async def _write_frame(self, frame: bytes, clip: _Clip, *, gain: bool) -> None:
+    async def _write_frame(self, frame: bytes, clip: _Clip, generation: int, *, gain: bool) -> None:
         await self._thawed.wait()
+        should_check = (
+            self._publication_context is not None
+            and not clip.cue
+            and id(clip) not in self._publication_checked
+        )
+        if should_check:
+            self._publication_checked.add(id(clip))
+            decision = await self._publication_decision(clip.publication)
+            if generation != self._generation:
+                raise _PublicationPrevented("unknown", "cancelled")
+            if not self._thawed.is_set():
+                raise _PublicationPrevented("unknown", "frozen")
+            if self._closed:
+                raise _PublicationPrevented("unknown", "closed")
+            if decision is None:
+                raise _PublicationPrevented("unknown", "unresolved")
+            if not decision.allows:
+                raise _PublicationPrevented(decision.validity, decision.reason)
         pcm = self._apply_gain(frame) if gain else frame
         self._last_sample = _pcm_last_sample(pcm)
         await self._writer.write(pcm)
         if self._clip_bytes == 0:
             self._emit("playback_audio_started", clip.text, cue=clip.cue, utterance=clip.utterance)
         self._clip_bytes += len(pcm)
+
+    async def _publication_decision(
+        self, binding: SentenceBinding | None
+    ) -> PublicationDecision | None:
+        context = self._publication_context
+        if context is None or binding is None:
+            return None
+        gate = context.gate
+        if gate is None:
+            if binding.scope in ("historical", "no_visual"):
+                return PublicationDecision(
+                    "valid", "safe_scope_without_gate", context.now(), context.clock_domain
+                )
+            return None
+        return await self._run_publication_gate(context, binding, gate)
+
+    async def _run_publication_gate(
+        self,
+        context: PublicationContext,
+        binding: SentenceBinding,
+        gate: Callable[[SentenceBinding], Awaitable[PublicationDecision | None]],
+    ) -> PublicationDecision | None:
+        if not math.isfinite(context.timeout_seconds) or context.timeout_seconds <= 0:
+            return None
+        try:
+            async with asyncio.timeout(context.timeout_seconds):
+                decision = await gate(binding)
+                effective = (
+                    None
+                    if decision is None
+                    else _fresh_publication_decision(decision, binding, context)
+                )
+                if self._journal is not None:
+                    self._journal.record(
+                        "publication_gate_decided",
+                        source="playback",
+                        publication_id=binding.publication_id,
+                        validity=None if effective is None else effective.validity,
+                        reason="unknown" if effective is None else effective.reason,
+                        checked_at=None if effective is None else effective.checked_at,
+                        clock_domain=None if effective is None else effective.clock_domain,
+                    )
+                return effective
+        except asyncio.CancelledError:
+            raise
+        except TimeoutError:
+            if self._journal is not None:
+                self._journal.record(
+                    "publication_gate_expired",
+                    source="playback",
+                    publication_id=binding.publication_id,
+                )
+            return None
+        except (OSError, RuntimeError, TypeError, ValueError) as error:
+            self._record_fault("playback", error)
+            if self._journal is not None:
+                self._journal.record(
+                    "publication_gate_failed",
+                    source="playback",
+                    publication_id=binding.publication_id,
+                    error=type(error).__name__,
+                )
+            return None
 
     async def _fade_out(self) -> None:
         if self._last_sample == 0:
@@ -748,6 +920,7 @@ class PlaybackEngine:
         await self.stop()
         worker, self._worker = self._worker, None
         prepared, self._prepared = self._prepared, set()
+        self._publication_bindings.clear()
         try:
             if worker is not None:
                 worker.cancel()
@@ -878,12 +1051,15 @@ class PlaybackEngine:
                 utterance=utterance,
             )
             self._record_fault("playback", error)
+        except _PublicationPrevented as prevented:
+            self._emit_dropped(clip, str(prevented), heard="")
         else:
             if played:
                 self._emit("playback_finished", text, cue=cue, utterance=utterance)
             else:
                 self._emit_interrupted(clip)
         finally:
+            self._publication_checked.discard(id(clip))
             self._play_tasks.discard(play_task)
             self._active_done = None
             self._active_play_task = None
