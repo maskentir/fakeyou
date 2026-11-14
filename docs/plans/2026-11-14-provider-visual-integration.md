@@ -26,19 +26,22 @@ Google, so the experiment costs code and credits instead of a new dependency.
 | `src/fakeyou/perception/camera_evidence.py` | modify | the cache entry stores the inspection instead of the answer text |
 | `src/fakeyou/perception/context.py` | modify | the on-demand screen look maps the same verdict to the same status and code |
 | `src/fakeyou/catalog/errors.py` | modify | name the error for a response that is not a usable inspection |
-| `src/fakeyou/observability/report_contract.py` | modify | classify `insufficient` evidence in the canonical report |
+| `src/fakeyou/observability/report_contract.py` | modify | classify `insufficient` evidence in the canonical report, and let an unmet need outrank an answered one |
 | `src/fakeyou/session_targets.json` | modify | move the scorecard contract version, because the classification contract changed and no target value changed |
-| `evals/_visual_cassette.py` | create | record the controlled cases from the provider and replay them offline |
+| `evals/_visual_cassette.py` | create | record the controlled cases from the provider, guard the budget, and replay them offline |
 | `evals/fixtures/visual-inspection/provider-cassette.jsonl` | create | the recorded provider responses, with usage and no credentials |
+| `evals/fixtures/visual-inspection/experiment-attempts.jsonl` | create | every provider attempt of the experiment, so the request count is reconstructible |
 | `evals/_visual_inspection.py` | modify | map a provider fault to a case-level error and keep a programming error visible |
-| `evals/_provider_doubles.py` | modify | adapt a recorded look answer to the inspection contract, and record the look requests only |
-| `tests/_perception_fakes.py` | modify | the fake model serves scripted inspections |
+| `evals/_provider_doubles.py` | modify | record the look requests and replace the entry the old recording left behind |
+| `evals/fixtures/simulator/cassettes/sim-s3-camera.jsonl` | modify | the camera look recorded with a real structured provider response |
+| `evals/fixtures/simulator/cassettes/sim-s3-screen.jsonl` | modify | the screen look recorded with a real structured provider response |
+| `tests/_perception_fakes.py` | modify | the fake model serves scripted inspections as provider-shaped JSON |
 | `tests/test_interpreter.py` | modify | the structured look, the unparsed inspection, and the budget |
 | `tests/test_camera_evidence.py` | modify | the verdict mapping and the cache that keeps an abstention an abstention |
 | `tests/test_context_evidence.py` | modify | the on-demand screen look emits the same statuses |
 | `tests/test_context.py` | modify | the screen look scripts an inspection instead of free text |
-| `tests/test_provider_doubles_eval.py` | modify | the recorded look replays as a structured inspection |
-| `tests/test_scorecard_contract.py` | modify | `insufficient` evidence is classified, not unclassified |
+| `tests/test_provider_doubles_eval.py` | modify | every recorded look parses as an inspection, and a free text answer is rejected |
+| `tests/test_scorecard_contract.py` | modify | `insufficient` evidence is classified, and an unmet need outranks an answered one |
 
 No new abstraction is introduced. There is no `EvidenceResolver`, no evidence store, and no
 second inspection contract; the work stays inside the interpreter, the evidence contract,
@@ -199,23 +202,20 @@ reproducible without credentials and without spending credits.
 
 Two recorded look requests depend on the production look prompt: the camera look in
 `sim-s3-camera` and the screen look in `sim-s3-screen`. Both replay recorded free text, so
-a structured production prompt changes the shape of the expected response. The request
-still finds its recorded entry, because the prompt keeps its shape, so the recorded free
-text would be replayed and rejected by the structured parser.
+a structured production prompt changes the shape of the expected response.
 
-Re-recording a whole simulator scenario is not affordable: record mode relays every model
-call in the session, and the budget is twelve requests in total. The double therefore
-has two paths for a look request.
+The double has one path for a look request, and it is the recording path. In
+`record_looks` mode it relays the look request to the provider and replaces the entry
+that the old recording left behind, so the cassette holds one look entry and it holds a
+real provider response. Replay has no second path: a free text response is not an
+inspection, and the production contract rejects it.
 
-In replay it adapts the recorded answer into the inspection contract. The recorded
-provider bytes stay untouched and the production path runs end to end, from the prompt to
-the verdict to the evidence status. The simulator remains a behavioural double and not a
-quality measurement.
-
-In `record_looks` mode it relays the look request to the provider and appends the real
-response to the cassette, while every other request still replays. The two look entries
-can therefore be replaced by real provider responses when credentials are available,
-without re-recording the whole scenario.
+The rejection is deliberate. A compatibility adapter that wrapped the old free text into
+a verdict would have produced a green simulator without proving that a structured
+provider is used, and it would have turned "I cannot see the requested information" into
+a supported claim. The regression test holds the line: every recorded look in the
+simulator cassettes must parse as an inspection, and a recorded free text answer must be
+rejected by the contract.
 
 ## The experiment budget
 
@@ -223,27 +223,37 @@ The recorder stops when it reaches twelve requests. It never extends the quota, 
 retries automatically, and never falls back to another provider. A refusal to continue is a
 recorded outcome, not a silent truncation.
 
+The guard reads the attempt ledger before every provider call, so the budget survives a
+restart and the historical request count is reconstructible from the artefact rather than
+from the number of successful recordings. The ledger holds every attempt, including the
+ones that never reached inference, and marks each one:
+
+- A request that reached the provider's inference path counts against the request cap,
+  whether it succeeded or timed out, because it may have been billed.
+- A request the provider rejected before inference, such as an authentication rejection,
+  is recorded and costs nothing. It never reached the model, so it does not consume the
+  inference budget.
+
+The cost is computed from the provider-reported usage of the successful recordings. The
+cost of a timed-out request cannot be proven from the artefact, so the reported figure is
+the cost estimated from successful recorded usage.
+
 Each request records the provider-reported usage, and the report states the actual spend
 from the provider's own numbers rather than an assumed per-request cost. The published
 Gemini 3.8 Flash rates at the time of writing are $0.75 per million input tokens and $3.75
 per million output tokens until 31 December 2026; the budget guard uses the pessimistic of
 the two so the estimate cannot understate the cost.
 
-The planned spend is eight requests for the eight controlled cases, two requests to
-re-record the simulator look entries, and two requests held in reserve for a diagnostic
-retry. A live test never runs in CI.
-
-Recording the eight controlled cases needs Google credentials. The recorder enforces the
-approved budget itself: it stops at twelve requests, it never extends the quota, it never
-falls back to another provider, and it writes the provider-reported usage and the computed
-cost for every request. The cassette is committed only once it holds real provider
-responses; an empty or synthetic cassette is never presented as one.
+The spent budget is eight requests for the eight controlled cases, one request that timed
+out, and two requests to record the simulator look entries. Three requests remain. A live
+test never runs in CI.
 
 ## Measured provider result
 
 The eight controlled cases were recorded from `gemini-3.8-flash` in nine attempts, one of
-which timed out, for a recorded cost of US$0.0124 against the approved US$1. Replaying the
-cassette offline produces:
+which timed out, and the two simulator look entries were recorded in two more. The
+eleven requests that reached inference cost an estimated US$0.0146 from the successful
+recorded usage, against the approved US$1. Replaying the cassette offline produces:
 
 | Metric | Result |
 | --- | --- |
@@ -261,21 +271,28 @@ The provider read the controlled scenes correctly. It named the beta date, the o
 project title, the shirt colour, and it abstained on the budget, on the person's name, and
 on the obscured date, so the verdict and the answer are exact on every case.
 
-The grounding numbers are a property of the rubric, not a measurement of hallucination.
-The provider states each observation as a sentence, for example `The text displays 'Beta:
-17 March 2027'`, while the rubric accepts only `Beta: 17 March 2027`. Every observation is
-faithful, and every one of them is unlisted, so the closed rubric scores each as a false
-claim.
+The grounding numbers are the strict rubric baseline, and they measure the rubric rather
+than hallucination. The provider states each observation as a sentence, for example
+`The text displays 'Beta: 17 March 2027'`, while the rubric accepts only
+`Beta: 17 March 2027`. Every observation is faithful, and every one of them is unlisted,
+so the closed rubric scores each as a false claim.
 
-This is the case the Phase 3b-A plan named: provider integration needs reviewed aliases or
-independent adjudication for previously unseen free-form assertions, and a model's own
-verdict cannot supply them. The dataset carries a `fact_aliases` field for that decision,
-and the alias list is a labelling decision, not an implementation detail. Until it is
-reviewed, the false claim rate measures rubric conformance and the report says so.
+These eight cases are a development dataset, not a held-out benchmark. The numbers above
+show that the provider read these eight controlled scenes correctly. They are not evidence
+about how a vision model performs in general, and the false claim rate of a rubric that
+has not seen free-form assertions is not a false claim rate of the model.
 
-The provider latency in the recording runs from 2.6 to 7.1 seconds per case, and one
-request timed out at the thirty second provider timeout. Phase 5 measures latency on real
-meetings.
+The adjudication of the fifteen recorded assertions is a separate review, one assertion
+at a time, and its outcome is kept apart from this baseline. A reviewed alias list would
+add a second set of numbers next to the strict ones, never in place of them.
+
+## The parsing contract the provider exposed
+
+The first recorded provider response could not be parsed by the provider's own output
+parser. `observed_facts` is a tuple and the contract is strict, so the parser rejected the
+JSON array the provider sends, while the contract accepts it in JSON mode. The evaluation
+harness already validated the raw response as JSON, and the production path now does the
+same, so both read one contract and one parsing mode.
 
 ## Honest reporting
 

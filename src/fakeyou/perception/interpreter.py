@@ -153,11 +153,12 @@ class PerceptionInterpreter:
         structured = self._model.with_structured_output(VisualInspection, include_raw=True)
         with reservation:
             result = await self._invoke(lambda: structured.ainvoke([message]))
-            raw, parsed = structured_parts(result)
+            raw, _parsed = structured_parts(result)
             reservation.charge(tokens_used(raw.usage_metadata if raw else None, estimate))
-        if not isinstance(parsed, VisualInspection):
-            raise FakeYouError(ErrorCode.PERCEPTION_INSPECTION_UNPARSED)
-        return parsed
+        try:
+            return VisualInspection.model_validate_json(raw_text(raw))
+        except ValueError as error:
+            raise FakeYouError(ErrorCode.PERCEPTION_INSPECTION_UNPARSED) from error
 
     async def camera_answer(
         self,
@@ -270,6 +271,19 @@ async def inspection_message(image: bytes, question: str, *, source: str) -> Hum
             },
         ]
     )
+
+
+def raw_text(raw: Any) -> str:
+    content = getattr(raw, "content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            str(block.get("text", ""))
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        )
+    return str(content)
 
 
 def structured_parts(result: Any) -> tuple[AIMessage | None, Any]:

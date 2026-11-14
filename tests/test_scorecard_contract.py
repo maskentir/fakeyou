@@ -640,6 +640,32 @@ def test_an_abstention_is_not_hidden_as_visual_unavailable() -> None:
 @pytest.mark.parametrize(
     "observations",
     [
+        (
+            ("screen", "inference", "produced"),
+            ("participant", "inference", "insufficient"),
+        ),
+        (
+            ("participant", "inference", "insufficient"),
+            ("screen", "inference", "produced"),
+        ),
+        (
+            ("screen", "reused", "produced"),
+            ("participant", "inference", "insufficient"),
+        ),
+    ],
+)
+def test_one_unmet_need_is_not_hidden_by_an_answered_need(observations: tuple[Any, ...]) -> None:
+    report = build_session_report(
+        canonical_session(evidence=("screen", "participant"), observations=observations)
+    )
+    assert path_of(report) == "visual_insufficient"
+    assert report["evidence_unclassified"] == 0
+    assert report["latency_by_evidence_path"]["visual_fresh"]["expected_answers"] == 0
+
+
+@pytest.mark.parametrize(
+    "observations",
+    [
         (("screen", "inference", "produced"),),
         (("screen", "reused", "produced"),),
         (("screen", "not_attempted", "unavailable"),),

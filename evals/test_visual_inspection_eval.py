@@ -185,10 +185,13 @@ async def test_the_recorder_stops_at_the_request_budget(tmp_path: Path) -> None:
     model = vision_model(answers=["Project Orchid"])
     data = (FIXTURE.parent / "screen.png").read_bytes()
     cases = [("screen.png", "What is the project name?", data)] * 3
-    budget = ExperimentBudget(max_requests=2)
+    budget = ExperimentBudget(max_requests=2, ledger=tmp_path / "attempts.jsonl")
 
     recorded = await record_visual_cassette(
-        cases, model, path=tmp_path / "provider-cassette.jsonl", budget=budget
+        cases,
+        model,
+        path=tmp_path / "provider-cassette.jsonl",
+        budget=budget,
     )
 
     assert len(recorded) == 2
@@ -231,6 +234,58 @@ async def test_a_reviewed_alias_grounds_a_paraphrase() -> None:
     report = await evaluate_inspections(inspect, fixture)
     assert report["metrics"]["grounding_precision"]["rate"] == 1.0
     assert report["metrics"]["false_claim_rate"]["rate"] == 0.0
+
+
+async def test_the_recorder_stops_before_the_provider_call_when_the_request_budget_is_reached(
+    tmp_path: Path,
+) -> None:
+    model = vision_model(answers=["Project Orchid"])
+    data = (FIXTURE.parent / "screen.png").read_bytes()
+    budget = ExperimentBudget(max_requests=1, ledger=tmp_path / "attempts.jsonl")
+    budget.record(
+        {"source": "test", "question": "already spent"},
+        usage={"input_tokens": 100, "output_tokens": 10},
+    )
+
+    recorded = await record_visual_cassette(
+        [("screen.png", "What is the project name?", data)],
+        model,
+        path=tmp_path / "provider-cassette.jsonl",
+        budget=budget,
+    )
+
+    assert recorded == []
+    assert model.structured_seen == []
+
+
+async def test_the_recorder_stops_before_the_provider_call_when_the_cost_budget_is_reached(
+    tmp_path: Path,
+) -> None:
+    model = vision_model(answers=["Project Orchid"])
+    data = (FIXTURE.parent / "screen.png").read_bytes()
+    budget = ExperimentBudget(max_requests=12, max_usd=0.0001, ledger=tmp_path / "attempts.jsonl")
+
+    recorded = await record_visual_cassette(
+        [("screen.png", "What is the project name?", data)],
+        model,
+        path=tmp_path / "provider-cassette.jsonl",
+        budget=budget,
+    )
+
+    assert recorded == []
+    assert model.structured_seen == []
+
+
+def test_the_budget_remembers_the_spent_requests_after_a_restart(tmp_path: Path) -> None:
+    ledger = tmp_path / "attempts.jsonl"
+
+    first = ExperimentBudget(max_requests=12, ledger=ledger)
+    first.record({"source": "test"}, usage={"input_tokens": 100, "output_tokens": 10})
+
+    second = ExperimentBudget(max_requests=12, ledger=ledger)
+
+    assert second.requests == 1
+    assert second.spent_usd > 0
 
 
 def test_the_dataset_rejects_relabelled_images_with_stale_hashes(tmp_path: Path) -> None:

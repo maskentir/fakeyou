@@ -13,7 +13,7 @@ from langchain_core.messages.ai import UsageMetadata
 from langchain_core.outputs import ChatResult
 from langchain_core.runnables import Runnable, RunnableLambda
 from PIL import Image, ImageDraw, ImageFont
-from pydantic import PrivateAttr
+from pydantic import BaseModel, PrivateAttr
 
 from fakeyou.perception.frames import keyframe_from_jpeg
 from fakeyou.perception.inspector import VisualInspection
@@ -113,7 +113,8 @@ class FakeVisionModel(FakeMessagesListChatModel):
         def respond(model_input: LanguageModelInput) -> dict[str, Any]:
             self.structured_seen.append(_messages_of(model_input))
             parsed: Any = self._next(schema)
-            raw = AIMessage(content="", usage_metadata=usage(self.reading_tokens))
+            body = parsed.model_dump_json() if isinstance(parsed, BaseModel) else ""
+            raw = AIMessage(content=body, usage_metadata=usage(self.reading_tokens))
             return {"raw": raw, "parsed": parsed, "parsing_error": None}
 
         return RunnableLambda(respond)

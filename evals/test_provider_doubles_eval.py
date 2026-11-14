@@ -1,22 +1,25 @@
 import json
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 from evals._provider_doubles import (
     Cassette,
     RequestKey,
-    _adapt_look_to_inspection,
     _is_look_request,
     _token_vector,
 )
 from fakeyou.perception.inspector import VisualInspection
-from fakeyou.perception.interpreter import INSPECTION_PROMPT
+from fakeyou.perception.interpreter import INSPECTION_PROMPT, INSPECTION_PROMPT_MARKER
 
 JUDGE = "You decide whether the twin should take the floor."
 EARLIER = "Ayu: " + "the slides look fine and the checklist is on track. " * 6
 QUESTION = "Harun: Twin, please raise your hand"
+CASSETTES = Path(__file__).parent / "fixtures" / "simulator" / "cassettes"
 
 
-def _gemini_entry(answer: str) -> dict[str, object]:
+def _gemini_entry(answer: str) -> dict[str, Any]:
     body = json.dumps({"candidates": [{"content": {"parts": [{"text": answer}], "role": "model"}}]})
     return {
         "route": "/v1beta/models/gemini-3.8-flash:generateContent",
@@ -28,26 +31,37 @@ def _gemini_entry(answer: str) -> dict[str, object]:
     }
 
 
-def test_a_recorded_free_text_look_replays_as_a_structured_inspection() -> None:
-    adapted = _adapt_look_to_inspection(_gemini_entry("Harun's shirt is red."))
+def _recorded_look_entries() -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for path in sorted(CASSETTES.glob("*.jsonl")):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line:
+                continue
+            entry = json.loads(line)
+            if INSPECTION_PROMPT_MARKER in str(entry.get("focus", "")):
+                entries.append(entry)
+    return entries
 
-    body = json.loads("".join(chunk[1] for chunk in adapted["chunks"]))
-    text = body["candidates"][0]["content"]["parts"][0]["text"]
 
-    assert json.loads(text) == {"verdict": "supported", "answer": "Harun's shirt is red."}
-    inspection = VisualInspection.model_validate_json(text)
-    assert inspection.verdict == "supported"
-    assert inspection.answer == "Harun's shirt is red."
+def test_every_recorded_simulator_look_is_a_structured_inspection() -> None:
+    entries = _recorded_look_entries()
+
+    assert entries, "the simulator cassettes must hold the recorded look requests"
+
+    for entry in entries:
+        body = "".join(chunk[1] for chunk in entry.get("chunks", []) if len(chunk) > 1)
+        text = json.loads(body)["candidates"][0]["content"]["parts"][0]["text"]
+        inspection = VisualInspection.model_validate_json(text)
+        assert inspection.verdict in {"supported", "not_visible", "unclear"}
 
 
-def test_a_recorded_structured_look_is_not_wrapped_twice() -> None:
-    already = json.dumps({"verdict": "unclear", "answer": None})
-    adapted = _adapt_look_to_inspection(_gemini_entry(already))
+def test_a_recorded_free_text_look_is_rejected_by_the_inspection_contract() -> None:
+    free_text = _gemini_entry("Harun's shirt is red.")
+    body = "".join(chunk[1] for chunk in free_text["chunks"])
+    text = json.loads(body)["candidates"][0]["content"]["parts"][0]["text"]
 
-    body = json.loads("".join(chunk[1] for chunk in adapted["chunks"]))
-    text = body["candidates"][0]["content"]["parts"][0]["text"]
-
-    assert json.loads(text) == {"verdict": "unclear", "answer": None}
+    with pytest.raises(ValueError, match="expected value"):
+        VisualInspection.model_validate_json(text)
 
 
 def test_a_look_request_is_recognised_by_the_inspection_prompt() -> None:
