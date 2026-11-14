@@ -1103,6 +1103,12 @@ The sim-s1 cassette holds two recorded judge requests that differ only in whethe
 
 ## Phase 5 — Live end-to-end correctness and cost benchmark
 
+**Current milestone:** review the [Phase 5 Live E2E Measurement Plan](2026-11-14-live-e2e-measurement.md)
+before implementation. It defines independent claim adjudication, publication-time
+freshness, timing/accounting requirements, and proposed acceptance gates. The #194
+experiment budget remains closed; paid execution requires a separately approved budget.
+The earlier task outline below is not authorization to run a live benchmark.
+
 **Release condition:** grounded answers, measured latency, measured vision calls and measured CPU from a real meeting, across general questions, follow-up questions, small objects, visual change, several participants, screen share, speaker change and failed streams.
 
 **Files:**
