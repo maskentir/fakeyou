@@ -83,14 +83,29 @@ references, disagreement resolutions, and reasons with every claim.
 ## 4. Scenario matrix and sampling
 
 The following is a measurement population, **not a provider-request allocation**.
-First run an optional diagnostic pilot of one turn per scenario, only if separately
-budget-approved. Inspect completeness and costs, then pause. Pilot results are reported
-separately and cannot replace the frozen confirmatory population.
+Start with a diagnostic pilot of one turn per scenario, only if separately budget-approved.
+Measure participant-observed E2E p50/p95 from that pilot, with sample counts and separate
+fresh-visual, cached-visual, and no-visual cohorts. Inspect completeness and costs, then
+pause. Pilot results are reported separately and cannot replace the frozen confirmatory
+population. Freezing participant E2E acceptance thresholds requires pilot evidence and
+explicit review before the confirmatory run; no paid pilot is authorized by this plan.
 
-The proposed confirmatory population is five independent real meeting sessions with
-twenty intended turns each: each scenario below once per meeting, plus three additional
-S01 and three additional S03 turns. This gives 100 intended turns, including twenty
-no-visual and twenty intended cache-reuse turns. Use varied scenes, subjects, props,
+The revised confirmatory design is five independent real meeting sessions with twenty-four
+intended turns each: each scenario below once per meeting, plus four additional S01,
+four additional S03, and two additional S05 turns. This gives 120 intended turns:
+
+| Population | Per meeting | Five meetings |
+| --- | --- | --- |
+| No visual (S01) | 5 | 25 |
+| Cache candidate (S03) | 5 | 25 |
+| Unanswerable detail (S05) | 3 | 15 |
+| Other eleven scenarios (S02, S04, S06–S14) | 11 | 55 |
+| Total | 24 | 120 |
+
+The twenty-five S01 and twenty-five S03 candidates each provide a five-turn margin over
+the floor of twenty successful measured answers. Cache eligibility and failures can still
+reduce the observed cohort below that floor; the allocation does not guarantee a pass.
+Use varied scenes, subjects, props,
 questions, and scenario order across meetings; do not train or tune on confirmatory data.
 Keep S02 and its S03 repetitions in a valid prerequisite order. Cache eligibility follows
 the real question/frame/epoch/TTL contract; a stable-looking scene alone does not guarantee
@@ -102,7 +117,7 @@ a reusable snapshot. Record legitimate ineligible misses without forcing a hit.
 | S02 | General question about a visible person or object | Correct subject and independently visible details |
 | S03 | Repeat the same visual question on a stable view | Reuse when eligible; final claims still valid at use |
 | S04 | Follow-up about a different detail or subject | No answer reuse from the previous question or person |
-| S05 | Small object, then an illegible or occluded detail | Answer visible detail; abstain rather than invent hidden detail |
+| S05 | One question about one absent or obscured detail | One primary label per turn: `not_visible` or `unclear`; no compound visible/hidden question |
 | S06 | Multiple participants; requested camera unavailable | Resolve identity correctly; do not substitute another person's image |
 | S07 | Screen-share question while the speaker changes | Answer from the correct shared screen, independent of speaker identity |
 | S08 | Relevant scene change during inference | Detect invalidated evidence or use an explicit historical scope |
@@ -112,6 +127,23 @@ a reusable snapshot. Record legitimate ineligible misses without forcing a hit.
 | S12 | Stream replacement, reconnect, or reused participant ID | Epoch/generation change invalidates the old subject/frame association |
 | S13 | Injected timeout, invalid response, or provider failure | Distinct measured failure; safe response; bounded work and recovery |
 | S14 | Held-out natural meeting question and follow-up | Independent relevance and claim review beyond the controlled props |
+
+Every intended turn has one evaluable primary question and one primary answerability
+label, fixed independently before the run. Additional assertions in the answer still
+receive atomic claim adjudication. Authoring a scenario must not require changing the
+production contract's one-verdict-per-inspection semantics.
+
+| Primary question type | Expected label | Coverage |
+| --- | --- | --- |
+| Visible object/detail | `supported` | S02/S04 and other answerable cases |
+| Requested detail absent from the frame | `not_visible` | S05 absent-detail cases |
+| Relevant detail present but covered or unreadable | `unclear` | S05 obscured-detail cases |
+
+Freeze the fifteen S05 cases as eight `not_visible` and seven `unclear` turns. Meetings
+M1, M3, and M5 each contain two absent-detail and one obscured-detail case; M2 and M4
+each contain one absent-detail and two obscured-detail cases. Freeze each exact question,
+scene, subtype, and expected label in the scenario manifest before execution. An S05
+operational failure is a failure outcome, not a correctly detected semantic abstention.
 
 Perform all S13 fault injection offline first. Live fault injection, if approved, happens
 at the local boundary; do not intentionally spend requests on authentication failures.
@@ -124,6 +156,10 @@ is retained as a miss or failure; it is not reassigned to make the cache cohort 
 If any gated latency cohort has fewer than twenty measured successful answers, its gate
 is inconclusive and the missing outcomes remain visible. More samples require budget
 approval; do not silently extend or truncate a population to achieve a pass.
+Freeze the final population, subtype mixture, and cohort definitions before confirmatory
+execution, and run it only if a separate approved budget can fund that population.
+If the allocation is reduced to 100 turns, designate that run exploratory; it does not
+promise pass/fail decisions for latency cohorts that fail to meet the sample floor.
 
 ## 5. Freshness and publication boundaries
 
@@ -137,7 +173,7 @@ A change during publication is a separately reported mid-publication violation f
 current-state assertion. Participant-side audio is the primary E2E publication observation;
 local `playback_audio_started` is a distinct internal measurement.
 
-Proposed live-at-use thresholds, requiring approval with this plan:
+Approved live-at-use design acceptance targets, to be tested offline and then measured:
 
 - A current-state claim uses a frame no more than **5.0 seconds old at publication**.
 - A subject/stream/liveness validation finishes no more than **250 ms before publication**.
@@ -149,6 +185,10 @@ Proposed live-at-use thresholds, requiring approval with this plan:
 
 Measure rather than assume these properties. A validation at inference completion is
 insufficient for S09. Conversation-floor checks do not establish visual liveness.
+Offline instrumentation must demonstrate a revalidation hook close enough to actual
+audible publication to test the 250 ms bound. Validation at speech queue entry does not
+meet that requirement. If the runtime has no usable hook, record an instrumentation gap
+and a failed or not-measurable freshness outcome; do not assume compliance.
 Frame age at publication is `published_at - frame_capture_at`, not evidence `age_ms`.
 The latter currently describes acquisition/cache age and can be zero for fresh inference
 even after substantial computation and queuing.
@@ -214,7 +254,7 @@ cancelled, timed-out, and missing-output turns stay in intended-turn outcomes.
 | Failure-safe behavior | Injected failures with no fabricated visual claim and a correctly bounded outcome / injected failures | 100% |
 | Live-at-use compliance | Current-state claims satisfying all age, validation, and scene checks / current-state claims | 100%; zero unjudgeable publication measurements |
 | Internal answer latency | Runtime `speech_stopped` to local `playback_audio_started`; empirical p50/p95 | Existing global and no-visual/cached thresholds: p50 <= 3.5 s, p95 <= 6.5 s |
-| Participant-observed E2E latency | End of audible question to first audible answer in the same participant recording | Proposed additional gate: p50 <= 3.5 s, p95 <= 6.5 s |
+| Participant-observed E2E latency | End of audible question to first audible answer in the same participant recording | Measure p50/p95 from the pilot; numeric acceptance thresholds require pilot-based approval and freezing before confirmatory execution |
 | Completion and recovery | Session completed; pending work settles after failure/stop | All sessions complete; no orphan paid work or unbounded retry |
 | Accounting completeness | Outbound attempts with an attributable budget reservation and terminal or unknown settlement / all observed attempts | 100%; approved request/cost caps never exceeded |
 
@@ -233,8 +273,15 @@ with remote playback. Stratify by observed canonical path, including
 `visual_insufficient` and `visual_unavailable`. Publish p50/p95 for fresh inference too;
 do not silently relax the existing global SLO to accommodate it. The existing internal
 thresholds come from `session_targets.json` version 5; this plan changes no runtime
-target. Applying the same numeric values to participant-observed E2E latency is a proposed
-additional Phase 5 gate, not a claim that the current scorecard measures that boundary.
+target. The internal 3.5/6.5-second limits are not approved participant E2E release gates.
+After reviewing pilot observations, approve and record participant E2E p50/p95 thresholds
+for fresh visual, cached visual, and no visual separately. Freeze their values, cohort
+definitions, sample floors, and approval in the confirmatory run manifest before any
+confirmatory output is observed. A pooled aggregate cannot hide a slow fresh-inference
+cohort or substitute for a cohort-specific decision. Report other observed paths separately.
+If pilot samples are too sparse to support a defensible threshold, obtain separately
+budget-approved pilot observations or keep the gate unresolved and do not start the
+confirmatory run. Do not derive or adjust thresholds from confirmatory results.
 Use the existing `summarize` empirical quantile convention and disclose it in the report.
 Timeouts and missing answers are censored/missing observations with explicit counts,
 never fast zero-latency samples. Report completion by the configured response deadline.
