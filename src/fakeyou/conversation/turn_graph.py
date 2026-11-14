@@ -1,5 +1,4 @@
 import asyncio
-import hashlib
 from collections.abc import (
     AsyncIterator,
     Awaitable,
@@ -73,7 +72,7 @@ from fakeyou.foundation.gathered_evidence import GatheredEvidence
 from fakeyou.foundation.language import spoken_language
 from fakeyou.foundation.participation import ParticipationContext
 from fakeyou.foundation.protocols import SupportsAclose
-from fakeyou.foundation.publication import SentenceBinding
+from fakeyou.foundation.publication import SentenceBinding, StateProvenance, sentence_digest
 from fakeyou.foundation.transcript import TranscriptEvent, spoken_part, with_system_notes
 from fakeyou.foundation.triggers import ReplyChannel
 from fakeyou.observability.cleanup import close_safely
@@ -86,7 +85,12 @@ from fakeyou.session.facts import StateQuestion
 from fakeyou.session.intent import EvidenceNeed, Reading, intent_of
 from fakeyou.session.planner import TurnPlan, plan_turn, with_language
 from fakeyou.session.policy import UNATTRIBUTED, Channel, Grant, authorize
-from fakeyou.speech.contract import PreparedSpeech, PublicationSpeaker, speak_no_visual
+from fakeyou.speech.contract import (
+    PreparedSpeech,
+    PublicationOutcome,
+    PublicationSpeaker,
+    speak_no_visual,
+)
 
 _NO_VISUAL_STATE: frozenset[StateQuestion] = frozenset(
     {"attendance", "participant_count", "own_action_status"}
@@ -211,7 +215,13 @@ class TurnPlanning(Protocol):
     ) -> PlannedTurn: ...
 
 
-StateSpeech = Callable[[StateQuestion, str | None], str | None]
+@dataclass(frozen=True, slots=True)
+class StateAnswer:
+    text: str
+    provenance: StateProvenance | None = None
+
+
+StateSpeech = Callable[[StateQuestion, str | None], StateAnswer | None]
 EvidencePort = Callable[[str, tuple[str, ...], str | None], Awaitable[Mapping[str, object]]]
 
 
@@ -704,7 +714,7 @@ class TurnSink:
             transcript_id=self._transcript_id,
             request_id=self._scope.request_id,
             sentence_index=sentence_index,
-            sentence_hash=hashlib.sha256(" ".join(prepared.text.split()).encode()).hexdigest(),
+            sentence_hash=sentence_digest(prepared.text),
             gather_attempt_id=gathered.gather_attempt_id if gathered is not None else None,
             required_kinds=self._publication_needs,
             evidence=gathered.provenance if gathered is not None else (),
@@ -1036,9 +1046,10 @@ async def answer_state(
     question = planned.plan.state_question
     if question is None or runtime.state_speech is None:
         return False
-    text = runtime.state_speech(question, planned.plan.language)
-    if text is None:
+    answer = runtime.state_speech(question, planned.plan.language)
+    if answer is None:
         return False
+    text = answer.text
     runtime.journal.record(
         "state_answer_selected",
         source="agent",
@@ -1063,9 +1074,13 @@ async def answer_state(
     language = runtime.sentences.language if runtime.sentences is not None else None
     if question in _NO_VISUAL_STATE:
         await speak_no_visual(runtime.speaker, text, transcript_id=final.id, language=language)
+        outcome: StateSpeechOutcome = "spoken"
     else:
+        outcome = await _speak_state_bound(runtime, final.id, generation, answer, language)
+    if outcome == "unbound":
         await runtime.speaker.speak(text, transcript_id=final.id, language=language)
-    runtime.note_spoken(text)
+    if outcome != "prevented":
+        runtime.note_spoken(text)
     _move_phase(runtime, "listening", final.id)
     return True
 
@@ -1344,6 +1359,51 @@ def _turn_dropped(runtime: TurnContext) -> None:
     if _closed(runtime):
         raise asyncio.CancelledError
     _raise_if_failed(runtime)
+
+
+StateSpeechOutcome = Literal["unbound", "spoken", "prevented"]
+
+
+async def _speak_state_bound(
+    runtime: TurnContext,
+    transcript_id: str,
+    generation: int,
+    answer: StateAnswer,
+    language: str | None,
+) -> StateSpeechOutcome:
+    speaker = runtime.speaker
+    provenance = answer.provenance
+    if provenance is None or not isinstance(speaker, PublicationSpeaker):
+        return "unbound"
+    context = speaker.publication_context
+    if context is None:
+        return "unbound"
+    prepared = await speaker.prepare(
+        answer.text, sentence_index=0, transcript_id=transcript_id, language=language
+    )
+    if prepared is None:
+        return "prevented"
+    speaker.bind_publication(
+        prepared,
+        SentenceBinding(
+            publication_id=context.id_factory(),
+            meeting_id=context.meeting_id,
+            turn_id=transcript_id,
+            transcript_id=transcript_id,
+            request_id=turn_request_id(transcript_id, generation),
+            sentence_index=0,
+            sentence_hash=sentence_digest(prepared.text),
+            gather_attempt_id=None,
+            required_kinds=(),
+            evidence=(),
+            scope="state" if provenance.known else "no_visual",
+            state=provenance,
+        ),
+    )
+    await speaker.speak_prepared(prepared)
+    if isinstance(prepared, PublicationOutcome) and prepared.publication_prevented is not None:
+        return "prevented"
+    return "spoken"
 
 
 async def recover_turn(

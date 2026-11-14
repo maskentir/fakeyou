@@ -52,7 +52,12 @@ from fakeyou.conversation.reply_planner import TurnLanguage
 from fakeyou.conversation.session import SessionConfig
 from fakeyou.conversation.speech_book import BookSource, TurnEvidence
 from fakeyou.conversation.state_speech import locale_of, render
-from fakeyou.conversation.turn_graph import CommandPort, ConversationPhase, PlannedTurn
+from fakeyou.conversation.turn_graph import (
+    CommandPort,
+    ConversationPhase,
+    PlannedTurn,
+    StateAnswer,
+)
 from fakeyou.conversation.turn_judge import ModelTurnJudge, TurnJudge
 from fakeyou.db.engine import open_database
 from fakeyou.db.schema import require_current
@@ -98,6 +103,7 @@ from fakeyou.session.identity import PresenceFact
 from fakeyou.session.intent import Reading, intent_of
 from fakeyou.session.planner import plan_turn
 from fakeyou.session.policy import UNATTRIBUTED, Channel, Grant, authorize
+from fakeyou.session.state_publication import CURRENT_STATE_QUESTIONS, state_provenance
 
 
 @dataclass(slots=True)
@@ -432,14 +438,21 @@ class _ConversationBuilder:
             return None
         return MeetingEvidence(perception, journal=self._diagnostics.journal)
 
-    def _state_speech(self, question: StateQuestion, language: str | None) -> str | None:
+    def _state_speech(self, question: StateQuestion, language: str | None) -> StateAnswer | None:
         kernel = self._behavior.kernel
         locale = locale_of(language or self._settings.speech.language)
         if kernel is None or locale is None:
             return None
         commands = self._behavior.commands
         actions = commands.recent() if commands is not None else ()
-        return render(state_fact(question, kernel.state, actions).proposition, locale)
+        state = kernel.state
+        fact = state_fact(question, state, actions)
+        return StateAnswer(
+            render(fact.proposition, locale),
+            state_provenance(question, fact, state)
+            if question in CURRENT_STATE_QUESTIONS
+            else None,
+        )
 
     def add_speaker_attribution(self) -> None:
         self._middleware.append(SpeakerAttributionMiddleware())

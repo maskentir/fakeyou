@@ -43,8 +43,9 @@ visual gate. Undeclared direct speech and unbound prepared replies stay
 unresolved and are prevented while a context is active. The declared callers are
 the initial greeting, the recovery apology, and the attendance, participant
 count, and own-action state answers. Presenter and screen-title state answers
-stay undeclared because they describe the current screen; with a context active
-they are prevented until they carry their own evidence binding.
+stay undeclared because they describe the current meeting state. They carry
+their own state provenance and binding; see
+`2026-11-14-state-answer-publication.md`.
 
 Historical wording or an abstention requires separate upstream preparation and
 binding. A missing participant observer never blocks otherwise safe speech.

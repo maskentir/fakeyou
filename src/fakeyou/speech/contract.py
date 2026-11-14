@@ -76,6 +76,12 @@ class PublicationSpeaker(Protocol):
 
 
 @runtime_checkable
+class PublicationOutcome(Protocol):
+    @property
+    def publication_prevented(self) -> str | None: ...
+
+
+@runtime_checkable
 class NoVisualSpeaker(Protocol):
     async def speak_no_visual(
         self,
