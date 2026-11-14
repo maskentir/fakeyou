@@ -53,7 +53,6 @@ class TurnTestContext:
     admitted: AdmittedFinals = field(default_factory=AdmittedFinals)
     barge: BargeLatch = field(default_factory=BargeLatch)
     plans: dict[str, PlannedTurn] = field(default_factory=dict)
-    notes: list[str] = field(default_factory=list)
     moves: list[tuple[ConversationPhase, str]] = field(default_factory=list)
     failures: list[Exception] = field(default_factory=list)
     barge_in: bool = True
@@ -80,10 +79,6 @@ class TurnTestContext:
     def early_gate(self, transcript_id: str) -> None:
         del transcript_id
         return None
-
-    @property
-    def note_spoken(self) -> Callable[[str], None]:
-        return self.notes.append
 
     def request_pending(self) -> None:
         self.requested = True

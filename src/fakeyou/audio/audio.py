@@ -68,6 +68,8 @@ from fakeyou.observability.provider_faults import (
 from fakeyou.speech.contract import (
     PreparedSpeech,
     PublicationSpeaker,
+    ReceiptObserver,
+    ReceiptSource,
     SupportsWarmup,
     speak_no_visual,
 )
@@ -576,6 +578,10 @@ class MeetingAudioSession:
         if language is not None:
             extra["language"] = language
         return await self._engine.prepare(text, **extra)
+
+    def observe_receipts(self, observer: ReceiptObserver) -> None:
+        if isinstance(self._engine, ReceiptSource):
+            self._engine.observe_receipts(observer)
 
     @property
     def publication_context(self) -> PublicationContext | None:

@@ -26,7 +26,7 @@ from fakeyou.persistence.record import MeetingRecord
 from fakeyou.session.intent import Reading
 from fakeyou.session.planner import TurnPlan
 from fakeyou.session.policy import Channel
-from fakeyou.speech.contract import PreparedSpeech
+from fakeyou.speech.contract import PlaybackReceipt, PreparedSpeech, ReceiptObserver
 from tests._audio_support import FakeSynth, FakeWriter, build_engine
 from tests._model_responder import ModelResponder
 from tests._persistence_fakes import RecordingJournal
@@ -56,8 +56,15 @@ class BindingSession(FakeSession):
         )
         self.engine.configure_publication(self.publication_context)
         self.bindings: list[tuple[PreparedSpeech, SentenceBinding]] = []
+        self.scene_changed = False
+
+    def observe_receipts(self, observer: ReceiptObserver) -> None:
+        self.engine.observe_receipts(observer)
 
     async def gate(self, binding: SentenceBinding) -> PublicationDecision:
+        if self.scene_changed:
+            return PublicationDecision("invalid", "scene_changed", 100.0, "test")
+
         async def validate(item: EvidenceBinding) -> Validation:
             return Validation(
                 100.0,
@@ -195,6 +202,58 @@ async def test_publication_binding_is_completed_after_sentence_scrubbing(
             assert "audible_start" not in row
         finally:
             record.close()
+    finally:
+        await actor.close()
+        await session.engine.close()
+
+
+@pytest.mark.parametrize("scene_changed", [True, False])
+async def test_visual_reply_is_counted_as_spoken_only_when_pcm_was_written(
+    *, scene_changed: bool
+) -> None:
+    gathered = GatheredEvidence(
+        {"screen": {"code": "ok", "answer": "A red mug."}}, "gather-1", (provenance("screen"),)
+    )
+
+    async def evidence(
+        _question: str, _needs: tuple[str, ...], _transcript_id: str | None = None
+    ) -> Mapping[str, object]:
+        return gathered
+
+    def planning(event: TranscriptEvent, reading: Reading, channel: Channel) -> PlannedTurn:
+        del reading, channel
+        return PlannedTurn(
+            TurnPlan(f"plan-{event.id}", "evidence_then_speech", "speech", ("screen",))
+        )
+
+    replier = FakeReplier(reply="The mug is red.")
+    actor = FloorActor(
+        build_turn_graph(),
+        ActorWiring(
+            journal=FakeJournal(),
+            responder=ModelResponder(
+                chunks=unused_chunks, phase=ToolPhaseState(), max_sentences=3, language="en"
+            ),
+        ),
+    )
+    actor.configure_reply(
+        ReplyOptions(
+            whole_turn=lambda events, hook: ReplierWholeResponder(replier, events, hook),
+            sentences=SentenceLimits(max_sentences=2, language="en"),
+        )
+    )
+    session = BindingSession()
+    session.scene_changed = scene_changed
+    counted: list[PlaybackReceipt] = []
+    actor.observe_spoken(counted.append)
+    actor.bind(session)
+    actor.configure_deferred(DeferredOptions(planning=planning, evidence=evidence))
+    try:
+        await actor.handle_final(transcript("f1", "What is on the screen?"))
+        [(prepared, binding)] = session.bindings
+        assert bool(session.writer.written) is not scene_changed
+        assert [item.text for item in counted] == ([] if scene_changed else [prepared.text])
+        assert all(item.publication_id == binding.publication_id for item in counted)
     finally:
         await actor.close()
         await session.engine.close()

@@ -47,6 +47,16 @@ class SpokenLog:
             else {}
         )
         heard = {} if event.heard is None else {"heard_words": len(event.heard.split())}
+        receipt = event.receipt
+        outcome = (
+            {}
+            if receipt is None
+            else {
+                "playback_attempt_id": receipt.attempt_id,
+                "playback_outcome": receipt.outcome,
+                "local_audio_seconds": receipt.local_audio_seconds,
+            }
+        )
         self.journal.record(
             event.kind,
             source="playback",
@@ -58,15 +68,18 @@ class SpokenLog:
             sentence_sha256=hashlib.sha256(" ".join(event.text.split()).encode()).hexdigest(),
             **publication,
             **heard,
+            **outcome,
         )
         if event.kind == "playback_started":
             self.speaking = event.text
         elif event.kind == "playback_finished":
             self.speaking = None
-            self.record.add_twin_speech(event.text, causation_id=utterance.transcript_id)
+            if receipt is None or receipt.local_audio_written:
+                self.record.add_twin_speech(event.text, causation_id=utterance.transcript_id)
         elif event.kind == "playback_dropped" and event.text == self.speaking:
             self.speaking = None
-            self._record_interrupted(event)
+            if receipt is None or receipt.outcome != "prevented":
+                self._record_interrupted(event)
 
     def _record_interrupted(self, event: PlaybackEvent) -> None:
         causation_id = event.utterance.transcript_id

@@ -71,7 +71,14 @@ from fakeyou.foundation.triggers import ReplyChannel
 from fakeyou.observability.faults import ConsumerSink, FaultReporter, capture_error, guard_observer
 from fakeyou.observability.journal import Journal, JournalSink
 from fakeyou.observability.provider_faults import classify_exception
-from fakeyou.speech.contract import PreparedSpeech, PublicationSpeaker, speak_no_visual
+from fakeyou.speech.contract import (
+    PlaybackReceipt,
+    PreparedSpeech,
+    PublicationSpeaker,
+    ReceiptObserver,
+    ReceiptSource,
+    speak_no_visual,
+)
 
 _ADMITTED = frozenset({"speak", "clarify"})
 _STOP_DATA: dict[str, list[str]] = json.loads(read_package_text("stop_phrases.json"))
@@ -251,7 +258,8 @@ class FloorActor:
         self._recovery = self._build_recovery()
         self._reply = ReplyOptions()
         self._observer: TransitionObserver | None = None
-        self._spoken: Callable[[str], None] | None = None
+        self._spoken: ReceiptObserver | None = None
+        self._voiced_attempts: set[str] = set()
         self._moments: MomentDetector | None = None
         self._moment_quota = 0
         self._contributions_at: list[float] = []
@@ -433,10 +441,6 @@ class FloorActor:
         return self._deferred_options.others_speaking
 
     @property
-    def note_spoken(self) -> Callable[[str], None]:
-        return self._note_spoken
-
-    @property
     def shadow(self) -> bool:
         return self._shadow
 
@@ -533,7 +537,7 @@ class FloorActor:
         if isinstance(session, SupportsLouder):
             control.on_louder = session.louder
 
-    def observe_spoken(self, observer: Callable[[str], None]) -> None:
+    def observe_spoken(self, observer: ReceiptObserver) -> None:
         self._spoken = observer
 
     def bind_moments(self, detector: MomentDetector, *, max_interjections_per_10min: int) -> None:
@@ -607,17 +611,24 @@ class FloorActor:
             clock=self._clock,
         )
 
-    def _note_spoken(self, sentence: str) -> None:
+    def _note_receipt(self, receipt: PlaybackReceipt) -> None:
+        if self._closed or receipt.cue or not receipt.local_audio_written:
+            return
+        if receipt.attempt_id in self._voiced_attempts:
+            return
+        self._voiced_attempts.add(receipt.attempt_id)
         self._sentences_spoken += 1
         self._quiet.note_activity()
         if self._spoken is not None:
-            self._spoken(sentence)
+            self._spoken(receipt)
 
     def bind(self, session: MeetingAudio) -> None:
         if self._closed:
             raise ConversationError("meeting conversation is closed")
         if self._session is not None and self._session is not session:
             raise ConversationError("meeting conversation already owns an audio session")
+        if self._session is None and isinstance(session, ReceiptSource):
+            session.observe_receipts(self._note_receipt)
         self._session = session
         self._bind_control()
         self._prepare_cues()
