@@ -41,7 +41,7 @@ def test_cue_and_answer_have_independent_gates() -> None:
     report = build_session_report(session())
     card = score_session(report)
 
-    assert card["version"] == 4
+    assert card["version"] == 5
     assert card["metrics"]["first_audio_p50_seconds"]["value"] == 1.5
     assert card["metrics"]["first_answer_audio_p50_seconds"]["value"] == 8.0
     assert card["metrics"]["first_answer_audio_p50_seconds"]["passed"] is False
@@ -195,7 +195,7 @@ def test_evidence_paths_are_scored_and_reported_per_path() -> None:
     assert report["evidence_cache"]["hits"] == 1
     assert report["evidence_cache"]["hit_rate"] == 1.0
     assert report["latency_by_evidence_path"]["visual_cached"]["expected_answers"] == 1
-    assert card["version"] == 4
+    assert card["version"] == 5
     assert card["metrics"]["first_answer_audio_p50_visual_cached_seconds"]["value"] == 8.0
     assert card["metrics"]["first_answer_audio_p50_visual_cached_seconds"]["status"] == "failed"
 
@@ -601,6 +601,42 @@ def test_visual_requested_without_telemetry_is_unclassified() -> None:
     assert card["passed"] is False
 
 
+def test_a_valid_abstention_is_visual_insufficient() -> None:
+    report = build_session_report(
+        canonical_session(
+            evidence=("participant",), observations=(("participant", "inference", "insufficient"),)
+        )
+    )
+    card = score_session(report)
+    assert path_of(report) == "visual_insufficient"
+    assert report["evidence_unclassified"] == 0
+    assert "evidence_classification" not in card["unscored"]
+
+
+def test_a_cached_abstention_is_still_visual_insufficient() -> None:
+    report = build_session_report(
+        canonical_session(
+            evidence=("participant",), observations=(("participant", "reused", "insufficient"),)
+        )
+    )
+    assert path_of(report) == "visual_insufficient"
+    assert report["evidence_unclassified"] == 0
+
+
+def test_an_abstention_is_not_hidden_as_visual_unavailable() -> None:
+    report = build_session_report(
+        canonical_session(
+            evidence=("screen", "participant"),
+            observations=(
+                ("screen", "not_attempted", "unavailable"),
+                ("participant", "inference", "insufficient"),
+            ),
+        )
+    )
+    assert path_of(report) == "visual_insufficient"
+    assert report["latency_by_evidence_path"]["visual_unavailable"]["expected_answers"] == 0
+
+
 @pytest.mark.parametrize(
     "observations",
     [
@@ -640,8 +676,6 @@ def test_incomplete_or_duplicate_visual_telemetry_is_unclassified(
         ("inference", "unknown"),
         ("not_attempted", "produced"),
         ("reused", "unavailable"),
-        ("inference", "insufficient"),
-        ("reused", "insufficient"),
         ("not_attempted", "insufficient"),
     ],
 )

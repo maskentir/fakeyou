@@ -154,7 +154,13 @@ def measures_output(rows: list[dict[str, Any]]) -> bool:
     return any(row.get("answer_boundary") is True for row in rows)
 
 
-EVIDENCE_PATHS = ("no_visual", "visual_cached", "visual_fresh", "visual_unavailable")
+EVIDENCE_PATHS = (
+    "no_visual",
+    "visual_cached",
+    "visual_fresh",
+    "visual_insufficient",
+    "visual_unavailable",
+)
 VISUAL_NEEDS = frozenset({"screen", "participant"})
 
 
@@ -196,6 +202,8 @@ def _classify(turn: _Turn, observations: dict[str, list[tuple[str, str, str]]]) 
     classified_states = {
         ("inference", "produced"),
         ("reused", "produced"),
+        ("inference", "insufficient"),
+        ("reused", "insufficient"),
         ("inference", "unavailable"),
         ("not_attempted", "unavailable"),
     }
@@ -207,6 +215,8 @@ def _classify(turn: _Turn, observations: dict[str, list[tuple[str, str, str]]]) 
     seen = [(acquisition, status) for _, acquisition, status in events]
     if any(acquisition == "inference" and status == "produced" for acquisition, status in seen):
         return "visual_fresh"
+    if any(status == "insufficient" for _, status in seen):
+        return "visual_insufficient"
     if any(acquisition == "reused" for acquisition, _ in seen):
         return "visual_cached"
     if seen and all(status == "unavailable" for _, status in seen):
