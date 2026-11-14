@@ -136,7 +136,7 @@ async def test_publish_joins_exact_sentence_and_reports_json_safe_measurement() 
 async def test_evidence_stale_at_the_audible_start_is_measured_but_not_compliant() -> None:
     probe = PublicationProbe(lambda: 100.0, "fake")
     probe.register(binding())
-    validate = revalidator(pre=validation(99.9), post=validation(110.5))
+    validate = revalidator(pre=validation(99.9), post=validation(111.1))
 
     report = await probe.publish(
         "pub-1",
@@ -190,7 +190,7 @@ async def test_a_missing_current_snapshot_is_not_measurable() -> None:
 
 
 @pytest.mark.asyncio
-async def test_an_uncertain_observation_is_measured_but_not_compliant() -> None:
+async def test_an_uncertain_observation_is_not_measurable() -> None:
     probe = PublicationProbe(lambda: 100.0, "fake")
     probe.register(binding())
     validate = revalidator(
@@ -199,13 +199,13 @@ async def test_an_uncertain_observation_is_measured_but_not_compliant() -> None:
 
     report = await probe.publish("pub-1", revalidate=validate, emit=lambda: _async(publication()))
 
-    assert report["measurable"] is True
-    assert report["compliant"] is False
-    assert "validation_uncertainty_too_large" in report["violations"]
+    assert report["measurable"] is False
+    assert report["compliant"] is None
+    assert report["reason"] == "validation_uncertainty_too_large"
 
 
 @pytest.mark.asyncio
-async def test_an_uncertain_publication_is_measured_but_not_compliant() -> None:
+async def test_an_uncertain_publication_is_not_measurable() -> None:
     probe = PublicationProbe(lambda: 100.0, "fake")
     probe.register(binding())
     validate = revalidator(pre=validation(99.9), post=validation(101.1))
@@ -216,9 +216,9 @@ async def test_an_uncertain_publication_is_measured_but_not_compliant() -> None:
         emit=lambda: _async(publication(uncertainty=0.06)),
     )
 
-    assert report["measurable"] is True
-    assert report["compliant"] is False
-    assert "publication_uncertainty_too_large" in report["violations"]
+    assert report["measurable"] is False
+    assert report["compliant"] is None
+    assert report["reason"] == "publication_uncertainty_too_large"
 
 
 @pytest.mark.asyncio
@@ -357,6 +357,45 @@ async def test_a_local_write_is_not_a_participant_audible_observation() -> None:
     assert report["measurable"] is False
     assert report["compliant"] is None
     assert report["reason"] == "not_participant_audible"
+
+
+@pytest.mark.asyncio
+async def test_a_validation_that_ends_before_the_audible_end_is_not_measurable() -> None:
+    probe = PublicationProbe(lambda: 100.0, "fake")
+    probe.register(binding())
+    validate = revalidator(pre=validation(99.9), post=validation(100.1))
+
+    report = await probe.publish("pub-1", revalidate=validate, emit=lambda: _async(publication()))
+
+    assert report["measurable"] is False
+    assert report["compliant"] is None
+    assert report["reason"] == "continuity_not_observed_to_the_end"
+
+
+@pytest.mark.asyncio
+async def test_a_post_publication_validation_that_does_not_support_is_not_compliant() -> None:
+    probe = PublicationProbe(lambda: 100.0, "fake")
+    probe.register(binding())
+    validate = revalidator(pre=validation(99.9), post=validation(101.1, supported=False))
+
+    report = await probe.publish("pub-1", revalidate=validate, emit=lambda: _async(publication()))
+
+    assert report["measurable"] is True
+    assert report["compliant"] is False
+    assert "postpublication_validation_not_supported" in report["violations"]
+
+
+@pytest.mark.asyncio
+async def test_a_scene_that_changed_before_publication_is_not_compliant_afterwards() -> None:
+    probe = PublicationProbe(lambda: 100.0, "fake")
+    probe.register(binding())
+    validate = revalidator(pre=validation(99.9, unchanged=False), post=validation(101.1))
+
+    report = await probe.publish("pub-1", revalidate=validate, emit=lambda: _async(publication()))
+
+    assert report["measurable"] is True
+    assert report["compliant"] is False
+    assert "scene_not_continuous" in report["violations"]
 
 
 def test_binding_rejects_duplicate_or_incomplete_visual_joins() -> None:

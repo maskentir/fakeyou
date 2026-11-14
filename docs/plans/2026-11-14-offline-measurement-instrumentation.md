@@ -39,7 +39,7 @@ are different findings.
 | The publication is valid and fresh | `true` | `true` |
 | The publication is provably stale, or the scene changed while it was heard | `true` | `false` |
 | No participant audio recording exists | `false` | `null` |
-| The clocks cannot be synchronised | `false` | `null` |
+| The clock mapping is absent or its uncertainty exceeds 50 ms | `false` | `null` |
 
 `measurable` is `true` when the apparatus produced a joined, time-aligned observation:
 the publication exists, its identity matches the binding, the clock domains agree, and
@@ -47,6 +47,10 @@ the timestamps order. `compliant` is `false` when the product broke the freshnes
 continuity contract on an otherwise measurable observation, and `null` when there was no
 measurement to judge. A product violation is never reported as an instrumentation gap,
 and an instrumentation gap is never reported as compliance.
+
+A clock uncertainty above the approved bound is an unjudgeable measurement, not a
+product failure. A weak instrument must not inflate the number of product failures, and
+an observed product failure must not be hidden as an instrumentation gap.
 
 ## Freshness is measured at the audible start
 
@@ -56,10 +60,21 @@ finished no more than 250 ms before that audible start. A timestamp that cannot 
 ordered, or that lands after the publication it validates, is not measurable rather than
 a pass, and no negative duration is clamped to zero.
 
+The continuity check covers the whole sentence. The validation that follows the emission
+must reach the audible end, so a scene that changed during the sentence cannot be
+declared continuous by a validation that only observed its first moment. A validation
+that stops short of the audible end is a measurement gap.
+
+Both boundaries are judged on their own. The validation before the emission carries the
+age and freshness rules, and the validation after the emission proves the scene held to
+the end of the sentence. Each of them reports whether it supports the evidence, whether
+the scene is continuous, and which snapshot it saw; one boundary succeeding never
+substitutes for the other.
+
 The approved bounds are the ones in the merged measurement contract: a current-state
 claim uses a frame no more than 5.0 seconds old at publication, a validation finishes no
 more than 250 ms before publication, and a clock mapping carries an uncertainty of at
-most 50 ms.
+most 50 ms. An uncertainty above that bound makes the measurement unjudgeable.
 
 A historical answer is assessed against its named frame: the current-state age rule and
 the current-scene continuity rule do not apply to it, and the integrity rules still do.

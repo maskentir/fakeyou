@@ -126,7 +126,7 @@ class PublicationProbe:
         if binding is None:
             return self._report(publication_id, None, None, "no_registered_sentence")
         before = await self._revalidate(binding, revalidate)
-        gap = self._domain_gap(before)
+        gap = self._before_gap(before)
         if gap is not None:
             return self._report(publication_id, binding, None, gap)
         publication = await emit()
@@ -139,13 +139,10 @@ class PublicationProbe:
         if gap is not None:
             return self._report(publication_id, binding, publication, gap)
         after = await self._revalidate(binding, revalidate)
-        gap = self._domain_gap(after)
+        gap = self._after_gap(after, publication)
         if gap is not None:
             return self._report(publication_id, binding, publication, gap)
-        gap = self._audible_gap(after, publication)
-        if gap is not None:
-            return self._report(publication_id, binding, publication, gap)
-        gap = self._continuity_gap(binding, after)
+        gap = self._continuity_gap(binding, before, after)
         if gap is not None:
             return self._report(publication_id, binding, publication, gap)
         violations = self._violations(binding, before, after, publication)
@@ -161,9 +158,32 @@ class PublicationProbe:
             found.append((evidence, await revalidate(evidence)))
         return found
 
-    def _domain_gap(self, found: list[tuple[EvidenceBinding, Validation]]) -> str | None:
-        if any(validation.clock_domain != self._clock_domain for _evidence, validation in found):
+    def _before_gap(self, before: list[tuple[EvidenceBinding, Validation]]) -> str | None:
+        if any(validation.clock_domain != self._clock_domain for _evidence, validation in before):
             return "clock_domain_mismatch"
+        if any(
+            validation.uncertainty_seconds > MAX_UNCERTAINTY_SECONDS
+            for _evidence, validation in before
+        ):
+            return "validation_uncertainty_too_large"
+        return None
+
+    def _after_gap(
+        self,
+        after: list[tuple[EvidenceBinding, Validation]],
+        publication: AudioPublication,
+    ) -> str | None:
+        if any(validation.clock_domain != self._clock_domain for _evidence, validation in after):
+            return "clock_domain_mismatch"
+        if any(
+            validation.uncertainty_seconds > MAX_UNCERTAINTY_SECONDS
+            for _evidence, validation in after
+        ):
+            return "validation_uncertainty_too_large"
+        if publication.uncertainty_seconds > MAX_UNCERTAINTY_SECONDS:
+            return "publication_uncertainty_too_large"
+        if any(validation.checked_at < publication.ended_at for _evidence, validation in after):
+            return "continuity_not_observed_to_the_end"
         return None
 
     def _publication_gap(
@@ -194,25 +214,20 @@ class PublicationProbe:
             return "validation_after_publication"
         return None
 
-    def _audible_gap(
-        self,
-        after: list[tuple[EvidenceBinding, Validation]],
-        publication: AudioPublication,
-    ) -> str | None:
-        if any(validation.checked_at < publication.started_at for _e, validation in after):
-            return "publication_validated_before_publication"
-        return None
-
     def _continuity_gap(
-        self, binding: SentenceBinding, after: list[tuple[EvidenceBinding, Validation]]
+        self,
+        binding: SentenceBinding,
+        before: list[tuple[EvidenceBinding, Validation]],
+        after: list[tuple[EvidenceBinding, Validation]],
     ) -> str | None:
         if binding.scope != CURRENT_SCOPE:
             return None
-        for _evidence, validation in after:
-            if validation.unchanged is None:
-                return "continuity_unknown"
-            if validation.current_snapshot is None:
-                return "current_snapshot_missing"
+        for found in (before, after):
+            for _evidence, validation in found:
+                if validation.unchanged is None:
+                    return "continuity_unknown"
+                if validation.current_snapshot is None:
+                    return "current_snapshot_missing"
         return None
 
     def _violations(
@@ -224,14 +239,12 @@ class PublicationProbe:
     ) -> list[str]:
         violations: list[str] = []
         for evidence, validation in before:
-            violations.extend(
-                self._freshness_violations(binding, evidence, validation, publication)
-            )
+            violations.extend(self._early_violations(binding, evidence, validation, publication))
         for evidence, validation in after:
-            violations.extend(self._continuity_violations(binding, evidence, validation))
+            violations.extend(self._late_violations(binding, evidence, validation))
         return violations
 
-    def _freshness_violations(
+    def _early_violations(
         self,
         binding: SentenceBinding,
         evidence: EvidenceBinding,
@@ -246,14 +259,23 @@ class PublicationProbe:
             violations.append("evidence_stale_at_publication")
         if publication.started_at - validation.checked_at > PRE_PUBLICATION_MAX_AGE_SECONDS:
             violations.append("prepublication_validation_too_old")
-        if validation.uncertainty_seconds > MAX_UNCERTAINTY_SECONDS:
-            violations.append("validation_uncertainty_too_large")
-        if publication.uncertainty_seconds > MAX_UNCERTAINTY_SECONDS:
-            violations.append("publication_uncertainty_too_large")
         if not validation.supported:
-            violations.append("validation_not_supported")
+            violations.append("prepublication_validation_not_supported")
         if validation.observed_at != evidence.observed_at:
             violations.append("validation_observation_mismatch")
+        violations.extend(self._continuity_violations(binding, evidence, validation))
+        return violations
+
+    def _late_violations(
+        self,
+        binding: SentenceBinding,
+        evidence: EvidenceBinding,
+        validation: Validation,
+    ) -> list[str]:
+        violations: list[str] = []
+        if not validation.supported:
+            violations.append("postpublication_validation_not_supported")
+        violations.extend(self._continuity_violations(binding, evidence, validation))
         return violations
 
     def _continuity_violations(
