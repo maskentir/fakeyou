@@ -156,6 +156,12 @@ raises-require-match-for = [
 "src/fakeyou/perception/context.py" = ["PLR0913"]
 "src/fakeyou/perception/interpreter.py" = ["PLR0913"]
 "src/fakeyou/perception/sensors.py" = ["PLR0913"]
+# M1 measurement accounting: a reservation names the role, the provider route, the
+# amount and the links to the turn and the parent attempt.
+"evals/_measurement_budget.py" = ["PLR0913"]
+# M1 measurement fixtures: the scripted observations name every clock, scope and
+# uncertainty field the measurement contract defines.
+"evals/test_publication_measurement_eval.py" = ["PLR0913"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "evals"]
