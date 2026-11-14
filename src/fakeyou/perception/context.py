@@ -10,6 +10,7 @@ from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResp
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, ToolMessage
 
 from fakeyou.catalog.errors import FakeYouError
+from fakeyou.foundation.clock_mapping import LOCAL_MONOTONIC, PAGE_CLOCK, MappedInstant
 from fakeyou.foundation.gathered_evidence import GatheredEvidence
 from fakeyou.foundation.participation import mentions_whole_phrase
 from fakeyou.foundation.publication import EvidenceBinding
@@ -145,6 +146,7 @@ class PerceptionContext:
         self._state = state
         self._camera_epoch = camera_epoch or (lambda: 0)
         self._camera_monotonic = camera_monotonic
+        self.capture_clock: Callable[[datetime], MappedInstant | None] | None = None
 
     def view(self) -> MeetingView:
         meeting = self._state() if self._state is not None else None
@@ -268,7 +270,7 @@ class PerceptionContext:
         started = time.monotonic()
         try:
             async with asyncio.timeout(LOOK_TIMEOUT_SECONDS):
-                inspection = await self.interpreter.answer(data, question, source=source)
+                inspected = await self.interpreter.inspect(data, question, source=source)
         except (
             ProviderFault,
             FakeYouError,
@@ -283,8 +285,9 @@ class PerceptionContext:
                 "screen_reading",
                 error_type=type(error).__name__,
             )
-        if inspection is None:
+        if inspected is None:
             return _unavailable("screen", subject_id, "budget_exhausted")
+        inspection = inspected.inspection
         vision_latency_ms = round((time.monotonic() - started) * 1000)
         status, code = inspection_outcome(inspection)
         return EvidenceResult(
@@ -300,6 +303,7 @@ class PerceptionContext:
             observed_at=ref.captured_at,
             age_ms=0,
             vision_latency_ms=vision_latency_ms,
+            attempt=inspected.attempt,
         )
 
 
@@ -393,29 +397,56 @@ class MeetingEvidence:
                 if result.snapshot is not None:
                     fields["snapshot_id"] = result.snapshot.correlation_id
                     fields["captured_at"] = result.snapshot.captured_at.isoformat()
+                if result.attempt is not None:
+                    fields["provider_attempt_id"] = result.attempt.attempt_id
+                    if result.attempt.provider:
+                        fields["provider"] = result.attempt.provider
+                    if result.attempt.response_id:
+                        fields["provider_response_id"] = result.attempt.response_id
+                mapped = self._capture(result)
+                fields["capture_mapped"] = mapped is not None
+                if mapped is not None:
+                    fields["capture_mapping_uncertainty_ms"] = round(
+                        mapped.uncertainty_seconds * 1000, 3
+                    )
                 self._journal.record(
                     "perception_evidence_resolved",
                     source="perception",
                     **fields,
                 )
         provenance = tuple(
-            EvidenceBinding(
-                kind=need,
-                gather_attempt_id=attempt_id,
-                snapshot=result.snapshot,
-                observed_at=result.observed_at.timestamp(),
-                provider=None,
-                provider_attempt_id=None,
-                inference=result.acquisition,
-                capture_monotonic=None,
-                capture_clock_domain="utc" if result.snapshot is not None else None,
-                capture_time_origin="snapshot_ref_reported",
-                capture_mapping_uncertainty_seconds=None,
-                observation_clock_domain="utc",
-            )
-            for need, result in results.items()
+            self._binding(need, attempt_id, result) for need, result in results.items()
         )
         return GatheredEvidence(payloads, attempt_id, provenance)
+
+    def _capture(self, result: EvidenceResult) -> MappedInstant | None:
+        clock = self._context.capture_clock
+        if clock is None or result.snapshot is None:
+            return None
+        return clock(result.snapshot.captured_at)
+
+    def _binding(self, need: str, attempt_id: str, result: EvidenceResult) -> EvidenceBinding:
+        attempt = result.attempt
+        mapped = self._capture(result)
+        return EvidenceBinding(
+            kind=need,
+            gather_attempt_id=attempt_id,
+            snapshot=result.snapshot,
+            observed_at=(
+                attempt.finished_at if attempt is not None else result.observed_at.timestamp()
+            ),
+            provider=attempt.provider if attempt is not None else None,
+            provider_attempt_id=attempt.attempt_id if attempt is not None else None,
+            inference=result.acquisition,
+            capture_monotonic=mapped.monotonic if mapped is not None else None,
+            capture_clock_domain=PAGE_CLOCK if result.snapshot is not None else None,
+            capture_mapping_clock_domain=mapped.clock_domain if mapped is not None else None,
+            capture_time_origin=mapped.origin if mapped is not None else "snapshot_ref_reported",
+            capture_mapping_uncertainty_seconds=(
+                mapped.uncertainty_seconds if mapped is not None else None
+            ),
+            observation_clock_domain=LOCAL_MONOTONIC if attempt is not None else "utc",
+        )
 
 
 class PerceptionContextMiddleware(AgentMiddleware[Any, Any, Any]):

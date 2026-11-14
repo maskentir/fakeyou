@@ -22,7 +22,7 @@ from fakeyou.perception.context import (
 from fakeyou.perception.evidence import EvidenceResult, evidence_payload
 from fakeyou.perception.frames import keyframe_from_jpeg
 from fakeyou.perception.inspector import VisualInspection
-from fakeyou.perception.interpreter import PerceptionInterpreter
+from fakeyou.perception.interpreter import Inspected, PerceptionInterpreter
 from fakeyou.perception.percepts import Keyframe
 from fakeyou.perception.sensors import (
     ActiveSampler,
@@ -335,13 +335,13 @@ async def test_an_invalidation_before_the_inference_rejects_the_answer() -> None
     model = vision_model(answers=["A dark blue shirt."])
     timeline, _context, interpreter = camera_stack(model)
     snapshot = put_frame(timeline, jpeg_of((120, 120, 120)))
-    original = interpreter.answer
+    original = interpreter.inspect
 
-    async def answered(image: bytes, question: str, *, source: str) -> VisualInspection | None:
+    async def answered(image: bytes, question: str, *, source: str) -> Inspected | None:
         timeline.camera_frames.drop("device-p1")
         return await original(image, question, source=source)
 
-    object.__setattr__(interpreter, "answer", answered)
+    object.__setattr__(interpreter, "inspect", answered)
 
     with pytest.raises(StaleEvidence):
         await interpreter.camera_answer("device-p1", "device-p1", QUESTION, snapshot, source=SOURCE)
@@ -386,9 +386,9 @@ async def test_a_new_frame_during_the_inference_rejects_the_answer() -> None:
     model = vision_model(answers=["A dark blue shirt."])
     timeline, _context, interpreter = camera_stack(model)
     snapshot = put_frame(timeline, jpeg_of((120, 120, 120)))
-    original = interpreter.answer
+    original = interpreter.inspect
 
-    async def answered(image: bytes, question: str, *, source: str) -> VisualInspection | None:
+    async def answered(image: bytes, question: str, *, source: str) -> Inspected | None:
         timeline.camera_frames.put(
             "device-p1",
             CameraSample(
@@ -401,7 +401,7 @@ async def test_a_new_frame_during_the_inference_rejects_the_answer() -> None:
         )
         return await original(image, question, source=source)
 
-    object.__setattr__(interpreter, "answer", answered)
+    object.__setattr__(interpreter, "inspect", answered)
 
     with pytest.raises(StaleEvidence):
         await interpreter.camera_answer("device-p1", "device-p1", QUESTION, snapshot, source=SOURCE)
@@ -671,7 +671,7 @@ async def test_a_provider_failure_reports_a_failed_look() -> None:
     async def failing(_image: bytes, _question: str, **_kwargs: Any) -> str | None:
         raise ProviderFault("perception", "unknown")
 
-    object.__setattr__(interpreter, "answer", failing)
+    object.__setattr__(interpreter, "inspect", failing)
 
     result = await context.look_at_participant("Budi", "What color is his shirt?")
 
@@ -693,7 +693,7 @@ async def test_a_hanging_provider_times_out_the_camera_look(
         await asyncio.sleep(30)
         return "never"
 
-    object.__setattr__(interpreter, "answer", hanging)
+    object.__setattr__(interpreter, "inspect", hanging)
 
     result = await context.look_at_participant("Budi", "What color is his shirt?")
 
@@ -711,7 +711,7 @@ async def test_a_cancelled_camera_look_propagates_the_cancellation() -> None:
         await asyncio.sleep(30)
         return "never"
 
-    object.__setattr__(interpreter, "answer", hanging)
+    object.__setattr__(interpreter, "inspect", hanging)
 
     task = asyncio.create_task(context.look_at_participant("Budi", "What color is his shirt?"))
     await asyncio.sleep(0.05)
