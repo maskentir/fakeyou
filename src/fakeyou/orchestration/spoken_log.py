@@ -24,6 +24,19 @@ class SpokenLog:
             )
             return
         utterance = event.utterance
+        binding = utterance.publication
+        publication = (
+            {
+                "publication_id": binding.publication_id,
+                "publication_meeting_id": binding.meeting_id,
+                "turn_id": binding.turn_id,
+                "request_id": binding.request_id,
+                "gather_attempt_id": binding.gather_attempt_id,
+                "publication_scope": binding.scope,
+            }
+            if binding is not None
+            else {}
+        )
         heard = {} if event.heard is None else {"heard_words": len(event.heard.split())}
         self.journal.record(
             event.kind,
@@ -34,6 +47,7 @@ class SpokenLog:
             transcript_id=utterance.transcript_id,
             sentence_index=utterance.sentence_index,
             sentence_sha256=hashlib.sha256(" ".join(event.text.split()).encode()).hexdigest(),
+            **publication,
             **heard,
         )
         if event.kind == "playback_started":

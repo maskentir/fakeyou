@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 from typing import Any
 
-from fakeyou.perception.evidence import SnapshotRef
+from fakeyou.foundation.publication import (
+    AudioPublication,
+    EvidenceBinding,
+    SentenceBinding,
+    SnapshotRef,
+    Validation,
+)
 
 EVIDENCE_MAX_AGE_SECONDS = 5.0
 PRE_PUBLICATION_MAX_AGE_SECONDS = 0.25
@@ -13,73 +19,6 @@ PARTICIPANT_AUDIBLE = "participant_audible"
 LOCAL_WRITE = "local_write"
 CURRENT_SCOPE = "current"
 NO_VISUAL_SCOPE = "no_visual"
-
-
-@dataclass(frozen=True, slots=True)
-class EvidenceBinding:
-    kind: str
-    gather_attempt_id: str
-    snapshot: SnapshotRef
-    observed_at: float
-    provider: str
-    provider_attempt_id: str
-    inference: str
-
-
-@dataclass(frozen=True, slots=True)
-class SentenceBinding:
-    publication_id: str
-    meeting_id: str
-    turn_id: str
-    transcript_id: str
-    request_id: str
-    sentence_index: int
-    sentence_hash: str
-    gather_attempt_id: str | None
-    required_kinds: tuple[str, ...]
-    evidence: tuple[EvidenceBinding, ...]
-    scope: str
-
-    def __post_init__(self) -> None:
-        if len(set(self.required_kinds)) != len(self.required_kinds):
-            raise ValueError("required visual kinds must be unique")
-        kinds = [item.kind for item in self.evidence]
-        if len(set(kinds)) != len(kinds):
-            raise ValueError("one required visual kind cannot carry two observations")
-        if not set(self.required_kinds) <= set(kinds):
-            raise ValueError("required visual kinds are not covered by the evidence")
-        if self.scope == NO_VISUAL_SCOPE:
-            if self.evidence or self.required_kinds:
-                raise ValueError("a no-visual sentence carries no visual evidence")
-            return
-        if not self.evidence:
-            raise ValueError("a scoped sentence needs the evidence it was gathered from")
-        if any(item.gather_attempt_id != self.gather_attempt_id for item in self.evidence):
-            raise ValueError("every observation belongs to the gather attempt of the sentence")
-
-
-@dataclass(frozen=True, slots=True)
-class Validation:
-    checked_at: float
-    clock_domain: str
-    current_snapshot: SnapshotRef | None
-    supported: bool
-    unchanged: bool | None
-    observed_at: float
-    uncertainty_seconds: float
-
-
-@dataclass(frozen=True, slots=True)
-class AudioPublication:
-    publication_id: str
-    transcript_id: str
-    sentence_index: int
-    sentence_hash: str
-    started_at: float
-    ended_at: float
-    clock_domain: str
-    observation_kind: str
-    uncertainty_seconds: float
 
 
 def _scene_identity(snapshot: SnapshotRef) -> tuple[Any, ...]:
@@ -126,7 +65,7 @@ class PublicationProbe:
         if binding is None:
             return self._report(publication_id, None, None, "no_registered_sentence")
         before = await self._revalidate(binding, revalidate)
-        gap = self._before_gap(before)
+        gap = self._before_gap(binding, before)
         if gap is not None:
             return self._report(publication_id, binding, None, gap)
         publication = await emit()
@@ -158,7 +97,19 @@ class PublicationProbe:
             found.append((evidence, await revalidate(evidence)))
         return found
 
-    def _before_gap(self, before: list[tuple[EvidenceBinding, Validation]]) -> str | None:
+    def _before_gap(
+        self, binding: SentenceBinding, before: list[tuple[EvidenceBinding, Validation]]
+    ) -> str | None:
+        if binding.scope == CURRENT_SCOPE and any(
+            evidence.capture_monotonic is None
+            or not math.isfinite(evidence.capture_monotonic)
+            or evidence.capture_mapping_clock_domain != self._clock_domain
+            or evidence.capture_mapping_uncertainty_seconds is None
+            or not math.isfinite(evidence.capture_mapping_uncertainty_seconds)
+            or not 0 <= evidence.capture_mapping_uncertainty_seconds <= MAX_UNCERTAINTY_SECONDS
+            for evidence, _validation in before
+        ):
+            return "capture_age_unmeasurable"
         if any(validation.clock_domain != self._clock_domain for _evidence, validation in before):
             return "clock_domain_mismatch"
         if any(
@@ -193,6 +144,8 @@ class PublicationProbe:
             return "clock_domain_mismatch"
         if publication.observation_kind != PARTICIPANT_AUDIBLE:
             return "not_participant_audible"
+        if publication.participant_consent is not True:
+            return "participant_observation_not_consented"
         if publication.publication_id != binding.publication_id:
             return "publication_identity_mismatch"
         if (
@@ -252,11 +205,19 @@ class PublicationProbe:
         publication: AudioPublication,
     ) -> list[str]:
         violations: list[str] = []
-        if (
-            binding.scope == CURRENT_SCOPE
-            and publication.started_at - evidence.observed_at > EVIDENCE_MAX_AGE_SECONDS
+        if binding.scope == CURRENT_SCOPE and (
+            evidence.capture_monotonic is None
+            or evidence.capture_mapping_uncertainty_seconds is None
+            or publication.started_at
+            - evidence.capture_monotonic
+            + evidence.capture_mapping_uncertainty_seconds
+            > EVIDENCE_MAX_AGE_SECONDS
         ):
-            violations.append("evidence_stale_at_publication")
+            violations.append(
+                "capture_age_unmeasurable"
+                if evidence.capture_monotonic is None
+                else "evidence_stale_at_publication"
+            )
         if publication.started_at - validation.checked_at > PRE_PUBLICATION_MAX_AGE_SECONDS:
             violations.append("prepublication_validation_too_old")
         if not validation.supported:
@@ -289,9 +250,11 @@ class PublicationProbe:
         violations: list[str] = []
         if validation.unchanged is False:
             violations.append("scene_not_continuous")
-        if validation.current_snapshot is not None and _scene_identity(
-            validation.current_snapshot
-        ) != _scene_identity(evidence.snapshot):
+        if (
+            evidence.snapshot is not None
+            and validation.current_snapshot is not None
+            and _scene_identity(validation.current_snapshot) != _scene_identity(evidence.snapshot)
+        ):
             violations.append("scene_not_continuous")
         return violations
 
@@ -332,7 +295,9 @@ class PublicationProbe:
                     "provider_attempt_id": item.provider_attempt_id,
                     "inference": item.inference,
                     "observed_at": item.observed_at,
-                    "snapshot": _snapshot_json(item.snapshot),
+                    "snapshot": _snapshot_json(item.snapshot)
+                    if item.snapshot is not None
+                    else None,
                 }
                 for item in binding.evidence
             ]

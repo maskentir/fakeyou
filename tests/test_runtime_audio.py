@@ -479,3 +479,28 @@ async def test_startup_milestones_are_journaled_and_capture_clock_restarts_at_ad
     ]
     assert session.events.index("admitted") < session.events.index("capture_clock_restarted")
     assert session.events.index("capture_clock_restarted") < session.events.index("microphone")
+
+
+async def test_initial_greeting_is_declared_no_visual_when_publication_is_measured(
+    open_audio: Callable[..., AbstractAsyncContextManager[FakeAudio]], session: SimpleNamespace
+) -> None:
+    class DeclaringAudio(FakeAudio):
+        async def speak_no_visual(
+            self,
+            text: str,
+            *,
+            transcript_id: str | None = None,
+            language: str | None = None,
+        ) -> None:
+            del transcript_id, language
+            self.events.append(f"speak_no_visual:{text}")
+
+    open_audio = partial(open_audio, DeclaringAudio(session.events), started=True)
+
+    await runtime.run_meeting_session(
+        session.config,
+        runtime.SessionWiring(open_audio=open_audio, initial_speech="Hello", **session.kwargs),
+    )
+
+    assert "speak_no_visual:Hello" in session.events
+    assert "speak:Hello" not in session.events

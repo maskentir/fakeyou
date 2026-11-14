@@ -2,6 +2,8 @@ from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
+from fakeyou.foundation.publication import PublicationContext, SentenceBinding
+
 
 @dataclass(frozen=True, slots=True)
 class WordTiming:
@@ -63,3 +65,46 @@ class PreparedSpeech(Protocol):
     async def __anext__(self) -> bytes: ...
 
     async def aclose(self) -> None: ...
+
+
+@runtime_checkable
+class PublicationSpeaker(Protocol):
+    @property
+    def publication_context(self) -> PublicationContext | None: ...
+
+    def bind_publication(self, prepared: PreparedSpeech, binding: SentenceBinding) -> None: ...
+
+
+@runtime_checkable
+class NoVisualSpeaker(Protocol):
+    async def speak_no_visual(
+        self,
+        text: str,
+        *,
+        transcript_id: str | None = None,
+        language: str | None = None,
+    ) -> None: ...
+
+
+class DirectSpeaker(Protocol):
+    async def speak(
+        self,
+        text: str,
+        *,
+        sentence_index: int | None = None,
+        transcript_id: str | None = None,
+        language: str | None = None,
+    ) -> None: ...
+
+
+async def speak_no_visual(
+    speaker: DirectSpeaker,
+    text: str,
+    *,
+    transcript_id: str | None = None,
+    language: str | None = None,
+) -> None:
+    if isinstance(speaker, NoVisualSpeaker):
+        await speaker.speak_no_visual(text, transcript_id=transcript_id, language=language)
+        return
+    await speaker.speak(text, transcript_id=transcript_id, language=language)

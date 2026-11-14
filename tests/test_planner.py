@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field, replace
 from typing import override
 
+import pytest
+
 from fakeyou.conversation import turn_graph
 from fakeyou.conversation.turn_graph import (
     OWNER_CLAIM_NOTE,
@@ -18,6 +20,7 @@ from fakeyou.perception.meet_protocol import MeetUser
 from fakeyou.perception.roster import MeetRoster
 from fakeyou.session.commands import CommandOutcome, CommandSpec, CommandState
 from fakeyou.session.contracts import ChatObserved
+from fakeyou.session.facts import StateQuestion
 from fakeyou.session.intent import MeetAction, Reading
 from fakeyou.session.planner import TurnPlan
 from fakeyou.session.policy import Refusal
@@ -303,3 +306,55 @@ async def test_a_failed_look_tells_the_reply_not_to_claim_it_saw_anything() -> N
 
     assert failed_look_note("participant", "unknown_participant") in reply.text
     assert "the shared screen" not in reply.text
+
+
+class DeclaringSpeaker(RecordingSpeaker):
+    def __init__(self) -> None:
+        super().__init__()
+        self.declared: list[str] = []
+
+    async def speak_no_visual(
+        self,
+        text: str,
+        *,
+        transcript_id: str | None = None,
+        language: str | None = None,
+    ) -> None:
+        del transcript_id, language
+        self.declared.append(text)
+
+
+@pytest.mark.parametrize(
+    ("question", "declared"),
+    [
+        ("attendance", True),
+        ("participant_count", True),
+        ("own_action_status", True),
+        ("presenter", False),
+        ("screen_title", False),
+    ],
+)
+async def test_only_non_screen_state_answers_are_declared_no_visual(
+    question: StateQuestion, *, declared: bool
+) -> None:
+    speaker = DeclaringSpeaker()
+    planned = PlannedTurn(TurnPlan("p", "speech_only", output="speech", state_question=question))
+    state_runtime = TurnTestContext(
+        speaker=speaker,
+        journal=RecordingJournal(),
+        state_speech=lambda _question, _language: "Answer.",
+    )
+
+    assert await turn_graph.answer_state(state_runtime, event("Question?"), planned, 0) is True
+    assert speaker.declared == (["Answer."] if declared else [])
+    assert speaker.spoken == ([] if declared else ["Answer."])
+
+
+async def test_recovery_apology_is_declared_no_visual() -> None:
+    speaker = DeclaringSpeaker()
+    recovery_runtime = TurnTestContext(speaker=speaker, journal=RecordingJournal())
+
+    await turn_graph.recover_turn(recovery_runtime, RuntimeError("boom"), 0, "t1")
+
+    assert speaker.declared == [recovery_runtime.recovery.failed_line]
+    assert speaker.spoken == []

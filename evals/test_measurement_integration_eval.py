@@ -4,10 +4,10 @@ from decimal import Decimal
 from pathlib import Path
 
 from evals._measurement_budget import BudgetLimits, MeasurementLedger
-from evals._publication_measurement import (
+from evals._publication_measurement import PublicationProbe
+from fakeyou.foundation.publication import (
     AudioPublication,
     EvidenceBinding,
-    PublicationProbe,
     SentenceBinding,
     Validation,
 )
@@ -40,7 +40,19 @@ async def test_a_fake_provider_attempt_joins_the_published_sentence(tmp_path: Pa
     ledger.settle(attempt, usd=Decimal("0.01"), inference=True, outcome="ok")
 
     evidence = EvidenceBinding(
-        "camera", "gather-1", snapshot(), OBSERVED_AT, "fake", attempt, "inference"
+        "camera",
+        "gather-1",
+        snapshot(),
+        OBSERVED_AT,
+        "fake",
+        attempt,
+        "inference",
+        capture_monotonic=OBSERVED_AT + 0.01,
+        capture_clock_domain="fake",
+        capture_mapping_clock_domain="fake",
+        capture_time_origin="source_capture",
+        capture_mapping_uncertainty_seconds=0.01,
+        observation_clock_domain="fake",
     )
     binding = SentenceBinding(
         "pub-1",
@@ -75,7 +87,16 @@ async def test_a_fake_provider_attempt_joins_the_published_sentence(tmp_path: Pa
 
     async def emit() -> AudioPublication:
         return AudioPublication(
-            "pub-1", "transcript-1", 0, "hash-1", 100.0, 101.0, "fake", "participant_audible", 0.01
+            "pub-1",
+            "transcript-1",
+            0,
+            "hash-1",
+            100.0,
+            101.0,
+            "fake",
+            "participant_audible",
+            0.01,
+            participant_consent=True,
         )
 
     report = await probe.publish("pub-1", revalidate=revalidate, emit=emit)
@@ -105,7 +126,19 @@ async def test_a_superseded_attempt_stays_visible_without_claiming_the_sentence(
     ledger.settle(used, usd=Decimal("0.01"), inference=True, outcome="ok")
 
     evidence = EvidenceBinding(
-        "camera", "gather-1", snapshot(), OBSERVED_AT, "fake", used, "inference"
+        "camera",
+        "gather-1",
+        snapshot(),
+        OBSERVED_AT,
+        "fake",
+        used,
+        "inference",
+        capture_monotonic=OBSERVED_AT + 0.01,
+        capture_clock_domain="fake",
+        capture_mapping_clock_domain="fake",
+        capture_time_origin="source_capture",
+        capture_mapping_uncertainty_seconds=0.01,
+        observation_clock_domain="fake",
     )
     binding = SentenceBinding(
         "pub-1",
@@ -140,7 +173,16 @@ async def test_a_superseded_attempt_stays_visible_without_claiming_the_sentence(
 
     async def emit() -> AudioPublication:
         return AudioPublication(
-            "pub-1", "transcript-1", 0, "hash-1", 100.0, 101.0, "fake", "participant_audible", 0.01
+            "pub-1",
+            "transcript-1",
+            0,
+            "hash-1",
+            100.0,
+            101.0,
+            "fake",
+            "participant_audible",
+            0.01,
+            participant_consent=True,
         )
 
     report = await probe.publish("pub-1", revalidate=revalidate, emit=emit)

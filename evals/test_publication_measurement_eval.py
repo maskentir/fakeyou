@@ -1,13 +1,14 @@
 import json
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
 
-from evals._publication_measurement import (
+from evals._publication_measurement import PublicationProbe
+from fakeyou.foundation.publication import (
     AudioPublication,
     EvidenceBinding,
-    PublicationProbe,
     SentenceBinding,
     Validation,
 )
@@ -32,7 +33,19 @@ def snapshot(sequence: int = 1) -> SnapshotRef:
 
 def evidence(observed_at: float = 95.0, gather_attempt_id: str = "gather-1") -> EvidenceBinding:
     return EvidenceBinding(
-        "camera", gather_attempt_id, snapshot(), observed_at, "fake", "provider-1", "inference"
+        "camera",
+        gather_attempt_id,
+        snapshot(),
+        observed_at,
+        "fake",
+        "provider-1",
+        "inference",
+        capture_monotonic=observed_at + 0.01,
+        capture_clock_domain="fake",
+        capture_mapping_clock_domain="fake",
+        capture_time_origin="source_capture",
+        capture_mapping_uncertainty_seconds=0.01,
+        observation_clock_domain="fake",
     )
 
 
@@ -102,6 +115,7 @@ def publication(
         clock_domain,
         observation_kind,
         uncertainty,
+        participant_consent=True,
     )
 
 
@@ -237,9 +251,16 @@ async def test_a_scene_change_during_the_audible_interval_is_measured_but_not_co
 
 
 @pytest.mark.asyncio
-async def test_a_historical_frame_stays_measurable_and_compliant_when_it_is_old() -> None:
+@pytest.mark.parametrize("mapped", [True, False])
+async def test_a_historical_frame_stays_measurable_and_compliant_when_it_is_old(
+    *,
+    mapped: bool,
+) -> None:
     probe = PublicationProbe(lambda: 100.0, "fake")
-    probe.register(binding(scope="historical", items=(evidence(observed_at=10.0),)))
+    item = evidence(observed_at=10.0)
+    if not mapped:
+        item = replace(item, capture_monotonic=None, capture_mapping_clock_domain=None)
+    probe.register(binding(scope="historical", items=(item,)))
     validate = revalidator(
         pre=validation(99.9, observed_at=10.0),
         post=validation(101.1, observed_at=10.0, unchanged=None),

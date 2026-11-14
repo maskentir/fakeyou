@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 from collections.abc import (
     AsyncIterator,
     Awaitable,
@@ -68,9 +69,11 @@ from fakeyou.conversation.turn_recovery import (
     turn_request_id,
     within_sentence_budget,
 )
+from fakeyou.foundation.gathered_evidence import GatheredEvidence
 from fakeyou.foundation.language import spoken_language
 from fakeyou.foundation.participation import ParticipationContext
 from fakeyou.foundation.protocols import SupportsAclose
+from fakeyou.foundation.publication import SentenceBinding
 from fakeyou.foundation.transcript import TranscriptEvent, spoken_part, with_system_notes
 from fakeyou.foundation.triggers import ReplyChannel
 from fakeyou.observability.cleanup import close_safely
@@ -83,7 +86,11 @@ from fakeyou.session.facts import StateQuestion
 from fakeyou.session.intent import EvidenceNeed, Reading, intent_of
 from fakeyou.session.planner import TurnPlan, plan_turn, with_language
 from fakeyou.session.policy import UNATTRIBUTED, Channel, Grant, authorize
-from fakeyou.speech.contract import PreparedSpeech
+from fakeyou.speech.contract import PreparedSpeech, PublicationSpeaker, speak_no_visual
+
+_NO_VISUAL_STATE: frozenset[StateQuestion] = frozenset(
+    {"attendance", "participant_count", "own_action_status"}
+)
 
 
 class Speaker(Protocol):
@@ -644,10 +651,20 @@ class TurnSink:
         self._started = False
         self._queued = False
         self._indices: dict[PreparedSpeech, int] = {}
+        self._publication_evidence: GatheredEvidence | None = None
+        self._publication_needs: tuple[str, ...] = ()
 
     @property
     def started(self) -> bool:
         return self._started
+
+    def bind_reply(self, event: TranscriptEvent) -> None:
+        self._publication_evidence = (
+            event.evidence if isinstance(event.evidence, GatheredEvidence) else None
+        )
+        self._publication_needs = tuple(
+            need for need in event.evidence_needs if need in {"screen", "participant"}
+        )
 
     async def prepare(self, sentence: str, language: str) -> PreparedSpeech | None:
         sentence_index = self._offered
@@ -664,10 +681,38 @@ class TurnSink:
         if prepared is None:
             return None
         self._indices[prepared] = sentence_index
+        self._bind_publication(prepared, sentence_index)
         if not self._queued and self._drop_outcome() is None:
             _move_phase(self._runtime, "queued", self._transcript_id)
             self._queued = True
         return prepared
+
+    def _bind_publication(self, prepared: PreparedSpeech, sentence_index: int) -> None:
+        speaker = self._runtime.speaker
+        if not isinstance(speaker, PublicationSpeaker):
+            return
+        context = speaker.publication_context
+        if context is None or self._scope is None:
+            return
+        gathered = self._publication_evidence
+        if self._publication_needs and gathered is None:
+            return
+        binding = SentenceBinding(
+            publication_id=context.id_factory(),
+            meeting_id=context.meeting_id,
+            turn_id=self._transcript_id,
+            transcript_id=self._transcript_id,
+            request_id=self._scope.request_id,
+            sentence_index=sentence_index,
+            sentence_hash=hashlib.sha256(" ".join(prepared.text.split()).encode()).hexdigest(),
+            gather_attempt_id=gathered.gather_attempt_id if gathered is not None else None,
+            required_kinds=self._publication_needs,
+            evidence=gathered.provenance if gathered is not None else (),
+            scope=gathered.scope
+            if self._publication_needs and gathered is not None
+            else "no_visual",
+        )
+        speaker.bind_publication(prepared, binding)
 
     async def say(self, prepared: PreparedSpeech) -> None:
         runtime = self._runtime
@@ -1016,7 +1061,10 @@ async def answer_state(
         return True
     _move_phase(runtime, "queued", final.id)
     language = runtime.sentences.language if runtime.sentences is not None else None
-    await runtime.speaker.speak(text, transcript_id=final.id, language=language)
+    if question in _NO_VISUAL_STATE:
+        await speak_no_visual(runtime.speaker, text, transcript_id=final.id, language=language)
+    else:
+        await runtime.speaker.speak(text, transcript_id=final.id, language=language)
     runtime.note_spoken(text)
     _move_phase(runtime, "listening", final.id)
     return True
@@ -1182,6 +1230,7 @@ async def _speak_reply(
             responder = (
                 _turn_responder(runtime, reply_batch, hook, request_id) if streamed else None
             )
+        sink.bind_reply(reply_batch[-1] if draft is None else reply_event)
         context = replace(
             _speech_context(runtime, sink, scope, generations, final.id),
             responder=responder,
@@ -1311,7 +1360,7 @@ async def recover_turn(
         return
     speaker = runtime.speaker
     _, speech_error = await capture_error(
-        lambda: speaker.speak(recovery.failed_line, transcript_id=transcript_id)
+        lambda: speak_no_visual(speaker, recovery.failed_line, transcript_id=transcript_id)
     )
     if speech_error is not None:
         _fail(runtime, speech_error)

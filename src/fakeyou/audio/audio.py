@@ -3,6 +3,7 @@ import random
 import sys
 from collections.abc import (
     AsyncIterator,
+    Awaitable,
     Callable,
     Coroutine,
     Sequence,
@@ -51,6 +52,7 @@ from fakeyou.foundation.protocols import (
     SupportsReconnectWhenIdle,
     SupportsSessionExpiry,
 )
+from fakeyou.foundation.publication import PublicationContext, SentenceBinding
 from fakeyou.foundation.transcript import TranscriptUpdate
 from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
 from fakeyou.observability.faults import (
@@ -63,7 +65,12 @@ from fakeyou.observability.provider_faults import (
     ProviderFault,
     classify_exception,
 )
-from fakeyou.speech.contract import PreparedSpeech, SupportsWarmup
+from fakeyou.speech.contract import (
+    PreparedSpeech,
+    PublicationSpeaker,
+    SupportsWarmup,
+    speak_no_visual,
+)
 from fakeyou.speech.registry import build_speech_synthesizer
 from fakeyou.transcription.contract import (
     SpeechSinks,
@@ -214,6 +221,7 @@ class StreamComponents:
     voice_activity: VoiceActivityTracker | None = None
     own_speech: OwnSpeech | None = None
     runtime: SessionRuntime | None = None
+    publication: PublicationContext | None = None
 
 
 DEFAULT_STREAM_COMPONENTS = StreamComponents()
@@ -519,9 +527,27 @@ class MeetingAudioSession:
             extra["transcript_id"] = transcript_id
         if language is not None:
             extra["language"] = language
+        await self._voice(text, self._engine.speak(text, **extra))
+
+    async def speak_no_visual(
+        self,
+        text: str,
+        *,
+        transcript_id: str | None = None,
+        language: str | None = None,
+    ) -> None:
+        self.raise_if_failed()
+        if self._stopping:
+            raise MeetingAudioError("meeting audio session is stopped")
+        await self._voice(
+            text,
+            speak_no_visual(self._engine, text, transcript_id=transcript_id, language=language),
+        )
+
+    async def _voice(self, text: str, speech: Awaitable[None]) -> None:
         with self._gate.own_speech.speaking(text):
             try:
-                await self._engine.speak(text, **extra)
+                await speech
             except (PlaybackError, OSError) as error:
                 if self._faults is not None:
                     self._faults.record(classify_exception("tts", error, operation="speak"))
@@ -550,6 +576,19 @@ class MeetingAudioSession:
         if language is not None:
             extra["language"] = language
         return await self._engine.prepare(text, **extra)
+
+    @property
+    def publication_context(self) -> PublicationContext | None:
+        return (
+            self._engine.publication_context
+            if isinstance(self._engine, PublicationSpeaker)
+            else None
+        )
+
+    def bind_publication(self, prepared: PreparedSpeech, binding: SentenceBinding) -> None:
+        if not isinstance(self._engine, PublicationSpeaker):
+            raise MeetingAudioError("playback does not support publication binding")
+        self._engine.bind_publication(prepared, binding)
 
     async def speak_prepared(self, prepared: PreparedSpeech) -> None:
         self.raise_if_failed()
@@ -735,14 +774,22 @@ def _resolve_engine(
     speech: SpeechPipelineSettings,
     callbacks: StreamCallbacks,
     diagnostics: Diagnostics,
+    publication: PublicationContext | None,
 ) -> PlaybackPort:
-    if playback is not None:
-        return playback
-    return create_playback_engine(
-        speech=speech,
-        on_event=callbacks.on_playback_event,
-        diagnostics=diagnostics,
+    engine = (
+        playback
+        if playback is not None
+        else create_playback_engine(
+            speech=speech,
+            on_event=callbacks.on_playback_event,
+            diagnostics=diagnostics,
+        )
     )
+    if publication is not None:
+        if not isinstance(engine, PlaybackEngine):
+            raise MeetingAudioError("configured playback does not support publication gating")
+        engine.configure_publication(publication)
+    return engine
 
 
 def _default_speech_session(
@@ -886,7 +933,9 @@ async def open_meeting_audio(
 ) -> AsyncIterator[MeetingAudioSession]:
     speech = policy.speech
     slot = _SessionSlot()
-    engine = _resolve_engine(components.playback, speech, callbacks, diagnostics)
+    engine = _resolve_engine(
+        components.playback, speech, callbacks, diagnostics, components.publication
+    )
     capture: CaptureSource = source or ParecCapture(on_failure=partial(_on_capture_failed, slot))
     activity = components.activity or CaptureActivity()
     runtime = components.runtime or DEFAULT_SESSION_RUNTIME
@@ -1020,7 +1069,9 @@ async def open_stream_audio(
     stream_id = source.stream_id
     input = source.input
     slot = _SessionSlot()
-    engine = _resolve_engine(components.playback, speech, callbacks, diagnostics)
+    engine = _resolve_engine(
+        components.playback, speech, callbacks, diagnostics, components.publication
+    )
     activity = components.activity or CaptureActivity()
     gate = FinalGate(
         components.own_speech or OwnSpeech(),
