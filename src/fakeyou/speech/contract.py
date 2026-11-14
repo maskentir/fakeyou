@@ -1,6 +1,6 @@
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 from fakeyou.foundation.publication import PublicationContext, SentenceBinding
 
@@ -75,10 +75,49 @@ class PublicationSpeaker(Protocol):
     def bind_publication(self, prepared: PreparedSpeech, binding: SentenceBinding) -> None: ...
 
 
-@runtime_checkable
-class PublicationOutcome(Protocol):
+PlaybackOutcome = Literal[
+    "attempted",
+    "prevented",
+    "dropped_before_audio",
+    "audio_started",
+    "interrupted_after_audio",
+    "completed",
+]
+_AUDIO_WRITTEN: frozenset[PlaybackOutcome] = frozenset(
+    {"audio_started", "interrupted_after_audio", "completed"}
+)
+_SETTLED: frozenset[PlaybackOutcome] = frozenset(
+    {"prevented", "dropped_before_audio", "interrupted_after_audio", "completed"}
+)
+
+
+@dataclass(frozen=True, slots=True)
+class PlaybackReceipt:
+    attempt_id: str
+    outcome: PlaybackOutcome
+    text: str
+    cue: bool = False
+    detail: str = ""
+    local_audio_seconds: float = 0.0
+    publication_id: str | None = None
+    transcript_id: str | None = None
+    sentence_index: int | None = None
+
     @property
-    def publication_prevented(self) -> str | None: ...
+    def local_audio_written(self) -> bool:
+        return self.outcome in _AUDIO_WRITTEN
+
+    @property
+    def settled(self) -> bool:
+        return self.outcome in _SETTLED
+
+
+ReceiptObserver = Callable[[PlaybackReceipt], None]
+
+
+@runtime_checkable
+class ReceiptSource(Protocol):
+    def observe_receipts(self, observer: ReceiptObserver) -> None: ...
 
 
 @runtime_checkable

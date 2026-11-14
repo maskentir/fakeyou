@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 import math
 import struct
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
@@ -13,6 +14,7 @@ from fakeyou.audio.playback import PlaybackEvent
 from fakeyou.foundation.transcript import TranscriptUpdate
 from fakeyou.observability.faults import ConsumerSink, FaultReporter, guard_consumer
 from fakeyou.observability.journal import Journal
+from fakeyou.speech.contract import PlaybackOutcome, PlaybackReceipt, ReceiptObserver
 from fakeyou.transcription.contract import SpeechSinks, SttConnectionLost, TranscriptionError
 from tests._prepared_support import PreparedSpeaker
 
@@ -221,11 +223,30 @@ class FakeReplyAudio(FakeAudio):
         self.stops = 0
         self.speaking = False
         self.on_playback_event: Callable[[PlaybackEvent], None] | None = None
+        self._receipt_observers: list[ReceiptObserver] = []
+        self._attempts = itertools.count(1)
 
     @property
     @override
     def is_speaking(self) -> bool:
         return self.speaking
+
+    def observe_receipts(self, observer: ReceiptObserver) -> None:
+        self._receipt_observers.append(observer)
+
+    def voiced(self, text: str, *, interrupted: bool = False) -> None:
+        attempt_id = f"simulated:{next(self._attempts)}"
+        outcomes: tuple[PlaybackOutcome, ...] = (
+            "attempted",
+            "audio_started",
+            "interrupted_after_audio" if interrupted else "completed",
+        )
+        for outcome in outcomes:
+            self.deliver(PlaybackReceipt(attempt_id, outcome, text))
+
+    def deliver(self, receipt: PlaybackReceipt) -> None:
+        for observer in self._receipt_observers:
+            observer(receipt)
 
     @override
     async def speak(
@@ -240,6 +261,7 @@ class FakeReplyAudio(FakeAudio):
         self.indices.append(sentence_index)
         self.transcripts.append(transcript_id)
         self.languages.append(language)
+        self.voiced(text)
         if self.on_playback_event is not None:
             self.on_playback_event(PlaybackEvent("playback_finished", text))
 

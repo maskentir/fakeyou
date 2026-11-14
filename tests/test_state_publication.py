@@ -40,7 +40,7 @@ from fakeyou.session.state_publication import (
     state_publication_decision,
 )
 from fakeyou.session.world import SessionState
-from fakeyou.speech.contract import PreparedSpeech
+from fakeyou.speech.contract import PlaybackReceipt, PreparedSpeech, ReceiptObserver
 from tests._audio_support import FakeSynth, FakeWriter, build_engine
 from tests._model_responder import ModelResponder
 from tests._persistence_fakes import RecordingJournal
@@ -79,7 +79,7 @@ class Meeting:
     before_playback: Callable[[], None] | None = None
     gated: bool = True
     engine: PlaybackEngine = field(init=False)
-    notes: list[str] = field(default_factory=list)
+    receipts: list[PlaybackReceipt] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.engine = build_engine(
@@ -94,6 +94,7 @@ class Meeting:
             id_factory=lambda: next(ids),
         )
         self.engine.configure_publication(self.publication_context)
+        self.engine.observe_receipts(self.receipts.append)
 
     def observe(self, *observations: Observation) -> None:
         self.state = replay(*observations, state=self.state)
@@ -175,7 +176,13 @@ class Meeting:
             speaker_evidence_id=None,
         )
         assert await turn_graph.answer_state(runtime, final, planned, 0) is True
-        self.notes.extend(runtime.notes)
+
+    def observe_receipts(self, observer: ReceiptObserver) -> None:
+        self.engine.observe_receipts(observer)
+
+    @property
+    def voiced(self) -> list[str]:
+        return [item.text for item in self.receipts if item.outcome == "audio_started"]
 
     @property
     def dropped(self) -> str:
@@ -189,7 +196,7 @@ async def test_presenter_answer_with_matching_revision_is_published_with_its_bin
         await meeting.ask("presenter")
         [binding] = meeting.bindings
         assert meeting.writer.written
-        assert meeting.notes == ["Ayu is presenting."]
+        assert meeting.voiced == ["Ayu is presenting."]
         assert binding.scope == "state"
         assert binding.publication_id == "publication-1"
         assert binding.request_id == "t1:0"
@@ -247,7 +254,7 @@ async def test_state_change_while_queued_prevents_the_old_claim(
         assert len(meeting.bindings) == 1
         assert meeting.writer.written == []
         assert reason in meeting.dropped
-        assert meeting.notes == []
+        assert meeting.voiced == []
     finally:
         await meeting.engine.close()
 
@@ -295,7 +302,7 @@ async def test_unknown_state_abstention_still_speaks(
         assert binding.state.subject_id is None
         assert binding.state.source_health == "stale"
         assert meeting.writer.written
-        assert len(meeting.notes) == 1
+        assert len(meeting.voiced) == 1
     finally:
         await meeting.engine.close()
 
@@ -319,7 +326,7 @@ async def test_factual_state_claim_without_a_gate_is_unresolved() -> None:
         await meeting.ask("presenter")
         assert meeting.writer.written == []
         assert "unresolved" in meeting.dropped
-        assert meeting.notes == []
+        assert meeting.voiced == []
     finally:
         await meeting.engine.close()
 
@@ -361,7 +368,7 @@ async def test_actor_counts_a_state_answer_as_spoken_only_when_it_was_emitted(
             ),
         ),
     )
-    actor.observe_spoken(observed.append)
+    actor.observe_spoken(lambda receipt: observed.append(receipt.text))
     actor.bind(meeting)
     actor.configure_deferred(DeferredOptions(planning=_state_plan, state_speech=meeting.speech))
     try:
