@@ -56,6 +56,7 @@ class EvidenceBinding:
     capture_time_origin: str | None = None
     capture_mapping_uncertainty_seconds: float | None = None
     observation_clock_domain: str | None = None
+    status: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
