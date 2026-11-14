@@ -28,9 +28,10 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from fakeyou.config.settings import CartesiaTTS, GoogleReply, Settings
 from fakeyou.foundation.invariants import PLAYBACK_SAMPLE_RATE
+from fakeyou.perception.interpreter import INSPECTION_PROMPT_MARKER
 from fakeyou.speech.websocket import secure_scheme
 
-ProviderMode = Literal["live", "record", "replay"]
+ProviderMode = Literal["live", "record", "record_looks", "replay"]
 GOOGLE = "https://generativelanguage.googleapis.com"
 CASSETTES = Path(__file__).parent / "fixtures" / "simulator" / "cassettes"
 MIN_SIMILARITY = 0.75
@@ -66,9 +67,38 @@ VOLATILE = (
 
 def provider_mode() -> ProviderMode:
     mode = os.environ.get("SIMULATOR_PROVIDERS", "live")
-    if mode not in ("live", "record", "replay"):
-        raise ValueError(f"SIMULATOR_PROVIDERS must be live, record or replay, not {mode!r}")
+    if mode not in ("live", "record", "record_looks", "replay"):
+        raise ValueError(
+            f"SIMULATOR_PROVIDERS must be live, record, record_looks or replay, not {mode!r}"
+        )
     return cast(ProviderMode, mode)
+
+
+def _is_look_request(body: bytes) -> bool:
+    try:
+        request = json.loads(body)
+    except ValueError:
+        return False
+    contents = request.get("contents") or []
+    if not contents:
+        return False
+    return INSPECTION_PROMPT_MARKER in json.dumps(contents[-1], ensure_ascii=False)
+
+
+def _adapt_look_to_inspection(entry: dict[str, Any]) -> dict[str, Any]:
+    body = "".join(chunk[1] for chunk in entry.get("chunks", []) if len(chunk) > 1)
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        return entry
+    for candidate in payload.get("candidates") or []:
+        for part in (candidate.get("content") or {}).get("parts") or []:
+            text = part.get("text")
+            if isinstance(text, str) and text.strip():
+                part["text"] = json.dumps({"verdict": "supported", "answer": text.strip()})
+    adapted = dict(entry)
+    adapted["chunks"] = [[0.0, json.dumps(payload, ensure_ascii=False)]]
+    return adapted
 
 
 def _without_images(value: Any) -> Any:
@@ -346,6 +376,12 @@ class ProviderDoubles:
             SNAPSHOT.write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n")
             self._stt_upstream = settings.stt.url
             return self._pointed(settings, None)
+        if self.mode == "record_looks":
+            _require_google(settings)
+            snapshot = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
+            recorded = Settings.model_validate({**snapshot, "paths": settings.paths.model_dump()})
+            self._stt_upstream = recorded.stt.url
+            return self._pointed(recorded, None)
         snapshot = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
         recorded = Settings.model_validate({**snapshot, "paths": settings.paths.model_dump()})
         return self._pointed(recorded, SecretStr(DOUBLE_KEY))
@@ -426,7 +462,7 @@ class ProviderDoubles:
         body = await request.body()
         route = request.url.path
         key = RequestKey.of(body)
-        if self.mode == "record":
+        if self.mode == "record" or (self.mode == "record_looks" and _is_look_request(body)):
             return await self._record(request, route, body, key)
         entry = self.cassette.match(route, key)
         if entry is None:
@@ -434,6 +470,8 @@ class ProviderDoubles:
                 {"error": {"code": 500, "message": "cassette miss", "status": "INTERNAL"}},
                 status_code=500,
             )
+        if _is_look_request(body):
+            entry = _adapt_look_to_inspection(entry)
         return StreamingResponse(
             _replayed(entry["chunks"]),
             status_code=entry["status"],

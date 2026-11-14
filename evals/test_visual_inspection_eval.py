@@ -4,12 +4,20 @@ from pathlib import Path
 
 import pytest
 
+from evals._visual_cassette import (
+    ExperimentBudget,
+    cassette_inspector,
+    record_visual_cassette,
+)
 from evals._visual_images import (
     VISUAL_IMAGE_NAMES,
     generate_visual_images,
     image_pixel_digest,
 )
 from evals._visual_inspection import FIXTURE, evaluate_inspections, load_visual_fixture
+from fakeyou.observability.provider_faults import FaultEvidence, ProviderFault
+from fakeyou.perception.inspector import VISUAL_INSPECTION_SCHEMA_VERSION
+from tests._perception_fakes import vision_model
 
 
 def test_visual_labels_have_all_verdicts_and_independent_image_annotations() -> None:
@@ -116,6 +124,113 @@ async def test_model_failures_are_reported_separately_from_invalid_outputs() -> 
     report = await evaluate_inspections(inspect, load_visual_fixture())
     assert report["metrics"]["model_error_rate"] == {"count": 8, "of": 8, "rate": 1.0}
     assert report["passed"] is False
+
+
+async def test_a_provider_fault_is_a_case_level_model_error() -> None:
+    async def inspect(_image: bytes, _question: str) -> str:
+        raise ProviderFault("perception", "timeout")
+
+    report = await evaluate_inspections(inspect, load_visual_fixture())
+    assert report["metrics"]["model_error_rate"] == {"count": 8, "of": 8, "rate": 1.0}
+    assert report["metrics"]["invalid_output_rate"]["rate"] == 0.0
+    assert report["passed"] is False
+
+
+async def test_a_programming_error_stays_visible_as_a_harness_failure() -> None:
+    async def inspect(_image: bytes, _question: str) -> str:
+        raise ProviderFault(
+            "perception", "unknown", evidence=FaultEvidence(detail="internal:TypeError")
+        )
+
+    with pytest.raises(ProviderFault):
+        await evaluate_inspections(inspect, load_visual_fixture())
+
+
+async def test_a_recorded_cassette_replays_without_a_network(tmp_path: Path) -> None:
+    fixture = load_visual_fixture()
+    entries = []
+    for case in fixture.cases:
+        data = (fixture.image_root / case.image).read_bytes()
+        entries.append(
+            {
+                "image_sha256": hashlib.sha256(data).hexdigest(),
+                "question": case.question,
+                "provider": "google",
+                "model": "gemini-3.8-flash",
+                "schema_version": VISUAL_INSPECTION_SCHEMA_VERSION,
+                "usage": {"input_tokens": 900, "output_tokens": 40},
+                "latency_ms": 800,
+                "text": json.dumps({"verdict": "supported", "answer": "Project Orchid"}),
+            }
+        )
+    path = tmp_path / "provider-cassette.jsonl"
+    path.write_text("".join(json.dumps(entry) + "\n" for entry in entries))
+
+    report = await evaluate_inspections(cassette_inspector(path), fixture)
+
+    assert report["metrics"]["invalid_output_rate"]["rate"] == 0.0
+    assert report["metrics"]["model_error_rate"]["rate"] == 0.0
+    assert report["metrics"]["verdict_accuracy"]["of"] == 8
+
+
+async def test_an_unrecorded_case_is_never_answered_from_the_model(tmp_path: Path) -> None:
+    path = tmp_path / "provider-cassette.jsonl"
+    path.write_text("")
+
+    with pytest.raises(LookupError):
+        await cassette_inspector(path)(b"image-bytes", "What is the beta date?")
+
+
+async def test_the_recorder_stops_at_the_request_budget(tmp_path: Path) -> None:
+    model = vision_model(answers=["Project Orchid"])
+    data = (FIXTURE.parent / "screen.png").read_bytes()
+    cases = [("screen.png", "What is the project name?", data)] * 3
+    budget = ExperimentBudget(max_requests=2)
+
+    recorded = await record_visual_cassette(
+        cases, model, path=tmp_path / "provider-cassette.jsonl", budget=budget
+    )
+
+    assert len(recorded) == 2
+    assert budget.requests == 2
+    assert budget.spent_usd > 0
+    assert recorded[0]["provider"] == "google"
+    assert recorded[0]["schema_version"] == VISUAL_INSPECTION_SCHEMA_VERSION
+    assert recorded[0]["usage"]["total_tokens"] == 1500
+
+
+async def test_a_reviewed_alias_grounds_a_paraphrase() -> None:
+    fixture = load_visual_fixture()
+    case = fixture.cases[0]
+    fixture = fixture.model_copy(
+        update={
+            "cases": (
+                case.model_copy(
+                    update={
+                        "annotations": (
+                            case.annotations[0].model_copy(
+                                update={"fact_aliases": ("the title says project orchid",)}
+                            ),
+                            *case.annotations[1:],
+                        )
+                    }
+                ),
+            )
+        }
+    )
+
+    async def inspect(_image: bytes, _question: str) -> str:
+        return json.dumps(
+            {
+                "verdict": "supported",
+                "answer": "17 March 2027",
+                "observed_facts": ["the title says project orchid"],
+            }
+        )
+
+    report = await evaluate_inspections(inspect, fixture)
+    assert report["metrics"]["grounding_precision"]["rate"] == 1.0
+    assert report["metrics"]["false_claim_rate"]["rate"] == 0.0
 
 
 def test_the_dataset_rejects_relabelled_images_with_stale_hashes(tmp_path: Path) -> None:

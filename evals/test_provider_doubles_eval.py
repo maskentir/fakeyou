@@ -1,10 +1,65 @@
+import json
 from pathlib import Path
 
-from evals._provider_doubles import Cassette, RequestKey, _token_vector
+from evals._provider_doubles import (
+    Cassette,
+    RequestKey,
+    _adapt_look_to_inspection,
+    _is_look_request,
+    _token_vector,
+)
+from fakeyou.perception.inspector import VisualInspection
+from fakeyou.perception.interpreter import INSPECTION_PROMPT
 
 JUDGE = "You decide whether the twin should take the floor."
 EARLIER = "Ayu: " + "the slides look fine and the checklist is on track. " * 6
 QUESTION = "Harun: Twin, please raise your hand"
+
+
+def _gemini_entry(answer: str) -> dict[str, object]:
+    body = json.dumps({"candidates": [{"content": {"parts": [{"text": answer}], "role": "model"}}]})
+    return {
+        "route": "/v1beta/models/gemini-3.8-flash:generateContent",
+        "system": "",
+        "focus": "focus",
+        "status": 200,
+        "media_type": "application/json",
+        "chunks": [[0.0, body]],
+    }
+
+
+def test_a_recorded_free_text_look_replays_as_a_structured_inspection() -> None:
+    adapted = _adapt_look_to_inspection(_gemini_entry("Harun's shirt is red."))
+
+    body = json.loads("".join(chunk[1] for chunk in adapted["chunks"]))
+    text = body["candidates"][0]["content"]["parts"][0]["text"]
+
+    assert json.loads(text) == {"verdict": "supported", "answer": "Harun's shirt is red."}
+    inspection = VisualInspection.model_validate_json(text)
+    assert inspection.verdict == "supported"
+    assert inspection.answer == "Harun's shirt is red."
+
+
+def test_a_look_request_is_recognised_by_the_inspection_prompt() -> None:
+    look = json.dumps(
+        {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [
+                        {"inlineData": {"mimeType": "image/jpeg", "data": "<image>"}},
+                        {"text": INSPECTION_PROMPT.format(source="a camera", question="color?")},
+                    ],
+                }
+            ]
+        }
+    ).encode()
+    reading = json.dumps(
+        {"contents": [{"role": "user", "parts": [{"text": "Fill every field from the screen"}]}]}
+    ).encode()
+
+    assert _is_look_request(look) is True
+    assert _is_look_request(reading) is False
 
 
 def _entry(focus: str, verdict: str) -> dict[str, str]:
