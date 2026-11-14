@@ -195,7 +195,8 @@ async def test_the_recorder_stops_at_the_request_budget(tmp_path: Path) -> None:
     )
 
     assert len(recorded) == 2
-    assert budget.requests == 2
+    assert budget.attempts == 2
+    assert budget.inference_attempts == 2
     assert budget.spent_usd > 0
     assert recorded[0]["provider"] == "google"
     assert recorded[0]["schema_version"] == VISUAL_INSPECTION_SCHEMA_VERSION
@@ -284,8 +285,61 @@ def test_the_budget_remembers_the_spent_requests_after_a_restart(tmp_path: Path)
 
     second = ExperimentBudget(max_requests=12, ledger=ledger)
 
-    assert second.requests == 1
+    assert second.attempts == 1
+    assert second.inference_attempts == 1
     assert second.spent_usd > 0
+
+
+def test_an_authentication_rejection_is_an_outbound_attempt_without_inference(
+    tmp_path: Path,
+) -> None:
+    ledger = tmp_path / "attempts.jsonl"
+    budget = ExperimentBudget(max_requests=12, ledger=ledger)
+
+    budget.record(
+        {"source": "test", "question": "rejected"},
+        status="rejected",
+        error="API_KEY_INVALID",
+        inference=False,
+    )
+
+    rebuilt = ExperimentBudget(max_requests=12, ledger=ledger)
+
+    assert rebuilt.attempts == 1
+    assert rebuilt.inference_attempts == 0
+    assert rebuilt.spent_usd == 0.0
+
+
+def test_a_reserved_attempt_keeps_its_quota_when_the_call_never_returns(
+    tmp_path: Path,
+) -> None:
+    ledger = tmp_path / "attempts.jsonl"
+    budget = ExperimentBudget(max_requests=12, ledger=ledger)
+
+    budget.reserve({"source": "test", "question": "timed out"})
+
+    rebuilt = ExperimentBudget(max_requests=12, ledger=ledger)
+
+    assert rebuilt.attempts == 1
+    assert rebuilt.inference_attempts == 0
+    assert rebuilt.exhausted is False
+
+
+def test_the_experiment_quota_is_closed_after_the_recorded_attempts(tmp_path: Path) -> None:
+    ledger = tmp_path / "attempts.jsonl"
+    budget = ExperimentBudget(max_requests=2, ledger=ledger)
+    budget.record({"source": "test"}, usage={"input_tokens": 100, "output_tokens": 10})
+    budget.record(
+        {"source": "test"},
+        status="rejected",
+        error="API_KEY_INVALID",
+        inference=False,
+    )
+
+    assert budget.attempts == 2
+    assert budget.inference_attempts == 1
+    assert budget.exhausted is True
+    assert budget.allows(0.0001) is False
 
 
 def test_the_dataset_rejects_relabelled_images_with_stale_hashes(tmp_path: Path) -> None:

@@ -529,6 +529,9 @@ class ProviderDoubles:
             name: request.headers[name] for name in FORWARDED_HEADERS if name in request.headers
         }
         started = time.monotonic()
+        attempt_id = guard.reserve(
+            {"source": "simulator", "route": route, "focus": key.focus[-200:]}
+        )
         upstream = await self._client.send(
             self._client.build_request(
                 "POST", GOOGLE + route, params=request.url.query, content=body, headers=headers
@@ -561,13 +564,13 @@ class ProviderDoubles:
                 }
                 if self.mode == "record_looks" and look:
                     cassette.replace_looks(route, entry)
-                    guard.record(
-                        {"source": "simulator", "route": route, "focus": key.focus[-200:]},
-                        usage=_usage_from_body(recorded),
-                        inference=200 <= upstream.status_code < 300,
-                    )
                 else:
                     cassette.add(entry)
+                guard.settle(
+                    attempt_id,
+                    usage=_usage_from_body(recorded),
+                    inference=200 <= upstream.status_code < 300,
+                )
 
         return StreamingResponse(relay(), status_code=upstream.status_code, media_type=media_type)
 

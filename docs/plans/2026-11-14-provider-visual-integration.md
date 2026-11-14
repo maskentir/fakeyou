@@ -225,14 +225,17 @@ recorded outcome, not a silent truncation.
 
 The guard reads the attempt ledger before every provider call, so the budget survives a
 restart and the historical request count is reconstructible from the artefact rather than
-from the number of successful recordings. The ledger holds every attempt, including the
-ones that never reached inference, and marks each one:
+from the number of successful recordings. The ledger holds every outbound attempt, and
+each attempt is reserved in the ledger before the call, so a timeout or a restart never
+frees the quota of a request that was already sent.
 
-- A request that reached the provider's inference path counts against the request cap,
-  whether it succeeded or timed out, because it may have been billed.
-- A request the provider rejected before inference, such as an authentication rejection,
-  is recorded and costs nothing. It never reached the model, so it does not consume the
-  inference budget.
+Two counters are kept apart:
+
+- The outbound attempt count is the cap. Every request that was sent to the provider is an
+  attempt, including one the provider rejected at authentication, because the request was
+  made and the quota is a request quota.
+- The inference attempt count is telemetry. It counts the requests that reached the
+  provider's inference path, and it is the number that explains the cost.
 
 The cost is computed from the provider-reported usage of the successful recordings. The
 cost of a timed-out request cannot be proven from the artefact, so the reported figure is
@@ -244,16 +247,19 @@ Gemini 3.8 Flash rates at the time of writing are $0.75 per million input tokens
 per million output tokens until 31 December 2026; the budget guard uses the pessimistic of
 the two so the estimate cannot understate the cost.
 
-The spent budget is eight requests for the eight controlled cases, one request that timed
-out, and two requests to record the simulator look entries. Three requests remain. A live
-test never runs in CI.
+The spent quota is fourteen outbound attempts against the approved twelve: eight
+controlled cases, one request that timed out after it started inference, two simulator
+look recordings, and three requests the provider rejected at authentication while this
+phase was being wired. Eleven of the fourteen reached inference and cost an estimated
+US$0.0146. The quota of this experiment is closed, and the guard refuses another call.
 
 ## Measured provider result
 
 The eight controlled cases were recorded from `gemini-3.8-flash` in nine attempts, one of
-which timed out, and the two simulator look entries were recorded in two more. The
-eleven requests that reached inference cost an estimated US$0.0146 from the successful
-recorded usage, against the approved US$1. Replaying the cassette offline produces:
+which timed out, and the two simulator look entries were recorded in two more. Eleven
+requests reached inference, costing an estimated US$0.0146 from the successful recorded
+usage, against the approved US$1. Fourteen outbound attempts were made in total, so the
+quota of this experiment is closed. Replaying the cassette offline produces:
 
 | Metric | Result |
 | --- | --- |

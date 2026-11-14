@@ -8,6 +8,7 @@ import time
 from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from langchain_core.language_models.chat_models import BaseChatModel
 
@@ -81,6 +82,16 @@ def append_ledger(entry: dict[str, Any], path: Path = LEDGER) -> None:
         file.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
+def write_ledger(entries: Sequence[dict[str, Any]], path: Path = LEDGER) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        "".join(json.dumps(entry, ensure_ascii=False) + "\n" for entry in entries),
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
 def load_cassette(path: Path = CASSETTE) -> list[dict[str, Any]]:
     if not path.exists():
         return []
@@ -121,16 +132,63 @@ class ExperimentBudget:
         self.ledger = ledger
         spent = load_ledger(ledger)
         self.attempts = len(spent)
-        self.requests = sum(1 for entry in spent if entry.get("inference") is not False)
+        self.inference_attempts = sum(1 for entry in spent if entry.get("inference") is True)
         self.failed = sum(1 for entry in spent if entry.get("status") == "failed")
         self.spent_usd = sum(float(entry.get("usd") or 0.0) for entry in spent)
 
     @property
     def exhausted(self) -> bool:
-        return self.requests >= self.max_requests or self.spent_usd >= self.max_usd
+        return self.attempts >= self.max_requests or self.spent_usd >= self.max_usd
 
     def allows(self, estimate_usd: float) -> bool:
         return not self.exhausted and self.spent_usd + estimate_usd <= self.max_usd
+
+    def reserve(self, attempt: dict[str, Any]) -> str:
+        attempt_id = str(uuid4())
+        entry = {
+            "status": "reserved",
+            "id": attempt_id,
+            "provider": PROVIDER,
+            "model": MODEL,
+            "usd": 0.0,
+            "inference": False,
+            "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            **attempt,
+        }
+        append_ledger(entry, self.ledger)
+        self.attempts += 1
+        return attempt_id
+
+    def settle(
+        self,
+        attempt_id: str,
+        *,
+        status: str = "recorded",
+        usage: dict[str, Any] | None = None,
+        error: str | None = None,
+        inference: bool = True,
+    ) -> float:
+        cost = usd_for_usage(usage or {})
+        entries = load_ledger(self.ledger)
+        for entry in entries:
+            if entry.get("id") != attempt_id:
+                continue
+            entry["status"] = status
+            entry["usd"] = round(cost, 6)
+            entry["inference"] = inference
+            if usage:
+                entry["usage"] = usage
+            if error is not None:
+                entry["error"] = error
+            write_ledger(entries, self.ledger)
+            break
+        if inference:
+            self.inference_attempts += 1
+        if status == "failed":
+            self.failed += 1
+        else:
+            self.spent_usd += cost
+        return cost
 
     def record(
         self,
@@ -141,27 +199,8 @@ class ExperimentBudget:
         error: str | None = None,
         inference: bool = True,
     ) -> float:
-        cost = usd_for_usage(usage or {})
-        entry = {
-            "status": status,
-            "provider": PROVIDER,
-            "model": MODEL,
-            "usd": round(cost, 6),
-            "inference": inference,
-            "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            **attempt,
-        }
-        if error is not None:
-            entry["error"] = error
-        append_ledger(entry, self.ledger)
-        self.attempts += 1
-        if inference:
-            self.requests += 1
-        if status == "failed":
-            self.failed += 1
-        else:
-            self.spent_usd += cost
-        return cost
+        attempt_id = self.reserve(attempt)
+        return self.settle(attempt_id, status=status, usage=usage, error=error, inference=inference)
 
 
 async def record_visual_cassette(
@@ -185,6 +224,7 @@ async def record_visual_cassette(
         if not guard.allows(estimate):
             break
         attempt = {"source": "eval", "image_sha256": digest, "question": question}
+        attempt_id = guard.reserve(attempt)
         try:
             message = await inspection_message(data, question, source=source_for(image))
             structured = model.with_structured_output(VisualInspection, include_raw=True)
@@ -193,11 +233,11 @@ async def record_visual_cassette(
             latency_ms = round((time.monotonic() - started) * 1000)
             raw, _parsed = structured_parts(result)
         except (TimeoutError, OSError, ProviderFault) as error:
-            guard.record(attempt, status="failed", error=type(error).__name__)
+            guard.settle(attempt_id, status="failed", error=type(error).__name__, inference=True)
             sys.stdout.write(f"failed {question!r}: {type(error).__name__}: {error}\n")
             continue
         usage = dict(getattr(raw, "usage_metadata", None) or {})
-        cost = guard.record(attempt, usage=usage)
+        cost = guard.settle(attempt_id, usage=usage)
         entry = {
             "image_sha256": digest,
             "question": question,
@@ -232,7 +272,8 @@ async def _main() -> None:
     sys.stdout.write(
         json.dumps(
             {
-                "requests": budget.requests,
+                "outbound_attempts": budget.attempts,
+                "inference_attempts": budget.inference_attempts,
                 "failed": budget.failed,
                 "cost_estimated_from_successful_usage_usd": round(budget.spent_usd, 6),
                 "recorded_now": len(recorded),
