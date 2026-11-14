@@ -2,14 +2,18 @@ import json
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 
+from evals import _provider_doubles as doubles_module
 from evals._provider_doubles import (
     Cassette,
+    ProviderDoubles,
     RequestKey,
     _is_look_request,
     _token_vector,
 )
+from evals._visual_cassette import ExperimentBudget
 from fakeyou.perception.inspector import VisualInspection
 from fakeyou.perception.interpreter import INSPECTION_PROMPT, INSPECTION_PROMPT_MARKER
 
@@ -17,6 +21,39 @@ JUDGE = "You decide whether the twin should take the floor."
 EARLIER = "Ayu: " + "the slides look fine and the checklist is on track. " * 6
 QUESTION = "Harun: Twin, please raise your hand"
 CASSETTES = Path(__file__).parent / "fixtures" / "simulator" / "cassettes"
+
+
+@pytest.mark.parametrize("closed_ledger", [False, True])
+async def test_full_recording_does_not_change_the_visual_experiment_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, closed_ledger: bool
+) -> None:
+    ledger = tmp_path / "experiment-attempts.jsonl"
+    budget = ExperimentBudget(max_requests=1, ledger=ledger)
+    if closed_ledger:
+        budget.reserve({"source": "test"})
+        assert budget.exhausted
+    before = ledger.read_bytes() if ledger.exists() else None
+    monkeypatch.setattr(doubles_module, "ExperimentBudget", lambda: budget)
+    cassette = Cassette.load(tmp_path / "full-recording.jsonl")
+    doubles = ProviderDoubles("record", cassette)
+    payload = {"contents": [{"parts": [{"text": INSPECTION_PROMPT_MARKER}]}]}
+    recorded = {"usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 2}}
+
+    def respond(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=recorded)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as upstream:
+        monkeypatch.setattr(doubles, "_client", upstream)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=doubles.app()), base_url="http://double"
+        ) as client:
+            response = await client.post("/v1beta/models/test:generateContent", json=payload)
+
+    assert response.status_code == 200
+    assert response.json() == recorded
+    [entry] = Cassette.load(cassette.path).entries
+    assert json.loads("".join(chunk[1] for chunk in entry["chunks"])) == recorded
+    assert (ledger.read_bytes() if ledger.exists() else None) == before
 
 
 def _gemini_entry(answer: str) -> dict[str, Any]:

@@ -519,9 +519,9 @@ class ProviderDoubles:
 
     async def _record(self, request: Request, route: str, body: bytes, key: RequestKey) -> Response:
         assert self._client is not None
-        guard = ExperimentBudget()
+        guard = ExperimentBudget() if self.mode == "record_looks" else None
         look = _is_look_request(body)
-        if self.mode == "record_looks" and not guard.allows(CONSERVATIVE_LOOK_USD):
+        if guard is not None and not guard.allows(CONSERVATIVE_LOOK_USD):
             return JSONResponse(
                 {"error": {"code": 429, "message": "experiment budget reached"}}, status_code=429
             )
@@ -529,8 +529,10 @@ class ProviderDoubles:
             name: request.headers[name] for name in FORWARDED_HEADERS if name in request.headers
         }
         started = time.monotonic()
-        attempt_id = guard.reserve(
-            {"source": "simulator", "route": route, "focus": key.focus[-200:]}
+        attempt_id = (
+            guard.reserve({"source": "simulator", "route": route, "focus": key.focus[-200:]})
+            if guard is not None
+            else None
         )
         upstream = await self._client.send(
             self._client.build_request(
@@ -566,11 +568,12 @@ class ProviderDoubles:
                     cassette.replace_looks(route, entry)
                 else:
                     cassette.add(entry)
-                guard.settle(
-                    attempt_id,
-                    usage=_usage_from_body(recorded),
-                    inference=200 <= upstream.status_code < 300,
-                )
+                if guard is not None and attempt_id is not None:
+                    guard.settle(
+                        attempt_id,
+                        usage=_usage_from_body(recorded),
+                        inference=200 <= upstream.status_code < 300,
+                    )
 
         return StreamingResponse(relay(), status_code=upstream.status_code, media_type=media_type)
 
