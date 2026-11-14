@@ -146,6 +146,7 @@ def create_perception_interpreter(
         max_concurrent=perception.interpreter.max_concurrent,
         snapshots=snapshots,
         journal=journal,
+        provider=f"{perception.interpreter.provider}/{perception.interpreter.model}",
     )
 
 
@@ -185,6 +186,7 @@ def create_perception_stack(
         camera_epoch=lambda: sensors.epoch,
         camera_monotonic=sensors.monotonic,
     )
+    context.capture_clock = sensors.capture_instant
     return PerceptionStack(
         timeline=timeline, sensors=sensors, context=context, archive=archive, reader=reader
     )

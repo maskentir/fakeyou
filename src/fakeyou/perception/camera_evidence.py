@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 
-from fakeyou.perception.evidence import SnapshotRef
+from fakeyou.perception.evidence import ProviderAttempt, SnapshotRef
 from fakeyou.perception.frames import compare_screens
 from fakeyou.perception.inspector import VisualInspection
 from fakeyou.perception.percepts import Keyframe
@@ -20,6 +20,7 @@ class AnswerEntry:
     ref: SnapshotRef
     keyframe: Keyframe
     stored_at: float
+    attempt: ProviderAttempt | None = None
 
 
 class StaleEvidence(Exception):
