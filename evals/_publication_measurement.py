@@ -8,8 +8,11 @@ from fakeyou.perception.evidence import SnapshotRef
 
 EVIDENCE_MAX_AGE_SECONDS = 5.0
 PRE_PUBLICATION_MAX_AGE_SECONDS = 0.25
+MAX_UNCERTAINTY_SECONDS = 0.05
 PARTICIPANT_AUDIBLE = "participant_audible"
 LOCAL_WRITE = "local_write"
+CURRENT_SCOPE = "current"
+NO_VISUAL_SCOPE = "no_visual"
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,11 +43,19 @@ class SentenceBinding:
     def __post_init__(self) -> None:
         if len(set(self.required_kinds)) != len(self.required_kinds):
             raise ValueError("required visual kinds must be unique")
-        covered = {item.kind for item in self.evidence}
-        if not set(self.required_kinds) <= covered:
+        kinds = [item.kind for item in self.evidence]
+        if len(set(kinds)) != len(kinds):
+            raise ValueError("one required visual kind cannot carry two observations")
+        if not set(self.required_kinds) <= set(kinds):
             raise ValueError("required visual kinds are not covered by the evidence")
-        if self.scope != "no_visual" and not self.evidence:
+        if self.scope == NO_VISUAL_SCOPE:
+            if self.evidence or self.required_kinds:
+                raise ValueError("a no-visual sentence carries no visual evidence")
+            return
+        if not self.evidence:
             raise ValueError("a scoped sentence needs the evidence it was gathered from")
+        if any(item.gather_attempt_id != self.gather_attempt_id for item in self.evidence):
+            raise ValueError("every observation belongs to the gather attempt of the sentence")
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,84 +120,177 @@ class PublicationProbe:
         publication_id: str,
         *,
         revalidate: Callable[[EvidenceBinding], Awaitable[Validation]],
-        emit: Callable[[], Awaitable[AudioPublication]],
+        emit: Callable[[], Awaitable[AudioPublication | None]],
     ) -> dict[str, Any]:
         binding = self._bindings.get(publication_id)
         if binding is None:
-            return self._report(publication_id, None, None, None, "no_registered_sentence")
-        now = self._now()
-        for evidence in binding.evidence:
-            validation = await revalidate(evidence)
-            failure = self._pre_publication_failure(evidence, validation, now)
-            if failure is not None:
-                return self._report(publication_id, binding, None, None, failure)
+            return self._report(publication_id, None, None, "no_registered_sentence")
+        before = await self._revalidate(binding, revalidate)
+        gap = self._domain_gap(before)
+        if gap is not None:
+            return self._report(publication_id, binding, None, gap)
         publication = await emit()
-        failure = self._publication_failure(binding, publication)
-        if failure is not None:
-            return self._report(publication_id, binding, publication, None, failure)
-        for evidence in binding.evidence:
-            validation = await revalidate(evidence)
-            failure = self._continuity_failure(binding, evidence, validation)
-            if failure is not None:
-                return self._report(publication_id, binding, publication, None, failure)
-        return self._report(publication_id, binding, publication, now, None)
+        if publication is None:
+            return self._report(publication_id, binding, None, "no_publication_observed")
+        gap = self._publication_gap(binding, publication)
+        if gap is not None:
+            return self._report(publication_id, binding, publication, gap)
+        gap = self._ordering_gap(before, publication)
+        if gap is not None:
+            return self._report(publication_id, binding, publication, gap)
+        after = await self._revalidate(binding, revalidate)
+        gap = self._domain_gap(after)
+        if gap is not None:
+            return self._report(publication_id, binding, publication, gap)
+        gap = self._audible_gap(after, publication)
+        if gap is not None:
+            return self._report(publication_id, binding, publication, gap)
+        gap = self._continuity_gap(binding, after)
+        if gap is not None:
+            return self._report(publication_id, binding, publication, gap)
+        violations = self._violations(binding, before, after, publication)
+        return self._report(publication_id, binding, publication, None, violations=violations)
 
-    def _pre_publication_failure(
-        self, evidence: EvidenceBinding, validation: Validation, now: float
-    ) -> str | None:
-        if validation.clock_domain != self._clock_domain:
+    async def _revalidate(
+        self,
+        binding: SentenceBinding,
+        revalidate: Callable[[EvidenceBinding], Awaitable[Validation]],
+    ) -> list[tuple[EvidenceBinding, Validation]]:
+        found: list[tuple[EvidenceBinding, Validation]] = []
+        for evidence in binding.evidence:
+            found.append((evidence, await revalidate(evidence)))
+        return found
+
+    def _domain_gap(self, found: list[tuple[EvidenceBinding, Validation]]) -> str | None:
+        if any(validation.clock_domain != self._clock_domain for _evidence, validation in found):
             return "clock_domain_mismatch"
-        if now - validation.checked_at > PRE_PUBLICATION_MAX_AGE_SECONDS:
-            return "prepublication_validation_too_old"
-        if now - evidence.observed_at > EVIDENCE_MAX_AGE_SECONDS:
-            return "evidence_too_old"
-        if now - validation.observed_at > EVIDENCE_MAX_AGE_SECONDS:
-            return "evidence_too_old"
-        if not validation.supported:
-            return "validation_not_supported"
         return None
 
-    def _publication_failure(
+    def _publication_gap(
         self, binding: SentenceBinding, publication: AudioPublication
     ) -> str | None:
-        if publication.publication_id != binding.publication_id:
-            return "publication_identity_mismatch"
-        if publication.observation_kind != PARTICIPANT_AUDIBLE:
-            return "not_participant_audible"
         if publication.clock_domain != self._clock_domain:
             return "clock_domain_mismatch"
-        if binding.evidence and (
+        if publication.observation_kind != PARTICIPANT_AUDIBLE:
+            return "not_participant_audible"
+        if publication.publication_id != binding.publication_id:
+            return "publication_identity_mismatch"
+        if (
             publication.transcript_id != binding.transcript_id
             or publication.sentence_index != binding.sentence_index
             or publication.sentence_hash != binding.sentence_hash
         ):
             return "publication_identity_mismatch"
+        if publication.ended_at < publication.started_at:
+            return "publication_interval_invalid"
         return None
 
-    def _continuity_failure(
-        self, binding: SentenceBinding, evidence: EvidenceBinding, validation: Validation
+    def _ordering_gap(
+        self,
+        before: list[tuple[EvidenceBinding, Validation]],
+        publication: AudioPublication,
     ) -> str | None:
-        if binding.scope != "current":
+        if any(validation.checked_at > publication.started_at for _e, validation in before):
+            return "validation_after_publication"
+        return None
+
+    def _audible_gap(
+        self,
+        after: list[tuple[EvidenceBinding, Validation]],
+        publication: AudioPublication,
+    ) -> str | None:
+        if any(validation.checked_at < publication.started_at for _e, validation in after):
+            return "publication_validated_before_publication"
+        return None
+
+    def _continuity_gap(
+        self, binding: SentenceBinding, after: list[tuple[EvidenceBinding, Validation]]
+    ) -> str | None:
+        if binding.scope != CURRENT_SCOPE:
             return None
+        for _evidence, validation in after:
+            if validation.unchanged is None:
+                return "continuity_unknown"
+            if validation.current_snapshot is None:
+                return "current_snapshot_missing"
+        return None
+
+    def _violations(
+        self,
+        binding: SentenceBinding,
+        before: list[tuple[EvidenceBinding, Validation]],
+        after: list[tuple[EvidenceBinding, Validation]],
+        publication: AudioPublication,
+    ) -> list[str]:
+        violations: list[str] = []
+        for evidence, validation in before:
+            violations.extend(
+                self._freshness_violations(binding, evidence, validation, publication)
+            )
+        for evidence, validation in after:
+            violations.extend(self._continuity_violations(binding, evidence, validation))
+        return violations
+
+    def _freshness_violations(
+        self,
+        binding: SentenceBinding,
+        evidence: EvidenceBinding,
+        validation: Validation,
+        publication: AudioPublication,
+    ) -> list[str]:
+        violations: list[str] = []
+        if (
+            binding.scope == CURRENT_SCOPE
+            and publication.started_at - evidence.observed_at > EVIDENCE_MAX_AGE_SECONDS
+        ):
+            violations.append("evidence_stale_at_publication")
+        if publication.started_at - validation.checked_at > PRE_PUBLICATION_MAX_AGE_SECONDS:
+            violations.append("prepublication_validation_too_old")
+        if validation.uncertainty_seconds > MAX_UNCERTAINTY_SECONDS:
+            violations.append("validation_uncertainty_too_large")
+        if publication.uncertainty_seconds > MAX_UNCERTAINTY_SECONDS:
+            violations.append("publication_uncertainty_too_large")
+        if not validation.supported:
+            violations.append("validation_not_supported")
+        if validation.observed_at != evidence.observed_at:
+            violations.append("validation_observation_mismatch")
+        return violations
+
+    def _continuity_violations(
+        self,
+        binding: SentenceBinding,
+        evidence: EvidenceBinding,
+        validation: Validation,
+    ) -> list[str]:
+        if binding.scope != CURRENT_SCOPE:
+            return []
+        violations: list[str] = []
         if validation.unchanged is False:
-            return "scene_not_continuous"
+            violations.append("scene_not_continuous")
         if validation.current_snapshot is not None and _scene_identity(
             validation.current_snapshot
         ) != _scene_identity(evidence.snapshot):
-            return "scene_not_continuous"
-        return None
+            violations.append("scene_not_continuous")
+        return violations
 
     def _report(
         self,
         publication_id: str,
         binding: SentenceBinding | None,
         publication: AudioPublication | None,
-        now: float | None,
         reason: str | None,
+        violations: list[str] | None = None,
     ) -> dict[str, Any]:
-        report: dict[str, Any] = {"measurable": reason is None, "publication_id": publication_id}
+        measurable = reason is None
+        report: dict[str, Any] = {
+            "measurable": measurable,
+            "compliant": (not violations) if measurable else None,
+            "publication_id": publication_id,
+        }
         if reason is not None:
             report["reason"] = reason
+        if violations:
+            report["violations"] = sorted(set(violations))
         if binding is not None:
             report["meeting_id"] = binding.meeting_id
             report["turn_id"] = binding.turn_id
@@ -222,6 +326,5 @@ class PublicationProbe:
                 "observation_kind": publication.observation_kind,
                 "uncertainty_seconds": publication.uncertainty_seconds,
             }
-        if now is not None:
-            report["measured_at"] = now
+            report["measured_at"] = self._now()
         return report

@@ -29,6 +29,41 @@ that the production runtime has an end-to-end participant-side audio observation
 wired publication revalidation hook. A missing production adapter remains an explicit
 not-measurable gap. No live run or participant latency threshold is approved here.
 
+## Measurable and compliant are separate dimensions
+
+A measurement reports two answers, because a failed measurement and a failing product
+are different findings.
+
+| Situation | Measurable | Compliant |
+| --- | --- | --- |
+| The publication is valid and fresh | `true` | `true` |
+| The publication is provably stale, or the scene changed while it was heard | `true` | `false` |
+| No participant audio recording exists | `false` | `null` |
+| The clocks cannot be synchronised | `false` | `null` |
+
+`measurable` is `true` when the apparatus produced a joined, time-aligned observation:
+the publication exists, its identity matches the binding, the clock domains agree, and
+the timestamps order. `compliant` is `false` when the product broke the freshness or
+continuity contract on an otherwise measurable observation, and `null` when there was no
+measurement to judge. A product violation is never reported as an instrumentation gap,
+and an instrumentation gap is never reported as compliance.
+
+## Freshness is measured at the audible start
+
+Frame age is `published_at - frame_capture_at`, where `published_at` is the audible start
+of the sentence, never the moment the probe began. A validation is fresh when it
+finished no more than 250 ms before that audible start. A timestamp that cannot be
+ordered, or that lands after the publication it validates, is not measurable rather than
+a pass, and no negative duration is clamped to zero.
+
+The approved bounds are the ones in the merged measurement contract: a current-state
+claim uses a frame no more than 5.0 seconds old at publication, a validation finishes no
+more than 250 ms before publication, and a clock mapping carries an uncertainty of at
+most 50 ms.
+
+A historical answer is assessed against its named frame: the current-state age rule and
+the current-scene continuity rule do not apply to it, and the integrity rules still do.
+
 ## Task 1: publication measurements
 
 - Add failing tests in `evals/test_publication_measurement_eval.py` before implementing
@@ -38,12 +73,17 @@ not-measurable gap. No live run or participant latency threshold is approved her
 - Require exact explicit publication IDs, complete kinds, and unique identities; never
   select the latest or nearest event as an implicit join. Repeated text in distinct
   attempts must remain distinguishable.
-- Use the approved 5-second age and 250-ms pre-publication validation bounds, preserve
-  clock domains/uncertainty, and verify subject/stream/epoch/generation and scene continuity
-  through the audible interval. Changes during queueing, inference, or publication must
-  remain visible. Historical frame-bounded answers do not require current-scene validity.
+- Every observation belongs to the gather attempt of the sentence, one required kind
+  cannot carry two observations, and a no-visual sentence carries no visual evidence.
+  The observed sentence identity is compared for every scope, including a no-visual turn.
+- Use the approved 5.0 second age, 250 ms pre-publication validation and 50 ms
+  uncertainty bounds, preserve clock domains/uncertainty, and verify
+  subject/stream/epoch/generation and scene continuity through the audible interval.
+  Changes during queueing, inference, or publication must remain visible. Historical
+  frame-bounded answers do not require current-scene validity.
 - Verify missing source data, local-write-only observations, and unsupported joins are
-  not measurable rather than passed; deterministic stale/invalid observations fail.
+  not measurable rather than passed; deterministic stale or invalid observations are
+  measured and reported as not compliant.
 
 ## Task 2: persistent accounting
 

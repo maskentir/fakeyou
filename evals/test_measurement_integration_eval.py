@@ -58,9 +58,13 @@ async def test_a_fake_provider_attempt_joins_the_published_sentence(tmp_path: Pa
     probe = PublicationProbe(lambda: 100.0, "fake")
     probe.register(binding)
 
+    calls = 0
+
     async def revalidate(_evidence: EvidenceBinding) -> Validation:
+        nonlocal calls
+        calls += 1
         return Validation(
-            99.9,
+            99.9 if calls == 1 else 101.1,
             "fake",
             snapshot(2),
             supported=True,
@@ -119,9 +123,13 @@ async def test_a_superseded_attempt_stays_visible_without_claiming_the_sentence(
     probe = PublicationProbe(lambda: 100.0, "fake")
     probe.register(binding)
 
+    calls = 0
+
     async def revalidate(_evidence: EvidenceBinding) -> Validation:
+        nonlocal calls
+        calls += 1
         return Validation(
-            99.9,
+            99.9 if calls == 1 else 101.1,
             "fake",
             snapshot(2),
             supported=True,
