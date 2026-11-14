@@ -95,6 +95,7 @@ class Meeting(FakeSession):
         VisualInspection(verdict="supported", answer="Beta is 17 March 2027."),
     )
     mapped: bool = True
+    gated: bool = True
     look_at: float = CAPTURED_AT + 1.0
     write_at: float = CAPTURED_AT + 2.0
     before_write: Callable[["Meeting"], None] | None = None
@@ -109,7 +110,7 @@ class Meeting(FakeSession):
     timeline: MeetingTimeline = field(init=False)
     perception: PerceptionContext = field(init=False)
     engine: PlaybackEngine = field(init=False)
-    publication_context: PublicationContext = field(init=False)
+    publication_context: PublicationContext | None = field(init=False)
 
     def __post_init__(self) -> None:
         FakeSession.__init__(self)
@@ -149,12 +150,16 @@ class Meeting(FakeSession):
                 captured_at.timestamp() * 1000
             )
         ids = (f"publication-{number}" for number in range(1, 100))
-        self.publication_context = opt_in_publication_context(
-            "meeting-9",
-            perception=self.perception,
-            kernel=self.kernel,
-            now=self.clock,
-            id_factory=lambda: next(ids),
+        self.publication_context = (
+            opt_in_publication_context(
+                "meeting-9",
+                perception=self.perception,
+                kernel=self.kernel,
+                now=self.clock,
+                id_factory=lambda: next(ids),
+            )
+            if self.gated
+            else None
         )
         self.engine = build_engine(
             FakeSynth(audio=b"\x01\x00" * FRAME_BYTES), self.writer, self.events

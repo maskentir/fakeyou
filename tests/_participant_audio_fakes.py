@@ -41,6 +41,7 @@ class ScriptedParticipantObserver:
     identity_method: str = "watermark"
     reported_hash: str | None = None
     reported_by: str | None = None
+    clock_domain: str = "fake"
     heard_calls: int = 0
 
     def consent(self) -> ParticipantConsent:
@@ -67,4 +68,6 @@ class ScriptedParticipantObserver:
         mapped = self.clock.map(observer_ms)
         if mapped is None:
             return None
-        return MappedInstant(mapped.monotonic, mapped.uncertainty_seconds, "fake", mapped.origin)
+        return MappedInstant(
+            mapped.monotonic, mapped.uncertainty_seconds, self.clock_domain, mapped.origin
+        )
