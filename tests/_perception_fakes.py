@@ -13,8 +13,10 @@ from langchain_core.messages.ai import UsageMetadata
 from langchain_core.outputs import ChatResult
 from langchain_core.runnables import Runnable, RunnableLambda
 from PIL import Image, ImageDraw, ImageFont
+from pydantic import PrivateAttr
 
 from fakeyou.perception.frames import keyframe_from_jpeg
+from fakeyou.perception.inspector import VisualInspection
 from fakeyou.perception.percepts import Keyframe, ScreenFigure, ScreenReading
 from fakeyou.perception.timeline import MeetingTimeline
 
@@ -87,9 +89,11 @@ def _messages_of(model_input: LanguageModelInput) -> list[BaseMessage]:
 
 class FakeVisionModel(FakeMessagesListChatModel):
     readings: list[ScreenReading | None] = []
+    inspections: list[VisualInspection | None] = []
     reading_tokens: int = 1500
     seen: list[list[BaseMessage]] = []
     structured_seen: list[list[BaseMessage]] = []
+    _inspection_index: int = PrivateAttr(default=0)
 
     @override
     def _generate(
@@ -108,23 +112,37 @@ class FakeVisionModel(FakeMessagesListChatModel):
     ) -> Runnable[LanguageModelInput, dict[str, Any] | Any]:
         def respond(model_input: LanguageModelInput) -> dict[str, Any]:
             self.structured_seen.append(_messages_of(model_input))
-            parsed: Any = self.readings.pop(0) if self.readings else None
+            parsed: Any = self._next(schema)
             raw = AIMessage(content="", usage_metadata=usage(self.reading_tokens))
             return {"raw": raw, "parsed": parsed, "parsing_error": None}
 
         return RunnableLambda(respond)
+
+    def _next(self, schema: dict[str, Any] | type) -> Any:
+        if schema is VisualInspection:
+            if not self.inspections:
+                return None
+            index = self._inspection_index % len(self.inspections)
+            self._inspection_index += 1
+            return self.inspections[index]
+        return self.readings.pop(0) if self.readings else None
 
 
 def vision_model(
     readings: Sequence[ScreenReading | None] = (),
     answers: Sequence[str] = (),
     *,
+    inspections: Sequence[VisualInspection | None] = (),
     reading_tokens: int = 1500,
 ) -> FakeVisionModel:
+    scripted = list(inspections) or [
+        VisualInspection(verdict="supported", answer=answer) for answer in answers
+    ]
     return FakeVisionModel(
         responses=[AIMessage(content=answer, usage_metadata=usage(900)) for answer in answers]
         or [AIMessage(content="unused")],
         readings=list(readings),
+        inspections=scripted,
         reading_tokens=reading_tokens,
         seen=[],
         structured_seen=[],

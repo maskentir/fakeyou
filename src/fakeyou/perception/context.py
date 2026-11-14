@@ -21,6 +21,7 @@ from fakeyou.perception.evidence import (
     SnapshotRef,
     evidence_payload,
     evidence_resolution,
+    inspection_outcome,
 )
 from fakeyou.perception.interpreter import (
     CAMERA_SOURCE,
@@ -265,7 +266,7 @@ class PerceptionContext:
         started = time.monotonic()
         try:
             async with asyncio.timeout(LOOK_TIMEOUT_SECONDS):
-                answer = await self.interpreter.answer(data, question, source=source)
+                inspection = await self.interpreter.answer(data, question, source=source)
         except (
             ProviderFault,
             FakeYouError,
@@ -280,19 +281,20 @@ class PerceptionContext:
                 "screen_reading",
                 error_type=type(error).__name__,
             )
-        if answer is None:
+        if inspection is None:
             return _unavailable("screen", subject_id, "budget_exhausted")
         vision_latency_ms = round((time.monotonic() - started) * 1000)
+        status, code = inspection_outcome(inspection)
         return EvidenceResult(
             source="screen",
             subject_id=subject_id,
             snapshot=ref,
             acquisition="inference",
-            status="produced",
+            status=status,
             verification="unverified",
             strategy="screen_reading",
-            code="ok",
-            answer=answer,
+            code=code,
+            answer=inspection.answer,
             observed_at=ref.captured_at,
             age_ms=0,
             vision_latency_ms=vision_latency_ms,

@@ -182,6 +182,7 @@ class ErrorCode(StrEnum):
     DEBRIEF_SOURCE_HASH_CHANGED = "debrief.source_hash_changed"
     PERSONA_IDENTITY_MISMATCH = "persona.identity_mismatch"
     PERSONA_KNOWLEDGE_MOVED = "persona.knowledge_moved"
+    PERCEPTION_INSPECTION_UNPARSED = "perception.inspection_unparsed"
     PERCEPTION_PROVIDER_UNSUPPORTED = "perception.provider_unsupported"
     PERCEPTION_READING_UNPARSED = "perception.reading_unparsed"
     PERCEPTION_PROTOCOL_UNREADABLE = "perception.protocol_unreadable"
@@ -676,6 +677,9 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
         "persona fields {fields} now live in the owner model; move them with "
         "`fakeyou owner-model import --persona PATH`, then remove them from the persona",
         ExitCode.INPUT_REJECTED,
+    ),
+    ErrorCode.PERCEPTION_INSPECTION_UNPARSED: ErrorSpec(
+        "the perception model returned no usable visual inspection"
     ),
     ErrorCode.PERCEPTION_PROVIDER_UNSUPPORTED: ErrorSpec(
         "unsupported perception provider: {provider}", ExitCode.INPUT_REJECTED
