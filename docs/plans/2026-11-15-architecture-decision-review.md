@@ -412,7 +412,8 @@ reference is never repaired.
 **Admission (correction C).** Version 1 waits for the complete structured
 response. The whole plan and the whole `visual_claims` array are validated; only
 then does verification start. A response that is truncated or fails validation
-admits no proposal, and the turn abstains with `claim_undeclared`. Streaming
+admits no proposal, and an abstention attempt follows with reason
+`claim_undeclared`, spoken only if it reaches `Written`. Streaming
 admission is not designed until completeness and correctness are proven. The
 cost is latency on visual answers, to be measured, not assumed.
 
