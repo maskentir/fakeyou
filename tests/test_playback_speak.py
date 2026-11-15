@@ -450,7 +450,8 @@ async def test_engine_never_synthesizes_dropped_speech(drop: str) -> None:
         await _drop_queued(engine, queued, active, drop=drop, release=writer.release)
         assert "queued" not in synth.texts
         dropped = [(event.kind, event.text) for event in events]
-        assert (("playback_dropped", "queued") in dropped) is (drop != "cancel")
+        assert ("playback_dropped", "queued") in dropped
+        assert ("playback_started", "queued") not in dropped
     finally:
         writer.release.set()
         await engine.close()

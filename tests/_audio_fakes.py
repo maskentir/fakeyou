@@ -5,6 +5,7 @@ import itertools
 import math
 import struct
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from dataclasses import replace
 from functools import partial
 from typing import Any, TypedDict, Unpack, cast, override
 
@@ -17,6 +18,24 @@ from fakeyou.observability.journal import Journal
 from fakeyou.speech.contract import PlaybackOutcome, PlaybackReceipt, ReceiptObserver
 from fakeyou.transcription.contract import SpeechSinks, SttConnectionLost, TranscriptionError
 from tests._prepared_support import PreparedSpeaker
+
+WRITTEN_OUTCOMES: dict[str, PlaybackOutcome] = {
+    "playback_started": "attempted",
+    "playback_audio_started": "audio_started",
+    "playback_finished": "completed",
+    "playback_dropped": "interrupted_after_audio",
+}
+
+
+def written(event: PlaybackEvent, seconds: float = 1.0) -> PlaybackEvent:
+    receipt = PlaybackReceipt(
+        "simulated",
+        WRITTEN_OUTCOMES[event.kind],
+        event.text,
+        cue=event.cue,
+        local_audio_seconds=seconds,
+    )
+    return replace(event, receipt=receipt)
 
 
 class FakeAudio(PreparedSpeaker):
@@ -234,15 +253,17 @@ class FakeReplyAudio(FakeAudio):
     def observe_receipts(self, observer: ReceiptObserver) -> None:
         self._receipt_observers.append(observer)
 
-    def voiced(self, text: str, *, interrupted: bool = False) -> None:
+    def voiced(self, text: str, *, interrupted: bool = False) -> PlaybackReceipt:
         attempt_id = f"simulated:{next(self._attempts)}"
         outcomes: tuple[PlaybackOutcome, ...] = (
             "attempted",
             "audio_started",
             "interrupted_after_audio" if interrupted else "completed",
         )
-        for outcome in outcomes:
-            self.deliver(PlaybackReceipt(attempt_id, outcome, text))
+        receipts = [PlaybackReceipt(attempt_id, outcome, text) for outcome in outcomes]
+        for receipt in receipts:
+            self.deliver(receipt)
+        return receipts[-1]
 
     def deliver(self, receipt: PlaybackReceipt) -> None:
         for observer in self._receipt_observers:
@@ -261,9 +282,9 @@ class FakeReplyAudio(FakeAudio):
         self.indices.append(sentence_index)
         self.transcripts.append(transcript_id)
         self.languages.append(language)
-        self.voiced(text)
+        receipt = self.voiced(text)
         if self.on_playback_event is not None:
-            self.on_playback_event(PlaybackEvent("playback_finished", text))
+            self.on_playback_event(PlaybackEvent("playback_finished", text, receipt=receipt))
 
     @override
     async def stop_playback(self) -> None:

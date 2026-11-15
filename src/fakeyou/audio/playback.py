@@ -859,8 +859,9 @@ class PlaybackEngine:
             await self._close_audio(audio)
 
     async def _write_faded(self, frame: bytes, clip: _Clip) -> None:
-        await self._writer.write(_faded(frame))
-        clip.progress.pcm_bytes += len(frame)
+        faded = _faded(frame)
+        await self._writer.write(faded)
+        clip.progress.pcm_bytes += len(faded)
 
     async def _write_frame(self, frame: bytes, clip: _Clip, generation: int, *, gain: bool) -> None:
         await self._thawed.wait()
@@ -1160,10 +1161,7 @@ class PlaybackEngine:
         while True:
             clip = await self._next_clip()
             generation = self._generation
-            if clip.done.cancelled():
-                await self._close_audio(clip.audio)
-                continue
-            if self._stopping or clip.epoch != self._stop_epoch:
+            if clip.done.cancelled() or self._stopping or clip.epoch != self._stop_epoch:
                 await self._drop_stale(clip)
                 continue
             if self._closed:

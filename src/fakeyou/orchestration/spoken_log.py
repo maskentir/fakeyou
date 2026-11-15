@@ -74,11 +74,11 @@ class SpokenLog:
             self.speaking = event.text
         elif event.kind == "playback_finished":
             self.speaking = None
-            if receipt is None or receipt.local_audio_written:
+            if receipt is not None and receipt.local_audio_written:
                 self.record.add_twin_speech(event.text, causation_id=utterance.transcript_id)
         elif event.kind == "playback_dropped" and event.text == self.speaking:
             self.speaking = None
-            if receipt is None or receipt.outcome != "prevented":
+            if receipt is not None and receipt.local_audio_written:
                 self._record_interrupted(event)
 
     def _record_interrupted(self, event: PlaybackEvent) -> None:
