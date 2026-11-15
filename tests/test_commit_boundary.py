@@ -514,3 +514,21 @@ async def test_scope_without_a_freshness_claim_is_not_bounded() -> None:
     commit = terminal(meeting).commit
     assert commit is not None
     assert commit.fresh_at_write_unproven is False
+
+
+@pytest.mark.parametrize("accepted_at", [None, float("nan"), 99.9, 100.2])
+def test_missing_or_out_of_order_writer_acceptance_cannot_prove_freshness(
+    accepted_at: float | None,
+) -> None:
+    progress = CommitProgress(
+        decision=PublicationDecision("valid", "ok", 100.0, LOCAL_MONOTONIC),
+        evaluated_at=100.0,
+        accepted_at=accepted_at,
+        first_written_at=100.1,
+        bounded=True,
+    )
+
+    timing = progress.timing(PublicationContext("meeting", LOCAL_MONOTONIC))
+
+    assert timing is not None
+    assert timing.fresh_at_write_unproven is True

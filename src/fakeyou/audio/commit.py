@@ -73,8 +73,13 @@ class CommitProgress:
     def _unproven(self) -> bool:
         written = self.first_written_at
         evaluated = self.evaluated_at
+        accepted = self.accepted_at
         if written is None or evaluated is None or not self.bounded:
             return False
+        if accepted is None or not math.isfinite(accepted):
+            return True
+        if not evaluated <= accepted <= written:
+            return True
         if not (math.isfinite(written) and math.isfinite(evaluated)) or written < evaluated:
             return True
         if written - evaluated > VALIDATION_AGE_SECONDS:
