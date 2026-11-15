@@ -100,7 +100,7 @@ committed to the repository, synthetic PCM included; the house rule stands.
 | Archive | `writer-spike-raw-eba185d7.tar.xz`, 3,088,788 bytes, SHA-256 `974bc6012f2a5c28ea2d9b264c3821948167b747ed05c15d18603f918faa4513`, re-verified on 2026-11-15 |
 | Destination | `s3://fakeyou-evidence/fakeyou/writer-spike/2026-11-15/eba185d7/writer-spike-raw-eba185d7.tar.xz` on RustFS. The `s3://` form is the S3-compatible address, not AWS |
 | Current location | **The author's machine only**, `.runtime/writer-spike/`. Not reachable by an auditor. The local copy is kept until an upload is verified |
-| Upload | **Not done.** The bucket does not exist (see the check below) |
+| Upload | **Not done.** The bucket does not exist, and a capability test on the local instance found that retention is not enforced. See `docs/reports/2026-11-16-rustfs-capability.md` |
 | Replay tool | `evals/writer_spike/replay.py`, no audio server needed: `python -m evals.writer_spike.replay <directory>` |
 
 Check of the existing deployment, 2026-11-15, read-only:
@@ -118,8 +118,15 @@ Two consequences for custody. An upload to this instance would not make the
 archive reachable by anyone but the author, and it would sit on the same disk
 as the copy it is meant to safeguard. And Object Lock is normally fixed when a
 bucket is created, so the bucket should not be created before the retention
-configuration is decided. Until a RustFS instance that an auditor can reach
-holds the bucket, custody stays pending.
+configuration is decided.
+
+The capability test of 2026-11-16 adds a third: on this version, a retained
+version can be deleted with the ordinary API, in both Governance and
+Compliance mode. Object Lock is configured and reported, but it is not
+enforced, so nothing held in such a bucket is immutable whatever its metadata
+says. The test bucket was removed and the instance returned to its stopped
+state. Until a RustFS deployment an auditor can reach holds the bucket, with
+retention verified to refuse a deletion there, custody stays pending.
 
 Storage requirements, to be confirmed at upload:
 
