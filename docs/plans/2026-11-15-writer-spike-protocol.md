@@ -1,12 +1,13 @@
 # Writer spike protocol — libpulse asynchronous stream
 
-Status: **PROTOCOL REVISION 3 — UNDER REVIEW. NOT AUTHORIZED TO RUN. NO TRIAL HAS RUN.**
+Status: **PROTOCOL REVISION 4 — UNDER REVIEW. NOT AUTHORIZED TO RUN. NO TRIAL HAS RUN.**
 
 | Revision | Head | Outcome |
 | --- | --- | --- |
 | 1 | `3d9c784c` | Rejected: ordering invariant contradicted corked upload; PCM staged before authorization; client-updated indices used as server proof |
 | 2 | `b2713b85` | Changes requested: write-return time used as a causal lower bound; revocation after commit held to a precommit criterion; playback-started used as per-clip acknowledgment; absence of output and delivery delay claimed without a bound; thread boundary of the commit section unspecified |
-| 3 | this file | Closes those six items. Trial definitions changed for C3 and C7, so the revision is raised before any run |
+| 3 | `747506ec` | Six items closed. Changes requested: mainloop iterations inside the commit section contradicted the zero-turn criterion; the post-stop bound ignored audio already read downstream; preflight stop rule ambiguous for PF3 and PF4 |
+| 4 | this file | Closes those three. Targets, trial counts and conditions are unchanged; what changes is where pumping happens and how results are interpreted |
 
 Unchanged from the rulings: 5 ms refusal, p99.9 ≤ 100 ms, V1 250 ms, and the
 trial counts of C0–C10.
@@ -55,18 +56,33 @@ mainloop lock, and the bytes would be sent to the server later by the mainloop
 thread, which is an asynchronous handoff after the evaluation with no proven
 bound.
 
-| Step | Where | May wait |
-| --- | --- | --- |
-| 1. Readiness | Before the section | Yes. Stream ready and not corked (arm R), writable size ≥ one frame, no data pending on the connection |
-| 2. Readiness re-check | Section | No. Synchronous query only; if it fails the section is abandoned and step 1 repeats |
-| 3. Final evaluation | Section | No |
-| 4. Release | Section | No. `release_invoked_at`, the write (arm R) or uncork request (arm S), `release_returned_at` |
-| 5. Send | Section | No. Non-blocking iterations until nothing is pending on the connection, at most a fixed count; then `sent_at`, or `send_incomplete` |
+| Step | Phase | May wait | Mainloop iteration |
+| --- | --- | --- | --- |
+| 1. Readiness | Before the section | Yes. Stream ready and not corked (arm R), writable size ≥ one frame, no data pending on the connection | Yes |
+| 2. Readiness re-check | Commit section | No. Synchronous query only; if it fails the section is abandoned and step 1 repeats | **None** |
+| 3. Final evaluation | Commit section | No | **None** |
+| 4. Release | Commit section | No. `release_invoked_at`, the write (arm R) or uncork request (arm S), `release_returned_at` | **None** |
+| 5. Pump | Postcommit | Not applicable | Yes. `first_pump_invoked_at`; non-blocking iterations until nothing is pending on the connection, then `sent_at`; `send_incomplete` if data is still pending after the first pump |
 
-The section is one synchronous function. The readiness re-check comes before the
-evaluation so that the evaluation is the last decision before the write. If
-readiness is lost, the evaluation is not reused; it is made again after the next
-wait.
+The commit section is steps 2 to 4: one synchronous function that makes no
+mainloop iteration. A mainloop iteration prepares, polls and dispatches, and
+dispatch runs callbacks. Keeping every iteration outside the section means no
+libpulse callback can run between the evaluation and the write, so nothing can
+re-enter and change state the evaluation read. The claim is that specific one,
+not atomicity from being on one thread.
+
+The readiness re-check comes before the evaluation so that the evaluation is the
+last decision before the write. Its answer reflects the last iteration before
+the section and may be stale; a write that then finds no room is refused and
+recorded. If readiness is lost, the evaluation is not reused; it is made again
+after the next wait.
+
+**The handoff in the section is to the client library, not to the server.** When
+the write returns, the frame is queued in the worker process. It reaches the
+server only when step 5 runs. A delay between steps 4 and 5 is therefore a delay
+between the commit and the bytes leaving the process, inside the client. C3
+injects exactly that. Whether the frame reached the server, and when, stays a
+question for the trials.
 
 What this does not claim: a writable-size check says the client may queue a
 frame. It says nothing about the path downstream of the socket, or about output
@@ -74,24 +90,35 @@ meeting a deadline.
 
 ## Preflight
 
-Preflight is part of the spike and runs only once the protocol is authorized. A
-failed item stops the spike before trial 1 and requires a protocol revision.
-Each item below is an assumption of this protocol, not an established fact.
+Preflight is part of the spike and runs only once the protocol is authorized.
+Each item below is an assumption of this protocol, not an established fact. The
+stop and go rule for each is fixed in the table after this one.
 
 | # | Assumption | Established by |
 | --- | --- | --- |
 | PF1 | In this context the write call queues and returns without blocking, including with a full buffer and a stopped daemon | Test |
 | PF2 | Bytes leave the process only during iterations made by the owning thread, and the pending-data query reflects unsent data | Reading the client library source for the version in the image, plus a test with the socket observed externally |
 | PF3 | The reply to a timing request issued after a write cannot be produced before the server has processed that write | A written argument from the daemon source for the version in the image, naming the code path. Trials cannot establish this |
-| PF4 | Once the server no longer lists a stream, no PCM of that stream can be rendered | Written argument from the daemon source, plus a test |
+| PF4a | Once the server no longer lists a stream, nothing further can be read from that stream's buffer | Written argument from the daemon source for the version in the image, plus a test |
+| PF4b | PCM of that stream already read into the sink and monitor path is gone, or leaves within a stated bound, once the stream is removed | Written argument from the daemon source covering the downstream path. A test and an observation window can corroborate it; they cannot establish it |
 | PF5 | Configured latency of `agent_output` and its monitor | Read from the running server and recorded in the manifest |
 | PF6 | The daemon can be confirmed stopped: every thread reported stopped by the kernel before the next step proceeds | Test |
 | PF7 | The observer attributes samples to clips with no false match on silence, on other clips, or on partial fragments | 100,000 clip patterns against recorded silence and each other |
 | PF8 | No other client or module can uncork, move or feed the streams under test | Module list and client list recorded; test |
+| PF9 | The calls made inside the commit section (writable-size query, write, uncork request) invoke no callback before returning | Reading the client library source, plus a test with counting callbacks registered on every hook |
 
-If PF3 is not established, server processing is reported as `unproven` for the
-whole run. No criterion depends on it. If PF4 is not established, no trial with
-released or staged PCM can be classed "no output, proven".
+| Preflight | If not established | Trials affected |
+| --- | --- | --- |
+| PF1, PF7, PF8, PF9 | **Stop.** No trial runs. Protocol revision required | All |
+| PF2 | The trials that depend on it do not run | C3; every use of `first_pump_invoked_at` and `send_incomplete` |
+| PF5 | The trials that depend on it do not run | Every trial with an observation window |
+| PF6 | The trials that depend on it do not run | C4, C5, C12; every bound raised to `stall_until` |
+| PF3 | Trials run. Server processing is reported `unproven` for the whole run | None; no criterion depends on it |
+| PF4a, PF4b | Trials run and are recorded. Route N2 is never reported as proven; every trial that would need it is `unproven` | Arm S no-output claims; arm R clips withheld after release |
+
+A condition that does not run is reported as not run, with the failed preflight
+as the reason. It is not reported as passed, and the spike is not stretched to
+run it anyway.
 
 ## Setup
 
@@ -119,15 +146,20 @@ No field is named or mapped to the contract's `accepted_at` or
 | | `stage_sent_at` | Nothing pending on the connection after staging |
 | Commit | `evaluated_at`, `commit_seq` | Final evaluation; order counter value of the section |
 | | `release_invoked_at`, `release_returned_at` | Immediately before and after the release call |
+| | `app_turns_in_section` | Event-loop task switches between steps 2 and 4; must be 0 |
+| | `pulse_iterations_in_section`, `callbacks_in_section` | libpulse mainloop iterations and callbacks invoked between steps 2 and 4; both must be 0 |
+| Postcommit | `first_pump_invoked_at` | Start of the first mainloop iteration after the section |
 | | `sent_at` or `send_incomplete` | Step 5 |
-| | `loop_turns_in_section` | Event-loop iterations between steps 2 and 5; must be 0 |
-| Postcommit | `ordered_reply_at` | Receipt of the reply to a timing request issued after the release |
+| | `ordered_reply_at` | Receipt of the reply to a timing request issued after the release |
 | | `buffer_read_at` | Receipt of a timing snapshot requested after the release, not flagged corrupt, read index past the clip start |
 | | `started_notified_at` | Playback-started notification. **Diagnostic only** |
 | | `output_interval` | From the observer, defined below |
 | Stop | `stop_requested_at`, `stop_applied_at`, `stop_seq` | Request by the caller; application on the owning thread; order counter value |
 | | `handoff_log` | Every release call for the clip with byte count and order counter value |
-| | `fill_at_stop` | Bytes released and not shown read by a valid snapshot |
+| | `released_before_stop_bytes` | From `handoff_log` |
+| | `unread_stream_bytes` | Released bytes not yet read from the stream buffer, from a valid snapshot taken at or after the stop; otherwise `unknown` |
+| | `downstream_inflight_bytes` | Bytes read from the stream buffer and not proven output. `unknown` unless PF4b supplies a bound |
+| | `observed_post_stop_bytes` | Bytes of the clip in observer fragments received after `stop_applied_at`. Some may have been output before the stop and received later |
 | Closure | `teardown_confirmed_at`, `observed_until` | Control connection no longer lists the stream; end of the observation window |
 | Fault | `stall_confirmed_at`, `stall_until` | Daemon confirmed stopped (PF6); resume signal sent |
 
@@ -159,7 +191,7 @@ Only deterministic bounds are used in classification.
 | Bound | Value | Why it is a bound |
 | --- | --- | --- |
 | Upper, `out_hi` | Receipt instant of the observer fragment holding the sample | A sample cannot be recorded before it was output. Scheduling and transport delay only move this later |
-| Lower, `out_lo`, arm R | `release_invoked_at`, provided `handoff_log` shows no earlier handoff of the clip; raised to `stall_until` when `stall_confirmed_at ≤ release_invoked_at` | No PCM of the clip existed outside the worker before the call began. A stopped daemon renders nothing |
+| Lower, `out_lo`, arm R | `release_invoked_at`, provided `handoff_log` shows no earlier handoff of the clip. Raised to `first_pump_invoked_at` when PF2 is established. Raised to `stall_until` when `stall_confirmed_at ≤ release_invoked_at` | No PCM of the clip existed outside the worker before the call began; with PF2, none left the process before the first pump. A stopped daemon renders nothing |
 | Lower, `out_lo`, arm S | `stage_invoked_at`, raised to `stall_until` under the same stall rule | The uncork instant is **not** a lower bound: whether staged PCM can play before it is the property under test |
 
 The write-return instant is never a lower bound: the server can process a frame
@@ -178,10 +210,10 @@ classification.
 | Unproven | `out_lo ≤ d < out_hi` |
 
 Errors run one way: a sample truly within bound may be classed unproven; a
-sample truly late is never classed within bound. Without a stall `out_lo` is the
-release instant, so late output can be *confirmed* only in the stall conditions
-and is otherwise unproven. That is a limit of the instrument and is reported as
-one.
+sample truly late is never classed within bound. Late output can be *confirmed*
+only where a lower bound moves past the deadline: a daemon stall (C4), or, with
+PF2, a pump delayed past the deadline (C3). Elsewhere it is unproven. That is a
+limit of the instrument and is reported as one.
 
 ### No output
 
@@ -190,17 +222,22 @@ one.
 | Route | Applies when | Requirements |
 | --- | --- | --- |
 | N1 Never handed over | Arm R, clip not released | `handoff_log` is empty for the clip. This is a fact about the worker and does not depend on the observer. The observer window below is run as corroboration; a sample seen there is a K7 failure |
-| N2 Handed over, then destroyed | PCM was staged or released | All of: the stream is the trial's own; discard and disconnect were requested; the control connection confirms the server no longer lists the stream; PF4 is established; no sample of the clip is observed from the first handoff until `observed_until`; a sentinel clip on a new stream is observed after `observed_until` |
+| N2 Handed over, then destroyed | PCM was staged or released | All of: the stream is the trial's own; discard and disconnect were requested; the control connection confirms the server no longer lists the stream; PF4a and PF4b are both established; no sample of the clip is observed from the first handoff until `observed_until`; a sentinel clip on a new stream is observed after `observed_until` |
 
 Observation window: `observed_until` is `teardown_confirmed_at` plus the larger
 of 2 s and ten times the latency recorded in PF5.
 
-N2 is a statement about a destroyed stream within a closed window. It rests on
-PF4, not on the silence alone: the observer reads from the same daemon, and
-silence followed by a sentinel shows the observer was alive, not that old PCM
-could never appear. Where teardown cannot be confirmed (daemon stopped or
-killed, control connection failed) or the daemon restarted inside the window,
-the trial is `unproven`.
+N2 rests on the two arguments, not on the silence. A stream missing from the
+server's list shows that reading from its buffer has ended (PF4a). It does not
+show that audio already read into the sink and monitor path is gone; that needs
+PF4b. The observation window is an empirical observation: silence followed by a
+sentinel shows the observer was alive and saw nothing in that window, not that
+old PCM could never appear later. If PF4b gives a bound longer than the window,
+the window is extended to that bound before any trial.
+
+Where either argument is missing, teardown cannot be confirmed (daemon stopped
+or killed, control connection failed), or the daemon restarted inside the
+window, the trial is `unproven`.
 
 ## Deadlines
 
@@ -257,13 +294,18 @@ A class with fewer than 100 trials is reported `unproven` for that class.
 | K5 | For a clip whose first sample was not proven within bound: no confirmed violation | C1–C4, C8 | Invariant; one occurrence fails the arm for V6 |
 | K6 | Cancel or revocation applied before commit, or an evaluation that is not `valid`: empty `handoff_log` in arm R, and no output proven | C6a, C7a, C11–C13 | Invariant |
 | K7 | Arm R: no sample with `out_hi < release_invoked_at`. An occurrence means a handoff outside the commit section or a faulty instrument; the run's observer evidence is void until explained. Arm S: a sample with `out_hi < release_invoked_at` is confirmed output before authorization | all | Invariant |
-| K8 | Postcommit stop: `handoff_log` shows no release with an order value after `stop_seq`; bytes observed after `stop_applied_at` do not exceed `fill_at_stop` plus one frame; the receipt states audio was written when any sample was observed | C6b, C7b | Invariant |
+| K8a | Postcommit stop: `handoff_log` shows no release with an order value after `stop_seq` | C6b, C7b | Invariant; a fact about the worker |
+| K8b | The receipt states audio was written exactly when a sample of the clip was observed, and the bytes observed in total do not exceed `released_before_stop_bytes` | C6b, C7b | Invariant |
+| K8c | Bound on output after the stop | C6b, C7b | No bound is asserted. `observed_post_stop_bytes` is reported as a distribution beside `unread_stream_bytes`. The verdict is `unproven` unless PF4b supplies a downstream bound, in which case the bound checked is `unread_stream_bytes` plus that bound |
 | K9 | Ordering. Arm R: `evaluated ≤ release_invoked ≤ release_returned`; `ordered_reply`, `buffer_read` and `out_hi` are not before `release_invoked`. Arm S: `stage_invoked ≤ stage_returned ≤ evaluated ≤ release_invoked ≤ release_returned`; the same signals are not before `stage_invoked` | all | Invariant |
 | K10 | No instant recorded for an event that did not occur; a restart is reported as failure; a missing or foreign-clock instant yields `unproven` | C5, C9, C10 | Invariant |
-| K11 | `loop_turns_in_section` is 0 in every trial. `send_incomplete` trials are counted and listed with the delay until the bytes were sent | all | Invariant for the first; report for the second |
+| K11 | `app_turns_in_section`, `pulse_iterations_in_section` and `callbacks_in_section` are each 0 in every trial | all | Invariant |
+| K12 | `first_pump_invoked_at − release_returned_at` and `sent_at − release_returned_at` are reported as distributions; `send_incomplete` trials are counted and listed | all | Report |
 
-K8 does not claim a rollback. The committed decision stands; buffered audio may
-still be heard and is reported as heard.
+K8 does not claim a rollback and does not claim a limit on what is heard after
+a stop. The committed decision stands. Audio already read from the stream buffer
+may be in the sink or monitor path when the stop is applied; it is not counted
+as unread, and no tolerance is invented to cover it.
 
 In arm S a valid trial cannot show that its audio began only after the uncork:
 `out_lo` is the staging instant, which precedes it. Authorization order in arm S

@@ -276,7 +276,7 @@ release ordering. No such proof is known.
 | | W-A2 — release is the write | W-A1 — stage, then release |
 | --- | --- | --- |
 | Before the final evaluation | Stream connected, running, empty. No PCM outside the worker | First frame uploaded to a corked stream (Z1) |
-| Commit section | One synchronous function on the thread that owns both the evaluation and libpulse: readiness re-check, final evaluation, non-blocking write of the first frame, send. No lock and no hop to another thread | Final evaluation, then an uncork request |
+| Commit section | One synchronous function on the thread that owns both the evaluation and libpulse: readiness re-check, final evaluation, non-blocking write of the first frame. No lock, no hop to another thread, and no mainloop iteration inside it, so no libpulse callback runs between evaluation and write. Sending to the server is a separate postcommit phase | Final evaluation, then an uncork request |
 | Final evaluation not `valid` | Nothing was handed over; nothing to undo | Staged PCM must be destroyed in another process, by asynchronous commands |
 | Fits I7 as written | Yes | No |
 | Latency after commit | Transport of the frame plus server start | Start only |
@@ -323,8 +323,10 @@ A missing or invalid item is `unproven`. It is never filled from another row.
 - **Before commit.** Revocation or cancellation means zero output. With Z1
   unused this is a fact about worker memory.
 - **After commit.** The commit is not rolled back. A stop means no further PCM
-  is released; audio already in the server may still play, bounded by the buffer
-  fill at the stop, and the receipt reports what left.
+  is released. Audio already handed over may still play: what is unread in the
+  stream buffer, and what was already read into the sink path. No bound on the
+  second is known, so no bound on post-stop output is claimed; the receipt
+  reports what left.
 
 ### What the spike must falsify
 
@@ -516,7 +518,7 @@ Tracking only. Each is its own review; none implies the next.
 | --- | --- | --- |
 | 1 | ADR revised with five rulings and three corrections | Direction accepted conditionally on r2; revision 3 awaiting review |
 | 2 | State machine, ownership, authority, revoked and consumed transitions fixed | Fallback entries and silence added in revision 3, awaiting review |
-| 3 | Writer spike protocol with pre-registered thresholds | Protocol revision 3, awaiting review |
+| 3 | Writer spike protocol with pre-registered thresholds | Protocol revision 4, awaiting review |
 | 4 | Offline writer spike, no meeting, no provider | **Not authorized** until gate 3 passes |
 | 5 | Contract diff against #205 reviewed separately | Not started |
 | 6 | NCA-01–27 and NCT-01–12 proven under the approved amendment | Not started |
