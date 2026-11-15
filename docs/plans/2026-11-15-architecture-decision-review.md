@@ -1,6 +1,6 @@
 # Architecture Decision Review — preparation, physical writer, typed visual claims
 
-Status: **REVISION 2 — DIRECTION RULED, CONTENT NOT YET APPROVED, NOTHING IMPLEMENTED.**
+Status: **REVISION 3 — DIRECTION ACCEPTED CONDITIONALLY, SPIKE NOT AUTHORIZED, NOTHING IMPLEMENTED.**
 
 This review answers the CHANGES REQUIRED decision on the stack #206–#217. It
 contains three decision records, one state machine and one threat model. It
@@ -8,15 +8,18 @@ changes no runtime behavior and no contract text. #205 stays authoritative;
 PublicationContext stays OFF; Phase 5B NO-GO; provider requests 0; provider
 spend US$0.
 
-Revision 2 applies the co-founder ruling of 2026-11-15 (five rulings, three
-corrections). That ruling was given on a summary, before this file was readable
-on the remote, so it fixes direction and not the wording below.
+Revision 2 applied the first co-founder ruling (five rulings, three
+corrections). Revision 3 applies the verdict on commit `3d9c784c`: three P0
+findings on the writer (event ordering against corked upload, PCM crossing the
+process boundary before authorization, server indices used as proof they are
+not) and four sharpenings (timing intervals, first-frame deadline, cancellation
+before and after commit, fallback entry into the machine).
 
-| Record | Ruling | State after revision 2 | Still open |
+| Record | Verdict on r2 | State after revision 3 | Still open |
 | --- | --- | --- | --- |
-| ADR-1 Preparation and publication | Conditional approval of option A | Five invariants written as contract wording for separate review | Contract diff review; local engine evaluation |
-| ADR-2 Physical writer | Spike only. No design selected, no V6 claim | Candidates and falsification conditions; protocol in `2026-11-15-writer-spike-protocol.md` | Whether any client design can prevent late output (section "What the spike must falsify") |
-| ADR-3 Typed visual claims | Conditional approval | Mandatory evidence reference, single matcher, complete-response admission | Real proposal availability, unmeasured |
+| ADR-1 Preparation and publication | Design direction accepted | Unchanged in substance; silence terminology corrected | Contract amendment review; local engine evaluation |
+| ADR-2 Physical writer | Spike protocol not approved | PCM zones, two variants, evidence sources corrected; protocol revised in `2026-11-15-writer-spike-protocol.md` | Protocol review; then whether any client design can prevent late output |
+| ADR-3 Typed visual claims | Design direction accepted | Unchanged | Latency cost and real proposal availability, both unmeasured |
 
 ## Findings from the source that shape the decisions
 
@@ -42,11 +45,18 @@ needs another transition changes this diagram first.
 ```mermaid
 stateDiagram-v2
     [*] --> Proposed: complete response validated (ADR-3)
+    [*] --> HistoricalCandidate: a current attempt of this claim ended without audio
+    [*] --> AbstentionCandidate: a claim of this turn has no statement
     Proposed --> Unsupported: evidence ref unresolved, or L2–L11
     Proposed --> Verified: evidence resolved + deterministic support (L1)
+    HistoricalCandidate --> HistoricalRefused: any of H1–H6 fails
+    HistoricalCandidate --> Verified: same claim and evidence, support re-confirmed, H1–H6 hold
+    AbstentionCandidate --> Silent: an abstention was already spoken this turn
+    AbstentionCandidate --> Rendered: catalog entry selected (AB1–AB3), audio must be prepared
+    AbstentionCandidate --> Prepared: catalog entry selected, lawful existing audio sealed to entry and version
     Verified --> Unrenderable: no pattern / field refusal / provenance mismatch
     Verified --> Rendered: pattern + G1–G8 on validated provenance
-    Rendered --> Ungranted: authority absent or refuses
+    Rendered --> Silent: no authorized synthesis path (Y4)
     Rendered --> Granted: grant issued for this attempt and text
     Granted --> GrantVoid: revoked or expired before use
     Granted --> Preparing: grant consumed at synthesizer entry
@@ -63,8 +73,9 @@ stateDiagram-v2
     Committed --> WrittenUnproven: output not prevented, or an instant missing (V4, V5)
     Committed --> Written: output proven within bound (V1)
     Unsupported --> [*]
+    HistoricalRefused --> [*]
     Unrenderable --> [*]
-    Ungranted --> [*]
+    Silent --> [*]
     GrantVoid --> [*]
     PrepAbandoned --> [*]
     Prevented --> [*]
@@ -74,19 +85,38 @@ stateDiagram-v2
     Written --> [*]
 ```
 
-A response that fails validation creates no attempt (ADR-3). A retry or a
-fallback (historical statement, abstention) is a **new attempt** entering at
-`Rendered` with its own publication ID and its own grant. It never resumes
-another attempt.
+A response that fails validation creates no attempt (ADR-3).
+
+**Fallback is a new attempt with its own entry.** It has its own publication ID
+and its own grant, links the attempt it replaces, and never resumes it.
+
+| Entry | Precondition, checked by the runtime before the attempt exists | Then |
+| --- | --- | --- |
+| `HistoricalCandidate` | The replaced attempt carries verified provenance for the same claim and evidence; its end reason is one H5 allows; no reason excluded by H6 | Support is re-confirmed by the one matcher and H1–H6 are checked. Only then `Verified`, rendered with the historical pattern. H1–H6 are checked again at the attempt's own commit, as the contract requires |
+| `AbstentionCandidate` | No historical statement is available for the claim; the catalog condition (AB1, AB2 or AB3) is derived from the look status, never from the model | Entry and version are selected. Existing lawful audio goes to `Prepared`, sealed to entry and version; otherwise `Rendered`, needing a grant like any statement |
+| retry | The earlier attempt ended in `PrepAbandoned` before commit | A new attempt at `Rendered` with a new grant |
+
+**Silence is not abstention.** `Silent` is a terminal state: nothing is
+prepared, nothing is written, and the journal records `synthesis_unavailable`
+(or that an abstention was already spoken) with the statement that would have
+been said. An abstention is spoken only when its attempt reaches `Written`.
+With no local engine and no lawful catalog audio, every visual turn ends in
+journaled silence.
+
+**No staged state.** In this machine PCM stays in worker memory through
+`Prepared` and `WriterReady` and first leaves the worker in the `Committed`
+transition. Holding PCM in the audio server before the final evaluation is not a
+state here; ADR-2 explains why and what would have to be reviewed to add one.
 
 **Ownership.** One component performs each transition; nothing else may.
 
 | Transitions | Owner | Notes |
 | --- | --- | --- |
 | into `Proposed` | reply planner | Only from a complete, validated structured response |
+| into and out of `HistoricalCandidate`, `AbstentionCandidate` | visual turn | Derives preconditions from recorded outcomes and look status only |
 | `Proposed →` `Verified` / `Unsupported` | the one matcher (`foundation.claims`) | Sole producer of provenance |
 | `Verified →` `Rendered` / `Unrenderable` | renderer | Validates provenance, never produces it |
-| `Rendered →` `Granted` / `Ungranted`; `Granted → GrantVoid` | preparation authority | Sole issuer and sole revoker |
+| `Rendered →` `Granted` / `Silent`; `Granted → GrantVoid` | preparation authority | Sole issuer and sole revoker |
 | `Granted → Preparing`, `Preparing →` any | synthesis engine | Consumes the grant before the synthesizer is entered |
 | `Prepared →` any, `WriterReady →` any | playback engine | Sole caller of the final evaluation |
 | `Committed →` any | writer, reported through the receipt | Sole source of output instants |
@@ -168,8 +198,9 @@ The first row is the proof. The others are defence in depth.
 - Requirements to evaluate: EN and ID; hard preparation timeout 2 s; p95 target
   ≤ 1 s (both initial experiment targets, not benchmark results and not contract
   values); memory and CPU limits set on the container.
-- With the engine absent the machine takes `Rendered → Ungranted` and the turn
-  abstains. Nothing else in the product depends on it, Decision Memory included.
+- With the engine absent the machine takes `Rendered → Silent`: journaled
+  silence, not a spoken abstention. Nothing else in the product depends on the
+  engine, Decision Memory included.
 - No engine is selected here. Candidates, licences and EN/ID quality are an
   evaluation of their own.
 
@@ -217,34 +248,78 @@ Status: **no design selected.** The ruling authorizes an offline spike of the
 libpulse asynchronous API and nothing else. Guard band plus honest
 classification is **not** accepted as satisfying V2.
 
-### Four events, four fields
+### Where PCM is, and what authorizes it to be there
 
-`first_written_at` keeps its contract meaning and is not reassigned. The writer
-records these separately; which one satisfies V1 is decided in contract review.
+Revision 2 proposed uploading PCM to the server while the stream is corked,
+then evaluating and uncorking. That put PCM in another process before the final
+evaluation and relied on the server's cork state to keep it silent. Cork is a
+playback control, not an authorization. It is withdrawn as the candidate design.
 
-| Field | Event | Kind of evidence |
+| Zone | Where the PCM is | What may put it there | What keeps it from being heard |
+| --- | --- | --- | --- |
+| Z0 Prepared | Worker memory only | A consumed preparation grant | It has not left the process. Provable inside the runtime |
+| Z1 Staged | Audio server buffer, playback not permitted | Nothing in #205. I7 makes the handoff part of the commit, so a handoff before the final evaluation is outside the contract as written | Only the server's cork state, which the runtime does not own |
+| Z2 Released | On its way to the sink | A final evaluation that returned `valid`, in the same non-suspending section | Nothing; this is output |
+
+**Rule for this review:** current-scope PCM goes from Z0 to Z2. Z1 is not used.
+Using it would need a contract review of I7 and a proof that staged audio can
+never play without a commit, across server restart, delayed commands and
+release ordering. No such proof is known.
+
+### Variants of the asynchronous writer
+
+| | W-A2 — release is the write | W-A1 — stage, then release |
 | --- | --- | --- |
-| `first_enqueued_at` | PCM entered the client-side queue | Local fact |
-| `first_server_accepted_at` | The audio API accepted the data | Server-reported index, received later: an upper bound on the event time |
-| `first_sink_consumed_at` | The sink took the first sample | Only if a non-interpolated server index shows it. Otherwise absent, and the attempt is `unproven` |
-| `first_output_observed_at` | The sample appeared on the output path | Independent observer: a recorder on `agent_output.monitor`, never the writer's own bookkeeping |
+| Before the final evaluation | Stream connected, running, empty. No PCM outside the worker | First frame uploaded to a corked stream (Z1) |
+| Commit section | Final evaluation, then a non-blocking write of the first frame after a writable-size check | Final evaluation, then an uncork request |
+| Final evaluation not `valid` | Nothing was handed over; nothing to undo | Staged PCM must be destroyed in another process, by asynchronous commands |
+| Fits I7 as written | Yes | No |
+| Latency after commit | Transport of the frame plus server start | Start only |
+| Standing | **Candidate** | Characterization arm in the spike only; cannot be put forward for V6 |
 
-Interpolated time and latency values are estimates and are not evidence for any
-field. A missing field is `unproven`, never filled from another.
+W-A1 is measured because its latency advantage is the reason it was proposed,
+and the cost of giving it up should be a number.
 
-Proposed for contract review: V1 is evaluated at `first_sink_consumed_at` at the
-weakest, with `first_output_observed_at` as the confirming observation where the
-observer runs.
+### Events and what counts as evidence for each
+
+`first_written_at` keeps its contract meaning. No field below is renamed to it
+or mapped onto it here; which event satisfies V1 is for contract review. The
+revision 2 proposal to evaluate V1 at a read-index event is withdrawn.
+
+| Event | Evidence accepted | Not evidence |
+| --- | --- | --- |
+| Client enqueue | The write call returned success. A local fact | — |
+| Server acceptance | A server-originated signal that can only follow the write: the reply to a command issued after it on the same ordered connection, or the server's playback-started notification. Each is a hypothesis until the spike validates it against the independent observer and against a stopped daemon | The local `write_index`. The client library advances it at the write call, before any server confirmation |
+| Buffer read | A timing snapshot requested after the release, not flagged corrupt, whose read index is past the clip start. It shows the stream buffer was read | Interpolated time or latency. A read index is not sink output: latency remains downstream of it |
+| Sink output | An independent recorder on `agent_output.monitor` identifying the clip's own samples, reported as a time interval with measured uncertainty | The writer's own bookkeeping, or any of the rows above |
+
+A missing or invalid item is `unproven`. It is never filled from another row.
 
 ### Candidates
 
-| | W-A — libpulse asynchronous stream | W-B — worker around the blocking API | W-C — non-blocking FIFO handoff |
+| | W-A2 — libpulse asynchronous stream | W-B — worker around the blocking API | W-C — non-blocking FIFO handoff |
 | --- | --- | --- | --- |
 | Blocking write | Reported, not waited on (to be shown) | Occurs; not interruptible | `EAGAIN` |
-| Acceptance point | Corked upload, then evaluate and uncork | A queue, not the device | Kernel pipe |
-| Stop after deadline | Cork and flush are asynchronous commands | Kill the worker | Nothing beyond the pipe buffer |
-| Observes sink consumption | Possibly, by server index | No | No |
-| Status | **Spike authorized** | **Rejected for V6** (F4) | Spiked only if it offers a more controllable boundary; a FIFO is not by itself bounded physical output |
+| Acceptance point | Non-blocking write inside the commit section | A queue, not the device | Kernel pipe |
+| Stop after deadline | Flush and cork are asynchronous commands | Kill the worker | Nothing beyond the pipe buffer |
+| Evidence of output | Monitor observation only | None | None |
+| Status | Spike **not yet authorized**; protocol under review | **Rejected for V6** (F4) | Spiked only if it offers a more controllable boundary; a FIFO is not by itself bounded physical output |
+
+### Deadlines and stops
+
+- **First frame.** V1 bounds the first successful write against the final
+  evaluation and the sample's freshness. That is the only output deadline in
+  #205. A clip whose first sample did not meet it must produce no sample at all
+  (V2, V3).
+- **Rest of the clip.** No deadline in #205: after the commit the decision
+  stands and later evidence is post-commit. A per-frame freshness bound would be
+  a new design requirement. It is not proposed here; continuation timing is
+  recorded for information.
+- **Before commit.** Revocation or cancellation means zero output. With Z1
+  unused this is a fact about worker memory.
+- **After commit.** The commit is not rolled back. A stop means no further PCM
+  is released; audio already in the server may still play, bounded by the buffer
+  fill at the stop, and the receipt reports what left.
 
 ### What the spike must falsify
 
@@ -263,8 +338,9 @@ stalls after the handoff and resumes after the deadline, the client's stop
 request is one more queued command with no ordering guarantee against the
 render thread. On this reasoning **no client-only design can make late sink
 consumption impossible**; it can only bound how much audio is exposed and detect
-it. The spike is expected to confirm this for W-A under a stalled daemon. If it
-does, the consequences are already ruled:
+it. This is a hypothesis, not a result. The spike is expected to confirm it for
+both variants under a stalled daemon. If it does, the consequences are already
+ruled:
 
 1. V6 stays NO-GO at the sink-consumption boundary for W-A.
 2. W-C is examined only for a boundary where the deadline is enforced by the
@@ -418,7 +494,8 @@ ordering. Everything else below is untrusted.
 | T7 | Stale or foreign artifact | Old audio published as current | Sealed tuple derived again and compared at `WriterReady` | ADR-1 |
 | T8 | Cancellation, barge-in, timeout, revocation | Unaccounted audio or work | One terminal state per attempt (M1, M8) | ADR-1, ADR-2 |
 | T9 | Stalled or blocking audio server | Stale audio after the allowance | **Open.** No accepted control; see ADR-2 | ADR-2 |
-| T10 | Missing, estimated or foreign-clock instants | A fresh verdict without proof | Four separate fields; missing means unproven (V5) | ADR-2 |
+| T10 | Missing, estimated or foreign-clock instants; indices the client updates itself | A fresh verdict without proof | Evidence accepted per event only from the named source; missing means unproven (V5) | ADR-2 |
+| T12 | PCM held in the audio server before authorization | Audio heard without a commit after restart, delayed or misordered commands | Z1 not used; PCM leaves the worker only inside the commit | ADR-2 |
 | T11 | Prepared audio holding sensitive screen values | Persistence or egress | Transient; engine has no egress; released at terminal state | ADR-1 |
 
 Not defended, by decision: a malicious change to runtime code in the worker
@@ -431,10 +508,10 @@ Tracking only. Each is its own review; none implies the next.
 
 | # | Gate | State |
 | --- | --- | --- |
-| 1 | ADR revised with five rulings and three corrections | This revision, awaiting review |
-| 2 | State machine, ownership, authority, revoked and consumed transitions fixed | In this revision, awaiting review |
-| 3 | Writer spike protocol with pre-registered thresholds | `2026-11-15-writer-spike-protocol.md`, awaiting review |
-| 4 | Offline writer spike, no meeting, no provider | Not started |
+| 1 | ADR revised with five rulings and three corrections | Direction accepted conditionally on r2; revision 3 awaiting review |
+| 2 | State machine, ownership, authority, revoked and consumed transitions fixed | Fallback entries and silence added in revision 3, awaiting review |
+| 3 | Writer spike protocol with pre-registered thresholds | Revision 2 of the protocol, awaiting review |
+| 4 | Offline writer spike, no meeting, no provider | **Not authorized** until gate 3 passes |
 | 5 | Contract diff against #205 reviewed separately | Not started |
 | 6 | NCA-01–27 and NCT-01–12 proven under the approved amendment | Not started |
 | 7 | Cumulative regression, provenance audit, end-to-end product evaluation | Not started |
