@@ -266,6 +266,7 @@ class MeetingTimeline:
         self.camera_frames = CameraFrameStore()
         self.samples = self.camera_frames.samples
         self._latest_keyframes: dict[str, Keyframe] = {}
+        self._latest_presenters: dict[str, ParticipantRef | None] = {}
         self._analyzed: OrderedDict[str, ContentSample] = OrderedDict()
 
     @property
@@ -278,6 +279,9 @@ class MeetingTimeline:
 
     def latest_keyframe(self, segment: ScreenSegment) -> Keyframe:
         return self._latest_keyframes.get(segment.ref, segment.keyframe)
+
+    def latest_presenter(self, segment: ScreenSegment) -> ParticipantRef | None:
+        return self._latest_presenters.get(segment.ref, segment.presenter)
 
     def analyzed_sample(self, ref: SnapshotRef) -> ContentSample | None:
         if ref.source == "screen":
@@ -361,6 +365,7 @@ class MeetingTimeline:
             and compare_screens(current.keyframe, keyframe) != "distinct"
         ):
             self._latest_keyframes[current.ref] = keyframe
+            self._latest_presenters[current.ref] = presenter
             shown = ScreenShown(segment=current, change="same", arrival=keyframe)
             self._emit(shown)
             return shown
@@ -389,6 +394,7 @@ class MeetingTimeline:
         state.screens[segment.ref] = segment
         state.current_ref = segment.ref
         self._latest_keyframes[segment.ref] = keyframe
+        self._latest_presenters[segment.ref] = presenter
         self._journal.record(
             "screen_captured",
             source="perception",

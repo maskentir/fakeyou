@@ -15,6 +15,7 @@ from fakeyou.foundation.content_digest import ContentSample, MatchLevel
 EvidenceSource = Literal["camera", "screen"]
 PublicationValidity = Literal["valid", "invalid", "unknown"]
 AgeState = Literal["fresh", "uncertain", "old"]
+Dependence = Literal["content", "source", "subject"]
 CAPTURE_FRESHNESS_SECONDS = 5.0
 VALIDATION_AGE_SECONDS = 0.25
 MAX_CLOCK_UNCERTAINTY_SECONDS = 0.05
@@ -101,6 +102,7 @@ class SentenceBinding:
     scope: str
     state: StateProvenance | None = None
     abstention: AbstentionRef | None = None
+    dependence: Dependence | None = None
 
     def __post_init__(self) -> None:
         _validate_sentence_identity(self)
@@ -189,6 +191,8 @@ class Validation:
     match: MatchLevel | None = None
     confirmation: ContentSample | None = None
     source_stopped: bool = False
+    source_changed: bool = False
+    subject_changed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -292,7 +296,9 @@ def decide_visual_publication(
     if not _finite(at):
         return PublicationDecision("unknown", "invalid_check_time", None, clock_domain)
     decisions = [
-        _evidence_decision(item, validations.get(item.kind), at, clock_domain)
+        _evidence_decision(
+            item, validations.get(item.kind), at, clock_domain, _dependence(binding, item)
+        )
         for item in binding.evidence
     ]
     basis = tuple(_basis(item, validations.get(item.kind), at) for item in binding.evidence)
@@ -338,8 +344,20 @@ def evaluate_state_publication(
     return PublicationDecision("valid", "ok", checked_at, clock_domain)
 
 
+def _dependence(binding: SentenceBinding, evidence: EvidenceBinding) -> Dependence:
+    if evidence.snapshot is not None and evidence.snapshot.source == "camera":
+        return "subject"
+    if evidence.kind != "screen":
+        return "subject"
+    return "content" if binding.dependence == "content" else "source"
+
+
 def _evidence_decision(
-    evidence: EvidenceBinding, validation: Validation | None, at: float, clock_domain: str
+    evidence: EvidenceBinding,
+    validation: Validation | None,
+    at: float,
+    clock_domain: str,
+    dependence: Dependence,
 ) -> PublicationDecision:
     if validation is None:
         return _unknown("validation_missing", at, clock_domain)
@@ -348,11 +366,25 @@ def _evidence_decision(
         or _snapshot_decision(evidence, at, clock_domain)
         or _validation_decision(validation, evidence, at, clock_domain)
         or _continuity_decision(validation, evidence, at, clock_domain)
+        or _camera_age_decision(validation, evidence, at, clock_domain)
         or _content_decision(validation.match, at, clock_domain)
     )
     if stopped is not None:
         return stopped
-    return _freshness_decision(evidence, validation, at, clock_domain)
+    return _freshness_decision(evidence, validation, (at, clock_domain), dependence)
+
+
+def _camera_age_decision(
+    validation: Validation, evidence: EvidenceBinding, at: float, clock_domain: str
+) -> PublicationDecision | None:
+    camera = evidence.snapshot is not None and evidence.snapshot.source == "camera"
+    if not camera or validation.match in (None, "exact"):
+        return None
+    captured = evidence.capture_monotonic or 0.0
+    state = _age_state(at - captured, evidence.capture_mapping_uncertainty_seconds or 0.0)
+    if state == "old":
+        return PublicationDecision("invalid", "capture_too_old", at, clock_domain)
+    return None
 
 
 def _snapshot_decision(
@@ -366,6 +398,8 @@ def _snapshot_decision(
 def _continuity_decision(
     validation: Validation, evidence: EvidenceBinding, at: float, clock_domain: str
 ) -> PublicationDecision | None:
+    if validation.subject_changed:
+        return PublicationDecision("invalid", "subject_changed", at, clock_domain)
     if validation.source_stopped:
         return PublicationDecision("invalid", "scene_changed", at, clock_domain)
     if validation.current_snapshot is None or validation.unchanged is None:
@@ -450,8 +484,12 @@ def _confirmation_decision(
 
 
 def _freshness_decision(
-    evidence: EvidenceBinding, validation: Validation, at: float, clock_domain: str
+    evidence: EvidenceBinding,
+    validation: Validation,
+    boundary: tuple[float, str],
+    dependence: Dependence,
 ) -> PublicationDecision:
+    at, clock_domain = boundary
     captured = evidence.capture_monotonic or 0.0
     state = _age_state(at - captured, evidence.capture_mapping_uncertainty_seconds or 0.0)
     reason = "ok"
@@ -466,7 +504,9 @@ def _freshness_decision(
             and analyzed is not None
             and confirmation.continuity != analyzed.continuity
         )
-        if interrupted:
+        if interrupted or validation.source_changed:
+            if dependence != "content":
+                return _unknown("source_identity_changed", at, clock_domain)
             reason = "content_confirmed_after_interruption"
         elif state != "fresh":
             reason = "continuity_confirmed"

@@ -57,13 +57,56 @@ class SceneRevalidator:
             match=_match(evidence.analyzed, latest, same_scene=same_scene),
             confirmation=latest,
             source_stopped=bound is not None and self._stopped(bound),
+            source_changed=bound is not None
+            and bound.source == "screen"
+            and self._source_changed(bound, evidence.analyzed, latest, same_scene=same_scene),
+            subject_changed=bound is not None
+            and bound.source == "camera"
+            and self._subject_changed(bound, evidence.analyzed),
         )
 
     def _stopped(self, bound: SnapshotRef) -> bool:
-        return bound.source == "screen" and (
-            self._context.timeline.samples.stopped("screen", SCREEN_SOURCE_ID)
-            or self._context.timeline.snapshot().current_screen is None
+        timeline = self._context.timeline
+        if bound.source == "screen":
+            return (
+                timeline.samples.stopped("screen", SCREEN_SOURCE_ID)
+                or timeline.snapshot().current_screen is None
+            )
+        return timeline.samples.stopped("camera", bound.subject_id) or self._context.camera_gone(
+            bound.subject_id
         )
+
+    def _source_changed(
+        self,
+        bound: SnapshotRef,
+        analyzed: ContentSample | None,
+        latest: ContentSample | None,
+        *,
+        same_scene: bool,
+    ) -> bool:
+        if not same_scene:
+            return True
+        streams = (
+            None if analyzed is None else analyzed.record.stream_id,
+            None if latest is None else latest.record.stream_id,
+        )
+        if streams[0] and streams[1] and streams[0] != streams[1]:
+            return True
+        timeline = self._context.timeline
+        segment = timeline.snapshot().screen(bound.subject_id)
+        if segment is None:
+            return True
+        first, latest_presenter = segment.presenter, timeline.latest_presenter(segment)
+        return (
+            first is not None
+            and latest_presenter is not None
+            and first.participant_id != latest_presenter.participant_id
+        )
+
+    def _subject_changed(self, bound: SnapshotRef, analyzed: ContentSample | None) -> bool:
+        stream_id = bound.stream_id if analyzed is None else analyzed.record.stream_id
+        owner = self._context.timeline.samples.subject_of_stream("camera", stream_id)
+        return owner is not None and owner != bound.subject_id
 
     def _latest(self, bound: SnapshotRef) -> ContentSample | None:
         subject = SCREEN_SOURCE_ID if bound.source == "screen" else bound.subject_id

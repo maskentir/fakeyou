@@ -541,7 +541,7 @@ async def test_end_to_end_unmapped_capture_is_prevented_unknown() -> None:
     assert result["reason"] == "capture_time_unmapped"
 
 
-async def test_end_to_end_camera_claim_with_a_lost_camera_is_prevented_unknown() -> None:
+async def test_end_to_end_camera_claim_with_a_lost_camera_is_prevented_invalid() -> None:
     turn = await ask(
         Audited(before_write=camera_goes_stale),
         "What is Budi wearing?",
@@ -551,7 +551,7 @@ async def test_end_to_end_camera_claim_with_a_lost_camera_is_prevented_unknown()
 
     result = await measured(turn, participant(heard=False), continuity_at=AFTER_SPEECH)
 
-    assert result["status"] == "prevented_unknown"
+    assert result["status"] == "prevented_invalid"
 
 
 PATHS: list[tuple[str, dict[str, Any], dict[str, Any], int]] = [

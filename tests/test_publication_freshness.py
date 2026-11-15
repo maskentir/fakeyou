@@ -7,6 +7,7 @@ import pytest
 from fakeyou.foundation.clock_mapping import LOCAL_MONOTONIC, PAGE_CLOCK, MappedInstant
 from fakeyou.foundation.content_digest import ContentSample, MatchLevel
 from fakeyou.foundation.publication import (
+    Dependence,
     EvidenceBinding,
     PublicationDecision,
     SentenceBinding,
@@ -76,7 +77,9 @@ def validated(
     return replace(validation, **changes)
 
 
-def decide(item: EvidenceBinding, validation: Validation) -> PublicationDecision:
+def decide(
+    item: EvidenceBinding, validation: Validation, dependence: Dependence | None = None
+) -> PublicationDecision:
     binding = SentenceBinding(
         "publication",
         "meeting",
@@ -86,17 +89,20 @@ def decide(item: EvidenceBinding, validation: Validation) -> PublicationDecision
         0,
         sentence_digest("Beta is 17 March 2027."),
         "gather",
-        ("screen",),
+        (item.kind,),
         (item,),
         "current",
+        dependence=dependence,
     )
     return decide_visual_publication(
-        binding, {"screen": validation}, at=AT, clock_domain=LOCAL_MONOTONIC
+        binding, {item.kind: validation}, at=AT, clock_domain=LOCAL_MONOTONIC
     )
 
 
-def outcome(item: EvidenceBinding, validation: Validation) -> tuple[str, str]:
-    decision = decide(item, validation)
+def outcome(
+    item: EvidenceBinding, validation: Validation, dependence: Dependence | None = None
+) -> tuple[str, str]:
+    decision = decide(item, validation, dependence)
     return decision.validity, decision.reason
 
 
@@ -199,10 +205,10 @@ ROWS: list[tuple[str, EvidenceBinding, Validation, tuple[str, str]]] = [
         ("unknown", "confirmation_time_inconsistent"),
     ),
     (
-        "S16",
+        "S16 for a source claim",
         evidence(OLD),
         validated("exact", sampled(99.0, sequence=4, continuity=2)),
-        ("valid", "content_confirmed_after_interruption"),
+        ("unknown", "source_identity_changed"),
     ),
     (
         "S18 with a later sample",

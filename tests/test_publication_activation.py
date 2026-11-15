@@ -449,7 +449,7 @@ async def test_camera_that_went_away_before_the_write_prevents_the_claim() -> No
         meeting, "What is Budi wearing?", needs=("participant",), reply="Budi wears grey."
     )
 
-    assert turn.meeting.prevented == "unknown:scene_continuity_unknown"
+    assert turn.meeting.prevented == "invalid:scene_changed"
 
 
 async def test_reply_without_visual_needs_is_published_under_the_composed_gate() -> None:

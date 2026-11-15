@@ -219,6 +219,16 @@ class PerceptionContext:
             return None
         return frame
 
+    def camera_gone(self, participant_id: str) -> bool:
+        frame = self.timeline.camera_frames.get(participant_id)
+        meeting = self._state() if self._state is not None else None
+        camera_on = meeting.cameras_on if meeting is not None else None
+        return (
+            frame is None
+            or (camera_on is not None and participant_id not in camera_on)
+            or frame.ref.epoch != self._camera_epoch()
+        )
+
     def _camera_live(self, participant_id: str, frame: CameraFrame) -> bool:
         meeting = self._state() if self._state is not None else None
         camera_on = meeting.cameras_on if meeting is not None else None

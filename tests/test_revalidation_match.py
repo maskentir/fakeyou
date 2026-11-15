@@ -19,6 +19,7 @@ from fakeyou.perception.timeline import (
 )
 from tests._perception_fakes import START, keyframe, slide_jpeg
 from tests.test_camera_evidence import jpeg_of
+from tests.test_publication_activation import Clock
 
 ROADMAP = slide_jpeg("Launch Timeline", ["Beta: 17 March 2027"])
 ROADMAP_EDITED = slide_jpeg("Launch Timeline", ["Beta: 18 March 2027"])
@@ -28,8 +29,9 @@ BUDGET = slide_jpeg("Budget", ["Total: 4 million"], background=(90, 20, 20))
 class Scene:
     def __init__(self) -> None:
         self.timeline = MeetingTimeline()
+        self.clock = Clock()
         self.context = PerceptionContext(
-            self.timeline, None, max_chars=6000, camera_monotonic=lambda: 100.0
+            self.timeline, None, max_chars=6000, camera_monotonic=self.clock
         )
         self.revalidate = SceneRevalidator(self.context, now=lambda: 100.0)
         self.presenter = self.timeline.participant("device-ayu", "Ayu")

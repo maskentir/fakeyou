@@ -40,6 +40,10 @@ class SampleLedger:
     revision: int = 0
     _sources: dict[SourceKey, _Source] = field(default_factory=dict)
     _history: deque[ContentSample] = field(default_factory=lambda: deque(maxlen=HISTORY_SIZE))
+    _stream_subjects: dict[tuple[DigestRole, str], str] = field(default_factory=dict)
+
+    def subject_of_stream(self, role: DigestRole, stream_id: str) -> str | None:
+        return self._stream_subjects.get((role, stream_id))
 
     def since(self, revision: int) -> tuple[ContentSample, ...]:
         return tuple(sample for sample in self._history if sample.revision > revision)
@@ -69,6 +73,8 @@ class SampleLedger:
             source.continuity += 1
         self.revision += 1
         source.stopped = False
+        if record.stream_id:
+            self._stream_subjects[record.role, record.stream_id] = record.subject_id
         source.latest = self._sample(source, record, captured_at, capture, consistent=consistent)
         self._history.append(source.latest)
         return Ingested("accepted" if consistent else "inconsistent_time", source.latest)
