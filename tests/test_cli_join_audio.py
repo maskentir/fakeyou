@@ -29,6 +29,7 @@ from fakeyou.persistence.record import (
     meeting_record_path,
 )
 from fakeyou.speech.contract import PreparedSpeech
+from tests._audio_fakes import written
 from tests._cli_support import AudioJoin
 from tests._error_support import message_pattern
 from tests._prepared_support import FakePreparedSpeech
@@ -317,7 +318,7 @@ async def test_join_playback_events_are_journaled_and_finished_speech_recorded(
         handler(PlaybackEvent("playback_finished", "Hmm…", "", cue=True))
         handler(PlaybackEvent("playback_started", "hello", "", utterance=Utterance("t7", 0)))
         handler(PlaybackEvent("playback_dropped", "cut off", "interrupted"))
-        handler(PlaybackEvent("playback_finished", "hello?  ", ""))
+        handler(written(PlaybackEvent("playback_finished", "hello?  ", "")))
         return SessionResult(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
 
     session_run.effect = run
@@ -372,9 +373,9 @@ async def test_join_records_a_sentence_cut_off_mid_playback_and_skips_queued_one
         del config
         handler = kwargs["open_audio"].keywords["callbacks"].on_playback_event
         handler(PlaybackEvent("playback_started", "First part.", ""))
-        handler(PlaybackEvent("playback_finished", "First part.", ""))
+        handler(written(PlaybackEvent("playback_finished", "First part.", "")))
         handler(PlaybackEvent("playback_started", "Second part is long.", ""))
-        handler(PlaybackEvent("playback_dropped", "Second part is long.", "interrupted"))
+        handler(written(PlaybackEvent("playback_dropped", "Second part is long.", "interrupted")))
         handler(PlaybackEvent("playback_dropped", "Never started.", "interrupted"))
         return SessionResult(phase="ended", terminal_reason="stopped_by_owner", detail="ok")
 
