@@ -18,6 +18,7 @@ from fakeyou.audio.commit import (
     DeadlineWriter,
     WriteWithheld,
 )
+from fakeyou.foundation.abstention import abstention_digest, abstention_refusal
 from fakeyou.foundation.invariants import PLAYBACK_SAMPLE_RATE
 from fakeyou.foundation.pcm import PCM16_SAMPLE_BYTES, VoicedClip, voiced_clip
 from fakeyou.foundation.protocols import SupportsAclose
@@ -459,6 +460,9 @@ class PlaybackEngine:
     def bind_publication(self, prepared: PreparedSpeech, binding: SentenceBinding) -> None:
         if binding.sentence_hash != sentence_digest(prepared.text):
             raise ValueError("publication sentence hash does not match prepared speech")
+        abstention = binding.abstention
+        if abstention is not None and abstention.text_digest != abstention_digest(prepared.text):
+            raise ValueError("publication abstention digest does not match prepared speech")
         if binding.sentence_index != prepared.sentence_index:
             raise ValueError("publication sentence index does not match prepared speech")
         if binding.transcript_id != prepared.transcript_id:
@@ -968,6 +972,9 @@ class PlaybackEngine:
                     "valid", "declared_no_visual", context.now(), context.clock_domain
                 )
             return None
+        refused = abstention_refusal(binding.abstention, binding.scope)
+        if refused is not None:
+            return PublicationDecision("unknown", refused, context.now(), context.clock_domain)
         gate = context.gate
         if gate is None:
             if binding.scope in ("historical", "no_visual"):

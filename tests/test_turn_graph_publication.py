@@ -122,6 +122,7 @@ def provenance(kind: str) -> EvidenceBinding:
         provider="fake",
         provider_attempt_id="provider-1",
         inference="inference",
+        status="produced",
         capture_monotonic=98.0,
         capture_clock_domain="utc",
         capture_mapping_clock_domain="test",

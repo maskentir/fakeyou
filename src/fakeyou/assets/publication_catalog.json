@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "abstentions": {
+    "AB1": {
+      "scope": "no_visual",
+      "text": {
+        "en": "I don't have enough reliable information to answer that.",
+        "id": "Saya belum punya informasi yang cukup andal untuk menjawabnya."
+      }
+    },
+    "AB2": {
+      "scope": "historical",
+      "text": {
+        "en": "I couldn't determine that from the frame I checked.",
+        "id": "Saya tidak bisa memastikan itu dari gambar yang saya periksa."
+      }
+    },
+    "AB3": {
+      "scope": "no_visual",
+      "text": {
+        "en": "I couldn't inspect the visual information needed to answer.",
+        "id": "Saya tidak bisa memeriksa informasi visual yang diperlukan untuk menjawabnya."
+      }
+    }
+  }
+}

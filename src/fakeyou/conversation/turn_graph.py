@@ -68,6 +68,12 @@ from fakeyou.conversation.turn_recovery import (
     turn_request_id,
     within_sentence_budget,
 )
+from fakeyou.conversation.visual_speech import (
+    RuntimeSpeech,
+    StatementSpeaker,
+    TurnIdentity,
+    produced,
+)
 from fakeyou.foundation.gathered_evidence import GatheredEvidence
 from fakeyou.foundation.language import spoken_language
 from fakeyou.foundation.participation import ParticipationContext
@@ -693,6 +699,38 @@ class TurnSink:
             self._queued = True
         return prepared
 
+    def runtime_speech(self, language: str | None) -> RuntimeSpeech | None:
+        speaker = self._runtime.speaker
+        if not isinstance(speaker, StatementSpeaker) or self._scope is None:
+            return None
+        context = speaker.publication_context
+        if context is None or not self._publication_needs:
+            return None
+        return RuntimeSpeech(
+            speaker,
+            context,
+            TurnIdentity(self._transcript_id, self._scope.request_id, language),
+            self._take_index,
+            self._runtime.journal,
+        )
+
+    def _take_index(self) -> int:
+        index = self._offered
+        self._offered += 1
+        return index
+
+    async def abstain_without_a_produced_look(self, language: str | None) -> bool:
+        speech = self.runtime_speech(language)
+        if speech is None or produced(self._publication_evidence, self._publication_needs):
+            return False
+        self._started = True
+        _raise_if_failed(self._runtime)
+        spoken = await speech.abstain(
+            self._publication_evidence, self._publication_needs, reason="look_not_produced"
+        )
+        self._spoken += int(spoken)
+        return True
+
     def _bind_publication(self, prepared: PreparedSpeech, sentence_index: int) -> None:
         speaker = self._runtime.speaker
         if not isinstance(speaker, PublicationSpeaker):
@@ -1235,6 +1273,15 @@ async def _speak_reply(
                 _turn_responder(runtime, reply_batch, hook, request_id) if streamed else None
             )
         sink.bind_reply(reply_batch[-1] if draft is None else reply_event)
+        if await sink.abstain_without_a_produced_look(_reply_language(runtime)):
+            _finish_turn(
+                runtime,
+                {"completed": True, "delivered": (ABSTAINED,)},
+                final.id,
+                generations,
+                streamed=streamed,
+            )
+            return
         context = replace(
             _speech_context(runtime, sink, scope, generations, final.id),
             responder=responder,
@@ -1265,6 +1312,13 @@ async def _speak_reply(
             )
     _raise_reply_failure(output)
     _finish_turn(runtime, output, final.id, generations, streamed=streamed)
+
+
+ABSTAINED = "abstained"
+
+
+def _reply_language(runtime: TurnContext) -> str | None:
+    return runtime.sentences.language if runtime.sentences is not None else None
 
 
 def _start_cue(runtime: TurnContext, turn: CueTurn) -> asyncio.Task[None] | None:

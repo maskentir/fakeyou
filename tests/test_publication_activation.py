@@ -4,7 +4,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
-from typing import override
+from typing import TypedDict, Unpack, override
 
 import pytest
 
@@ -248,6 +248,12 @@ class Meeting(FakeSession):
 class Turn:
     meeting: Meeting
     counted: list[PlaybackReceipt]
+    replier: FakeReplier
+
+
+class Spoken(TypedDict, total=False):
+    reply: str
+    language: str
 
 
 async def ask(
@@ -256,8 +262,11 @@ async def ask(
     *,
     needs: tuple[EvidenceNeed, ...] = (),
     state_question: StateQuestion | None = None,
-    reply: str = "Beta is on 17 March 2027.",
+    **spoken: Unpack[Spoken],
 ) -> Turn:
+    reply = spoken.get("reply", "Beta is on 17 March 2027.")
+    language = spoken.get("language", "en")
+
     def planning(event: TranscriptEvent, reading: Reading, channel: Channel) -> PlannedTurn:
         del reading, channel
         if state_question is not None:
@@ -281,14 +290,14 @@ async def ask(
         ActorWiring(
             journal=FakeJournal(),
             responder=ModelResponder(
-                chunks=unused_chunks, phase=ToolPhaseState(), max_sentences=3, language="en"
+                chunks=unused_chunks, phase=ToolPhaseState(), max_sentences=3, language=language
             ),
         ),
     )
     actor.configure_reply(
         ReplyOptions(
             whole_turn=lambda events, hook: ReplierWholeResponder(replier, events, hook),
-            sentences=SentenceLimits(max_sentences=2, language="en"),
+            sentences=SentenceLimits(max_sentences=2, language=language),
         )
     )
     counted: list[PlaybackReceipt] = []
@@ -304,7 +313,7 @@ async def ask(
     finally:
         await actor.close()
         await meeting.engine.close()
-    return Turn(meeting, counted)
+    return Turn(meeting, counted, replier)
 
 
 async def test_fresh_supported_screen_claim_is_published_and_counted() -> None:
@@ -361,7 +370,7 @@ async def test_slow_reply_without_a_confirmation_sample_is_prevented() -> None:
 
 
 @pytest.mark.parametrize("verdict", ["not_visible", "unclear"])
-async def test_finding_reply_after_an_abstaining_look_is_prevented(
+async def test_reply_after_an_abstaining_look_is_the_catalog_abstention(
     verdict: VisualVerdict,
 ) -> None:
     meeting = Meeting(inspections=(VisualInspection(verdict=verdict),))
@@ -372,8 +381,14 @@ async def test_finding_reply_after_an_abstaining_look_is_prevented(
 
     [binding] = turn.meeting.bindings
     assert binding.evidence[0].status == "insufficient"
-    assert turn.meeting.prevented == "unknown:validation_support_unknown"
-    assert turn.counted == []
+    assert binding.scope == "historical"
+    assert binding.abstention is not None
+    assert binding.abstention.entry_id == "AB2"
+    assert [item.text for item in turn.meeting.settled] == [
+        "I couldn't determine that from the frame I checked."
+    ]
+    assert [item.outcome for item in turn.meeting.settled] == ["completed"]
+    assert len(turn.counted) == 1
 
 
 def show_budget(meeting: Meeting) -> None:

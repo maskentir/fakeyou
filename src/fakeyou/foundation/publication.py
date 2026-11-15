@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Literal
 
+from fakeyou.foundation.abstention import AbstentionRef, abstention_refusal
 from fakeyou.foundation.clock import monotonic
 from fakeyou.foundation.content_digest import ContentSample, MatchLevel
 
@@ -99,6 +100,7 @@ class SentenceBinding:
     evidence: tuple[EvidenceBinding, ...]
     scope: str
     state: StateProvenance | None = None
+    abstention: AbstentionRef | None = None
 
     def __post_init__(self) -> None:
         _validate_sentence_identity(self)
@@ -127,6 +129,8 @@ def _validate_sentence_identity(binding: SentenceBinding) -> None:
 def _validate_sentence_scope(binding: SentenceBinding) -> None:
     if binding.scope not in {"current", "historical", "no_visual", "state"}:
         raise ValueError("unknown publication scope")
+    if binding.abstention is not None and binding.scope not in {"historical", "no_visual"}:
+        raise ValueError("an abstention is epistemic or historical, never a current claim")
     if len(set(binding.required_kinds)) != len(binding.required_kinds):
         raise ValueError("required visual kinds must be unique")
     kinds = [item.kind for item in binding.evidence]
@@ -278,6 +282,9 @@ def decide_visual_publication(
     at: float,
     clock_domain: str,
 ) -> PublicationDecision:
+    refused = abstention_refusal(binding.abstention, binding.scope)
+    if refused is not None:
+        return _unknown(refused, at, clock_domain)
     if binding.scope in {"no_visual", "historical"}:
         return PublicationDecision("valid", "ok", None, clock_domain)
     if binding.scope == "state":
