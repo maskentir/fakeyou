@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, Unpack
 
@@ -141,6 +142,12 @@ def _standing_gap(consent: ParticipantConsent) -> ParticipantGap | None:
         return consent.gap(0.0, 0.0)
     if consent.scope != AUDIO_MEASUREMENT_SCOPE:
         return "participant_consent_scope_mismatch"
+    granted_at = consent.granted_at
+    if granted_at is None or not math.isfinite(granted_at):
+        return "participant_consent_not_in_force"
+    revoked_at = consent.revoked_at
+    if revoked_at is not None and not revoked_at > granted_at:
+        return "participant_consent_revoked"
     return None
 
 
@@ -164,7 +171,9 @@ def measure_participant_publication(
     **options: Unpack[MeasurementOptions],
 ) -> dict[str, Any]:
     observation = observe_participant(binding, observer)
-    options.setdefault("local_write_observed", local_write_observed(receipt, binding))
+    written = local_write_observed(receipt, binding)
+    if written is not None:
+        options["local_write_observed"] = written
     result = measure_publication(
         binding,
         observation.publication,

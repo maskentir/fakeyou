@@ -7,9 +7,11 @@ import pytest
 
 from fakeyou.audio.playback import (
     BYTES_PER_SECOND,
+    FADE_BYTES,
     FRAME_BYTES,
     PlaybackEngine,
     PlaybackEvent,
+    PlaybackEventKind,
 )
 from fakeyou.conversation.actor import ActorWiring, FloorActor
 from fakeyou.conversation.turn_graph import build_turn_graph
@@ -267,6 +269,57 @@ async def test_barge_in_after_partial_pcm_reports_the_partial_duration() -> None
         await playback.engine.close()
 
 
+async def test_superseded_clip_reports_only_the_faded_bytes_actually_written() -> None:
+    playback = Playback(writer=StallingWriter(1))
+    speaking = asyncio.create_task(playback.engine.speak("A long sentence that gets cut."))
+    try:
+        assert isinstance(playback.writer, StallingWriter)
+        await playback.writer.stalled.wait()
+        stopping = asyncio.create_task(playback.engine.stop())
+        await asyncio.sleep(0)
+        playback.writer.release.set()
+        await stopping
+        await speaking
+        fade = playback.writer.written[-1]
+        assert len(fade) == FADE_BYTES
+        assert len(playback.writer.heard) == 2 * FRAME_BYTES + FADE_BYTES
+        interrupted = playback.receipts[-1]
+        assert interrupted.outcome == "interrupted_after_audio"
+        assert interrupted.local_audio_seconds == pytest.approx(playback.pcm_seconds)
+        assert interrupted.local_audio_seconds < 3 * FRAME_BYTES / BYTES_PER_SECOND
+    finally:
+        playback.writer.release.set()
+        await playback.engine.close()
+
+
+async def test_queued_clip_whose_caller_was_cancelled_settles_once_without_audio() -> None:
+    playback = Playback(writer=StallingWriter(1))
+    first = asyncio.create_task(playback.engine.speak("First sentence."))
+    try:
+        assert isinstance(playback.writer, StallingWriter)
+        await playback.writer.stalled.wait()
+        second = asyncio.create_task(playback.engine.speak("Second sentence."))
+        await asyncio.sleep(0)
+        second.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await second
+        heard_before = len(playback.writer.heard)
+        playback.writer.release.set()
+        await first
+        await playback.engine.speak("Third sentence.")
+        queued = [item for item in playback.receipts if item.text == "Second sentence."]
+        assert [item.outcome for item in queued] == ["dropped_before_audio"]
+        [receipt] = queued
+        assert receipt.settled
+        assert not receipt.local_audio_written
+        assert receipt.local_audio_seconds == 0
+        assert receipt.detail == "cancelled"
+        assert len(playback.writer.heard) == heard_before + 2 * len(THREE_FRAMES) - FRAME_BYTES
+    finally:
+        playback.writer.release.set()
+        await playback.engine.close()
+
+
 async def test_replayed_sentence_is_a_new_attempt_with_its_own_receipts() -> None:
     playback = Playback()
     playback.gate("valid")
@@ -430,6 +483,41 @@ async def test_empty_clip_leaves_no_twin_speech_in_the_record(tmp_path: Path) ->
         assert twin_speech == []
     finally:
         await playback.engine.close()
+
+
+@pytest.mark.parametrize("kind", ["playback_finished", "playback_dropped"])
+def test_event_without_a_receipt_is_journaled_but_never_becomes_twin_speech(
+    kind: PlaybackEventKind, tmp_path: Path
+) -> None:
+    journal = RecordingJournal()
+    record = MeetingRecord(tmp_path / "record.jsonl")
+    log = SpokenLog(journal, record)
+    try:
+        log.observe(PlaybackEvent("playback_started", "Hello there."))
+        log.observe(PlaybackEvent(kind, "Hello there.", heard="Hello"))
+        assert [entry for entry in record.entries() if isinstance(entry, TwinSpeechEntry)] == []
+        [row] = journal.events(kind)
+        assert "playback_outcome" not in row
+        assert log.speaking is None
+    finally:
+        record.close()
+
+
+@pytest.mark.parametrize("outcome", ["attempted", "prevented", "dropped_before_audio"])
+def test_dropped_event_without_local_audio_never_becomes_twin_speech(
+    outcome: PlaybackOutcome, tmp_path: Path
+) -> None:
+    journal = RecordingJournal()
+    record = MeetingRecord(tmp_path / "record.jsonl")
+    log = SpokenLog(journal, record)
+    receipt = PlaybackReceipt("attempt", outcome, "Hello there.")
+    try:
+        log.observe(PlaybackEvent("playback_started", "Hello there."))
+        log.observe(PlaybackEvent("playback_dropped", "Hello there.", receipt=receipt))
+        assert [entry for entry in record.entries() if isinstance(entry, TwinSpeechEntry)] == []
+        assert journal.events("playback_dropped")[0]["playback_outcome"] == outcome
+    finally:
+        record.close()
 
 
 async def test_written_clip_is_recorded_with_its_attempt_and_outcome(tmp_path: Path) -> None:

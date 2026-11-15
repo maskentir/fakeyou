@@ -12,6 +12,7 @@ from fakeyou.observability.faults import FaultReporter
 from fakeyou.orchestration.join import _JoinRun, _log_playback_event
 from fakeyou.orchestration.spoken_log import SpokenLog
 from fakeyou.persistence.record import MeetingRecord, TwinSpeechEntry
+from tests._audio_fakes import written
 from tests._audio_support import FakeSynth, FakeWriter, build_engine
 from tests._persistence_fakes import RecordingJournal
 from tests.test_playback_cues import CUE_AUDIO
@@ -139,7 +140,7 @@ def test_audio_start_journals_identity_without_recording_another_speech(tmp_path
         assert row["sentence_sha256"] == hashlib.sha256(b"Answer.").hexdigest()
         assert row["contains_question"] is False
         assert "text" not in row
-        log.observe(PlaybackEvent("playback_finished", "Answer.", utterance=utterance))
+        log.observe(written(PlaybackEvent("playback_finished", "Answer.", utterance=utterance)))
         assert [entry.text for entry in record.entries() if isinstance(entry, TwinSpeechEntry)] == [
             "Answer."
         ]
