@@ -174,7 +174,7 @@ async def test_supported_claim_is_spoken_and_an_unsupported_one_is_dropped() -> 
 
     turn = await revenue_turn("Revenue.", wrong, REVENUE_CLAIM)
 
-    assert turn.meeting.synth.texts == [REVENUE_STATEMENT]
+    assert turn.meeting.synth.texts == [REVENUE_STATEMENT, NOT_ENOUGH]
 
 
 async def test_indonesian_turn_is_rendered_with_the_indonesian_pattern() -> None:
@@ -298,6 +298,5 @@ def test_synthesis_is_reached_from_the_conversation_only_through_two_guarded_fun
     assert callers == {
         ("turn_graph.py", "prepare"),
         ("turn_graph.py", "_speak_state_bound"),
-        ("visual_speech.py", "abstain_with"),
-        ("visual_speech.py", "_state"),
+        ("visual_speech.py", "prepare"),
     }

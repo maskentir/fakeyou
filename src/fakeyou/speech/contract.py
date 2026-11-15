@@ -144,6 +144,11 @@ class ReceiptSource(Protocol):
 
 
 @runtime_checkable
+class OutcomeSource(Protocol):
+    def publication_outcome(self, publication_id: str) -> PlaybackReceipt | None: ...
+
+
+@runtime_checkable
 class NoVisualSpeaker(Protocol):
     async def speak_no_visual(
         self,

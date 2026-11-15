@@ -43,6 +43,8 @@ from fakeyou.observability.faults import (
 from fakeyou.observability.journal import Journal
 from fakeyou.persistence.audio_persist import SlotAudioWriter
 from fakeyou.speech.contract import (
+    OutcomeSource,
+    PlaybackReceipt,
     PreparedSpeech,
     PublicationSpeaker,
     ReceiptObserver,
@@ -691,6 +693,14 @@ class StreamFleetSession:
         for session in self._sessions:
             if isinstance(session, ReceiptSource):
                 session.observe_receipts(observer)
+
+    def publication_outcome(self, publication_id: str) -> PlaybackReceipt | None:
+        for session in self._sessions:
+            if isinstance(session, OutcomeSource):
+                receipt = session.publication_outcome(publication_id)
+                if receipt is not None:
+                    return receipt
+        return None
 
     @property
     def publication_context(self) -> PublicationContext | None:

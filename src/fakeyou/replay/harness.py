@@ -42,7 +42,7 @@ from fakeyou.replay.pacer import PacedWriter
 from fakeyou.replay.recorded import RecordedJudge, RecordedModel, RecordedSynthesizer
 from fakeyou.session.contracts import ChatObserved, Endpoint, RosterObserved, ScreenObserved
 from fakeyou.session.kernel import SessionKernel
-from fakeyou.speech.contract import PreparedSpeech, ReceiptObserver
+from fakeyou.speech.contract import PlaybackReceipt, PreparedSpeech, ReceiptObserver
 
 LANES = {
     "vad": "audio",
@@ -128,6 +128,9 @@ class EngineAudio:
 
     def observe_receipts(self, observer: ReceiptObserver) -> None:
         self._engine.observe_receipts(observer)
+
+    def publication_outcome(self, publication_id: str) -> PlaybackReceipt | None:
+        return self._engine.publication_outcome(publication_id)
 
     @property
     def is_speaking(self) -> bool:

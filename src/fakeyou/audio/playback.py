@@ -2,6 +2,7 @@ import asyncio
 import itertools
 import math
 import uuid
+from collections import OrderedDict
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -79,6 +80,7 @@ class PlaybackEvent:
     receipt: PlaybackReceipt | None = None
 
 
+OUTCOME_CACHE_SIZE = 64
 GAIN_STEP = 1.2
 MAX_GAIN = 2.4
 DUCK_GAIN = 0.15
@@ -358,9 +360,11 @@ def _pcm_last_sample(pcm: bytes) -> int:
 
 
 def _unrendered(binding: SentenceBinding, context: PublicationContext) -> str | None:
-    if not context.render_only or binding.scope != "current":
+    if not context.render_only or binding.scope not in {"current", "historical"}:
         return None
     rendering = binding.rendering
+    if rendering is None and binding.scope == "historical" and binding.abstention is not None:
+        return None
     digest = "" if rendering is None else rendering.text_digest
     return rendering_refusal(rendering, binding.scope, digest)
 
@@ -451,10 +455,21 @@ class PlaybackEngine:
         self._turn_endings: set[asyncio.Task[None]] = set()
         self._attempts = (f"{uuid.uuid4().hex[:12]}:{number}" for number in itertools.count(1))
         self._receipt_observers: list[ReceiptObserver] = []
+        self._outcomes: OrderedDict[str, PlaybackReceipt] = OrderedDict()
         self._publication_context: PublicationContext | None = None
         self._publication_bindings: dict[PreparedSpeech, SentenceBinding] = {}
         self._publication_ids: set[str] = set()
         self._publication_checked: set[int] = set()
+
+    def publication_outcome(self, publication_id: str) -> PlaybackReceipt | None:
+        return self._outcomes.get(publication_id)
+
+    def _keep_outcome(self, receipt: PlaybackReceipt) -> None:
+        if receipt.publication_id is None or not receipt.settled:
+            return
+        self._outcomes[receipt.publication_id] = receipt
+        while len(self._outcomes) > OUTCOME_CACHE_SIZE:
+            self._outcomes.popitem(last=False)
 
     def observe_receipts(self, observer: ReceiptObserver) -> None:
         self._receipt_observers.append(observer)
@@ -1149,6 +1164,7 @@ class PlaybackEngine:
         receipt = event.receipt
         if receipt is None:
             return
+        self._keep_outcome(receipt)
         for observer in tuple(self._receipt_observers):
             guard_observer(
                 partial(observer, receipt),

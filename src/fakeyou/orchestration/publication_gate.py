@@ -46,6 +46,8 @@ def compose_publication_gate(
             )
         if binding.scope == "current" and sources.revalidate is None:
             return None
+        if binding.scope == "historical" and binding.rendering is not None:
+            return _decide(binding, sources, now(), clock_domain)
         return await evaluate_visual_publication(
             binding, sources.revalidate or _never, now=now, clock_domain=clock_domain
         )
@@ -66,15 +68,24 @@ def compose_publication_commit(
             return state_publication_decision(
                 binding, sources.state(), now=now, clock_domain=clock_domain
             )
-        validate = sources.validate
-        if binding.scope == "current" and validate is None:
+        if binding.scope == "current" and sources.validate is None:
             return None
-        validations = (
-            {} if validate is None else {item.kind: validate(item) for item in binding.evidence}
-        )
-        return decide_visual_publication(binding, validations, at=now(), clock_domain=clock_domain)
+        return _decide(binding, sources, now(), clock_domain)
 
     return commit
+
+
+def _decide(
+    binding: SentenceBinding, sources: GateSources, at: float, clock_domain: str
+) -> PublicationDecision:
+    validate = sources.validate
+    visual = binding.scope == "current" or binding.rendering is not None
+    validations = (
+        {item.kind: validate(item) for item in binding.evidence}
+        if validate is not None and visual
+        else {}
+    )
+    return decide_visual_publication(binding, validations, at=at, clock_domain=clock_domain)
 
 
 async def _never(evidence: EvidenceBinding) -> Validation:

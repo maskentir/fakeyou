@@ -72,6 +72,7 @@ from fakeyou.observability.faults import ConsumerSink, FaultReporter, capture_er
 from fakeyou.observability.journal import Journal, JournalSink
 from fakeyou.observability.provider_faults import classify_exception
 from fakeyou.speech.contract import (
+    OutcomeSource,
     PlaybackReceipt,
     PreparedSpeech,
     PublicationSpeaker,
@@ -1568,6 +1569,12 @@ class _ActorSpeaker:
 
     async def speak_prepared(self, prepared: PreparedSpeech) -> None:
         await self._session().speak_prepared(prepared)
+
+    def publication_outcome(self, publication_id: str) -> PlaybackReceipt | None:
+        session = self._actor.session
+        if not isinstance(session, OutcomeSource):
+            return None
+        return session.publication_outcome(publication_id)
 
     async def play_cue(self, text: str, *, transcript_id: str | None = None) -> bool:
         session = self._actor.session

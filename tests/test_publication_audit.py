@@ -34,6 +34,7 @@ from tests._participant_audio_fakes import (
 )
 from tests._persistence_fakes import RecordingJournal
 from tests.test_publication_activation import (
+    BETA_HISTORICAL,
     CAPTURED_AT,
     Meeting,
     Turn,
@@ -42,6 +43,7 @@ from tests.test_publication_activation import (
     camera_meeting,
     camera_turn,
     show_budget,
+    spoken_texts,
 )
 from tests.test_publication_measurement import _binding, _post
 
@@ -423,8 +425,10 @@ async def measured(
 ) -> dict[str, Any]:
     meeting = turn.meeting
     assert isinstance(meeting, Audited)
-    [binding] = meeting.bindings
-    [receipt] = meeting.settled
+    binding = meeting.bindings[0]
+    receipt = next(
+        item for item in meeting.settled if item.publication_id == binding.publication_id
+    )
     post = None if continuity_at is None else await continuity(meeting, binding, continuity_at)
     return measure_participant_publication(
         binding,
@@ -519,8 +523,7 @@ async def test_end_to_end_prevented_claim_is_prevented_not_compliant() -> None:
     result = await measured(turn, participant(heard=False), continuity_at=AFTER_SPEECH)
 
     assert result["status"] == "prevented_invalid"
-    assert turn.counted == []
-    assert turn.meeting.writer.written == []
+    assert spoken_texts(turn.meeting) == [BETA_HISTORICAL]
 
 
 async def test_end_to_end_report_of_a_prevented_claim_is_a_conflict_not_a_verdict() -> None:
@@ -547,13 +550,13 @@ async def test_end_to_end_camera_claim_with_a_lost_camera_is_never_a_current_sta
     turn = await camera_turn(camera_meeting(before_write=camera_goes_stale))
 
     assert all(binding.scope != "current" for binding in turn.meeting.bindings)
-    assert all("grey" not in item.text for item in turn.meeting.receipts)
+    assert spoken_texts(turn.meeting) == ["The checked frame showed a grey shirt."]
 
 
 PATHS: list[tuple[str, dict[str, Any], dict[str, Any], int]] = [
     ("visual allowed", {}, {"needs": ("screen",)}, 1),
-    ("visual prevented", {"before_write": show_budget}, {"needs": ("screen",)}, 0),
-    ("visual unmapped", {"mapped": False}, {"needs": ("screen",)}, 0),
+    ("visual prevented", {"before_write": show_budget}, {"needs": ("screen",)}, 1),
+    ("visual unmapped", {"mapped": False}, {"needs": ("screen",)}, 1),
     ("no visual reply", {}, {"reply": "I am well."}, 1),
     ("state allowed", {}, {"state_question": "presenter"}, 1),
     ("non-visual state", {}, {"state_question": "participant_count"}, 1),
@@ -571,10 +574,9 @@ async def test_every_speech_path_counts_exactly_the_attempts_with_local_audio(
     voiced = {item.attempt_id for item in meeting.receipts if item.local_audio_written}
     assert len(turn.counted) == len(voiced) == spoken
     assert bool(meeting.writer.written) is bool(spoken)
-    assert len({item.attempt_id for item in meeting.receipts}) == 1
-    assert [item.outcome for item in meeting.settled] == (
-        ["completed"] if spoken else ["prevented"]
-    )
+    assert {item.attempt_id for item in turn.counted} == voiced
+    assert sum(item.outcome == "completed" for item in meeting.settled) == spoken
+    assert all(item.outcome in ("completed", "prevented") for item in meeting.settled)
 
 
 @pytest.mark.parametrize(

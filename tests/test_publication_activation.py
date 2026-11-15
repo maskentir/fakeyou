@@ -2,7 +2,7 @@ import ast
 import asyncio
 import json
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, TypedDict, Unpack, override
@@ -36,6 +36,7 @@ from fakeyou.foundation.clock_mapping import LOCAL_MONOTONIC, ClockExchange, Rem
 from fakeyou.foundation.publication import (
     PublicationContext,
     PublicationDecision,
+    RuntimeSynthesis,
     SentenceBinding,
     sentence_digest,
 )
@@ -97,6 +98,7 @@ class Meeting(FakeSession):
     )
     mapped: bool = True
     gated: bool = True
+    runtime_synthesis: RuntimeSynthesis = "local"
     look_at: float = CAPTURED_AT + 1.0
     write_at: float = CAPTURED_AT + 2.0
     before_write: Callable[["Meeting"], None] | None = None
@@ -164,6 +166,10 @@ class Meeting(FakeSession):
             if self.gated
             else None
         )
+        if self.publication_context is not None:
+            self.publication_context = replace(
+                self.publication_context, runtime_synthesis=self.runtime_synthesis
+            )
         self.synth = FakeSynth(audio=b"\x01\x00" * FRAME_BYTES)
         self.engine = build_engine(self.synth, self.writer, self.events)
         self.engine.configure_publication(self.publication_context)
@@ -233,16 +239,23 @@ class Meeting(FakeSession):
     ) -> None:
         await self.engine.speak_no_visual(text, transcript_id=transcript_id, language=language)
 
+    def publication_outcome(self, publication_id: str) -> PlaybackReceipt | None:
+        return self.engine.publication_outcome(publication_id)
+
     @property
     def settled(self) -> list[PlaybackReceipt]:
         return [item for item in self.receipts if item.settled]
 
     @property
     def prevented(self) -> str:
-        [receipt] = self.settled
+        receipt = self.settled[0]
         assert receipt.outcome == "prevented"
-        assert self.writer.written == []
+        assert receipt.local_audio_seconds == 0
         return receipt.detail.removeprefix("publication_prevented:")
+
+    @property
+    def fallback(self) -> list[str]:
+        return [receipt.text for receipt in self.settled[1:] if receipt.local_audio_written]
 
 
 @dataclass
@@ -250,6 +263,7 @@ class Turn:
     meeting: Meeting
     counted: list[PlaybackReceipt]
     replier: FakeReplier
+    journal: FakeJournal
 
 
 class Spoken(TypedDict, total=False):
@@ -266,6 +280,12 @@ BETA_CLAIM = {
     "value": "17 March 2027",
 }
 BETA_STATEMENT = "The currently displayed screen lists launch for Beta as 17 March 2027."
+BETA_HISTORICAL = "The checked frame listed launch for Beta as 17 March 2027."
+NOT_ENOUGH = "I don't have enough reliable information to answer that."
+
+
+def spoken_texts(meeting: "Meeting") -> list[str]:
+    return [receipt.text for receipt in meeting.settled if receipt.local_audio_written]
 
 
 def with_claims(reply: str, claims: Sequence[Mapping[str, str]]) -> str:
@@ -302,10 +322,11 @@ async def ask(
         return PlannedTurn(TurnPlan(f"plan-{event.id}", "speech_only", "speech"))
 
     replier = FakeReplier(reply=reply)
+    journal = FakeJournal()
     actor = FloorActor(
         build_turn_graph(),
         ActorWiring(
-            journal=FakeJournal(),
+            journal=journal,
             responder=ModelResponder(
                 chunks=unused_chunks, phase=ToolPhaseState(), max_sentences=3, language=language
             ),
@@ -330,7 +351,7 @@ async def ask(
     finally:
         await actor.close()
         await meeting.engine.close()
-    return Turn(meeting, counted, replier)
+    return Turn(meeting, counted, replier, journal)
 
 
 async def test_fresh_supported_screen_claim_is_published_and_counted() -> None:
@@ -373,7 +394,9 @@ async def test_static_slide_without_a_confirmation_sample_is_prevented(age: floa
     turn = await ask(meeting, "When is beta?", needs=("screen",))
 
     assert turn.meeting.prevented == "invalid:capture_too_old"
-    assert turn.counted == []
+    assert turn.meeting.fallback == [BETA_HISTORICAL if age < 30 else NOT_ENOUGH]
+    assert spoken_texts(turn.meeting) == turn.meeting.fallback
+    assert len(turn.counted) == 1
 
 
 async def test_slow_reply_without_a_confirmation_sample_is_prevented() -> None:
@@ -430,7 +453,8 @@ async def test_screen_change_between_the_look_and_the_write_prevents_the_claim(
     turn = await ask(Meeting(before_write=change), "When is beta?", needs=("screen",))
 
     assert turn.meeting.prevented == reason
-    assert turn.counted == []
+    assert spoken_texts(turn.meeting) == [BETA_HISTORICAL]
+    assert [item.text for item in turn.counted] == [BETA_HISTORICAL]
 
 
 async def test_unmapped_capture_clock_prevents_the_claim() -> None:
@@ -440,7 +464,6 @@ async def test_unmapped_capture_clock_prevents_the_claim() -> None:
 
 
 GREY_SHIRT = {"kind": "participant", "shape": "item_presence", "item": "a grey shirt"}
-NOT_ENOUGH = "I don't have enough reliable information to answer that."
 
 
 async def camera_turn(meeting: Meeting) -> Turn:
@@ -458,12 +481,16 @@ def camera_meeting(**options: Any) -> Meeting:
     return Meeting(inspections=(look,), **options)
 
 
-async def test_camera_claim_has_no_current_pattern_and_is_never_spoken_as_current() -> None:
+GREY_HISTORICAL = "The checked frame showed a grey shirt."
+
+
+async def test_camera_claim_is_spoken_only_as_a_historical_statement() -> None:
     turn = await camera_turn(camera_meeting())
 
     [binding] = turn.meeting.bindings
-    assert binding.scope != "current"
-    assert [item.text for item in turn.meeting.settled] == [NOT_ENOUGH]
+    assert binding.scope == "historical"
+    assert binding.rendering is not None
+    assert [item.text for item in turn.meeting.settled] == [GREY_HISTORICAL]
     assert len(turn.counted) == 1
 
 
@@ -475,7 +502,7 @@ async def test_camera_that_went_away_never_yields_a_current_camera_statement() -
     turn = await camera_turn(camera_meeting(before_write=camera_goes_stale))
 
     assert all(binding.scope != "current" for binding in turn.meeting.bindings)
-    assert "grey" not in " ".join(item.text for item in turn.meeting.receipts)
+    assert spoken_texts(turn.meeting) == [GREY_HISTORICAL]
 
 
 async def test_reply_without_visual_needs_is_published_under_the_composed_gate() -> None:

@@ -66,6 +66,8 @@ from fakeyou.observability.provider_faults import (
     classify_exception,
 )
 from fakeyou.speech.contract import (
+    OutcomeSource,
+    PlaybackReceipt,
     PreparedSpeech,
     PublicationSpeaker,
     ReceiptObserver,
@@ -582,6 +584,11 @@ class MeetingAudioSession:
     def observe_receipts(self, observer: ReceiptObserver) -> None:
         if isinstance(self._engine, ReceiptSource):
             self._engine.observe_receipts(observer)
+
+    def publication_outcome(self, publication_id: str) -> PlaybackReceipt | None:
+        if isinstance(self._engine, OutcomeSource):
+            return self._engine.publication_outcome(publication_id)
+        return None
 
     @property
     def publication_context(self) -> PublicationContext | None:

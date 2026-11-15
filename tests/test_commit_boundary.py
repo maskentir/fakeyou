@@ -20,11 +20,14 @@ from tests._audio_support import FakeWriter
 from tests._participant_audio_fakes import ScriptedParticipantObserver, granted
 from tests._perception_fakes import START
 from tests.test_publication_activation import (
+    BETA_HISTORICAL,
+    BETA_STATEMENT,
     CAPTURED_AT,
     Meeting,
     Turn,
     ask,
     show_budget,
+    spoken_texts,
 )
 from tests.test_publication_freshness import confirm_same
 from tests.test_publication_measurement import _post
@@ -85,8 +88,7 @@ async def beta_turn(meeting: Meeting) -> Turn:
 
 
 def terminal(meeting: Meeting) -> PlaybackReceipt:
-    [receipt] = meeting.settled
-    return receipt
+    return meeting.settled[0]
 
 
 @pytest.mark.parametrize(
@@ -106,8 +108,8 @@ async def test_non_exact_sample_before_the_commit_hands_nothing_to_the_writer(
     turn = await beta_turn(meeting)
 
     assert meeting.prevented == reason
-    assert meeting.writer.written == []
-    assert turn.counted == []
+    assert spoken_texts(meeting) == [BETA_HISTORICAL]
+    assert [item.text for item in turn.counted] == [BETA_HISTORICAL]
 
 
 async def test_exact_sample_before_the_commit_is_recorded_on_the_committed_decision() -> None:
@@ -168,7 +170,7 @@ async def test_freeze_after_the_preliminary_decision_commits_after_the_thaw() ->
     await beta_turn(meeting)
 
     assert meeting.prevented == "invalid:scene_changed"
-    assert meeting.writer.written == []
+    assert BETA_STATEMENT not in spoken_texts(meeting)
 
 
 async def test_freeze_without_a_change_is_published_after_the_thaw() -> None:
@@ -389,8 +391,8 @@ async def test_first_write_delayed_past_the_validation_window_is_withheld() -> N
     turn = await beta_turn(meeting)
 
     assert meeting.prevented == "unknown:write_delayed_past_validation"
-    assert meeting.writer.written == []
-    assert turn.counted == []
+    assert spoken_texts(meeting) == [BETA_HISTORICAL]
+    assert [item.text for item in turn.counted] == [BETA_HISTORICAL]
     receipt = terminal(meeting)
     assert receipt.commit is not None
     assert receipt.commit.evaluations == 2
@@ -420,7 +422,7 @@ async def test_withheld_write_whose_scene_changed_during_the_delay_is_prevented(
     await beta_turn(meeting)
 
     assert meeting.prevented == "invalid:scene_changed"
-    assert meeting.writer.written == []
+    assert BETA_STATEMENT not in spoken_texts(meeting)
 
 
 async def test_deadline_is_the_validation_allowance_after_the_final_evaluation() -> None:

@@ -15,7 +15,14 @@ from fakeyou.foundation.publication import (
 from fakeyou.perception.inspector import VisualInspection
 from fakeyou.perception.timeline import SCREEN_SOURCE_ID
 from tests._perception_fakes import START, keyframe
-from tests.test_publication_activation import ROADMAP, Meeting, ask, show_budget, stop_sharing
+from tests.test_publication_activation import (
+    BETA_HISTORICAL,
+    ROADMAP,
+    Meeting,
+    ask,
+    show_budget,
+    stop_sharing,
+)
 from tests.test_publication_freshness import (
     FRESH,
     OLD,
@@ -277,7 +284,7 @@ async def test_restarted_share_with_the_identical_slide_does_not_prove_the_sourc
     turn = await ask(meeting, "When is beta?", needs=("screen",))
 
     assert meeting.prevented == "unknown:source_identity_changed"
-    assert turn.counted == []
+    assert [item.text for item in turn.counted] == [BETA_HISTORICAL]
 
 
 async def test_another_slide_is_a_changed_scene_end_to_end() -> None:

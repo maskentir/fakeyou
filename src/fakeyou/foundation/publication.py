@@ -17,6 +17,8 @@ EvidenceSource = Literal["camera", "screen"]
 PublicationValidity = Literal["valid", "invalid", "unknown"]
 AgeState = Literal["fresh", "uncertain", "old"]
 Dependence = Literal["content", "source", "subject"]
+RuntimeSynthesis = Literal["unavailable", "local", "provider"]
+HISTORICAL_AGE_SECONDS = 30.0
 CAPTURE_FRESHNESS_SECONDS = 5.0
 VALIDATION_AGE_SECONDS = 0.25
 MAX_CLOCK_UNCERTAINTY_SECONDS = 0.05
@@ -105,6 +107,7 @@ class SentenceBinding:
     abstention: AbstentionRef | None = None
     dependence: Dependence | None = None
     rendering: Rendering | None = None
+    replaces: str | None = None
 
     def __post_init__(self) -> None:
         _validate_sentence_identity(self)
@@ -247,6 +250,7 @@ class PublicationContext:
     revision: Callable[[], int] | None = None
     samples_since: Callable[[int], tuple[ContentSample, ...]] | None = None
     render_only: bool = False
+    runtime_synthesis: RuntimeSynthesis = "unavailable"
 
 
 def _finite(value: float | None) -> bool:
@@ -292,6 +296,8 @@ def decide_visual_publication(
     refused = abstention_refusal(binding.abstention, binding.scope)
     if refused is not None:
         return _unknown(refused, at, clock_domain)
+    if binding.scope == "historical" and binding.rendering is not None:
+        return _historical_decision(binding, validations, at, clock_domain)
     if binding.scope in {"no_visual", "historical"}:
         return PublicationDecision("valid", "ok", None, clock_domain)
     if binding.scope == "state":
@@ -345,6 +351,36 @@ def evaluate_state_publication(
     if current.claim != claimed.claim:
         return PublicationDecision("invalid", "state_changed", checked_at, clock_domain)
     return PublicationDecision("valid", "ok", checked_at, clock_domain)
+
+
+def _historical_decision(
+    binding: SentenceBinding, validations: Mapping[str, Validation], at: float, clock_domain: str
+) -> PublicationDecision:
+    if not _finite(at):
+        return PublicationDecision("unknown", "invalid_check_time", None, clock_domain)
+    decisions = [
+        _historical_evidence_decision(item, validations.get(item.kind), at, clock_domain)
+        for item in binding.evidence
+    ]
+    stopped = next((item for item in decisions if item is not None), None)
+    return stopped or PublicationDecision("valid", "ok", at, clock_domain)
+
+
+def _historical_evidence_decision(
+    evidence: EvidenceBinding, validation: Validation | None, at: float, clock_domain: str
+) -> PublicationDecision | None:
+    if evidence.status != "produced":
+        return _unknown("validation_support_unknown", at, clock_domain)
+    unmapped = _capture_mapping_decision(evidence, at, clock_domain)
+    if unmapped is not None:
+        return unmapped
+    if validation is not None and validation.subject_changed:
+        return PublicationDecision("invalid", "subject_changed", at, clock_domain)
+    captured = evidence.capture_monotonic or 0.0
+    uncertainty = evidence.capture_mapping_uncertainty_seconds or 0.0
+    if at - captured + uncertainty > HISTORICAL_AGE_SECONDS:
+        return PublicationDecision("invalid", "historical_too_old", at, clock_domain)
+    return None
 
 
 def _dependence(binding: SentenceBinding, evidence: EvidenceBinding) -> Dependence:

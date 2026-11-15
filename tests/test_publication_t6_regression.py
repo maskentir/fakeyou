@@ -7,7 +7,7 @@ from fakeyou.foundation.publication import SnapshotRef
 from fakeyou.perception.frames import changed_blocks, compare_screens
 from fakeyou.perception.inspector import VisualInspection
 from tests._perception_fakes import keyframe, reading, slide_jpeg
-from tests.test_publication_activation import Meeting, Turn, ask
+from tests.test_publication_activation import Meeting, Turn, ask, spoken_texts
 
 
 def figure_slide(revenue: str) -> bytes:
@@ -118,9 +118,14 @@ async def test_claim_about_a_figure_is_not_published_after_one_digit_changed(
     del comparison
     turn = await revenue_turn(figure_meeting(before, after))
 
-    assert [item.outcome for item in turn.meeting.settled] == ["prevented"]
     assert turn.meeting.prevented == "unknown:content_changed_unverified"
-    assert turn.counted == []
+    assert spoken_texts(turn.meeting) == [
+        "The checked frame listed revenue for Project A as $1.2M."
+    ]
+    assert all(
+        binding.scope != "current" or receipt.outcome == "prevented"
+        for binding, receipt in zip(turn.meeting.bindings, turn.meeting.settled, strict=True)
+    )
 
 
 @pytest.mark.parametrize(("before", "after", "comparison"), CASES)

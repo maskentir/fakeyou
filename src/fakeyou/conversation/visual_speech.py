@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
@@ -15,9 +16,12 @@ from fakeyou.foundation.publication import (
 )
 from fakeyou.foundation.rendering import RENDER_UNSUPPORTED, Rendered, render
 from fakeyou.observability.journal import JournalSink
-from fakeyou.speech.contract import PreparedSpeech
+from fakeyou.speech.contract import OutcomeSource, PlaybackReceipt, PreparedSpeech
 
 VISUAL_KINDS = frozenset({"screen", "participant", "camera"})
+SYNTHESIS_UNAVAILABLE = "synthesis_unavailable"
+NO_CURRENT_PATTERN = "no_current_pattern"
+HISTORICAL_GATHER = "historical_gather"
 
 
 @runtime_checkable
@@ -72,6 +76,33 @@ def abstention_for(
     return select_abstention(look_status=status, frame_inspected=False, language=language), ()
 
 
+HISTORICAL_REASONS = frozenset(
+    {
+        "capture_too_old",
+        "confirmation_too_old",
+        "confirmation_age_threshold_uncertain",
+        "capture_age_threshold_uncertain",
+        "content_changed_unverified",
+        "continuity_unknown",
+        "scene_changed",
+        "scene_continuity_unknown",
+        "source_identity_changed",
+        "confirmation_time_unmapped",
+        "confirmation_time_inconsistent",
+        "write_delayed_past_validation",
+        NO_CURRENT_PATTERN,
+        HISTORICAL_GATHER,
+    }
+)
+PREVENTED_PREFIX = "publication_prevented:"
+
+
+def prevented_reason(receipt: PlaybackReceipt | None) -> str | None:
+    if receipt is None or receipt.outcome != "prevented":
+        return None
+    return receipt.detail.removeprefix(PREVENTED_PREFIX).partition(":")[2] or "unresolved"
+
+
 @dataclass(slots=True)
 class RuntimeSpeech:
     speaker: StatementSpeaker
@@ -81,6 +112,61 @@ class RuntimeSpeech:
     journal: JournalSink
     abstained: bool = False
     spoken: list[str] = field(default_factory=list)
+
+    async def prepare(
+        self, text: str, language: str, *, purpose: str
+    ) -> tuple[PreparedSpeech, int] | None:
+        mode = self.context.runtime_synthesis
+        common = {"transcript_id": self.identity.transcript_id, "purpose": purpose}
+        if mode == "unavailable":
+            self.journal.record(
+                "runtime_statement_skipped",
+                source="agent",
+                reason=SYNTHESIS_UNAVAILABLE,
+                statement=text,
+                **common,
+            )
+            return None
+        index = self.next_index()
+        request = {"authorization": mode, "text_sha256": sentence_digest(text), **common}
+        self.journal.record("runtime_synthesis_requested", source="agent", **request)
+        try:
+            prepared = await self.speaker.prepare(
+                text,
+                sentence_index=index,
+                transcript_id=self.identity.transcript_id,
+                language=language,
+            )
+        except asyncio.CancelledError:
+            self.journal.record("runtime_synthesis_cancelled", source="agent", **request)
+            raise
+        except Exception as error:
+            self.journal.record(
+                "runtime_synthesis_failed", source="agent", error=type(error).__name__, **request
+            )
+            raise
+        self.journal.record(
+            "runtime_synthesis_finished",
+            source="agent",
+            outcome="empty" if prepared is None else "prepared",
+            **request,
+        )
+        return None if prepared is None else (prepared, index)
+
+    def outcome(self, publication_id: str) -> PlaybackReceipt | None:
+        speaker = self.speaker
+        if not isinstance(speaker, OutcomeSource):
+            return None
+        return speaker.publication_outcome(publication_id)
+
+    async def publish(self, prepared: PreparedSpeech, binding: SentenceBinding) -> bool:
+        self.speaker.bind_publication(prepared, binding)
+        await self.speaker.speak_prepared(prepared)
+        receipt = self.outcome(binding.publication_id)
+        voiced = receipt is not None and receipt.local_audio_written
+        if voiced:
+            self.spoken.append(prepared.text)
+        return voiced
 
     async def abstain(
         self, evidence: GatheredEvidence | None, needs: tuple[str, ...], *, reason: str
@@ -105,15 +191,10 @@ class RuntimeSpeech:
         reason: str,
     ) -> bool:
         self.abstained = True
-        index = self.next_index()
-        prepared = await self.speaker.prepare(
-            entry.text,
-            sentence_index=index,
-            transcript_id=self.identity.transcript_id,
-            language=entry.language,
-        )
-        if prepared is None:
+        ready = await self.prepare(entry.text, entry.language, purpose="abstention")
+        if ready is None:
             return False
+        prepared, index = ready
         historical = entry.scope == "historical"
         binding = SentenceBinding(
             publication_id=self.context.id_factory(),
@@ -129,7 +210,6 @@ class RuntimeSpeech:
             scope=entry.scope,
             abstention=entry.ref,
         )
-        self.speaker.bind_publication(prepared, binding)
         self.journal.record(
             "abstention_selected",
             source="agent",
@@ -150,9 +230,7 @@ class RuntimeSpeech:
                 for item in (() if evidence is None else evidence.provenance)
             ],
         )
-        await self.speaker.speak_prepared(prepared)
-        self.spoken.append(prepared.text)
-        return True
+        return await self.publish(prepared, binding)
 
 
 def _distinct(claims: tuple[Claim, ...]) -> tuple[Claim, ...]:
@@ -164,6 +242,8 @@ class Statement:
     rendered: Rendered
     verified: VerifiedClaim
     publication_id: str
+    voiced: bool
+    replaces: str | None = None
 
 
 @dataclass(slots=True)
@@ -173,25 +253,59 @@ class VisualTurn:
     needs: tuple[str, ...]
     statements: list[Statement] = field(default_factory=list)
     rejected: list[tuple[Claim, str]] = field(default_factory=list)
+    unanswered: list[str] = field(default_factory=list)
 
     async def speak(self, model_text: str) -> int:
         language = self.speech.identity.language
         for claim in _distinct(parse_claims(model_text)):
             verified = verify_claim(claim, self.evidence, language=language)
-            rendered = render(verified, "current", language) if verified.supported else None
-            if rendered is None:
-                reason = RENDER_UNSUPPORTED if verified.supported else verified.support.reason
-                self._reject(claim, reason)
+            if not verified.supported:
+                self._reject(claim, verified.support.reason)
                 continue
-            await self._state(rendered, verified)
+            await self._answer(verified)
         self._drop_model_text(model_text)
-        if not self.statements:
+        voiced = sum(statement.voiced for statement in self.statements)
+        if self.unanswered or self.rejected or not self.statements:
+            reasons = [*self.unanswered, *(reason for _, reason in self.rejected)]
             await self.speech.abstain(
-                self.evidence,
-                self.needs,
-                reason=self.rejected[0][1] if self.rejected else "claim_undeclared",
+                self.evidence, self.needs, reason=reasons[0] if reasons else "claim_undeclared"
             )
-        return len(self.statements)
+        return voiced
+
+    async def _answer(self, verified: VerifiedClaim) -> None:
+        language = self.speech.identity.language
+        if self.evidence is not None and self.evidence.scope == "historical":
+            await self._fall_back(verified, HISTORICAL_GATHER, None)
+            return
+        current = render(verified, "current", language)
+        if current is None:
+            reason = RENDER_UNSUPPORTED if verified.claim.source == "screen" else NO_CURRENT_PATTERN
+            await self._fall_back(verified, reason, None)
+            return
+        statement = await self._state(current, verified, None)
+        if statement is None:
+            self.unanswered.append(SYNTHESIS_UNAVAILABLE)
+            return
+        prevented = prevented_reason(self.speech.outcome(statement.publication_id))
+        if prevented is not None:
+            await self._fall_back(verified, prevented, statement.publication_id)
+
+    async def _fall_back(self, verified: VerifiedClaim, reason: str, replaces: str | None) -> None:
+        historical = (
+            render(verified, "historical", self.speech.identity.language)
+            if reason in HISTORICAL_REASONS
+            else None
+        )
+        if historical is None:
+            self.unanswered.append(reason)
+            return
+        statement = await self._state(historical, verified, replaces)
+        if statement is None:
+            self.unanswered.append(SYNTHESIS_UNAVAILABLE)
+        elif not statement.voiced:
+            refused = prevented_reason(self.speech.outcome(statement.publication_id))
+            if refused is not None:
+                self.unanswered.append(refused)
 
     def _reject(self, claim: Claim, reason: str) -> None:
         self.rejected.append((claim, reason))
@@ -214,20 +328,19 @@ class VisualTurn:
             reason="model_extra_assertion_ignored" if self.statements else "claim_undeclared",
         )
 
-    async def _state(self, rendered: Rendered, verified: VerifiedClaim) -> None:
+    async def _state(
+        self, rendered: Rendered, verified: VerifiedClaim, replaces: str | None
+    ) -> Statement | None:
         speech = self.speech
         look = verified.evidence
         if look is None or self.evidence is None:
-            return
-        index = speech.next_index()
-        prepared = await speech.speaker.prepare(
-            rendered.text,
-            sentence_index=index,
-            transcript_id=speech.identity.transcript_id,
-            language=rendered.rendering.language,
+            return None
+        ready = await speech.prepare(
+            rendered.text, rendered.rendering.language, purpose=rendered.rendering.tense
         )
-        if prepared is None:
-            return
+        if ready is None:
+            return None
+        prepared, index = ready
         binding = SentenceBinding(
             publication_id=speech.context.id_factory(),
             meeting_id=speech.context.meeting_id,
@@ -242,19 +355,21 @@ class VisualTurn:
             scope=rendered.rendering.tense,
             dependence=rendered.claim.dependence,
             rendering=rendered.rendering,
+            replaces=replaces,
         )
-        speech.speaker.bind_publication(prepared, binding)
-        self.statements.append(Statement(rendered, verified, binding.publication_id))
         speech.journal.record(
             "visual_statement_selected",
             source="agent",
             transcript_id=speech.identity.transcript_id,
             publication_id=binding.publication_id,
+            replaces_publication_id=replaces,
             pattern_id=rendered.rendering.pattern_id,
             pattern_version=rendered.rendering.version,
             language=rendered.rendering.language,
             evidence_kind=look.kind,
             fields=[(span.name, span.start, span.end) for span in rendered.rendering.fields],
         )
-        await speech.speaker.speak_prepared(prepared)
-        speech.spoken.append(prepared.text)
+        voiced = await speech.publish(prepared, binding)
+        statement = Statement(rendered, verified, binding.publication_id, voiced, replaces)
+        self.statements.append(statement)
+        return statement
