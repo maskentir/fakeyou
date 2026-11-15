@@ -34,6 +34,8 @@ def measure_publication(
         return _vetoed(binding, publication, decision, clock_domain, local_write=local_write)
     if publication is None:
         return _not_measurable(result, "no_participant_observation")
+    if local_write is False:
+        return _not_measurable(result, "publication_observation_conflict")
     reason = _observation_reason(binding, publication, clock_domain) or _provider_reason(binding)
     if reason is not None:
         return _not_measurable(result, reason)
