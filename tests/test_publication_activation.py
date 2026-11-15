@@ -116,6 +116,11 @@ class Meeting(FakeSession):
         FakeSession.__init__(self)
         self.page_clock = RemoteClock(now=self.clock, drift_ppm=0)
         self.timeline = MeetingTimeline()
+        if self.mapped:
+            self.timeline.capture_clock = lambda captured_at: self.page_clock.map(
+                captured_at.timestamp() * 1000
+            )
+        self.advance(CAPTURED_AT)
         presenter = self.timeline.participant("device-ayu", "Ayu")
         self.timeline.participant("device-budi", "Budi")
         self.timeline.show_screen(keyframe(ROADMAP, seconds=0), presenter, data=ROADMAP)
@@ -145,10 +150,6 @@ class Meeting(FakeSession):
             clock=lambda: START,
             camera_monotonic=self.clock,
         )
-        if self.mapped:
-            self.perception.capture_clock = lambda captured_at: self.page_clock.map(
-                captured_at.timestamp() * 1000
-            )
         ids = (f"publication-{number}" for number in range(1, 100))
         self.publication_context = (
             opt_in_publication_context(
@@ -340,17 +341,16 @@ async def test_published_claim_without_a_participant_observer_is_never_compliant
 
 
 @pytest.mark.parametrize("age", [5.5, 30.0, 300.0])
-async def test_finding_static_slide_older_than_five_seconds_is_prevented(age: float) -> None:
+async def test_static_slide_without_a_confirmation_sample_is_prevented(age: float) -> None:
     meeting = Meeting(look_at=CAPTURED_AT + age - 1.0, write_at=CAPTURED_AT + age)
 
     turn = await ask(meeting, "When is beta?", needs=("screen",))
 
-    expected = "unknown:capture_time_unmapped" if age > 120 else "invalid:capture_too_old"
-    assert turn.meeting.prevented == expected
+    assert turn.meeting.prevented == "invalid:capture_too_old"
     assert turn.counted == []
 
 
-async def test_finding_reply_slower_than_the_capture_limit_is_prevented() -> None:
+async def test_slow_reply_without_a_confirmation_sample_is_prevented() -> None:
     turn = await ask(
         Meeting(look_at=CAPTURED_AT + 0.5, write_at=CAPTURED_AT + 5.2),
         "When is beta?",
@@ -388,8 +388,8 @@ def stop_sharing(meeting: Meeting) -> None:
 @pytest.mark.parametrize(
     ("change", "reason"),
     [
-        (show_budget, "invalid:subject_changed"),
-        (stop_sharing, "unknown:scene_continuity_unknown"),
+        (show_budget, "invalid:scene_changed"),
+        (stop_sharing, "invalid:scene_changed"),
     ],
 )
 async def test_screen_change_between_the_look_and_the_write_prevents_the_claim(

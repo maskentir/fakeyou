@@ -20,7 +20,7 @@ def sample(sequence: int, digest: str | None = "aa", **changes: Any) -> DigestRe
 def ingest(ledger: SampleLedger, record: DigestRecord, seconds: float) -> str:
     return ledger.ingest(
         record, captured_at=at(seconds), capture=MappedInstant(100.0 + seconds, 0.01)
-    )
+    ).outcome
 
 
 def test_accepted_sample_becomes_the_latest_with_its_own_capture() -> None:

@@ -3,16 +3,21 @@ from __future__ import annotations
 import hashlib
 import math
 import uuid
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Literal
 
 from fakeyou.foundation.clock import monotonic
-from fakeyou.foundation.content_digest import ContentSample, DigestRecord, MatchLevel
+from fakeyou.foundation.content_digest import ContentSample, MatchLevel
 
 EvidenceSource = Literal["camera", "screen"]
 PublicationValidity = Literal["valid", "invalid", "unknown"]
+AgeState = Literal["fresh", "uncertain", "old"]
+CAPTURE_FRESHNESS_SECONDS = 5.0
+VALIDATION_AGE_SECONDS = 0.25
+MAX_CLOCK_UNCERTAINTY_SECONDS = 0.05
+VALID_REASONS = ("ok", "continuity_confirmed", "content_confirmed_after_interruption")
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,7 +63,7 @@ class EvidenceBinding:
     capture_mapping_uncertainty_seconds: float | None = None
     observation_clock_domain: str | None = None
     status: str | None = None
-    digest: DigestRecord | None = None
+    analyzed: ContentSample | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,6 +184,7 @@ class Validation:
     uncertainty_seconds: float
     match: MatchLevel | None = None
     confirmation: ContentSample | None = None
+    source_stopped: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,12 +202,23 @@ class AudioPublication:
 
 
 @dataclass(frozen=True, slots=True)
+class EvidenceBasis:
+    kind: str
+    analyzed: ContentSample | None
+    confirmation: ContentSample | None
+    match: MatchLevel | None
+    source_continuous: bool | None
+    evaluated_at: float
+
+
+@dataclass(frozen=True, slots=True)
 class PublicationDecision:
     validity: PublicationValidity
     reason: str
     checked_at: float | None
     clock_domain: str | None
     uncertainty_seconds: float = 0.0
+    basis: tuple[EvidenceBasis, ...] = ()
 
     @property
     def allows(self) -> bool:
@@ -247,29 +264,40 @@ async def evaluate_visual_publication(
         return PublicationDecision("valid", "ok", None, clock_domain)
     if binding.scope == "state":
         return _unknown("state_scope_needs_state_validation", now(), clock_domain)
+    validations = {item.kind: await revalidate(item) for item in binding.evidence}
+    return decide_visual_publication(binding, validations, at=now(), clock_domain=clock_domain)
+
+
+def decide_visual_publication(
+    binding: SentenceBinding,
+    validations: Mapping[str, Validation],
+    *,
+    at: float,
+    clock_domain: str,
+) -> PublicationDecision:
+    if binding.scope in {"no_visual", "historical"}:
+        return PublicationDecision("valid", "ok", None, clock_domain)
+    if binding.scope == "state":
+        return _unknown("state_scope_needs_state_validation", at, clock_domain)
+    if not _finite(at):
+        return PublicationDecision("unknown", "invalid_check_time", None, clock_domain)
     decisions = [
-        await _evaluate_evidence(item, revalidate, now, clock_domain) for item in binding.evidence
+        _evidence_decision(item, validations.get(item.kind), at, clock_domain)
+        for item in binding.evidence
     ]
-    boundary = now()
-    for evidence in binding.evidence:
-        capture = _capture_decision(evidence, boundary, clock_domain)
-        if capture is not None:
-            decisions.append(capture)
-    decisions.extend(
-        _validation_age_decision(item, boundary, clock_domain)
-        for item in tuple(decisions)
-        if item.allows
-    )
+    basis = tuple(_basis(item, validations.get(item.kind), at) for item in binding.evidence)
     invalid = next((item for item in decisions if item.validity == "invalid"), None)
-    if invalid is not None:
-        return invalid
     unknown = next((item for item in decisions if item.validity == "unknown"), None)
-    return unknown or PublicationDecision(
+    stopped = invalid or unknown
+    if stopped is not None:
+        return replace(stopped, basis=basis)
+    return PublicationDecision(
         "valid",
-        "ok",
+        max((item.reason for item in decisions), key=VALID_REASONS.index),
         min(item.checked_at for item in decisions if item.checked_at is not None),
         clock_domain,
         max(item.uncertainty_seconds for item in decisions),
+        basis,
     )
 
 
@@ -300,38 +328,48 @@ def evaluate_state_publication(
     return PublicationDecision("valid", "ok", checked_at, clock_domain)
 
 
-async def _evaluate_evidence(
-    evidence: EvidenceBinding,
-    revalidate: Callable[[EvidenceBinding], Awaitable[Validation]],
-    now: Callable[[], float],
-    clock_domain: str,
+def _evidence_decision(
+    evidence: EvidenceBinding, validation: Validation | None, at: float, clock_domain: str
 ) -> PublicationDecision:
-    validation = await revalidate(evidence)
-    checked_at = now()
-    if not _finite(checked_at):
-        return PublicationDecision("unknown", "invalid_check_time", None, clock_domain)
-    capture_decision = _capture_decision(evidence, checked_at, clock_domain)
-    if capture_decision is not None:
-        return capture_decision
-    if evidence.snapshot is None:
-        return _unknown("snapshot_missing", checked_at, clock_domain)
-    validation_decision = _validation_decision(validation, evidence, checked_at, clock_domain)
-    if validation_decision is not None:
-        return validation_decision
-    if validation.current_snapshot is None or validation.unchanged is None:
-        return _unknown("scene_continuity_unknown", checked_at, clock_domain)
-    if validation.unchanged is False:
-        return PublicationDecision("invalid", "scene_changed", checked_at, clock_domain)
-    content = _content_decision(validation.match, checked_at, clock_domain)
-    if content is not None:
-        return content
-    if validation.match is None and _scene_identity(validation.current_snapshot) != _scene_identity(
-        evidence.snapshot
-    ):
-        return PublicationDecision("invalid", "scene_changed", checked_at, clock_domain)
-    return PublicationDecision(
-        "valid", "ok", validation.checked_at, clock_domain, validation.uncertainty_seconds
+    if validation is None:
+        return _unknown("validation_missing", at, clock_domain)
+    stopped = (
+        _capture_mapping_decision(evidence, at, clock_domain)
+        or _snapshot_decision(evidence, at, clock_domain)
+        or _validation_decision(validation, evidence, at, clock_domain)
+        or _continuity_decision(validation, evidence, at, clock_domain)
+        or _content_decision(validation.match, at, clock_domain)
     )
+    if stopped is not None:
+        return stopped
+    return _freshness_decision(evidence, validation, at, clock_domain)
+
+
+def _snapshot_decision(
+    evidence: EvidenceBinding, at: float, clock_domain: str
+) -> PublicationDecision | None:
+    if evidence.snapshot is None:
+        return _unknown("snapshot_missing", at, clock_domain)
+    return None
+
+
+def _continuity_decision(
+    validation: Validation, evidence: EvidenceBinding, at: float, clock_domain: str
+) -> PublicationDecision | None:
+    if validation.source_stopped:
+        return PublicationDecision("invalid", "scene_changed", at, clock_domain)
+    if validation.current_snapshot is None or validation.unchanged is None:
+        return _unknown("scene_continuity_unknown", at, clock_domain)
+    camera = evidence.snapshot is not None and evidence.snapshot.source == "camera"
+    if validation.unchanged is False and (validation.match is None or camera):
+        return PublicationDecision("invalid", "scene_changed", at, clock_domain)
+    if (
+        validation.match is None
+        and evidence.snapshot is not None
+        and _scene_identity(validation.current_snapshot) != _scene_identity(evidence.snapshot)
+    ):
+        return PublicationDecision("invalid", "scene_changed", at, clock_domain)
+    return None
 
 
 def _content_decision(
@@ -346,11 +384,17 @@ def _content_decision(
     return None
 
 
-def _capture_decision(
+def _age_state(age: float, uncertainty: float) -> AgeState:
+    if age - uncertainty > CAPTURE_FRESHNESS_SECONDS:
+        return "old"
+    if age + uncertainty > CAPTURE_FRESHNESS_SECONDS:
+        return "uncertain"
+    return "fresh"
+
+
+def _capture_mapping_decision(
     binding: EvidenceBinding, checked_at: float, clock_domain: str
 ) -> PublicationDecision | None:
-    if not _finite(checked_at):
-        return _unknown("invalid_check_time", checked_at, clock_domain)
     if (
         not binding.capture_clock_domain
         or not binding.capture_time_origin
@@ -364,18 +408,82 @@ def _capture_decision(
     ):
         return _unknown("capture_time_invalid", checked_at, clock_domain)
     uncertainty = binding.capture_mapping_uncertainty_seconds or 0.0
-    if uncertainty < 0 or uncertainty > 0.05:
+    if uncertainty < 0 or uncertainty > MAX_CLOCK_UNCERTAINTY_SECONDS:
         return _unknown("capture_time_invalid", checked_at, clock_domain)
     if binding.capture_monotonic < 0:
         return _unknown("capture_time_invalid", checked_at, clock_domain)
     if binding.capture_monotonic > checked_at:
         return _unknown("capture_time_in_future", checked_at, clock_domain)
-    age = checked_at - binding.capture_monotonic
-    if age - uncertainty > 5.0:
-        return PublicationDecision("invalid", "capture_too_old", checked_at, clock_domain)
-    if age + uncertainty > 5.0:
-        return _unknown("capture_age_threshold_uncertain", checked_at, clock_domain)
     return None
+
+
+def _confirmation_decision(
+    evidence: EvidenceBinding, confirmation: ContentSample | None, at: float, clock_domain: str
+) -> PublicationDecision | None:
+    capture = None if confirmation is None else confirmation.capture
+    captured = evidence.capture_monotonic
+    if capture is None or captured is None or capture.clock_domain != clock_domain:
+        return _unknown("confirmation_time_unmapped", at, clock_domain)
+    uncertainty = capture.uncertainty_seconds
+    if not (_finite(capture.monotonic) and _finite(uncertainty)):
+        return _unknown("confirmation_time_unmapped", at, clock_domain)
+    if uncertainty < 0 or uncertainty > MAX_CLOCK_UNCERTAINTY_SECONDS:
+        return _unknown("confirmation_time_unmapped", at, clock_domain)
+    if capture.monotonic < captured or capture.monotonic > at:
+        return _unknown("confirmation_time_inconsistent", at, clock_domain)
+    state = _age_state(at - capture.monotonic, uncertainty)
+    if state == "old":
+        return PublicationDecision("invalid", "confirmation_too_old", at, clock_domain)
+    if state == "uncertain":
+        return _unknown("confirmation_age_threshold_uncertain", at, clock_domain)
+    return None
+
+
+def _freshness_decision(
+    evidence: EvidenceBinding, validation: Validation, at: float, clock_domain: str
+) -> PublicationDecision:
+    captured = evidence.capture_monotonic or 0.0
+    state = _age_state(at - captured, evidence.capture_mapping_uncertainty_seconds or 0.0)
+    reason = "ok"
+    if validation.match == "exact":
+        confirmation = validation.confirmation
+        stopped = _confirmation_decision(evidence, confirmation, at, clock_domain)
+        if stopped is not None and (state != "fresh" or stopped.validity == "unknown"):
+            return stopped
+        analyzed = evidence.analyzed
+        interrupted = (
+            confirmation is not None
+            and analyzed is not None
+            and confirmation.continuity != analyzed.continuity
+        )
+        if interrupted:
+            reason = "content_confirmed_after_interruption"
+        elif state != "fresh":
+            reason = "continuity_confirmed"
+    elif state == "old":
+        return PublicationDecision("invalid", "capture_too_old", at, clock_domain)
+    elif state == "uncertain":
+        return _unknown("capture_age_threshold_uncertain", at, clock_domain)
+    return PublicationDecision(
+        "valid", reason, validation.checked_at, clock_domain, validation.uncertainty_seconds
+    )
+
+
+def _basis(evidence: EvidenceBinding, validation: Validation | None, at: float) -> EvidenceBasis:
+    analyzed = evidence.analyzed
+    confirmation = None if validation is None else validation.confirmation
+    return EvidenceBasis(
+        kind=evidence.kind,
+        analyzed=analyzed,
+        confirmation=confirmation,
+        match=None if validation is None else validation.match,
+        source_continuous=(
+            None
+            if analyzed is None or confirmation is None
+            else analyzed.continuity == confirmation.continuity
+        ),
+        evaluated_at=at,
+    )
 
 
 def _validation_decision(
@@ -395,7 +503,7 @@ def _validation_decision(
     if (
         not _finite(validation.uncertainty_seconds)
         or validation.uncertainty_seconds < 0
-        or validation.uncertainty_seconds > 0.05
+        or validation.uncertainty_seconds > MAX_CLOCK_UNCERTAINTY_SECONDS
     ):
         return _unknown("validation_uncertainty_too_large", checked_at, clock_domain)
     age = _validation_age_decision(
@@ -413,6 +521,7 @@ def _validation_decision(
         return PublicationDecision("invalid", "unsupported", checked_at, clock_domain)
     if (
         binding.snapshot is not None
+        and binding.snapshot.source == "camera"
         and validation.current_snapshot is not None
         and (binding.snapshot.subject_id != validation.current_snapshot.subject_id)
     ):
@@ -428,7 +537,7 @@ def _validation_age_decision(
     age = boundary - decision.checked_at
     if age < 0:
         return _unknown("validation_time_in_future", boundary, clock_domain)
-    if age - decision.uncertainty_seconds > 0.25:
+    if age - decision.uncertainty_seconds > VALIDATION_AGE_SECONDS:
         return PublicationDecision(
             "invalid",
             "validation_too_old",
@@ -436,6 +545,6 @@ def _validation_age_decision(
             clock_domain,
             decision.uncertainty_seconds,
         )
-    if age + decision.uncertainty_seconds > 0.25:
+    if age + decision.uncertainty_seconds > VALIDATION_AGE_SECONDS:
         return _unknown("validation_age_threshold_uncertain", boundary, clock_domain)
     return decision

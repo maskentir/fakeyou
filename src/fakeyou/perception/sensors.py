@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import PerceptionSettings
 from fakeyou.foundation.clock_mapping import ClockExchange, MappedInstant, RemoteClock
-from fakeyou.foundation.content_digest import DigestRecord
+from fakeyou.foundation.content_digest import ContentSample, DigestRecord
 from fakeyou.foundation.invariants import PERCEPTION_POLL_TIMEOUT_MULTIPLIER
 from fakeyou.foundation.polling import PollingLoop, PollSchedule
 from fakeyou.foundation.resources import load_bridged_script
@@ -33,7 +33,6 @@ from fakeyou.perception.roster import MeetRoster, RosterChange, StreamAssignment
 from fakeyou.perception.timeline import (
     SCREEN_SOURCE_ID,
     CameraSample,
-    FrameSample,
     MeetingTimeline,
 )
 
@@ -160,7 +159,7 @@ class PerceptionSensors:
         self._audio_outputs: set[tuple[str, str]] = set()
         self._admitted_at: datetime | None = None
         self._sampler_samples: dict[str, float] = {}
-        self._frame_samples: OrderedDict[tuple[str, int], FrameSample] = OrderedDict()
+        self._frame_samples: OrderedDict[tuple[str, int], ContentSample] = OrderedDict()
         self._recording_streams: set[str] = set()
         self.samples_seen = 0
         self.samples_irregular = 0
@@ -209,7 +208,8 @@ class PerceptionSensors:
             else self._person(assignment.device_id).participant_id
         )
         captured_at = page_time(sample.page_ms)
-        frame_sample = FrameSample(
+        capture = self.capture_instant(captured_at)
+        ingested = self.timeline.confirm(
             DigestRecord(
                 algorithm=sample.algorithm,
                 version=sample.version,
@@ -224,14 +224,15 @@ class PerceptionSensors:
                 digest=sample.digest,
                 skip_reason=sample.skip_reason,
             ),
-            self.capture_instant(captured_at),
+            captured_at=captured_at,
+            capture=capture,
         )
         self._recording_streams.add(sample.stream_id)
-        self._frame_samples[sample.stream_id, sample.sequence] = frame_sample
+        self._frame_samples[sample.stream_id, sample.sequence] = ingested.sample
         while len(self._frame_samples) > FRAME_SAMPLE_CACHE_SIZE:
             self._frame_samples.popitem(last=False)
         self.samples_seen += 1
-        outcome = self.timeline.confirm(frame_sample, captured_at=captured_at)
+        outcome = ingested.outcome
         if outcome != "accepted":
             self.samples_irregular += 1
             self._journal.record(

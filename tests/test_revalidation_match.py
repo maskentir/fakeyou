@@ -15,7 +15,6 @@ from fakeyou.perception.revalidation import SceneRevalidator
 from fakeyou.perception.timeline import (
     SCREEN_SOURCE_ID,
     CameraSample,
-    FrameSample,
     MeetingTimeline,
 )
 from tests._perception_fakes import START, keyframe, slide_jpeg
@@ -55,7 +54,7 @@ class Scene:
             "attempt",
             "inference",
             status="produced",
-            digest=analyzed.record,
+            analyzed=analyzed,
         )
 
     def camera(self, color: tuple[int, int, int], seconds: float, stream: str = "s") -> None:
@@ -77,7 +76,7 @@ class Scene:
             "attempt",
             "inference",
             status="produced",
-            digest=frame.content.record,
+            analyzed=frame.content,
         )
 
     def match(self, evidence: EvidenceBinding) -> MatchLevel | None:
@@ -88,9 +87,7 @@ def digest_only(scene: Scene, sequence: int, **changes: Any) -> None:
     latest = scene.timeline.samples.latest("screen", SCREEN_SOURCE_ID)
     assert latest is not None
     record = replace(latest.record, sequence=sequence, **changes)
-    scene.timeline.confirm(
-        FrameSample(record, None), captured_at=START + timedelta(seconds=sequence)
-    )
+    scene.timeline.confirm(record, captured_at=START + timedelta(seconds=sequence), capture=None)
 
 
 def test_no_sample_after_the_analyzed_frame_has_no_match_level() -> None:
@@ -131,6 +128,40 @@ def test_digest_only_sample_with_another_digest_is_similar_without_any_frame() -
     assert scene.match(evidence) == "similar"
 
 
+def test_newer_non_exact_sample_outvotes_an_older_exact_one() -> None:
+    scene = Scene()
+    evidence = scene.screen_evidence()
+    digest_only(scene, 2)
+    assert scene.match(evidence) == "exact"
+
+    digest_only(scene, 3, digest="0" * 64)
+
+    assert scene.match(evidence) == "similar"
+
+
+def test_content_that_left_and_came_back_is_exact_with_a_broken_continuity() -> None:
+    scene = Scene()
+    evidence = scene.screen_evidence()
+    scene.show(BUDGET, 1.0)
+
+    scene.show(ROADMAP, 2.0)
+
+    validation = scene.revalidate.validate(evidence)
+    assert validation.match == "exact"
+    assert evidence.analyzed is not None
+    assert validation.confirmation is not None
+    assert validation.confirmation.continuity != evidence.analyzed.continuity
+
+
+def test_stopped_share_is_reported_as_a_stopped_source() -> None:
+    scene = Scene()
+    evidence = scene.screen_evidence()
+
+    scene.timeline.stop_screen(START + timedelta(seconds=1))
+
+    assert scene.revalidate.validate(evidence).source_stopped
+
+
 def test_another_segment_is_distinct() -> None:
     scene = Scene()
     evidence = scene.screen_evidence()
@@ -161,7 +192,7 @@ def test_later_sample_that_cannot_be_compared_is_unknown(change: dict[str, Any])
 
 def test_analyzed_frame_without_a_digest_is_unknown_once_any_sample_exists() -> None:
     scene = Scene()
-    evidence = replace(scene.screen_evidence(), digest=None)
+    evidence = replace(scene.screen_evidence(), analyzed=None)
 
     assert scene.match(evidence) == "unknown"
 
@@ -179,12 +210,12 @@ def test_sample_with_an_inconsistent_capture_time_is_unknown() -> None:
 def test_repeated_frame_does_not_become_the_confirmation() -> None:
     scene = Scene()
     evidence = scene.screen_evidence()
-    assert evidence.digest is not None
-    first = replace(evidence.digest, sequence=2, media_timestamp=1000.0)
-    scene.timeline.confirm(FrameSample(first, None), captured_at=START + timedelta(seconds=1))
+    assert evidence.analyzed is not None
+    first = replace(evidence.analyzed.record, sequence=2, media_timestamp=1000.0)
+    scene.timeline.confirm(first, captured_at=START + timedelta(seconds=1), capture=None)
 
     repeated = replace(first, sequence=3)
-    scene.timeline.confirm(FrameSample(repeated, None), captured_at=START + timedelta(seconds=30))
+    scene.timeline.confirm(repeated, captured_at=START + timedelta(seconds=30), capture=None)
 
     validation = scene.revalidate.validate(evidence)
     assert validation.confirmation is not None
@@ -227,11 +258,12 @@ def test_camera_heartbeat_without_a_record_is_unknown() -> None:
 def test_analyzed_record_is_not_changed_by_later_samples() -> None:
     scene = Scene()
     evidence = scene.screen_evidence()
-    before = (evidence.digest, evidence.snapshot)
+    before = (evidence.analyzed, evidence.snapshot)
 
     scene.show(ROADMAP_EDITED, 1.0)
     digest_only(scene, 7)
     scene.show(BUDGET, 9.0)
 
-    assert (evidence.digest, evidence.snapshot) == before
-    assert isinstance(evidence.digest, DigestRecord)
+    assert (evidence.analyzed, evidence.snapshot) == before
+    assert evidence.analyzed is not None
+    assert isinstance(evidence.analyzed.record, DigestRecord)

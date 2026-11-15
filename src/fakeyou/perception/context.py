@@ -435,7 +435,12 @@ class MeetingEvidence:
                         fields["provider"] = result.attempt.provider
                     if result.attempt.response_id:
                         fields["provider_response_id"] = result.attempt.response_id
-                mapped = self._capture(result)
+                analyzed = (
+                    None
+                    if result.snapshot is None
+                    else self._context.timeline.analyzed_sample(result.snapshot)
+                )
+                mapped = analyzed.capture if analyzed is not None else None
                 fields["capture_mapped"] = mapped is not None
                 if mapped is not None:
                     fields["capture_mapping_uncertainty_ms"] = round(
@@ -451,20 +456,14 @@ class MeetingEvidence:
         )
         return GatheredEvidence(payloads, attempt_id, provenance)
 
-    def _capture(self, result: EvidenceResult) -> MappedInstant | None:
-        clock = self._context.capture_clock
-        if clock is None or result.snapshot is None:
-            return None
-        return clock(result.snapshot.captured_at)
-
     def _binding(self, need: str, attempt_id: str, result: EvidenceResult) -> EvidenceBinding:
         attempt = result.attempt
-        mapped = self._capture(result)
         analyzed = (
             None
             if result.snapshot is None
             else self._context.timeline.analyzed_sample(result.snapshot)
         )
+        mapped = analyzed.capture if analyzed is not None else None
         return EvidenceBinding(
             kind=need,
             gather_attempt_id=attempt_id,
@@ -484,7 +483,7 @@ class MeetingEvidence:
             ),
             observation_clock_domain=LOCAL_MONOTONIC if attempt is not None else "utc",
             status=result.status,
-            digest=analyzed.record if analyzed is not None else None,
+            analyzed=analyzed,
         )
 
 

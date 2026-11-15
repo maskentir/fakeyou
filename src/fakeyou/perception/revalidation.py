@@ -2,7 +2,7 @@ from collections.abc import Callable
 
 from fakeyou.foundation.clock import monotonic
 from fakeyou.foundation.clock_mapping import LOCAL_MONOTONIC
-from fakeyou.foundation.content_digest import ContentSample, DigestRecord, MatchLevel
+from fakeyou.foundation.content_digest import ContentSample, MatchLevel
 from fakeyou.foundation.publication import EvidenceBinding, SnapshotRef, Validation
 from fakeyou.perception.context import PerceptionContext
 from fakeyou.perception.timeline import SCREEN_SOURCE_ID, CameraFrame
@@ -54,8 +54,15 @@ class SceneRevalidator:
             unchanged=None if bound is None else same_scene,
             observed_at=scene.seen_at if isinstance(scene, CameraFrame) else checked_at,
             uncertainty_seconds=0.0,
-            match=_match(evidence.digest, latest, same_scene=same_scene),
+            match=_match(evidence.analyzed, latest, same_scene=same_scene),
             confirmation=latest,
+            source_stopped=bound is not None and self._stopped(bound),
+        )
+
+    def _stopped(self, bound: SnapshotRef) -> bool:
+        return bound.source == "screen" and (
+            self._context.timeline.samples.stopped("screen", SCREEN_SOURCE_ID)
+            or self._context.timeline.snapshot().current_screen is None
         )
 
     def _latest(self, bound: SnapshotRef) -> ContentSample | None:
@@ -70,19 +77,20 @@ def _same_source(bound: SnapshotRef, current: SnapshotRef) -> bool:
 
 
 def _match(
-    analyzed: DigestRecord | None, latest: ContentSample | None, *, same_scene: bool
+    analyzed: ContentSample | None, latest: ContentSample | None, *, same_scene: bool
 ) -> MatchLevel | None:
     if latest is None:
         return None
     if analyzed is None:
         return "unknown"
-    if latest.record.sequence <= analyzed.sequence:
+    record = analyzed.record
+    if latest.record.sequence <= record.sequence:
         return None
-    same = analyzed.same_content_as(latest.record)
+    same = record.same_content_as(latest.record)
     if same is None or not latest.consistent:
         return "unknown"
     if same:
         return "exact"
-    if analyzed.role == "camera":
+    if record.role == "camera":
         return "similar"
     return "similar" if same_scene else "distinct"

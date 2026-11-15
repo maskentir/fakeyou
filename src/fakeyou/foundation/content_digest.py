@@ -51,6 +51,7 @@ class ContentSample:
     capture: MappedInstant | None
     revision: int
     consistent: bool = True
+    continuity: int = 0
 
 
 @dataclass(frozen=True, slots=True)
