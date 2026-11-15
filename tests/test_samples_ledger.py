@@ -203,3 +203,40 @@ def test_retired_camera_sampler_cannot_be_relabelled_as_a_new_subject() -> None:
 
     assert outcome == "retired_stream"
     assert ledger.latest("camera", "new-person") is None
+
+
+def test_page_epoch_scopes_generation_and_rejects_old_page_records() -> None:
+    ledger = SampleLedger()
+    ledger.begin_page(0, "page-a")
+    first = sample(500, generation=8, page_session="page-a")
+    assert ingest(ledger, first, 10.0) == "accepted"
+    original = ledger.latest("screen", "screen")
+    assert original is not None
+    ledger.begin_page(1, "page-b")
+
+    assert (
+        ingest(ledger, sample(1, generation=1, page_epoch=1, page_session="page-b"), 1.0)
+        == "accepted"
+    )
+    latest = ledger.latest("screen", "screen")
+    assert latest is not None
+    assert latest.consistent is True
+    assert latest.record.sampler_identity != original.record.sampler_identity
+    assert latest.continuity > original.continuity
+    assert ingest(ledger, sample(999, generation=99, page_session="page-a"), 20.0) == "retired_page"
+    assert ledger.latest("screen", "screen") == latest
+
+
+def test_stream_owner_lookup_does_not_relabel_old_page_evidence() -> None:
+    ledger = SampleLedger()
+    ledger.begin_page(0, "page-a")
+    ingest(ledger, sample(1, role="camera", subject_id="person-a", page_session="page-a"), 1.0)
+    ledger.begin_page(1, "page-b")
+    ingest(
+        ledger,
+        sample(1, role="camera", subject_id="person-b", page_epoch=1, page_session="page-b"),
+        2.0,
+    )
+
+    assert ledger.subject_of_stream("camera", "stream-screen", page=(0, "page-a")) == "person-a"
+    assert ledger.subject_of_stream("camera", "stream-screen", page=(1, "page-b")) == "person-b"

@@ -9,7 +9,7 @@ from fakeyou.foundation.clock_mapping import MappedInstant
 from fakeyou.foundation.content_digest import ContentSample, DigestRecord, DigestRole
 
 IngestOutcome = Literal[
-    "accepted", "repeated", "out_of_order", "inconsistent_time", "retired_stream"
+    "accepted", "repeated", "out_of_order", "inconsistent_time", "retired_stream", "retired_page"
 ]
 
 
@@ -20,12 +20,13 @@ class Ingested:
 
 
 SourceKey = tuple[DigestRole, str]
+SamplerIdentity = tuple[int, str | None, str, int]
 
 
 @dataclass(slots=True)
 class _Source:
-    incarnation: tuple[str, int] | None = None
-    retired: set[tuple[str, int]] = field(default_factory=set)
+    incarnation: SamplerIdentity | None = None
+    retired: set[SamplerIdentity] = field(default_factory=set)
     latest: ContentSample | None = None
     highest_sequence: int | None = None
     media_timestamp: float | None = None
@@ -42,13 +43,32 @@ HISTORY_SIZE = 512
 @dataclass(slots=True)
 class SampleLedger:
     revision: int = 0
+    page_epoch: int = 0
+    page_session: str | None = None
     _sources: dict[SourceKey, _Source] = field(default_factory=dict)
     _history: deque[ContentSample] = field(default_factory=lambda: deque(maxlen=HISTORY_SIZE))
-    _stream_subjects: dict[tuple[DigestRole, str], str] = field(default_factory=dict)
-    _retired_streams: set[tuple[DigestRole, str, int]] = field(default_factory=set)
+    _stream_subjects: dict[tuple[DigestRole, int, str | None, str], str] = field(
+        default_factory=dict
+    )
+    _retired_streams: set[tuple[DigestRole, int, str | None, str, int]] = field(default_factory=set)
 
-    def subject_of_stream(self, role: DigestRole, stream_id: str) -> str | None:
-        return self._stream_subjects.get((role, stream_id))
+    def begin_page(self, epoch: int, session: str | None = None) -> None:
+        if epoch < self.page_epoch or (
+            epoch == self.page_epoch and self.page_session not in {None, session}
+        ):
+            raise ValueError("page identity must advance through a new epoch")
+        if (epoch, session) == (self.page_epoch, self.page_session):
+            return
+        for role, subject in self._sources:
+            self.stop(role, subject)
+        self.page_epoch = epoch
+        self.page_session = session
+
+    def subject_of_stream(
+        self, role: DigestRole, stream_id: str, *, page: tuple[int, str | None] | None = None
+    ) -> str | None:
+        epoch, session = (self.page_epoch, self.page_session) if page is None else page
+        return self._stream_subjects.get((role, epoch, session, stream_id))
 
     def since(self, revision: int) -> tuple[ContentSample, ...]:
         return tuple(sample for sample in self._history if sample.revision > revision)
@@ -57,6 +77,9 @@ class SampleLedger:
         self, record: DigestRecord, *, captured_at: datetime, capture: MappedInstant | None
     ) -> Ingested:
         source = self._sources.setdefault((record.role, record.subject_id), _Source())
+        if (record.page_epoch, record.page_session) != (self.page_epoch, self.page_session):
+            source.discarded += 1
+            return Ingested("retired_page", self._sample(source, record, captured_at, capture))
         if not self._admit_stream(source, record, captured_at):
             source.discarded += 1
             return Ingested("retired_stream", self._sample(source, record, captured_at, capture))
@@ -76,31 +99,46 @@ class SampleLedger:
                 return Ingested("repeated", self._sample(source, record, captured_at, capture))
         if stamp is not None:
             source.media_timestamp = stamp
-        consistent = previous is None or captured_at >= previous.captured_at
+        consistent = (
+            previous is None
+            or (
+                (record.page_epoch, record.page_session)
+                != (previous.record.page_epoch, previous.record.page_session)
+            )
+            or captured_at >= previous.captured_at
+        )
         if previous is not None and previous.record.same_content_as(record) is not True:
             source.continuity += 1
         self.revision += 1
         source.stopped = False
         if record.stream_id:
-            self._stream_subjects[record.role, record.stream_id] = record.subject_id
+            self._stream_subjects[
+                record.role, record.page_epoch, record.page_session, record.stream_id
+            ] = record.subject_id
         source.latest = self._sample(source, record, captured_at, capture, consistent=consistent)
         self._history.append(source.latest)
         return Ingested("accepted" if consistent else "inconsistent_time", source.latest)
 
     def _admit_stream(self, source: _Source, record: DigestRecord, captured_at: datetime) -> bool:
-        incarnation = (record.stream_id, record.generation)
+        incarnation = record.sampler_identity
         if (record.role, *incarnation) in self._retired_streams:
             return False
         previous = source.latest
         if incarnation in source.retired or (
-            source.incarnation is not None and record.generation < source.incarnation[1]
+            source.incarnation is not None
+            and incarnation[:2] == source.incarnation[:2]
+            and record.generation < source.incarnation[-1]
         ):
             return False
         if source.incarnation is not None and source.incarnation != incarnation:
-            if previous is not None and captured_at < previous.captured_at:
+            if (
+                previous is not None
+                and incarnation[:2] == source.incarnation[:2]
+                and captured_at < previous.captured_at
+            ):
                 return False
             source.retired.add(source.incarnation)
-            if source.incarnation[1] > 0:
+            if source.incarnation[-1] > 0:
                 self._retired_streams.add((record.role, *source.incarnation))
             source.continuity += 1
             source.highest_sequence = None
@@ -128,7 +166,7 @@ class SampleLedger:
         self.revision += 1
         source.stopped = True
         source.continuity += 1
-        if source.incarnation is not None and source.incarnation[1] > 0:
+        if source.incarnation is not None and source.incarnation[-1] > 0:
             source.retired.add(source.incarnation)
             self._retired_streams.add((role, *source.incarnation))
 

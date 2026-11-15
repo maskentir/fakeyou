@@ -53,9 +53,8 @@ class SceneRevalidator:
             and analyzed is not None
             and latest is not None
         ):
-            same_scene = same_scene and (analyzed.record.stream_id, analyzed.record.generation) == (
-                latest.record.stream_id,
-                latest.record.generation,
+            same_scene = (
+                same_scene and analyzed.record.sampler_identity == latest.record.sampler_identity
             )
         return Validation(
             checked_at=checked_at,
@@ -98,8 +97,8 @@ class SceneRevalidator:
         if not same_scene:
             return True
         streams = (
-            None if analyzed is None else (analyzed.record.stream_id, analyzed.record.generation),
-            None if latest is None else (latest.record.stream_id, latest.record.generation),
+            None if analyzed is None else analyzed.record.sampler_identity,
+            None if latest is None else latest.record.sampler_identity,
         )
         if streams[0] and streams[1] and streams[0] != streams[1]:
             return True
@@ -116,7 +115,10 @@ class SceneRevalidator:
 
     def _subject_changed(self, bound: SnapshotRef, analyzed: ContentSample | None) -> bool:
         stream_id = bound.stream_id if analyzed is None else analyzed.record.stream_id
-        owner = self._context.timeline.samples.subject_of_stream("camera", stream_id)
+        page = (
+            None if analyzed is None else (analyzed.record.page_epoch, analyzed.record.page_session)
+        )
+        owner = self._context.timeline.samples.subject_of_stream("camera", stream_id, page=page)
         return owner is not None and owner != bound.subject_id
 
     def _latest(self, bound: SnapshotRef) -> ContentSample | None:
@@ -139,8 +141,7 @@ def _match(
         return "unknown"
     record = analyzed.record
     if (
-        latest.record.stream_id == record.stream_id
-        and latest.record.generation == record.generation
+        latest.record.sampler_identity == record.sampler_identity
         and latest.record.sequence <= record.sequence
     ):
         return None

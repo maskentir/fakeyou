@@ -2,6 +2,7 @@
   if (window.__fakeyouPerception) return;
   const bridge = window.__fakeyouRtc;
   if (!bridge) return;
+  const pageSession = crypto.randomUUID();
   const PROTOCOL_CHANNELS = ["collections"];
   const MAX_MESSAGES = 2000;
   const MAX_FRAMES = 8;
@@ -45,7 +46,7 @@
   }
 
   function pushMessage(label, bytes) {
-    messages.push({ channel: label, page_ms: bridge.pageNow(), b64: encodeBase64(bytes) });
+    messages.push({ page_session: pageSession, channel: label, page_ms: bridge.pageNow(), b64: encodeBase64(bytes) });
     if (messages.length > MAX_MESSAGES) {
       messages.splice(0, messages.length - MAX_MESSAGES);
       droppedMessages += 1;
@@ -138,6 +139,7 @@
   async function digestRecord(state, frame, page_ms) {
     state.sequence += 1;
     const record = {
+      page_session: pageSession,
       stream_id: state.id,
       generation: state.generation,
       role: state.role,
@@ -201,7 +203,8 @@
       .then((blob) => blob.arrayBuffer())
       .then((buffer) =>
         pushFrame({
-          stream_id: state.id,
+          page_session: pageSession,
+      stream_id: state.id,
       generation: state.generation,
           role: state.role,
           page_ms,
@@ -400,6 +403,7 @@
 
   function activeSamplers() {
     return [...samplers.values()].map((state) => ({
+      page_session: pageSession,
       stream_id: state.id,
       generation: state.generation,
       role: state.role,
@@ -415,6 +419,7 @@
       (item) => item.jpeg_b64.length
     );
     return {
+      page_session: pageSession,
       drained_page_ms: bridge.pageNow(),
       messages: sizedMessages.taken,
       frames: sizedFrames.taken,

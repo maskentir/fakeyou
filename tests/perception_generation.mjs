@@ -21,6 +21,7 @@ class Processor {
 const window = { __fakeyouRtc: bridge };
 vm.runInNewContext(readFileSync(process.argv[2], "utf8"), {
   window,
+  crypto: { randomUUID: () => "page-session-a" },
   MediaStreamTrackProcessor: Processor,
 });
 const api = window.__fakeyouPerception;
@@ -55,3 +56,20 @@ first.end();
 assert.equal(api.drain().active[0].generation, replaced);
 api.assign([]);
 assert.equal(api.drain().active.length, 0);
+
+const windowB = { __fakeyouRtc: bridge };
+vm.runInNewContext(readFileSync(process.argv[2], "utf8"), {
+  window: windowB,
+  crypto: { randomUUID: () => "page-session-b" },
+  MediaStreamTrackProcessor: Processor,
+});
+const apiB = windowB.__fakeyouPerception;
+apiB.assign([{ stream_id: "share", role: "camera", device_id: "person-a" }]);
+onTrack({ track: track(), streams: [{ id: "share" }] });
+const reloaded = apiB.drain();
+assert.equal(reloaded.active[0].generation, 1);
+assert.ok(replaced > reloaded.active[0].generation);
+assert.equal(reloaded.page_session, "page-session-b");
+assert.equal(reloaded.active[0].page_session, reloaded.page_session);
+assert.notEqual(api.drain().page_session, reloaded.page_session);
+apiB.assign([]);

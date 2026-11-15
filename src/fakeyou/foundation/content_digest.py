@@ -30,6 +30,12 @@ class DigestRecord:
     digest: str | None
     skip_reason: str | None = None
     generation: int = 0
+    page_epoch: int = 0
+    page_session: str | None = None
+
+    @property
+    def sampler_identity(self) -> tuple[int, str | None, str, int]:
+        return self.page_epoch, self.page_session, self.stream_id, self.generation
 
     def comparable_with(self, other: DigestRecord) -> bool:
         return (
@@ -60,6 +66,8 @@ class SampleSource:
     role: DigestRole
     stream_id: str
     subject_id: str
+    page_epoch: int = 0
+    page_session: str | None = None
 
 
 def encoded_bytes_record(
@@ -78,4 +86,6 @@ def encoded_bytes_record(
         sequence=sequence,
         media_timestamp=None,
         digest=sha256,
+        page_epoch=source.page_epoch,
+        page_session=source.page_session,
     )

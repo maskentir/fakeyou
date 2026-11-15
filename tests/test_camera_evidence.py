@@ -977,7 +977,7 @@ def slow_decoder(monkeypatch: pytest.MonkeyPatch) -> tuple[threading.Event, thre
 
 async def _frame_in_flight(
     stack: CameraStack, monkeypatch: pytest.MonkeyPatch, data: bytes
-) -> tuple[asyncio.Task[None], threading.Event]:
+) -> tuple[asyncio.Task[bool], threading.Event]:
     started, release = slow_decoder(monkeypatch)
     task = asyncio.create_task(
         stack.sensors.accept_batch(

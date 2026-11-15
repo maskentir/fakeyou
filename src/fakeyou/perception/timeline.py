@@ -194,7 +194,13 @@ class CameraFrameStore:
             return sample.sample
         record = encoded_bytes_record(
             hashlib.sha256(sample.data).hexdigest(),
-            SampleSource("camera", sample.stream_id, participant_id),
+            SampleSource(
+                "camera",
+                sample.stream_id,
+                participant_id,
+                self.samples.page_epoch,
+                self.samples.page_session,
+            ),
             sequence=self.samples.next_sequence("camera", participant_id),
             size=(0, 0),
         )
@@ -219,6 +225,8 @@ class CameraFrameStore:
             media_timestamp=None,
             digest=None,
             skip_reason=HEARTBEAT_WITHOUT_RECORD,
+            page_epoch=self.samples.page_epoch,
+            page_session=self.samples.page_session,
         )
         self.samples.ingest(record, captured_at=captured_at, capture=None)
 
@@ -302,7 +310,13 @@ class MeetingTimeline:
             sample = self.samples.ingest(
                 encoded_bytes_record(
                     keyframe.sha256,
-                    SampleSource("screen", "", SCREEN_SOURCE_ID),
+                    SampleSource(
+                        "screen",
+                        "",
+                        SCREEN_SOURCE_ID,
+                        self.samples.page_epoch,
+                        self.samples.page_session,
+                    ),
                     sequence=self.samples.next_sequence("screen", SCREEN_SOURCE_ID),
                     size=(keyframe.width, keyframe.height),
                 ),
