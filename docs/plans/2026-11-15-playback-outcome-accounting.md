@@ -65,7 +65,10 @@ removed. A speaker that issues no receipts counts nothing.
 `SpokenLog` reads the same receipt. The journal row gains the attempt ID, outcome,
 and local audio seconds. A prevented clip is no longer written to the meeting
 record as interrupted twin speech, and a clip that finished without PCM is not
-recorded as spoken. Interruptions keep their existing record behavior.
+recorded as spoken. A finished or dropped event without a receipt, or with a
+receipt that reports no local audio, is still journaled as diagnostic telemetry
+but never becomes a `TwinSpeechEntry`. An interruption whose receipt reports
+local audio keeps its existing record behavior.
 
 ## Unchanged
 
@@ -73,7 +76,12 @@ The publication gate, its timing before the first PCM, fade-out, barge-in, freez
 and queue behavior are untouched. The fade ramp written after a cancelled first
 frame is not clip audio and does not turn the receipt into started audio. A faded
 frame of the clip itself, written when a clip is superseded mid-stream without a
-publication context, is clip PCM and is counted in `local_audio_seconds`.
+publication context, is clip PCM and is counted in `local_audio_seconds` by the
+bytes of the faded ramp that were written, not by the length of the input frame.
+
+A clip whose caller was cancelled while it waited in the queue now settles with
+one `dropped_before_audio` receipt and a `playback_dropped` event with detail
+`cancelled`. It previously left the queue silently.
 
 ## Deterministic proof
 
@@ -86,6 +94,9 @@ publication context, is clip PCM and is counted in `local_audio_seconds`.
 | Replay as a new attempt; prevented then replayed | same |
 | Actor counts once per attempt, ignores cues, close, and rebind | same |
 | Record and journal read the receipt | same |
+| Faded frame duration equals the bytes the writer received | same |
+| Caller cancelled while queued settles once without audio | same |
+| Receipt-less or no-audio events never become twin speech | same |
 | Visual reply through `TurnSink` counted only when PCM was written | `tests/test_turn_graph_publication.py` |
 | State answer counted only when PCM was written | `tests/test_state_publication.py` |
 | Interjection quota consumed only by voiced contributions | `tests/test_actor_lanes.py` |
