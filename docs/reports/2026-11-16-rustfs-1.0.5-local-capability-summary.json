@@ -1,0 +1,143 @@
+{
+  "record_type": "Canonical summary derived from immutable historical data; not a new execution",
+  "source": {
+    "source_commit": "d37b89f40155d6130ebda72de2d1ce12eeaf06b4",
+    "source_path": "docs/reports/2026-11-16-rustfs-1.0.5-local-capability.json",
+    "git_blob": "b9da22e2e9b31912e4de983b7dcbf0c0c78e5534",
+    "sha256": "548825ad326edaae122c3aaff7d63640abc777391812cca4b68e8c50b566f977",
+    "bytes": 66557,
+    "source_url": "https://github.com/maskentir/fakeyou/blob/d37b89f40155d6130ebda72de2d1ce12eeaf06b4/docs/reports/2026-11-16-rustfs-1.0.5-local-capability.json"
+  },
+  "date": "2026-11-16",
+  "custody_status": "EVIDENCE CUSTODY PENDING",
+  "scope": "One candidate build, three isolated setup attempts, one S3 capability sequence plus same-container restart follow-up; only synthetic text; no existing storage API or real archive upload",
+  "existing_deployment_metadata_unchanged": true,
+  "existing_deployment_before_sha256": "6ad797f1243563291c8c02118319da1705879acd2a8c15a499b3e63b66abae08",
+  "existing_deployment_after_sha256": "6ad797f1243563291c8c02118319da1705879acd2a8c15a499b3e63b66abae08",
+  "archive_unchanged": {
+    "path": "/Users/pushmove/Desktop/side_projects/jemboed/fakeyou/.runtime/writer-spike/writer-spike-raw-eba185d7.tar.xz",
+    "size": 3088788,
+    "sha256": "974bc6012f2a5c28ea2d9b264c3821948167b747ed05c15d18603f918faa4513"
+  },
+  "unproven": [
+    "Independent failure domain and auditor access",
+    "TLS, encryption at rest and key recovery",
+    "Non-root IAM/bypass denial and credential separation",
+    "Bucket default retention and 12-month enforcement",
+    "Long-duration expiry, multi-node, crash/disk recovery, replication and other builds",
+    "Reproducible build provenance; image labels and Git tag are metadata, not independent binary verification"
+  ],
+  "decisions": {
+    "alpha81": "Rejected as immutable evidence storage; no retest or reversal",
+    "option_a": "Preferred architecture per ruling; local capability result is not deployment or custody approval",
+    "external_deployment": "Not authorized",
+    "cost_incurring_operation": "Not authorized",
+    "real_archive_upload": "Not authorized",
+    "final_custody_bucket": "Not authorized",
+    "custody": "EVIDENCE CUSTODY PENDING"
+  },
+  "artifacts": {
+    "rustfs-attempt01-result.json": "eead17cb96e94da5cf603245a0126d828f3b9d4891cfb243deface6b4dcda916",
+    "rustfs-attempt02-driver.log": "fb7209c3c77fbddd4e28f8a669d20f1d98ce324841caf09948820d95c2aff192",
+    "rustfs-attempt01-volume-events.jsonl": "ad42dc57d9a84ae2a599925dc67a1aee7de7d82d763482fcf393f495690e3300",
+    "rustfs-restart-followup.json": "aa4920bdfb55fe12bc983b247bfe7be12fffcfe3bb7a832e889a22b400fd2d1c",
+    "rustfs_candidate.py": "1043b64ba131db8fd8e4f556803662be46c5ce7c0da7e0428f6c2cb4d48a9556",
+    "rustfs-attempt02-result.json": "1e70800bb48cb675f908bf4149e77ed0ed513f3ecb64b595ddb7ab1b9f1b61f4",
+    "rustfs-attempt01-harness.py": "bab30ff0fa8384e7600b25fcf4f54a0fe62077ccb54ed44ee1fa2500c2a69ba0",
+    "restart_followup.py": "7fcef4fd994a9e519c0208db740a38030edd94ca427a6ae1f239afc3c347236e",
+    "rustfs-attempt02-harness.py": "aaea6e2685cb24ff1e91cf4ce0175fb209556956ff842ba77e709a81a8ac10e4",
+    "rustfs-attempt01-driver.log": "134e72ca6b4d23dfe92170701b16e5dca6f350d8b9fc5aa676756aef2c3802b7",
+    "rustfs-candidate-result.json": "cfe0a82d4445e4b8815e189cd78e8d49633f5f58c1d428f32a097388379cf3f9",
+    "rustfs-release.json": "14c6c5509748bf666ad31ecb4172cae03c026cee374c9a55b98c868d05e909eb",
+    "rustfs-driver.log": "be6cca132fab688c967fe64cbf9305cb1b3e6e99d8b4d17f21bdb411002238b2",
+    "rustfs-source-tag.json": "170f725526a5ec3ca9c59e012805e58ad3cb2cbdf17c8663c10989e5395d5a81",
+    "rustfs-candidate-container.log": "6e3485f7cf4cbfb6bc5f088b9c044cf9530a12c5d142024e4aa2219b8d013485"
+  },
+  "boundaries": {
+    "provider_requests": 0,
+    "provider_spend_usd": 0,
+    "production_activation": false,
+    "publication_context": "OFF",
+    "phase5b": "NO-GO",
+    "v6": "NO-GO",
+    "existing_deployment_modified": false,
+    "real_evidence_uploaded": false,
+    "final_custody_bucket_created": false
+  },
+  "candidate": {
+    "candidate_tag": "rustfs/rustfs:1.0.5",
+    "container": "fakeyou-rnext-cap-ce59d40f84",
+    "volume": "fakeyou-rnext-cap-ce59d40f84-data",
+    "network": "fakeyou-rnext-cap-ce59d40f84-net",
+    "scope": "Disposable synthetic localhost-only capability test; no existing deployment, final custody bucket or archive upload.",
+    "started_utc": "2026-11-15T19:18:46.027995+00:00",
+    "pinned_image": "rustfs/rustfs@sha256:b81d16a90ee25bd9511280127ca1471788c6e874cf0f0da759645f46b2dc1d74",
+    "image_id": "sha256:b81d16a90ee25bd9511280127ca1471788c6e874cf0f0da759645f46b2dc1d74",
+    "image_architecture": "arm64",
+    "endpoint": "http://127.0.0.1:61140",
+    "bucket": "rnext-synthetic-ce59d40f84",
+    "completed": false,
+    "fatal": {
+      "type": "RuntimeError",
+      "detail": "No restart health"
+    },
+    "cleanup_method": "Destroy disposable container, isolated volume and network only; no S3 cleanup bypass claimed. Volume destruction can remove retained synthetic objects and is not an immutability proof.",
+    "finished_utc": "2026-11-15T19:20:22.311703+00:00"
+  },
+  "setup_attempts": [
+    {
+      "candidate_tag": "rustfs/rustfs:1.0.5",
+      "container": "fakeyou-rnext-cap-4466b5a88c",
+      "volume": "fakeyou-rnext-cap-4466b5a88c-data",
+      "network": "fakeyou-rnext-cap-4466b5a88c-net",
+      "scope": "Disposable synthetic localhost-only capability test; no existing deployment, final custody bucket or archive upload.",
+      "started_utc": "2026-11-15T19:15:59.191272+00:00",
+      "pinned_image": "rustfs/rustfs@sha256:b81d16a90ee25bd9511280127ca1471788c6e874cf0f0da759645f46b2dc1d74",
+      "image_id": "sha256:b81d16a90ee25bd9511280127ca1471788c6e874cf0f0da759645f46b2dc1d74",
+      "image_architecture": "arm64",
+      "completed": false,
+      "fatal": {
+        "type": "AssertionError",
+        "detail": ""
+      },
+      "cleanup_method": "Destroy disposable container, isolated volume and network only; no S3 cleanup bypass claimed. Volume destruction can remove retained synthetic objects and is not an immutability proof.",
+      "finished_utc": "2026-11-15T19:16:39.291615+00:00"
+    },
+    {
+      "candidate_tag": "rustfs/rustfs:1.0.5",
+      "container": "fakeyou-rnext-cap-79b788bc1c",
+      "volume": "fakeyou-rnext-cap-79b788bc1c-data",
+      "network": "fakeyou-rnext-cap-79b788bc1c-net",
+      "scope": "Disposable synthetic localhost-only capability test; no existing deployment, final custody bucket or archive upload.",
+      "started_utc": "2026-11-15T19:17:57.817266+00:00",
+      "pinned_image": "rustfs/rustfs@sha256:b81d16a90ee25bd9511280127ca1471788c6e874cf0f0da759645f46b2dc1d74",
+      "image_id": "sha256:b81d16a90ee25bd9511280127ca1471788c6e874cf0f0da759645f46b2dc1d74",
+      "image_architecture": "arm64",
+      "completed": false,
+      "fatal": {
+        "type": "RuntimeError",
+        "detail": "Runtime port binding is not an observed localhost-only mapping: {\"mounts\": [{\"Type\": \"volume\", \"Name\": \"fakeyou-rnext-cap-79b788bc1c-data\", \"Source\": \"/var/lib/docker/volumes/fakeyou-rnext-cap-79b788bc1c-data/_data\", \"Destination\": \"/data\", \"Driver\": \"local\", \"Mode\": \"z\", \"RW\": true, \"Propagation\": \"\"}], \"runtime_ports\": {\"9000/tcp\": []}, \"configured_ports\": {\"9000/tcp\": [{\"HostIp\": \"127.0.0.1\", \"HostPort\": \"\"}]}}"
+      },
+      "cleanup_method": "Destroy disposable container, isolated volume and network only; no S3 cleanup bypass claimed. Volume destruction can remove retained synthetic objects and is not an immutability proof.",
+      "finished_utc": "2026-11-15T19:18:11.182144+00:00"
+    }
+  ],
+  "restart_followup": {
+    "old_endpoint": "http://127.0.0.1:61140",
+    "observed_restart_endpoint": "http://127.0.0.1:61145",
+    "bindings": [
+      {
+        "HostIp": "127.0.0.1",
+        "HostPort": "61145"
+      }
+    ],
+    "observed_at_utc": "2026-11-15T19:19:40.405756+00:00",
+    "purpose": "Read the same disposable candidate after restart; ephemeral host port changed. No production or existing deployment calls.",
+    "health_status": 200
+  },
+  "api_observations": "See unchanged Markdown report Measured API controls table: local observations only, including version-specific reads/hash checks and expected denial results. All 59 raw SDK invocation records remain solely at immutable source reference.",
+  "operation_counts": {
+    "before_restart": 46,
+    "restart_followup": 13
+  }
+}
