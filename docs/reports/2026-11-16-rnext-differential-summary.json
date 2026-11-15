@@ -1,0 +1,365 @@
+{
+  "record_type": "Canonical summary derived from immutable historical data; not a new execution",
+  "source": {
+    "source_commit": "d37b89f40155d6130ebda72de2d1ce12eeaf06b4",
+    "source_path": "docs/reports/2026-11-16-rnext-differential.json",
+    "git_blob": "3a3c6e2fb807bb14e23f26d32578a8d9f53afd9c",
+    "sha256": "bab05bee0150b094c18c9ef486c73bf567fa3c51a8eb4c86979d4d8be455c22c",
+    "bytes": 364686,
+    "source_url": "https://github.com/maskentir/fakeyou/blob/d37b89f40155d6130ebda72de2d1ce12eeaf06b4/docs/reports/2026-11-16-rnext-differential.json"
+  },
+  "date": "2026-11-16",
+  "reviewed_main": "a79197b5cf20d4235861b46edeb20165f4112bed",
+  "reviewed_pr220": "77e51c797ddbc9df75a5eeeac73331d306cdd2e1",
+  "reviewed_pr221": "44a5739ea74ff2ebdd38ae54b768e36dc5fd593a",
+  "protocol": {
+    "id": "rnext-differential-1",
+    "order": [
+      "01-main",
+      "02-pr220",
+      "03-pr220",
+      "04-main"
+    ],
+    "run_limit": 4,
+    "timeout_seconds_per_full_run": 600,
+    "workers": 4,
+    "selection": "Full native offline suites, default repository marker exclusions; no special deselection or assertion/timing/marker/source edits. Native collection delta is measured, not hidden.",
+    "instrumentation": "Passive sys.settrace enabled only during the target case; identical plugin bytes for all runs; may perturb timing and cannot reconstruct the uninstrumented historical execution.",
+    "python": "/Users/pushmove/Desktop/side_projects/jemboed/fakeyou/.venv/bin/python",
+    "platform": "macOS-27.0.1-arm64-arm-64bit",
+    "hashseed": "0",
+    "network_profile": "/private/tmp/fakeyou-rnext-20261116/offline.sb",
+    "plugin_sha256": "4b5e6276fc3c5cacc9d241482a2b7c78539f169598423254fcdfad62ffc12d06",
+    "deps_sha256": "db90e8b15bccf1299613e6fd0beeabc9416a761eaaecfbc6e628623a8cac207a",
+    "rustfs_test": "Deferred until all four runs complete; existing services not changed."
+  },
+  "protocol_sha256": "fe68b8b38fcfc44270c296736d5d04d0cb74855a55b6c0822b7d68b57116b4dc",
+  "driver_sha256": "c86912fd34ee32d185e0b8f8a02a5bd8a4c973f65d3eeae4ee041a4dcc85d274",
+  "driver_log_sha256": "3b524656ba39b70b9f7ef103a2b29102979ab8db3a2d95769ed9d14efea1d68b",
+  "historical_failures_preserved": {
+    "previous_pr220_full_run": {
+      "passed": 12152,
+      "failed": 1,
+      "skipped": 113,
+      "failure": "tests/test_actor_early_commit.py::test_a_repeated_interim_does_not_restart_the_hold",
+      "junit_sha256": "257a8cf7c7a558e60cff3970980d6376a00f8bf18ab96808e0ac7dadcbfd4569"
+    },
+    "earlier_reported_run": {
+      "test_sha": "36da8ca296b59920e01b4189a647ec6376eff56b",
+      "failed": 2,
+      "failures": [
+        "tests/test_resources.py::test_resource_handle_is_the_bundled_file_on_disk",
+        "tests/test_turn_graph_nonstreamed.py::test_whole_respond_over_the_turn_budget_is_cut_journaled_and_counted"
+      ],
+      "evidence": "Historical PR body; original raw log not recovered; no fix or waiver."
+    }
+  },
+  "boundaries": {
+    "source_or_tests_changed": false,
+    "assertion_threshold_or_skip_changed": false,
+    "production_safety_behavior_changed": false,
+    "provider_requests": 0,
+    "provider_spend_usd": 0,
+    "publication_context": "OFF",
+    "phase5b": "NO-GO",
+    "v6": "NO-GO",
+    "pr_b_implementation_started": false,
+    "merge_or_mark_ready": false
+  },
+  "attribution": {
+    "verdict": "INCONCLUSIVE: no recurrence in four bounded full-workload executions; no observed PR-specific failure; historical cause not established",
+    "merge_recommendation": "MERGE HOLD remains; green runs do not establish harmlessness and no waiver is issued",
+    "measured": [
+      "All four native full suites passed; target timer/version unchanged by repeated interim in all four traces",
+      "Identical target worker and twelve preceding tests; changing host load and native collection delta recorded",
+      "Historical previous full run remains failed; two earlier reported failures remain failures without waiver"
+    ],
+    "source_arguments": [
+      "Actor and target test bytes identical across main and PR220",
+      "Actor creates an asynchronous hold task; its sleep starts when the coroutine runs; the test uses fixed real sleeps before checking downstream fake speech",
+      "These source properties permit scheduling sensitivity but do not prove the actual historical causal chain"
+    ],
+    "hypotheses": [
+      "Host/event-loop scheduling or downstream turn work consumed the test timing headroom",
+      "Tracing, fixed hash seed, cache state or other environment differences changed recurrence probability"
+    ],
+    "unproven": [
+      "Cause and baseline reproducibility of the historical failure",
+      "No possible transitive regression from PR220",
+      "Production liveness or safety implication of this test failure",
+      "Subsecond scheduling load attribution; load averages are not causal traces of CPU starvation"
+    ]
+  },
+  "runs": [
+    {
+      "run": "01-main",
+      "sha": "a79197b5cf20d4235861b46edeb20165f4112bed",
+      "returncode": 0,
+      "duration_seconds": 216.129729916,
+      "started_utc": "2026-11-15T19:04:25Z",
+      "finished_utc": "2026-11-15T19:08:02Z",
+      "passed": 12053,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 113,
+      "failures": [],
+      "source_clean_after": true,
+      "collection": {
+        "count": 12166,
+        "order_sha256": "e783de40c11bacb10a002ccb6589314498eb65b40f42b43bba91f4db7f3b06c8",
+        "sorted_sha256": "e99d6f2ef0715128ee9d2efbdb3f0c2bb9fdf25c4714182454849e1d51db116c"
+      },
+      "target_worker": "gw0",
+      "old_trace_present": false,
+      "actor_sha256": "44e8fec9ec9ed67685388a3dc574339ddff2ba4f96e6bf777803b1adc8dc272d",
+      "target_test_sha256": "ec5b2ccb2d62de1c29c37ae3123d40528c7f210974aec1ac2fd7d67fb9c1ba5f",
+      "causal_basis": {
+        "target_call_start_ns": 249335052664375,
+        "assertion_ns": 249335336997458,
+        "spoken_at_assertion": [
+          "Rani, when is the beta?"
+        ],
+        "hold_task_first_entry_ns": 249335071655250,
+        "hold_task_resume_ns": 249335273452958,
+        "hold_sleep_entry_ns": 249335071689791,
+        "hold_sleep_nominal_due_ns": 249335271689791,
+        "fake_audio_completed_ns": 249335303825041,
+        "fake_audio_to_assert_ms": 33.172417,
+        "interim_returns": [
+          {
+            "ns": 249335070351458,
+            "changed": true,
+            "version": 1,
+            "timer_id": 4902297344
+          },
+          {
+            "ns": 249335192058166,
+            "changed": false,
+            "version": 1,
+            "timer_id": 4902297344
+          }
+        ],
+        "outcome": "passed"
+      },
+      "artifacts": {
+        "01-main.log": "329e61b9b05a91cc4373447cf1a40b8785c0ae055cad41b62debe68935892f28",
+        "01-main.xml": "dc87f49ef006511c43840d0567cea6eba9926291790a786896b119a24459018d",
+        "01-main-execution.json": "0a6845496aee05e940ef4f2154f2b87dad86ed7a555b0333cf4224cb91f20724"
+      },
+      "trace_artifacts": {
+        "01-main-gw1-causal.json": "6c720c583af804536b7a6ad8b9c5c4f6d8c32bebf75f03381b49bc1edd1cac00",
+        "01-main-gw2-causal.json": "8c6990d73addefcfee36b51157b296906d3dded8172a97a0b15d81c74c95b2a2",
+        "01-main-controller-causal.json": "e94749662bb0108f1034260927b9f5305341a60c4115d3d559712037d786b92f",
+        "01-main-gw0-causal.json": "fb3c8c51e149c4c6fd916001a03faa577d121f68102ad081acb63f8051168f74",
+        "01-main-gw3-causal.json": "70d5961aabeb13fb584d66e1cfd7c6a4304923ed0260afc205546ae7e1c39249"
+      },
+      "raw_trace_event_count": 619,
+      "warnings": 6,
+      "previous_historical_failure_node_passed_in_this_run": true
+    },
+    {
+      "run": "02-pr220",
+      "sha": "77e51c797ddbc9df75a5eeeac73331d306cdd2e1",
+      "returncode": 0,
+      "duration_seconds": 156.593525958,
+      "started_utc": "2026-11-15T19:08:02Z",
+      "finished_utc": "2026-11-15T19:10:39Z",
+      "passed": 12153,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 113,
+      "failures": [],
+      "source_clean_after": true,
+      "collection": {
+        "count": 12266,
+        "order_sha256": "3b8d8900db6de7afcec1bfb7d823a15d1af8968b33a674f60f1097578d6276cc",
+        "sorted_sha256": "2662a0e00dc0c5fbd2a9879c6fc88c46dbe4998271dddd22bd841456160c9de0"
+      },
+      "target_worker": "gw0",
+      "old_trace_present": false,
+      "actor_sha256": "44e8fec9ec9ed67685388a3dc574339ddff2ba4f96e6bf777803b1adc8dc272d",
+      "target_test_sha256": "ec5b2ccb2d62de1c29c37ae3123d40528c7f210974aec1ac2fd7d67fb9c1ba5f",
+      "causal_basis": {
+        "target_call_start_ns": 249507714168583,
+        "assertion_ns": 249508015737541,
+        "spoken_at_assertion": [
+          "Rani, when is the beta?"
+        ],
+        "hold_task_first_entry_ns": 249507733255375,
+        "hold_task_resume_ns": 249507934913666,
+        "hold_sleep_entry_ns": 249507733286083,
+        "hold_sleep_nominal_due_ns": 249507933286083,
+        "fake_audio_completed_ns": 249507958423541,
+        "fake_audio_to_assert_ms": 57.314,
+        "interim_returns": [
+          {
+            "ns": 249507732677916,
+            "changed": true,
+            "version": 1,
+            "timer_id": 4871491584
+          },
+          {
+            "ns": 249507862445666,
+            "changed": false,
+            "version": 1,
+            "timer_id": 4871491584
+          }
+        ],
+        "outcome": "passed"
+      },
+      "artifacts": {
+        "02-pr220.log": "4178d2be35df62c1e2f7926119fdb5197ce228eaf2163640340d9400f16408cd",
+        "02-pr220.xml": "630bf1d083ffa69df6654bb01ff63c9e6aa535bc64e5388abb2fa87554bbd040",
+        "02-pr220-execution.json": "ed96f81484fbcefdd807b3e4c748057afac8803a73f0cfb5150e43f94188c09d"
+      },
+      "trace_artifacts": {
+        "02-pr220-gw1-causal.json": "5fdc9d390cfb8b145c2d68cfd9c05b798c303ab568ac7298aaf5473e29089343",
+        "02-pr220-gw2-causal.json": "d79ed68edd551a1907aad4dc9c5a9ef3611c946f43fb48c5bffa187c5d27dcbb",
+        "02-pr220-gw0-causal.json": "911262fcc14af0333309d177d4d13293b12d5af28a0c49f3b8aeecf188b5cc03",
+        "02-pr220-controller-causal.json": "e38b71cfbf0eb6f7a20a9ba022558e7cdadeccc29dbc9fb8c1d0a31f7c281bdb",
+        "02-pr220-gw3-causal.json": "bb8265ede3d5103d641cdf69c8b657cc7f42f48e898afdccf9e6a35f269cd282"
+      },
+      "raw_trace_event_count": 619,
+      "warnings": 6,
+      "previous_historical_failure_node_passed_in_this_run": true
+    },
+    {
+      "run": "03-pr220",
+      "sha": "77e51c797ddbc9df75a5eeeac73331d306cdd2e1",
+      "returncode": 0,
+      "duration_seconds": 156.396954958,
+      "started_utc": "2026-11-15T19:10:40Z",
+      "finished_utc": "2026-11-15T19:13:16Z",
+      "passed": 12153,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 113,
+      "failures": [],
+      "source_clean_after": true,
+      "collection": {
+        "count": 12266,
+        "order_sha256": "3b8d8900db6de7afcec1bfb7d823a15d1af8968b33a674f60f1097578d6276cc",
+        "sorted_sha256": "2662a0e00dc0c5fbd2a9879c6fc88c46dbe4998271dddd22bd841456160c9de0"
+      },
+      "target_worker": "gw0",
+      "old_trace_present": false,
+      "actor_sha256": "44e8fec9ec9ed67685388a3dc574339ddff2ba4f96e6bf777803b1adc8dc272d",
+      "target_test_sha256": "ec5b2ccb2d62de1c29c37ae3123d40528c7f210974aec1ac2fd7d67fb9c1ba5f",
+      "causal_basis": {
+        "target_call_start_ns": 249656720049750,
+        "assertion_ns": 249657014146791,
+        "spoken_at_assertion": [
+          "Rani, when is the beta?"
+        ],
+        "hold_task_first_entry_ns": 249656747137958,
+        "hold_task_resume_ns": 249656949453083,
+        "hold_sleep_entry_ns": 249656747165333,
+        "hold_sleep_nominal_due_ns": 249656947165333,
+        "fake_audio_completed_ns": 249656967963125,
+        "fake_audio_to_assert_ms": 46.183666,
+        "interim_returns": [
+          {
+            "ns": 249656746451041,
+            "changed": true,
+            "version": 1,
+            "timer_id": 4828696576
+          },
+          {
+            "ns": 249656870524083,
+            "changed": false,
+            "version": 1,
+            "timer_id": 4828696576
+          }
+        ],
+        "outcome": "passed"
+      },
+      "artifacts": {
+        "03-pr220.log": "43083ac090e9745e0e1734033999de982cc2169996de658321fc6d9c6979a4e0",
+        "03-pr220.xml": "3b64a5c2e5b524d78d10003d115707f023c1776d10812e612e80461c28c29c9c",
+        "03-pr220-execution.json": "ae66f62bf7654049969a46781f7b44a65009eddd7f615ff8fbeb7f225cb90e08"
+      },
+      "trace_artifacts": {
+        "03-pr220-gw0-causal.json": "637c68be0e3f833e971da8df548f9190fbbf4e8b238844f51e66412cd65c7159",
+        "03-pr220-controller-causal.json": "4014f5b7efa4d789daaaeefd1f854f679839b39644ac4b23d28622a96a7bfc6f",
+        "03-pr220-gw3-causal.json": "26d7228acd6b7526d6decf8986e9a6be25ea30c80413b78a938937910d732461",
+        "03-pr220-gw1-causal.json": "89eff94a14420c72f76a9be46ef2ee00524cb0f1f1e7fcad37972a71efb320c8",
+        "03-pr220-gw2-causal.json": "d55996257c8b09a051cf53de3a30e5905584fc0595dd5ab94d9357cb4c138f9e"
+      },
+      "raw_trace_event_count": 619,
+      "warnings": 6,
+      "previous_historical_failure_node_passed_in_this_run": true
+    },
+    {
+      "run": "04-main",
+      "sha": "a79197b5cf20d4235861b46edeb20165f4112bed",
+      "returncode": 0,
+      "duration_seconds": 152.81441,
+      "started_utc": "2026-11-15T19:13:17Z",
+      "finished_utc": "2026-11-15T19:15:50Z",
+      "passed": 12053,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 113,
+      "failures": [],
+      "source_clean_after": true,
+      "collection": {
+        "count": 12166,
+        "order_sha256": "e783de40c11bacb10a002ccb6589314498eb65b40f42b43bba91f4db7f3b06c8",
+        "sorted_sha256": "e99d6f2ef0715128ee9d2efbdb3f0c2bb9fdf25c4714182454849e1d51db116c"
+      },
+      "target_worker": "gw0",
+      "old_trace_present": false,
+      "actor_sha256": "44e8fec9ec9ed67685388a3dc574339ddff2ba4f96e6bf777803b1adc8dc272d",
+      "target_test_sha256": "ec5b2ccb2d62de1c29c37ae3123d40528c7f210974aec1ac2fd7d67fb9c1ba5f",
+      "causal_basis": {
+        "target_call_start_ns": 249823320031375,
+        "assertion_ns": 249823612546208,
+        "spoken_at_assertion": [
+          "Rani, when is the beta?"
+        ],
+        "hold_task_first_entry_ns": 249823341213625,
+        "hold_task_resume_ns": 249823543562666,
+        "hold_sleep_entry_ns": 249823341250541,
+        "hold_sleep_nominal_due_ns": 249823541250541,
+        "fake_audio_completed_ns": 249823559515000,
+        "fake_audio_to_assert_ms": 53.031208,
+        "interim_returns": [
+          {
+            "ns": 249823340577708,
+            "changed": true,
+            "version": 1,
+            "timer_id": 4857112960
+          },
+          {
+            "ns": 249823464784666,
+            "changed": false,
+            "version": 1,
+            "timer_id": 4857112960
+          }
+        ],
+        "outcome": "passed"
+      },
+      "artifacts": {
+        "04-main.log": "254e3ee31f3d357b8fb915c539fa1424ca043f23e961105f645d9a4d76c666f5",
+        "04-main.xml": "e6828f23d431d4148c9af99eae10eb81ed940b0b9a62d4312e10de0904006aea",
+        "04-main-execution.json": "dde1afdd54bf8960c75b4a3005a539d1ae7ce7b55ea1f5c46fc47a151b162f7d"
+      },
+      "trace_artifacts": {
+        "04-main-gw1-causal.json": "034413dda88d619ccc17ef9f22c318c2c1a9c5be0821c48b1f0e6eec05cbc57e",
+        "04-main-gw2-causal.json": "32905c4f24cffa88084288071d47e5b0a38c98fc36099260fb6e12082df37023",
+        "04-main-controller-causal.json": "e9d51ed887fb706c02eb10e6ceeb52e5df69ac04ba99eced161450eaa40b0857",
+        "04-main-gw0-causal.json": "69e6a4076f9a60e9664d9fa8ba51ec6404a8a1f7f4efaf2653cebdb950f433a0",
+        "04-main-gw3-causal.json": "8e99fe8567bb541cc7ea75128165f3107f7129bce7a1dfd7746f72971dc0490d"
+      },
+      "raw_trace_event_count": 619,
+      "warnings": 7,
+      "previous_historical_failure_node_passed_in_this_run": true
+    }
+  ],
+  "collection_difference": {
+    "main_repeated_identically": true,
+    "pr_repeated_identically": true,
+    "common_count": 12109
+  },
+  "current_disposition": "Historical MERGE HOLD superseded by latest co-founder residual-risk acceptance in merged PR #220; attribution remains inconclusive; issue #223 open."
+}

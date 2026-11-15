@@ -1,0 +1,87 @@
+{
+  "source_commit": "d37b89f40155d6130ebda72de2d1ce12eeaf06b4",
+  "base_main": "70986cefccf62f0e6c5606bd37c0246df4c75e5c",
+  "files": [
+    {
+      "path": "docs/plans/2026-11-15-architecture-decision-closure.md",
+      "source_commit": "d37b89f40155d6130ebda72de2d1ce12eeaf06b4",
+      "git_blob": "f978f2e931d3e937b95a648e12fb2441f5415590",
+      "sha256": "573d0a60eed6b92cb1bf39931c0a345158bc516babf0595acd5e0dbefc350b41",
+      "bytes": 12050
+    },
+    {
+      "path": "docs/plans/2026-11-15-architecture-decision-review.md",
+      "source_commit": "d37b89f40155d6130ebda72de2d1ce12eeaf06b4",
+      "git_blob": "e369143ab0232f0fa46db66512c78607720615d2",
+      "sha256": "6d5d5ad18b4ceaffb8a4e4c93efabb5c4b13d5403891464c7c1339229f1f2f5a",
+      "bytes": 34264
+    },
+    {
+      "path": "docs/plans/2026-11-15-writer-spike-protocol.md",
+      "source_commit": "d37b89f40155d6130ebda72de2d1ce12eeaf06b4",
+      "git_blob": "398f43566f54513bb9fa7e35ed5cff751be3ac4c",
+      "sha256": "00638aa465eb03c53191fc75340876d471fb8fe02a08a93bc796f47bb7cbd214",
+      "bytes": 25738
+    },
+    {
+      "path": "docs/plans/2026-11-15-local-preparation-contract-amendment-proposal.md",
+      "source_commit": "d37b89f40155d6130ebda72de2d1ce12eeaf06b4",
+      "git_blob": "66c9219d48b7a4c42a67ded908f38c3fda4b9b6a",
+      "sha256": "571dfa991795ab493a2a1c33bfc115db8d74cc56f8f503c94f19c643c5336461",
+      "bytes": 12365
+    },
+    {
+      "path": "docs/reports/2026-11-15-writer-spike-preflight.md",
+      "source_commit": "d37b89f40155d6130ebda72de2d1ce12eeaf06b4",
+      "git_blob": "1ec2f72faf5fc29345bc88d82ad27d3395c86cbc",
+      "sha256": "844ec0f37ef201efc8687e62c8b513b3bfef6a375a26817442856b787707fd0b",
+      "bytes": 15412
+    },
+    {
+      "path": "docs/reports/2026-11-15-writer-spike-preflight.json",
+      "source_commit": "d37b89f40155d6130ebda72de2d1ce12eeaf06b4",
+      "git_blob": "d49443b9798b17b5c992e73cee7cd94333e11145",
+      "sha256": "1a7887e80cdcb1462c103196cf4582ba873d05a9ebf326a1c26f932ebb7f8de8",
+      "bytes": 13725
+    },
+    {
+      "path": "docs/reports/2026-11-16-rustfs-capability.md",
+      "source_commit": "d37b89f40155d6130ebda72de2d1ce12eeaf06b4",
+      "git_blob": "f5f2e057d796e46a7bb31e9ac41f84e6a91d1639",
+      "sha256": "4521658137716dac4cedfa6bbe4f2d1da41af23d1e3b73006e8213794f885903",
+      "bytes": 8726
+    },
+    {
+      "path": "docs/reports/2026-11-16-pr220-exact-head-review.md",
+      "source_commit": "d37b89f40155d6130ebda72de2d1ce12eeaf06b4",
+      "git_blob": "7bcb6304fe81f9bed03745c130cebe9cc766f0c1",
+      "sha256": "89fdf002ba820d34b060dc7ad0596b53fd70b008469ca06acc208526332d0749",
+      "bytes": 10033
+    },
+    {
+      "path": "docs/reports/2026-11-16-pr220-exact-head-review.json",
+      "source_commit": "d37b89f40155d6130ebda72de2d1ce12eeaf06b4",
+      "git_blob": "fb539a51e147fa0d4093031befa80c23eb511ca6",
+      "sha256": "2176846ea41481913eb0e8e438293d471d32a92aaadfe886690fc8d6d4923c07",
+      "bytes": 8193
+    },
+    {
+      "path": "docs/reports/2026-11-16-rnext-differential.md",
+      "source_commit": "d37b89f40155d6130ebda72de2d1ce12eeaf06b4",
+      "git_blob": "67d8aff087c99132214812c5a66390eed326b7b5",
+      "sha256": "b85aa80261c79b60ec937aeff812d4428098739c6e4465ae131acdc02f2a7b93",
+      "bytes": 8667
+    },
+    {
+      "path": "docs/reports/2026-11-16-rustfs-1.0.5-local-capability.md",
+      "source_commit": "d37b89f40155d6130ebda72de2d1ce12eeaf06b4",
+      "git_blob": "1bf22f4514146218e31de56c97e406771daaba9a",
+      "sha256": "d260242b3130c12f82dc66ec7fd6508f1b52936c79124827b7833a06bd669618",
+      "bytes": 8621
+    }
+  ],
+  "derived_summaries": [
+    "docs/reports/2026-11-16-rnext-differential-summary.json",
+    "docs/reports/2026-11-16-rustfs-1.0.5-local-capability-summary.json"
+  ]
+}
