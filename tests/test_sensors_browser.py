@@ -4,11 +4,13 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 import pytest
+from playwright.async_api import Route
 
 from fakeyou.config.settings import PerceptionSettings
+from fakeyou.foundation.content_digest import DECODED_PIXELS_SHA256, ContentSample
 from fakeyou.meet.browser import BrowserLaunch, open_direct_page
 from fakeyou.perception.sensors import PerceptionDrain, PerceptionSensors, load_perception_script
-from fakeyou.perception.timeline import MeetingTimeline, TimelineSnapshot
+from fakeyou.perception.timeline import SCREEN_SOURCE_ID, MeetingTimeline, TimelineSnapshot
 from tests._fakes_common import STREAM_CAPTURE_TEST_FLAG
 from tests._meet_protocol_fakes import chat_message, collection_payload, output, user_info
 
@@ -127,3 +129,68 @@ async def test_the_drain_reports_real_peer_connection_states() -> None:
 
     assert opened == ("new",)
     assert sensors.peer_states == ("closed",)
+
+
+STATIC_SCREEN_SHARE = TEST_SCREEN_SHARE.replace('tick % 2 ? "#122049" : "#122048"', '"#122048"')
+
+
+SECURE_ORIGIN = "https://perception.invalid"
+
+
+async def _blank_page(route: Route) -> None:
+    await route.fulfill(status=200, content_type="text/html", body="<html><body></body></html>")
+
+
+async def _screen_samples(share: str, *, wanted: int) -> tuple[list[ContentSample], int]:
+    timeline = MeetingTimeline()
+    sensors = PerceptionSensors(
+        timeline, PerceptionSettings(enabled=True), joined_at=datetime.now(UTC)
+    )
+    seen: dict[int, ContentSample] = {}
+    async with open_direct_page(launch=BrowserLaunch(headless=True)) as page:
+        await page.add_init_script(STREAM_CAPTURE_TEST_FLAG)
+        await page.add_init_script(load_perception_script())
+        await page.route(f"{SECURE_ORIGIN}/**", _blank_page)
+        await page.goto(f"{SECURE_ORIGIN}/")
+        stream_id = await page.evaluate(share)
+        await page.evaluate(SHOW_JS, ["Quarterly Review", ["Revenue: $1.2M"]])
+        drain = PerceptionDrain(page, sensors)
+        payload = collection_payload(
+            users=[user_info(AYU, "Ayu"), user_info(SCREEN, "", parent=AYU)],
+            outputs=[output(SCREEN, stream_id)],
+        )
+        await page.evaluate(SEND_JS, base64.b64encode(payload).decode())
+
+        def collected(_snapshot: TimelineSnapshot) -> bool:
+            latest = timeline.samples.latest("screen", SCREEN_SOURCE_ID)
+            if latest is not None:
+                seen[latest.record.sequence] = latest
+            return len(seen) >= wanted
+
+        await _drain_until(drain, timeline, collected, seconds=30.0)
+    return [seen[key] for key in sorted(seen)], len(timeline.snapshot().screens)
+
+
+@pytest.mark.browser
+async def test_every_sample_of_a_static_canvas_carries_the_same_pixel_digest() -> None:
+    samples, screens = await _screen_samples(STATIC_SCREEN_SHARE, wanted=4)
+    records = [sample.record for sample in samples]
+
+    assert screens == 1
+    assert {record.algorithm for record in records} == {DECODED_PIXELS_SHA256}
+    assert {(record.width, record.height) for record in records} == {(1280, 720)}
+    assert all(record.pixel_format for record in records)
+    assert all(record.digest and len(record.digest) == 64 for record in records)
+    assert len({record.digest for record in records}) == 1
+    stamps = [record.media_timestamp or 0.0 for record in records]
+    assert all(stamps)
+    assert stamps == sorted(set(stamps))
+    assert all(sample.capture is not None for sample in samples)
+
+
+@pytest.mark.browser
+async def test_one_pixel_change_below_the_thumbnail_threshold_changes_the_digest() -> None:
+    samples, screens = await _screen_samples(TEST_SCREEN_SHARE, wanted=12)
+
+    assert screens == 1
+    assert len({sample.record.digest for sample in samples}) >= 2

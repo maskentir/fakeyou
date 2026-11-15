@@ -1,9 +1,18 @@
+import hashlib
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Literal
 
+from fakeyou.foundation.clock_mapping import MappedInstant
+from fakeyou.foundation.content_digest import (
+    HEARTBEAT_WITHOUT_RECORD,
+    ContentSample,
+    DigestRecord,
+    SampleSource,
+    encoded_bytes_record,
+)
 from fakeyou.observability.journal import Journal
 from fakeyou.perception.evidence import SnapshotRef
 from fakeyou.perception.frames import compare_screens
@@ -22,9 +31,13 @@ from fakeyou.perception.percepts import (
     ScreenVisit,
     SignalKind,
 )
+from fakeyou.perception.samples import IngestOutcome, SampleLedger
 
 KEYFRAME_CACHE_SIZE = 48
 CAMERA_FRAME_CACHE_SIZE = 32
+ANALYZED_SAMPLE_CACHE_SIZE = 256
+SCREEN_SOURCE_ID = "screen"
+CaptureClock = Callable[[datetime], MappedInstant | None]
 ScreenChange = Literal["new", "revisit", "same", "merged"]
 
 
@@ -122,12 +135,19 @@ class KeyframeCache:
 
 
 @dataclass(frozen=True, slots=True)
+class FrameSample:
+    record: DigestRecord
+    capture: MappedInstant | None
+
+
+@dataclass(frozen=True, slots=True)
 class CameraSample:
     data: bytes
     stream_id: str
     captured_at: datetime
     epoch: int
     seen_at: float
+    sample: FrameSample | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,6 +155,7 @@ class CameraFrame:
     data: bytes
     seen_at: float
     ref: SnapshotRef
+    content: ContentSample | None = None
 
 
 class CameraFrameStore:
@@ -145,6 +166,8 @@ class CameraFrameStore:
         self._generations: dict[str, int] = {}
         self._epoch = 0
         self._invalidator: Callable[[str | None], None] | None = None
+        self.samples = SampleLedger()
+        self.capture_clock: CaptureClock | None = None
 
     def set_invalidator(self, invalidator: Callable[[str | None], None]) -> None:
         self._invalidator = invalidator
@@ -155,6 +178,7 @@ class CameraFrameStore:
         stored = CameraFrame(
             data=sample.data,
             seen_at=sample.seen_at,
+            content=self._ingest(participant_id, sample),
             ref=SnapshotRef(
                 source="camera",
                 subject_id=participant_id,
@@ -170,6 +194,47 @@ class CameraFrameStore:
         while len(self._frames) > self._capacity:
             self._frames.popitem(last=False)
         return stored
+
+    def _ingest(self, participant_id: str, sample: CameraSample) -> ContentSample:
+        given = sample.sample
+        record = (
+            given.record
+            if given is not None
+            else encoded_bytes_record(
+                hashlib.sha256(sample.data).hexdigest(),
+                SampleSource("camera", sample.stream_id, participant_id),
+                sequence=self.samples.next_sequence("camera", participant_id),
+                size=(0, 0),
+            )
+        )
+        clock = self.capture_clock
+        capture = (
+            given.capture
+            if given is not None
+            else (clock(sample.captured_at) if clock is not None else None)
+        )
+        self.samples.ingest(record, captured_at=sample.captured_at, capture=capture)
+        return ContentSample(record, sample.captured_at, capture, self.samples.revision)
+
+    def unverified_heartbeat(self, participant_id: str, *, captured_at: datetime) -> None:
+        frame = self._frames.get(participant_id)
+        if frame is None:
+            return
+        record = DigestRecord(
+            algorithm="",
+            version=0,
+            width=0,
+            height=0,
+            pixel_format="",
+            role="camera",
+            stream_id=frame.ref.stream_id,
+            subject_id=participant_id,
+            sequence=self.samples.next_sequence("camera", participant_id),
+            media_timestamp=None,
+            digest=None,
+            skip_reason=HEARTBEAT_WITHOUT_RECORD,
+        )
+        self.samples.ingest(record, captured_at=captured_at, capture=None)
 
     def get(self, participant_id: str) -> CameraFrame | None:
         frame = self._frames.get(participant_id)
@@ -187,11 +252,14 @@ class CameraFrameStore:
     def drop(self, participant_id: str) -> None:
         self._generations[participant_id] = self._generations.get(participant_id, 0) + 1
         self._frames.pop(participant_id, None)
+        self.samples.stop("camera", participant_id)
         if self._invalidator is not None:
             self._invalidator(participant_id)
 
     def clear(self) -> None:
         self._epoch += 1
+        for participant_id in self._frames:
+            self.samples.stop("camera", participant_id)
         self._frames.clear()
         if self._invalidator is not None:
             self._invalidator(None)
@@ -210,6 +278,56 @@ class MeetingTimeline:
         self._subscribers: list[TimelineSubscriber] = []
         self.keyframes = KeyframeCache()
         self.camera_frames = CameraFrameStore()
+        self.samples = self.camera_frames.samples
+        self._latest_keyframes: dict[str, Keyframe] = {}
+        self._analyzed: OrderedDict[str, ContentSample] = OrderedDict()
+
+    @property
+    def capture_clock(self) -> CaptureClock | None:
+        return self.camera_frames.capture_clock
+
+    @capture_clock.setter
+    def capture_clock(self, clock: CaptureClock | None) -> None:
+        self.camera_frames.capture_clock = clock
+
+    def latest_keyframe(self, segment: ScreenSegment) -> Keyframe:
+        return self._latest_keyframes.get(segment.ref, segment.keyframe)
+
+    def analyzed_sample(self, ref: SnapshotRef) -> ContentSample | None:
+        if ref.source == "screen":
+            return self._analyzed.get(ref.stream_id)
+        frame = self.camera_frames.get(ref.subject_id)
+        if frame is None or frame.ref != ref:
+            return None
+        return frame.content
+
+    def confirm(self, sample: FrameSample, *, captured_at: datetime) -> IngestOutcome:
+        return self.samples.ingest(sample.record, captured_at=captured_at, capture=sample.capture)
+
+    def _ingest_screen(self, keyframe: Keyframe, sample: FrameSample | None) -> None:
+        record = (
+            sample.record
+            if sample is not None
+            else encoded_bytes_record(
+                keyframe.sha256,
+                SampleSource("screen", "", SCREEN_SOURCE_ID),
+                sequence=self.samples.next_sequence("screen", SCREEN_SOURCE_ID),
+                size=(keyframe.width, keyframe.height),
+            )
+        )
+        clock = self.capture_clock
+        capture = (
+            sample.capture
+            if sample is not None
+            else (clock(keyframe.captured_at) if clock is not None else None)
+        )
+        self.samples.ingest(record, captured_at=keyframe.captured_at, capture=capture)
+        self._analyzed[keyframe.sha256] = ContentSample(
+            record, keyframe.captured_at, capture, self.samples.revision
+        )
+        self._analyzed.move_to_end(keyframe.sha256)
+        while len(self._analyzed) > ANALYZED_SAMPLE_CACHE_SIZE:
+            self._analyzed.popitem(last=False)
 
     def subscribe(self, subscriber: TimelineSubscriber) -> None:
         self._subscribers.append(subscriber)
@@ -244,10 +362,16 @@ class MeetingTimeline:
         self._state.participants.pop(participant_id, None)
 
     def show_screen(
-        self, keyframe: Keyframe, presenter: ParticipantRef | None, *, data: bytes | None = None
+        self,
+        keyframe: Keyframe,
+        presenter: ParticipantRef | None,
+        *,
+        data: bytes | None = None,
+        sample: FrameSample | None = None,
     ) -> ScreenShown:
         if data is not None:
             self.keyframes.put(keyframe.sha256, data)
+        self._ingest_screen(keyframe, sample)
         state = self._state
         current = state.screens.get(state.current_ref) if state.current_ref else None
         if (
@@ -255,6 +379,7 @@ class MeetingTimeline:
             and current.showing
             and compare_screens(current.keyframe, keyframe) != "distinct"
         ):
+            self._latest_keyframes[current.ref] = keyframe
             shown = ScreenShown(segment=current, change="same", arrival=keyframe)
             self._emit(shown)
             return shown
@@ -282,6 +407,7 @@ class MeetingTimeline:
             shown = ScreenShown(segment=segment, change="revisit", arrival=keyframe)
         state.screens[segment.ref] = segment
         state.current_ref = segment.ref
+        self._latest_keyframes[segment.ref] = keyframe
         self._journal.record(
             "screen_captured",
             source="perception",
@@ -296,6 +422,7 @@ class MeetingTimeline:
     def stop_screen(self, at: datetime) -> None:
         self._close_current(at)
         self._state.current_ref = None
+        self.samples.stop("screen", SCREEN_SOURCE_ID)
 
     def read_screen(self, ref: str, reading: ScreenReading | None) -> ScreenSegment | None:
         state = self._state
@@ -334,6 +461,7 @@ class MeetingTimeline:
         )
         del state.screens[segment.ref]
         state.screens[into.ref] = merged
+        self._latest_keyframes[into.ref] = self._latest_keyframes.pop(segment.ref, segment.keyframe)
         state.aliases[segment.ref] = into.ref
         for alias, target in tuple(state.aliases.items()):
             if target == segment.ref:

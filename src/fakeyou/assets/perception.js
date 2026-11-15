@@ -17,14 +17,21 @@
   const EMIT_CHANGED_BLOCKS = { screen: 2, camera: 12 };
   const MOVING_KEYFRAME_MS = 15000;
   const CAMERA_REFRESH_MS = 120000;
+  const MAX_SAMPLES = 256;
+  const DIGEST_ALGORITHM = "sha256-decoded-pixels";
+  const DIGEST_VERSION = 1;
+  const HASH_BUDGET_MS = 250;
+  const MAX_HASH_BYTES = 16 * 1024 * 1024;
   const messages = [];
   const frames = [];
+  const samples = [];
   const videoTracks = new Map();
   const roles = new Map();
   const samplers = new Map();
   const channels = [];
   let droppedMessages = 0;
   let droppedFrames = 0;
+  let droppedSamples = 0;
   let thumbCanvas = null;
 
   function encodeBase64(bytes) {
@@ -101,6 +108,72 @@
     return changed;
   }
 
+  function toHex(buffer) {
+    const bytes = new Uint8Array(buffer);
+    let text = "";
+    for (let index = 0; index < bytes.length; index += 1) {
+      text += bytes[index].toString(16).padStart(2, "0");
+    }
+    return text;
+  }
+
+  function pushSample(record) {
+    samples.push(record);
+    if (samples.length > MAX_SAMPLES) {
+      samples.splice(0, samples.length - MAX_SAMPLES);
+      droppedSamples += 1;
+    }
+  }
+
+  async function copyPixels(frame) {
+    const size = frame.allocationSize();
+    if (size > MAX_HASH_BYTES) return null;
+    const pixels = new Uint8Array(size);
+    await frame.copyTo(pixels);
+    return pixels;
+  }
+
+  async function digestRecord(state, frame, page_ms) {
+    state.sequence += 1;
+    const record = {
+      stream_id: state.id,
+      role: state.role,
+      page_ms,
+      sequence: state.sequence,
+      media_timestamp: Number.isFinite(frame.timestamp) ? frame.timestamp : null,
+      width: frame.codedWidth || 0,
+      height: frame.codedHeight || 0,
+      pixel_format: String(frame.format || ""),
+      algorithm: DIGEST_ALGORITHM,
+      version: DIGEST_VERSION,
+      digest: null,
+      skip_reason: null,
+    };
+    if (state.hashing) {
+      record.skip_reason = "hash_busy";
+      pushSample(record);
+      return record;
+    }
+    state.hashing = true;
+    const started = performance.now();
+    try {
+      const pixels = await copyPixels(frame);
+      if (!pixels) {
+        record.skip_reason = "frame_too_large";
+      } else {
+        const digest = toHex(await crypto.subtle.digest("SHA-256", pixels));
+        if (performance.now() - started > HASH_BUDGET_MS) record.skip_reason = "hash_over_budget";
+        else record.digest = digest;
+      }
+    } catch {
+      record.skip_reason = "hash_failed";
+    } finally {
+      state.hashing = false;
+    }
+    pushSample(record);
+    return record;
+  }
+
   function pushFrame(entry) {
     frames.push(entry);
     if (frames.length > MAX_FRAMES) {
@@ -110,7 +183,7 @@
     }
   }
 
-  function emit(state, frame, reason) {
+  function emit(state, frame, reason, sequence) {
     const sourceWidth = frame.displayWidth || frame.codedWidth;
     const sourceHeight = frame.displayHeight || frame.codedHeight;
     if (!sourceWidth || !sourceHeight) return;
@@ -128,6 +201,7 @@
           stream_id: state.id,
           role: state.role,
           page_ms,
+          sequence,
           width,
           height,
           reason,
@@ -137,7 +211,7 @@
       .catch(() => {});
   }
 
-  function sampleScreen(state, frame, thumb, now) {
+  function sampleScreen(state, frame, thumb, now, sequence) {
     const moved = changedBlocks(thumb, state.lastThumb) > 0;
     state.lastThumb = thumb;
     if (moved) {
@@ -146,7 +220,7 @@
       if (now - state.changingSince >= MOVING_KEYFRAME_MS) {
         state.changingSince = now;
         state.emittedThumb = thumb;
-        emit(state, frame, "moving");
+        emit(state, frame, "moving", sequence);
       }
       return;
     }
@@ -155,23 +229,25 @@
     state.changingSince = 0;
     if (changedBlocks(thumb, state.emittedThumb) >= EMIT_CHANGED_BLOCKS.screen) {
       state.emittedThumb = thumb;
-      emit(state, frame, "settled");
+      emit(state, frame, "settled", sequence);
     }
   }
 
-  function sampleCamera(state, frame, thumb, now) {
+  function sampleCamera(state, frame, thumb, now, sequence) {
     const changed = changedBlocks(thumb, state.emittedThumb) >= EMIT_CHANGED_BLOCKS.camera;
     if (changed || now - state.emittedAt >= CAMERA_REFRESH_MS) {
       state.emittedThumb = thumb;
       state.emittedAt = now;
-      emit(state, frame, changed ? "changed" : "refresh");
+      emit(state, frame, changed ? "changed" : "refresh", sequence);
     }
   }
 
-  function sample(state, frame, now) {
+  async function sample(state, frame, now, page_ms) {
     const thumb = thumbnail(frame);
-    if (state.role === "screen") sampleScreen(state, frame, thumb, now);
-    else sampleCamera(state, frame, thumb, now);
+    const sequence = state.sequence + 1;
+    if (state.role === "screen") sampleScreen(state, frame, thumb, now, sequence);
+    else sampleCamera(state, frame, thumb, now, sequence);
+    await digestRecord(state, frame, page_ms);
   }
 
   async function pump(state) {
@@ -190,7 +266,7 @@
         if (now - state.sampledAt >= interval) {
           state.sampledAt = now;
           state.lastSamplePageMs = bridge.pageNow();
-          sample(state, frame, now);
+          await sample(state, frame, now, state.lastSamplePageMs);
         }
       } catch {
         /* sampling must never break the page */
@@ -237,6 +313,8 @@
       stopped: false,
       sampledAt: 0,
       lastSamplePageMs: 0,
+      sequence: 0,
+      hashing: false,
       lastThumb: null,
       emittedThumb: null,
       emittedAt: 0,
@@ -326,6 +404,7 @@
       drained_page_ms: bridge.pageNow(),
       messages: sizedMessages.taken,
       frames: sizedFrames.taken,
+      samples: samples.splice(0, samples.length),
       tracks: [...videoTracks.keys()],
       sampling: [...samplers.keys()],
       active: activeSamplers(),
@@ -333,6 +412,7 @@
       peers: peerStates(),
       dropped_messages: droppedMessages,
       dropped_frames: droppedFrames,
+      dropped_samples: droppedSamples,
     };
   }
 

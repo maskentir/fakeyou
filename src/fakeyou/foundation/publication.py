@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Literal
 
 from fakeyou.foundation.clock import monotonic
+from fakeyou.foundation.content_digest import ContentSample, DigestRecord, MatchLevel
 
 EvidenceSource = Literal["camera", "screen"]
 PublicationValidity = Literal["valid", "invalid", "unknown"]
@@ -57,6 +58,7 @@ class EvidenceBinding:
     capture_mapping_uncertainty_seconds: float | None = None
     observation_clock_domain: str | None = None
     status: str | None = None
+    digest: DigestRecord | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,6 +177,8 @@ class Validation:
     unchanged: bool | None
     observed_at: float
     uncertainty_seconds: float
+    match: MatchLevel | None = None
+    confirmation: ContentSample | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -318,11 +322,28 @@ async def _evaluate_evidence(
         return _unknown("scene_continuity_unknown", checked_at, clock_domain)
     if validation.unchanged is False:
         return PublicationDecision("invalid", "scene_changed", checked_at, clock_domain)
-    if _scene_identity(validation.current_snapshot) != _scene_identity(evidence.snapshot):
+    content = _content_decision(validation.match, checked_at, clock_domain)
+    if content is not None:
+        return content
+    if validation.match is None and _scene_identity(validation.current_snapshot) != _scene_identity(
+        evidence.snapshot
+    ):
         return PublicationDecision("invalid", "scene_changed", checked_at, clock_domain)
     return PublicationDecision(
         "valid", "ok", validation.checked_at, clock_domain, validation.uncertainty_seconds
     )
+
+
+def _content_decision(
+    match: MatchLevel | None, checked_at: float, clock_domain: str
+) -> PublicationDecision | None:
+    if match == "similar":
+        return _unknown("content_changed_unverified", checked_at, clock_domain)
+    if match == "distinct":
+        return PublicationDecision("invalid", "scene_changed", checked_at, clock_domain)
+    if match == "unknown":
+        return _unknown("continuity_unknown", checked_at, clock_domain)
+    return None
 
 
 def _capture_decision(
