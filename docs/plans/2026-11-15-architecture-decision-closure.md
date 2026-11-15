@@ -1,6 +1,10 @@
 # Architecture Decision Closure — ADR-2 physical writer
 
-Status: **CLOSED BY CO-FOUNDER DECISION, 2026-11-15. #205 UNCHANGED. PublicationContext OFF. Phase 5B NO-GO.**
+Status: **ADR-2 DECISION CLOSED** (co-founder ruling on `afcf0a87`, 2026-11-15) · **EVIDENCE CUSTODY PENDING** · #205 unchanged · PublicationContext OFF · Phase 5B NO-GO.
+
+The design decision is final. The administrative closure is not complete until
+the raw evidence is in the storage ruled below and its reference is recorded
+here.
 
 This closes ADR-2 of `2026-11-15-architecture-decision-review.md`. It records a
 decision and the evidence it rests on. It proposes no design, revises no
@@ -18,7 +22,7 @@ protocol and changes no contract text. ADR-1 and ADR-3 are not closed here.
 | Guard band; client-side write refusal | Not a safety boundary. Neither satisfies V2 |
 | Full S1 trials | **Cancelled** for these configurations |
 | Spike protocol revision 4 | **Superseded** by the diagnostic findings. Not revised |
-| Current-scope visual speech | **Activation blocked** |
+| Production activation of the publication pipeline under #205 | **Blocked**, in full (see "Scope of V6") |
 | Contract #205 | Unchanged |
 
 No further variant of this writer is to be tried as a route to activation: no
@@ -83,39 +87,88 @@ confirmed violations alone.
 - No CPU-contention, restart or cancellation scenario was run.
 - The confirmed cells come from one run on one host.
 
-## Evidence custody
+## Evidence custody — PENDING
+
+Ruling: the raw archive goes to private, immutable object storage owned by the
+organization. Recordings are not committed to the repository, synthetic PCM
+included; the house rule stands.
 
 | Item | State |
 | --- | --- |
 | Results | Committed: `docs/reports/2026-11-15-writer-spike-preflight.json`, with SHA-256 of each raw file |
-| Raw files | Observer recordings, relay journal, run log, source tarball. Archive `writer-spike-raw-eba185d7.tar.xz`, 3,088,788 bytes, SHA-256 `974bc6012f2a5c28ea2d9b264c3821948167b747ed05c15d18603f918faa4513` |
-| Where the archive is | **On the author's machine only**, under `.runtime/writer-spike/`. A hash without the file does not allow replay; a location reachable by an authorized auditor has not been decided |
+| Archive | `writer-spike-raw-eba185d7.tar.xz`, 3,088,788 bytes, SHA-256 `974bc6012f2a5c28ea2d9b264c3821948167b747ed05c15d18603f918faa4513`, re-verified on 2026-11-15 |
+| Destination convention | `s3://<org-private-evidence-bucket>/fakeyou/writer-spike/2026-11-15/eba185d7/writer-spike-raw-eba185d7.tar.xz`. A convention, not a statement that the bucket exists |
+| Current location | **The author's machine only**, `.runtime/writer-spike/`. Not reachable by an auditor. The local copy is kept until an upload is verified |
+| Upload | **Not done.** No evidence bucket has been named |
 | Replay tool | `evals/writer_spike/replay.py`, no audio server needed: `python -m evals.writer_spike.replay <directory>` |
 
-What a replay from the raw recordings can verify, and did when run by the
-author (not an independent audit):
+Storage requirements, to be confirmed at upload:
 
-- which clips appear whole in each recording: 50, 50, 50, 50, 0, 50 across the
-  six cells, matching the report;
-- that each of the two daemon-stop recordings holds exactly 50 gaps longer than
-  250 ms in observer delivery, and the other four hold none.
+- private bucket with Block Public Access, encryption at rest and versioning;
+  Object Lock for the retention period where available;
+- read access for authorized auditors and reviewers only; no public or
+  temporary link, no shared drive, no PR attachment;
+- retention of at least 12 months, longer if organization policy requires;
+- SHA-256 of the stored object equal to the value above.
 
-What it cannot verify: the instant of each write call and of each resume. The
-harness kept those in memory and wrote only aggregates, so the per-clip
-lateness cannot be recomputed from the raw files. This is a gap in the evidence
-as recorded. It is consistent with the stall gaps above but is not a substitute
-for them. Closing it would need a rerun that persists per-clip rows; none is
-planned, since no further run of these configurations is authorized.
+To be recorded here once uploaded: bucket and object key, object version ID,
+SHA-256, size, upload date, and the person responsible for the evidence.
+
+Content check of the archive, done on 2026-11-15: 17 entries. Twelve observer
+recordings of the container's own null-sink monitor; the relay journal, whose
+rows hold only a timestamp, a direction, a byte count and a descriptor count;
+the run log; the results file; and the public PulseAudio 17.0 source tarball.
+A pattern search of the three text files for keys, tokens, passwords, private
+keys, e-mail addresses and local user paths found nothing. The container had no
+audio input from a meeting or a host device. This is the author's check, not an
+audit.
+
+### What the raw files do and do not support
+
+The diagnostic results record 50 of 50 confirmed late outputs in each of the two
+daemon-stall cells. The raw recordings support the presence of the clips and
+the gaps in observer delivery. They do not let an auditor reconstruct the
+lateness of each clip.
+
+- Recomputed from the recordings by the author: clips found whole per cell are
+  50, 50, 50, 50, 0, 50, matching the report; each daemon-stop recording holds
+  exactly 50 delivery gaps longer than 250 ms and the other four hold none.
+- Not recoverable: the instant of each write call and of each resume. The
+  harness held them in memory and wrote aggregates only.
+
+This is not an independently reproduced per-clip lateness and must not be
+described as one. The limit is accepted for the decision to **reject** the
+designs; no rerun is made. The same evidence may not be used later as complete
+proof to approve any alternative. Evidence for activation is held to a higher
+standard.
+
+## Scope of V6
+
+Ruled on the text of #205: "A writer that can satisfy neither branch of V2
+blocks production activation." The contract gives no exception for statements
+that carry no V1 freshness bound, and this closure creates none.
+
+| Capability | Ruling |
+| --- | --- |
+| Current-scope visual speech | Blocked |
+| Historical speech through the same publication pipeline | Blocked |
+| Spoken abstention through the same pipeline | Blocked |
+| Journaled silence | Allowed |
+| Observation and transcript | Not blocked by V6 |
+| Decision Memory and Decision Intelligence | Not blocked by V6 |
+| Phase 5B publication activation | NO-GO |
+
+What is blocked is activation of the publication and audio subsystem within the
+scope of #205, not the product as a whole. Historical speech or spoken
+abstention by any other route would need an explicit contract amendment with
+its own safety case and acceptance controls.
 
 ## What stays in force
 
-- V6 stands unmet. As written, V6 blocks production activation when the writer
-  satisfies neither branch of V2. Whether statements that carry no V1 bound
-  (historical, abstention) could ever be activated on the existing writer is a
-  contract question this closure does not answer.
 - ADR-1 and ADR-3: direction accepted, nothing implemented. The NC-76 / I7
-  amendment still needs its own contract review.
-- Observation, transcript and decision capture do not depend on any of this.
+  amendment still needs its own contract review. Closing ADR-2 approves neither
+  of them, nor the implementation stack #206–#217.
+- No custom audio engine project is opened by this closure.
 
 ## Condition on any future attempt
 
