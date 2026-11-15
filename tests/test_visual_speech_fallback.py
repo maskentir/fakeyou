@@ -456,7 +456,7 @@ AUTHORIZED: tuple[RuntimeSynthesis, ...] = ("local",)
 
 
 @pytest.mark.parametrize("mode", AUTHORIZED)
-async def test_every_runtime_synthesis_request_is_journaled_with_its_authorization(
+async def test_every_runtime_preparation_is_journaled_with_its_authorization(
     mode: RuntimeSynthesis,
 ) -> None:
     meeting = Meeting(runtime_synthesis=mode)
@@ -475,7 +475,7 @@ async def test_every_runtime_synthesis_request_is_journaled_with_its_authorizati
     assert [item["outcome"] for item in finished] == ["prepared"]
 
 
-async def test_synthesis_that_is_prevented_from_publication_is_still_in_the_ledger() -> None:
+async def test_preparation_for_prevented_publication_is_still_journaled() -> None:
     meeting = Meeting(before_write=show_budget)
 
     turn = await ask(meeting, "When is beta?", needs=("screen",))
@@ -507,7 +507,7 @@ class BrokenSpeaker:
         del prepared
 
 
-async def test_failed_and_cancelled_synthesis_requests_are_in_the_ledger() -> None:
+async def test_failed_and_cancelled_preparation_requests_are_journaled() -> None:
     journal = RecordingJournal()
     meeting = Meeting()
     failing = replace(speech_for(meeting, journal), speaker=BrokenSpeaker(meeting, hang=False))
