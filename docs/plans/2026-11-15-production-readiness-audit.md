@@ -20,16 +20,20 @@ is reviewable on its own diff against the PR below it. Nothing is merged.
 `tests/test_publication_audit.py` asks one question in three ways: can anything
 short of complete evidence produce a compliant verdict?
 
-1. **Exhaustive property.** 2,000 derandomized combinations of gate decision,
-   playback receipt, observer presence, consent state, scope, source, grant and
+1. **Sampled property.** 2,000 derandomized Hypothesis samples over gate decision,
+   playback receipt, caller-supplied local-write value, observer presence, consent state, scope, source, grant and
    revocation times, identity method, observer clock, report, sentence identity,
    capture mapping, provider identity, and post-speech continuity. The verdict is
    `observed_compliant` exactly when every piece is present and valid. Any
    `observed_*` verdict requires a usable consented observation. Any `prevented_*`
    verdict requires a veto and a no-write receipt. A participant gap never
-   coexists with a compliance value.
+   coexists with a compliance value. This is property-based sampling of the
+   combination space, not an exhaustive enumeration and not a proof. A second
+   sampled property (500 samples) checks that the observer is read exactly when
+   the grant is provable before the read.
 2. **One removal at a time.** Starting from the fully evidenced control, each of
-   23 single removals yields its own named status and reason, none compliant.
+   26 removals, three of them with a contradicting caller override, yields its
+   own named status and reason, none compliant.
 3. **End to end.** A real actor, playback engine, kernel port, perception
    timeline, composed gate, and playback receipt, with the scripted observer. The
    control reaches compliant only with every fake in place. Without an observer,
@@ -40,6 +44,13 @@ The property found one hole, fixed here: an allowed sentence whose playback
 receipt says no audio was written, but which a participant reports hearing, was
 reported compliant. It is now `publication_observation_conflict`, the same rule
 the veto path already had.
+
+Review of the stack added three controls. A caller-supplied local-write value
+cannot override a settled receipt in either direction (fixed in 3/5): a
+`prevented` or `dropped_before_audio` receipt with a caller claiming a write and
+a valid participant report stays a conflict. A playback event without a receipt
+is journaled but never enters the meeting record (fixed in 1/5). The observer is
+not read without a provable grant (fixed in 3/5).
 
 ## Regression
 

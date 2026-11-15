@@ -1,11 +1,13 @@
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Literal, override
 
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from fakeyou.audio.playback import PlaybackEvent, PlaybackEventKind
 from fakeyou.foundation.clock_mapping import LOCAL_MONOTONIC
 from fakeyou.foundation.publication import (
     PublicationDecision,
@@ -18,14 +20,18 @@ from fakeyou.observability.participant_audio import (
     AUDIO_MEASUREMENT_SCOPE,
     VERIFIED_IDENTITY_METHODS,
     measure_participant_publication,
+    observe_participant,
 )
+from fakeyou.orchestration.spoken_log import SpokenLog
 from fakeyou.perception.revalidation import SceneRevalidator
+from fakeyou.persistence.record import MeetingRecord, TwinSpeechEntry
 from fakeyou.speech.contract import PlaybackOutcome, PlaybackReceipt
 from tests._participant_audio_fakes import (
     ScriptedParticipantObserver,
     granted,
     observer_clock,
 )
+from tests._persistence_fakes import RecordingJournal
 from tests.test_publication_activation import (
     CAPTURED_AT,
     Meeting,
@@ -37,6 +43,7 @@ from tests.test_publication_activation import (
 from tests.test_publication_measurement import _binding, _post
 
 NO_WRITE: frozenset[PlaybackOutcome] = frozenset({"prevented", "dropped_before_audio"})
+UNSETTLED: frozenset[PlaybackOutcome | None] = frozenset({None, "attempted"})
 ClockKind = Literal["mapped", "uncertain", "none"]
 PostKind = Literal["continuous", "missing", "changed"]
 
@@ -58,6 +65,23 @@ class Case:
     capture_mapped: bool
     provider_known: bool
     post: PostKind
+    caller_local_write: bool | None = None
+
+    @property
+    def grant_provable(self) -> bool:
+        return (
+            self.consent_state == "granted"
+            and self.consent_scope == AUDIO_MEASUREMENT_SCOPE
+            and bool(self.consent_source)
+            and self.granted_at is not None
+            and (self.revoked_at is None or self.revoked_at > self.granted_at)
+        )
+
+    @property
+    def no_local_write(self) -> bool:
+        if self.receipt in NO_WRITE:
+            return True
+        return self.receipt in UNSETTLED and self.caller_local_write is False
 
     @property
     def consent_in_force(self) -> bool:
@@ -86,7 +110,7 @@ class Case:
         return (
             self.validity == "valid"
             and self.usable_observation
-            and self.receipt not in NO_WRITE
+            and not self.no_local_write
             and self.capture_mapped
             and self.provider_known
             and self.post == "continuous"
@@ -145,6 +169,11 @@ class Case:
             clock_domain="fake",
             receipt=receipt,
             post_validations=post,
+            **(
+                {}
+                if self.caller_local_write is None
+                else {"local_write_observed": self.caller_local_write}
+            ),
         )
 
 
@@ -175,6 +204,7 @@ CASES = st.builds(
     capture_mapped=st.booleans(),
     provider_known=st.booleans(),
     post=st.sampled_from(["continuous", "continuous", "missing", "changed"]),
+    caller_local_write=st.sampled_from([None, None, True, False]),
 )
 
 
@@ -188,15 +218,27 @@ def test_no_combination_of_partial_evidence_yields_a_compliant_verdict(case: Cas
     assert (result.get("compliant") is True) is case.fully_evidenced
     if status.startswith("observed_"):
         assert case.usable_observation
-        assert case.receipt not in NO_WRITE
+        assert not case.no_local_write
     if status.startswith("prevented_"):
         assert case.validity in ("invalid", "unknown")
-        assert case.receipt in NO_WRITE
+        assert case.no_local_write
         assert not case.usable_observation
     if result["participant_gap"] is not None:
         assert "compliant" not in result
     if not case.observer:
         assert result["participant_gap"] == "participant_observer_unavailable"
+
+
+@settings(max_examples=500, deadline=None, derandomize=True)
+@given(CASES)
+def test_observer_is_read_only_when_the_grant_is_provable(case: Case) -> None:
+    observer = case.scripted()
+    if observer is None:
+        return
+
+    observe_participant(case.binding(), observer)
+
+    assert observer.heard_calls == (1 if case.grant_provable else 0)
 
 
 FULL = Case(
@@ -240,7 +282,44 @@ REMOVALS: list[tuple[dict[str, Any], str, str]] = [
     ({"validity": "unknown"}, "observed_noncompliant", "published_despite_gate_unknown"),
     ({"receipt": "prevented"}, "not_measurable", "publication_observation_conflict"),
     ({"receipt": "dropped_before_audio"}, "not_measurable", "publication_observation_conflict"),
+    (
+        {"receipt": "prevented", "caller_local_write": True},
+        "not_measurable",
+        "publication_observation_conflict",
+    ),
+    (
+        {"receipt": "dropped_before_audio", "caller_local_write": True},
+        "not_measurable",
+        "publication_observation_conflict",
+    ),
+    (
+        {"receipt": None, "caller_local_write": False},
+        "not_measurable",
+        "publication_observation_conflict",
+    ),
 ]
+
+
+def test_caller_claim_of_no_write_cannot_hide_a_receipt_that_reports_audio() -> None:
+    result = replace(FULL, caller_local_write=False).measure()
+
+    assert result["status"] == "observed_compliant"
+
+
+@pytest.mark.parametrize("kind", ["playback_finished", "playback_dropped"])
+def test_playback_event_without_a_receipt_never_enters_the_meeting_record(
+    kind: PlaybackEventKind, tmp_path: Path
+) -> None:
+    journal = RecordingJournal()
+    record = MeetingRecord(tmp_path / "record.jsonl")
+    log = SpokenLog(journal, record)
+    try:
+        log.observe(PlaybackEvent("playback_started", "The slide shows revenue."))
+        log.observe(PlaybackEvent(kind, "The slide shows revenue.", heard="The slide"))
+        assert [entry for entry in record.entries() if isinstance(entry, TwinSpeechEntry)] == []
+        assert len(journal.events(kind)) == 1
+    finally:
+        record.close()
 
 
 def test_full_evidence_is_the_only_compliant_control() -> None:
