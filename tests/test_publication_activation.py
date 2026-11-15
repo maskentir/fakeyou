@@ -170,6 +170,7 @@ class Meeting(FakeSession):
             self.publication_context = replace(
                 self.publication_context, runtime_synthesis=self.runtime_synthesis
             )
+        self.writer.now = self.clock
         self.synth = FakeSynth(audio=b"\x01\x00" * FRAME_BYTES)
         self.engine = build_engine(self.synth, self.writer, self.events)
         self.engine.configure_publication(self.publication_context)

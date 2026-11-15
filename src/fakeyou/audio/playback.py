@@ -17,6 +17,7 @@ from fakeyou.audio.commit import (
     WRITE_DELAYED,
     CommitProgress,
     DeadlineWriter,
+    ObservedWriter,
     WriteWithheld,
 )
 from fakeyou.foundation.abstention import abstention_digest, abstention_refusal
@@ -24,7 +25,6 @@ from fakeyou.foundation.invariants import PLAYBACK_SAMPLE_RATE
 from fakeyou.foundation.pcm import PCM16_SAMPLE_BYTES, VoicedClip, voiced_clip
 from fakeyou.foundation.protocols import SupportsAclose
 from fakeyou.foundation.publication import (
-    VALIDATION_AGE_SECONDS,
     PublicationContext,
     PublicationDecision,
     SentenceBinding,
@@ -956,19 +956,23 @@ class PlaybackEngine:
             decision = context.commit(binding)
             if decision is None:
                 raise _PublicationPrevented("unknown", "unresolved")
-            evaluated_at = progress.evaluated(decision, context, bounded=bounded)
+            progress.evaluated(decision, context, bounded=bounded)
             self._journal_commit(binding, decision, progress)
             if not decision.allows:
                 raise _PublicationPrevented(decision.validity, decision.reason)
-            progress.accepted_at = evaluated_at
+            observation = None
             try:
-                if bounded and isinstance(self._writer, DeadlineWriter):
-                    await self._writer.write_before(pcm, evaluated_at + VALIDATION_AGE_SECONDS)
+                if isinstance(self._writer, ObservedWriter):
+                    observation = await self._writer.write_observed(
+                        pcm, progress.deadline() if bounded else float("inf")
+                    )
+                elif bounded and isinstance(self._writer, DeadlineWriter):
+                    await self._writer.write_before(pcm, progress.deadline())
                 else:
                     await self._writer.write(pcm)
             except WriteWithheld:
                 continue
-            progress.written(context)
+            progress.written(context, observation)
             return
         raise _PublicationPrevented("unknown", WRITE_DELAYED)
 

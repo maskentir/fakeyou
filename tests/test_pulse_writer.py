@@ -153,3 +153,28 @@ async def test_a_write_past_its_deadline_is_withheld_on_the_writer_thread(
     assert stream.written == [b"\x00" * 960]
     await writer.write(b"\x02\x00" * 480)
     assert stream.written[-1] == b"\x02\x00" * 480
+
+
+async def test_observed_write_records_writer_thread_acceptance_and_completion(
+    streams: list[FakeStream],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = [100.0]
+    writer = PulseWriter(sink="agent_output", rate=24000, now=lambda: clock[0])
+    await writer.drain()
+    stream = streams[0]
+    original = stream.write
+
+    def delayed_write(data: bytes) -> None:
+        clock[0] = 100.4
+        original(data)
+
+    monkeypatch.setattr(stream, "write", delayed_write)
+    clock[0] = 100.1
+
+    observation = await writer.write_observed(b"\x01\x00" * 480, 100.25)
+
+    assert observation.accepted_at == 100.1
+    assert observation.first_written_at == 100.4
+    assert stream.written[-1] == b"\x01\x00" * 480
+    await writer.close()

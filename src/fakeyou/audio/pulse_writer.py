@@ -7,9 +7,10 @@ from functools import partial
 
 from pasimple import PA_SAMPLE_S16LE, PA_STREAM_PLAYBACK, PaSimple, PaSimpleError
 
-from fakeyou.audio.commit import WriteWithheld
+from fakeyou.audio.commit import WriteObservation, WriteWithheld
 from fakeyou.audio.playback import PlaybackError
 from fakeyou.foundation.clock import monotonic
+from fakeyou.foundation.clock_mapping import LOCAL_MONOTONIC
 from fakeyou.foundation.invariants import PCM_CHANNELS
 from fakeyou.foundation.pcm import PCM16_SAMPLE_BYTES
 
@@ -59,9 +60,29 @@ class PulseWriter:
         await self._call(partial(self._write_before, deadline), pcm)
 
     def _write_before(self, deadline: float, pcm: bytes) -> None:
+        stream = self._open()
         if self._now() > deadline:
             raise WriteWithheld
-        self._write(pcm)
+        if pcm:
+            stream.write(pcm)
+
+    async def write_observed(self, pcm: bytes, deadline: float) -> WriteObservation:
+        if self._closed:
+            raise PlaybackError("the voice writer is closed")
+        loop = asyncio.get_running_loop()
+        try:
+            return await loop.run_in_executor(self._executor, self._observed, pcm, deadline)
+        except PaSimpleError as error:
+            raise PlaybackError(f"PulseAudio playback failed: {error}") from error
+
+    def _observed(self, pcm: bytes, deadline: float) -> WriteObservation:
+        accepted = self._now()
+        try:
+            self._write_before(deadline, pcm)
+        except PaSimpleError:
+            self._release_quietly()
+            raise
+        return WriteObservation(accepted, self._now(), LOCAL_MONOTONIC)
 
     async def drain(self) -> None:
         await self._call(self._drain)

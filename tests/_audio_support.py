@@ -1,10 +1,11 @@
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any, TypedDict, Unpack, cast, override
 
 import numpy as np
 
 from fakeyou.audio.audio import SessionRun
+from fakeyou.audio.commit import DeadlineWriter, WriteObservation
 from fakeyou.audio.graph import AudioGraph, PcmQueue
 from fakeyou.audio.playback import (
     PlaybackEngine,
@@ -13,6 +14,8 @@ from fakeyou.audio.playback import (
     PlaybackTiming,
 )
 from fakeyou.audio.vad import VadAnalyzer, VadController, VadParams
+from fakeyou.foundation.clock import monotonic
+from fakeyou.foundation.clock_mapping import LOCAL_MONOTONIC
 from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.observability.faults import FaultReporter
 from fakeyou.speech.contract import SpeechSynthesizer
@@ -164,6 +167,7 @@ class FakeSynth(SentenceSynth):
 class FakeWriter:
     def __init__(self, error: Exception | None = None, buffer_seconds: float = 0.0) -> None:
         self.error = error
+        self.now: Callable[[], float] = monotonic
         self.buffer_seconds = buffer_seconds
         self.written: list[bytes] = []
         self.cancelled: list[bytes] = []
@@ -187,6 +191,14 @@ class FakeWriter:
         if self.error is not None:
             raise self.error
         self.written.append(pcm)
+
+    async def write_observed(self, pcm: bytes, deadline: float) -> WriteObservation:
+        accepted = self.now()
+        if isinstance(self, DeadlineWriter):
+            await self.write_before(pcm, deadline)
+        else:
+            await self.write(pcm)
+        return WriteObservation(accepted, self.now(), LOCAL_MONOTONIC)
 
     async def drain(self) -> None:
         self.drains += 1

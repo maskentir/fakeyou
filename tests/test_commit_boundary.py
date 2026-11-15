@@ -325,7 +325,7 @@ async def test_committed_attempt_cancelled_before_its_first_write_is_not_spoken(
     assert receipt.local_audio_seconds == 0
     assert not receipt.local_audio_written
     assert receipt.commit is not None
-    assert receipt.commit.accepted_at is not None
+    assert receipt.commit.accepted_at is None
     assert receipt.commit.first_written_at is None
     assert turn.counted == []
     [binding] = meeting.bindings
@@ -531,4 +531,65 @@ def test_missing_or_out_of_order_writer_acceptance_cannot_prove_freshness(
     timing = progress.timing(PublicationContext("meeting", LOCAL_MONOTONIC))
 
     assert timing is not None
+    assert timing.fresh_at_write_unproven is True
+
+
+class UnobservedWriter:
+    buffer_seconds = 0.0
+
+    def __init__(self) -> None:
+        self.delegate = FakeWriter()
+
+    async def write(self, pcm: bytes) -> None:
+        await self.delegate.write(pcm)
+
+    async def drain(self) -> None:
+        await self.delegate.drain()
+
+    async def close(self) -> None:
+        await self.delegate.close()
+
+
+async def test_engine_evaluation_time_cannot_substitute_for_unobserved_writer_acceptance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    meeting = Meeting()
+    writer = UnobservedWriter()
+    monkeypatch.setattr(meeting.engine, "_writer", writer)
+
+    await beta_turn(meeting)
+
+    timing = terminal(meeting).commit
+    assert timing is not None
+    assert timing.accepted_at is None
+    assert timing.fresh_at_write_unproven is True
+
+
+def test_write_deadline_also_expires_when_the_confirmation_stops_being_fresh() -> None:
+    from tests.test_publication_freshness import decide, evidence, validated
+
+    decision = decide(evidence(95.2), validated())
+    progress = CommitProgress()
+    context = PublicationContext("meeting", LOCAL_MONOTONIC, now=lambda: 100.0)
+    progress.evaluated(decision, context, bounded=True)
+
+    assert progress.deadline() == pytest.approx(100.19)
+
+
+def test_writer_instants_from_another_clock_are_not_relabelled_as_local() -> None:
+    from fakeyou.audio.commit import WriteObservation
+
+    context = PublicationContext("meeting", LOCAL_MONOTONIC, now=lambda: 100.0)
+    progress = CommitProgress()
+    progress.evaluated(
+        PublicationDecision("valid", "ok", 100.0, LOCAL_MONOTONIC), context, bounded=True
+    )
+    progress.written(context, WriteObservation(100.0, 100.1, "another-clock"))
+
+    timing = progress.timing(context)
+
+    assert timing is not None
+    assert timing.accepted_at is None
+    assert timing.first_written_at is None
+    assert timing.writer_clock_domain == "another-clock"
     assert timing.fresh_at_write_unproven is True

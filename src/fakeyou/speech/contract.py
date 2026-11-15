@@ -111,6 +111,7 @@ class CommitTiming:
     evaluations: int = 1
     fresh_at_write_unproven: bool = False
     post_commit: tuple[PostCommitSample, ...] = ()
+    writer_clock_domain: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
