@@ -45,6 +45,7 @@ class SampleLedger:
     _sources: dict[SourceKey, _Source] = field(default_factory=dict)
     _history: deque[ContentSample] = field(default_factory=lambda: deque(maxlen=HISTORY_SIZE))
     _stream_subjects: dict[tuple[DigestRole, str], str] = field(default_factory=dict)
+    _retired_streams: set[tuple[DigestRole, str, int]] = field(default_factory=set)
 
     def subject_of_stream(self, role: DigestRole, stream_id: str) -> str | None:
         return self._stream_subjects.get((role, stream_id))
@@ -88,6 +89,8 @@ class SampleLedger:
 
     def _admit_stream(self, source: _Source, record: DigestRecord, captured_at: datetime) -> bool:
         incarnation = (record.stream_id, record.generation)
+        if (record.role, *incarnation) in self._retired_streams:
+            return False
         previous = source.latest
         if incarnation in source.retired or (
             source.incarnation is not None and record.generation < source.incarnation[1]
@@ -97,6 +100,8 @@ class SampleLedger:
             if previous is not None and captured_at < previous.captured_at:
                 return False
             source.retired.add(source.incarnation)
+            if source.incarnation[1] > 0:
+                self._retired_streams.add((record.role, *source.incarnation))
             source.continuity += 1
             source.highest_sequence = None
             source.media_timestamp = None
@@ -125,6 +130,7 @@ class SampleLedger:
         source.continuity += 1
         if source.incarnation is not None and source.incarnation[1] > 0:
             source.retired.add(source.incarnation)
+            self._retired_streams.add((role, *source.incarnation))
 
     def latest(self, role: DigestRole, subject_id: str) -> ContentSample | None:
         source = self._sources.get((role, subject_id))

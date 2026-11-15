@@ -192,3 +192,14 @@ def test_stopped_sampler_cannot_reopen_itself_with_a_late_packet() -> None:
 
     assert ingest(ledger, sample(501, generation=1), 1.0) == "retired_stream"
     assert ledger.stopped("screen", "screen")
+
+
+def test_retired_camera_sampler_cannot_be_relabelled_as_a_new_subject() -> None:
+    ledger = SampleLedger()
+    ingest(ledger, sample(500, role="camera", subject_id="old-person", generation=1), 0.0)
+    ledger.stop("camera", "old-person")
+
+    outcome = ingest(ledger, sample(501, role="camera", subject_id="new-person", generation=1), 1.0)
+
+    assert outcome == "retired_stream"
+    assert ledger.latest("camera", "new-person") is None

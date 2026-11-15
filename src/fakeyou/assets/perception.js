@@ -27,6 +27,7 @@
   const samples = [];
   const videoTracks = new Map();
   const roles = new Map();
+  const owners = new Map();
   const samplers = new Map();
   let samplerGeneration = 0;
   const channels = [];
@@ -318,6 +319,7 @@
       lastSamplePageMs: 0,
       sequence: 0,
       generation: ++samplerGeneration,
+      owner: owners.get(id) || "",
       hashing: false,
       lastThumb: null,
       emittedThumb: null,
@@ -353,18 +355,22 @@
 
   function assign(assignments) {
     const wanted = new Map();
+    const wantedOwners = new Map();
     for (const item of assignments || []) {
       if (item && (item.role === "screen" || item.role === "camera")) {
         wanted.set(String(item.stream_id), item.role);
+        wantedOwners.set(String(item.stream_id), String(item.device_id || ""));
       }
     }
     for (const id of [...samplers.keys()]) {
       const state = samplers.get(id);
-      if (!wanted.has(id) || wanted.get(id) !== state.role) stop(id);
+      if (!wanted.has(id) || wanted.get(id) !== state.role || wantedOwners.get(id) !== state.owner) stop(id);
     }
     roles.clear();
+    owners.clear();
     for (const [id, role] of wanted) {
       roles.set(id, role);
+      owners.set(id, wantedOwners.get(id));
       start(id);
     }
     return { sampling: [...samplers.keys()], known: [...videoTracks.keys()] };
