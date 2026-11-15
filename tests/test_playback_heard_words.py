@@ -9,6 +9,7 @@ from fakeyou.memory.ingestion import meeting_windows
 from fakeyou.orchestration.spoken_log import SpokenLog
 from fakeyou.persistence.record import MeetingRecord, TwinSpeechEntry, load_meeting_record
 from fakeyou.speech.contract import SpeechSegment, SpeechTurn, WordTiming
+from tests._audio_fakes import written
 from tests._audio_support import FakeWriter
 from tests._conversation_support import event
 from tests._persistence_fakes import RecordingJournal
@@ -251,7 +252,7 @@ def started(text: str) -> PlaybackEvent:
 
 
 def cut(text: str, heard: str | None) -> PlaybackEvent:
-    return PlaybackEvent("playback_dropped", text, "interrupted", heard=heard)
+    return written(PlaybackEvent("playback_dropped", text, "interrupted", heard=heard))
 
 
 def twin_lines(record: MeetingRecord) -> list[tuple[str, bool, str | None]]:
