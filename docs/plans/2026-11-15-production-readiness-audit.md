@@ -21,7 +21,8 @@ is reviewable on its own diff against the PR below it. Nothing is merged.
 short of complete evidence produce a compliant verdict?
 
 1. **Sampled property.** 2,000 derandomized Hypothesis samples over gate decision,
-   playback receipt, caller-supplied local-write value, observer presence, consent state, scope, source, grant and
+   playback receipt, caller-supplied local-write value, query time, consent clock
+   domain, observer presence, consent state, scope, source, grant and
    revocation times, identity method, observer clock, report, sentence identity,
    capture mapping, provider identity, and post-speech continuity. The verdict is
    `observed_compliant` exactly when every piece is present and valid. Any
@@ -30,9 +31,11 @@ short of complete evidence produce a compliant verdict?
    coexists with a compliance value. This is property-based sampling of the
    combination space, not an exhaustive enumeration and not a proof. A second
    sampled property (500 samples) checks that the observer is read exactly when
-   the grant is provable before the read.
+   the grant is complete and proven in force against the trusted reference: a
+   gate time, a query time, a matching clock domain, a grant at or before the
+   earliest possible audio start, and no revocation at or before the query.
 2. **One removal at a time.** Starting from the fully evidenced control, each of
-   26 removals, three of them with a contradicting caller override, yields its
+   33 removals, three of them with a contradicting caller override, yields its
    own named status and reason, none compliant.
 3. **End to end.** A real actor, playback engine, kernel port, perception
    timeline, composed gate, and playback receipt, with the scripted observer. The
@@ -51,6 +54,12 @@ cannot override a settled receipt in either direction (fixed in 3/5): a
 a valid participant report stays a conflict. A playback event without a receipt
 is journaled but never enters the meeting record (fixed in 1/5). The observer is
 not read without a provable grant (fixed in 3/5).
+
+A second review added the temporal preflight in 3/5. Without a gate decision
+there is no trusted audio bound, so the observer is not read and the reason is
+`participant_consent_reference_missing` rather than `current_gate_unproven`. An
+observer clock mapped into another domain than the consent record is
+`participant_consent_clock_incomparable`.
 
 ## Regression
 

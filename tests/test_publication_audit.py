@@ -19,6 +19,7 @@ from fakeyou.foundation.publication import (
 from fakeyou.observability.participant_audio import (
     AUDIO_MEASUREMENT_SCOPE,
     VERIFIED_IDENTITY_METHODS,
+    consent_reference,
     measure_participant_publication,
     observe_participant,
 )
@@ -44,6 +45,10 @@ from tests.test_publication_measurement import _binding, _post
 
 NO_WRITE: frozenset[PlaybackOutcome] = frozenset({"prevented", "dropped_before_audio"})
 UNSETTLED: frozenset[PlaybackOutcome | None] = frozenset({None, "attempted"})
+GATE_CHECKED_AT = 99.9
+AUDIO_NOT_BEFORE = 99.89
+HEARD_FROM = 100.0
+HEARD_UNTIL = 101.0
 ClockKind = Literal["mapped", "uncertain", "none"]
 PostKind = Literal["continuous", "missing", "changed"]
 
@@ -66,9 +71,11 @@ class Case:
     provider_known: bool
     post: PostKind
     caller_local_write: bool | None = None
+    queried_at: float | None = HEARD_UNTIL + 0.2
+    consent_domain: str = "fake"
 
     @property
-    def grant_provable(self) -> bool:
+    def grant_complete(self) -> bool:
         return (
             self.consent_state == "granted"
             and self.consent_scope == AUDIO_MEASUREMENT_SCOPE
@@ -78,6 +85,23 @@ class Case:
         )
 
     @property
+    def read_permitted(self) -> bool:
+        return (
+            self.grant_complete
+            and self.validity is not None
+            and self.queried_at is not None
+            and self.consent_domain == "fake"
+            and self.granted_at is not None
+            and self.granted_at <= AUDIO_NOT_BEFORE
+            and (self.revoked_at is None or self.revoked_at > self.queried_at)
+        )
+
+    def decision(self) -> PublicationDecision | None:
+        if self.validity is None:
+            return None
+        return PublicationDecision(self.validity, "scripted", GATE_CHECKED_AT, "fake", 0.01)
+
+    @property
     def no_local_write(self) -> bool:
         if self.receipt in NO_WRITE:
             return True
@@ -85,14 +109,7 @@ class Case:
 
     @property
     def consent_in_force(self) -> bool:
-        return (
-            self.consent_state == "granted"
-            and self.consent_scope == AUDIO_MEASUREMENT_SCOPE
-            and bool(self.consent_source)
-            and self.granted_at is not None
-            and self.granted_at <= 100.0
-            and (self.revoked_at is None or self.revoked_at > 101.0)
-        )
+        return self.read_permitted and (self.revoked_at is None or self.revoked_at > HEARD_UNTIL)
 
     @property
     def usable_observation(self) -> bool:
@@ -138,19 +155,17 @@ class Case:
                 source=self.consent_source,
                 granted_at=self.granted_at,
                 revoked_at=self.revoked_at,
+                clock_domain=self.consent_domain,
             ),
             clock=clock,
-            heard_from=100.0 if self.heard else None,
+            heard_from=HEARD_FROM if self.heard else None,
+            heard_until=HEARD_UNTIL,
             identity_method=self.identity_method,
             reported_hash=None if self.right_sentence else "another-sentence",
         )
 
     def measure(self) -> dict[str, Any]:
-        decision = (
-            None
-            if self.validity is None
-            else PublicationDecision(self.validity, "scripted", 99.9, "fake", 0.01)
-        )
+        decision = self.decision()
         changed = SnapshotRef("camera", "subject", "stream", 1, 2, 2, datetime.now(UTC))
         post = {
             "continuous": _post(),
@@ -169,6 +184,7 @@ class Case:
             clock_domain="fake",
             receipt=receipt,
             post_validations=post,
+            queried_at=self.queried_at,
             **(
                 {}
                 if self.caller_local_write is None
@@ -195,7 +211,7 @@ CASES = st.builds(
     consent_state=st.sampled_from(["granted", "granted", "denied", "unknown", "revoked"]),
     consent_scope=st.sampled_from([AUDIO_MEASUREMENT_SCOPE, AUDIO_MEASUREMENT_SCOPE, "marketing"]),
     consent_source=st.sampled_from(["participant_confirmed", "participant_confirmed", ""]),
-    granted_at=st.sampled_from([10.0, 10.0, 100.5, None]),
+    granted_at=st.sampled_from([10.0, 10.0, AUDIO_NOT_BEFORE, 99.895, 100.5, 150.0, None]),
     revoked_at=st.sampled_from([None, None, 100.5, 150.0]),
     identity_method=st.sampled_from(["watermark", "fingerprint", "transcript", "timing_guess"]),
     clock=st.sampled_from(["mapped", "mapped", "uncertain", "none"]),
@@ -205,6 +221,8 @@ CASES = st.builds(
     provider_known=st.booleans(),
     post=st.sampled_from(["continuous", "continuous", "missing", "changed"]),
     caller_local_write=st.sampled_from([None, None, True, False]),
+    queried_at=st.sampled_from([HEARD_UNTIL + 0.2, HEARD_UNTIL + 0.2, 200.0, None]),
+    consent_domain=st.sampled_from(["fake", "fake", "", "page_wall_utc"]),
 )
 
 
@@ -231,14 +249,19 @@ def test_no_combination_of_partial_evidence_yields_a_compliant_verdict(case: Cas
 
 @settings(max_examples=500, deadline=None, derandomize=True)
 @given(CASES)
-def test_observer_is_read_only_when_the_grant_is_provable(case: Case) -> None:
+def test_observer_is_read_only_when_the_grant_is_proven_in_force(case: Case) -> None:
     observer = case.scripted()
     if observer is None:
         return
 
-    observe_participant(case.binding(), observer)
+    observation = observe_participant(
+        case.binding(), observer, consent_reference(case.decision(), case.queried_at)
+    )
 
-    assert observer.heard_calls == (1 if case.grant_provable else 0)
+    assert observer.heard_calls == (1 if case.read_permitted else 0)
+    if not case.read_permitted:
+        assert observation.publication is None
+        assert observation.gap is not None
 
 
 FULL = Case(
@@ -267,7 +290,21 @@ REMOVALS: list[tuple[dict[str, Any], str, str]] = [
     ({"consent_source": ""}, "not_measurable", "participant_consent_unknown"),
     ({"granted_at": None}, "not_measurable", "participant_consent_not_in_force"),
     ({"granted_at": 100.5}, "not_measurable", "participant_consent_not_in_force"),
+    ({"granted_at": 99.895}, "not_measurable", "participant_consent_not_in_force"),
+    ({"granted_at": 150.0}, "not_measurable", "participant_consent_not_in_force"),
     ({"revoked_at": 100.5}, "not_measurable", "participant_consent_revoked"),
+    (
+        {"revoked_at": 150.0, "queried_at": 200.0},
+        "not_measurable",
+        "participant_consent_revoked",
+    ),
+    ({"queried_at": None}, "not_measurable", "participant_consent_reference_missing"),
+    ({"consent_domain": ""}, "not_measurable", "participant_consent_clock_incomparable"),
+    (
+        {"consent_domain": "page_wall_utc"},
+        "not_measurable",
+        "participant_consent_clock_incomparable",
+    ),
     ({"identity_method": "transcript"}, "not_measurable", "publication_identity_unverified"),
     ({"clock": "none"}, "not_measurable", "participant_clock_unmapped"),
     ({"clock": "uncertain"}, "not_measurable", "participant_clock_unmeasurable"),
@@ -277,7 +314,7 @@ REMOVALS: list[tuple[dict[str, Any], str, str]] = [
     ({"provider_known": False}, "not_measurable", "provider_identity_unmeasurable"),
     ({"post": "missing"}, "not_measurable", "postpublication_continuity_unmeasurable"),
     ({"post": "changed"}, "observed_noncompliant", "scene_not_continuous"),
-    ({"validity": None}, "not_measurable", "current_gate_unproven"),
+    ({"validity": None}, "not_measurable", "participant_consent_reference_missing"),
     ({"validity": "invalid"}, "observed_noncompliant", "published_despite_gate_invalid"),
     ({"validity": "unknown"}, "observed_noncompliant", "published_despite_gate_unknown"),
     ({"receipt": "prevented"}, "not_measurable", "publication_observation_conflict"),
@@ -359,7 +396,7 @@ class Audited(Meeting):
 
 
 def participant(*, heard: bool = True, **changes: Any) -> ScriptedParticipantObserver:
-    return ScriptedParticipantObserver(
+    observer = ScriptedParticipantObserver(
         **{
             "heard_from": CAPTURED_AT + 2.1 if heard else None,
             "heard_until": CAPTURED_AT + 2.7,
@@ -367,6 +404,8 @@ def participant(*, heard: bool = True, **changes: Any) -> ScriptedParticipantObs
             **changes,
         }
     )
+    observer.consented = replace(observer.consented, clock_domain=LOCAL_MONOTONIC)
+    return observer
 
 
 async def continuity(
@@ -392,6 +431,7 @@ async def measured(
         clock_domain=LOCAL_MONOTONIC,
         receipt=receipt,
         post_validations=post,
+        queried_at=AFTER_SPEECH,
     )
 
 
@@ -432,7 +472,10 @@ async def test_end_to_end_without_an_observer_is_the_production_outcome() -> Non
         (participant(clock=None), "participant_clock_unmapped"),
         (participant(identity_method="transcript"), "publication_identity_unverified"),
         (participant(heard=False), "participant_sentence_not_reported"),
-        (participant(clock_domain="observer_wall"), "participant_clock_unmeasurable"),
+        (
+            participant(clock_domain="observer_wall"),
+            "participant_consent_clock_incomparable",
+        ),
     ],
 )
 async def test_end_to_end_observer_gaps_never_become_verdicts(
