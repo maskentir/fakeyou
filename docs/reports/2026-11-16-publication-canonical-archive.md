@@ -88,14 +88,14 @@ is not independent custody and cannot recreate missing write/resume timestamps.
 | Extraction source / rNext record [#222](https://github.com/maskentir/fakeyou/pull/222) | `d37b89f40155d6130ebda72de2d1ce12eeaf06b4` |
 | Frozen exact-head audit [#221](https://github.com/maskentir/fakeyou/pull/221) | `44a5739ea74ff2ebdd38ae54b768e36dc5fd593a` |
 | Earlier closure/capability [#218](https://github.com/maskentir/fakeyou/pull/218) | `917c56dc546930841cb8b0ab39dc7ce4a4cd5716` |
-| Original protocol/harness [#217](https://github.com/maskentir/fakeyou/pull/217) | `4f5c22e2c9cd5bf3e9f294630851ba75c938e363` |
+| Preparation proposal [#217](https://github.com/maskentir/fakeyou/pull/217) | `4f5c22e2c9cd5bf3e9f294630851ba75c938e363` |
 | Writer harness execution | [`eba185d7c4c6ac93a897d57e8eb192bceb31059f`](https://github.com/maskentir/fakeyou/tree/eba185d7c4c6ac93a897d57e8eb192bceb31059f/evals/writer_spike) |
 | Reviewed #220 head | `77e51c797ddbc9df75a5eeeac73331d306cdd2e1` |
 | Earlier equivalent #220 tree commit | `36da8ca296b59920e01b4189a647ec6376eff56b` |
 | Pre-#220 baseline | `a79197b5cf20d4235861b46edeb20165f4112bed` |
 
 Original protocol and harness are available at their immutable refs, including
-[the protocol at #217](https://github.com/maskentir/fakeyou/blob/4f5c22e2c9cd5bf3e9f294630851ba75c938e363/docs/plans/2026-11-15-writer-spike-protocol.md).
+[the superseded protocol at #218](https://github.com/maskentir/fakeyou/blob/917c56dc546930841cb8b0ab39dc7ce4a4cd5716/docs/plans/2026-11-15-writer-spike-protocol.md).
 The original branches/PRs and refs are preserved; this archive does not merge
 or close their historical ancestry.
 
