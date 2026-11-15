@@ -2,6 +2,7 @@ import asyncio
 import base64
 import binascii
 import time
+from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, Protocol, override
@@ -11,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import PerceptionSettings
 from fakeyou.foundation.clock_mapping import ClockExchange, MappedInstant, RemoteClock
+from fakeyou.foundation.content_digest import DigestRecord
 from fakeyou.foundation.invariants import PERCEPTION_POLL_TIMEOUT_MULTIPLIER
 from fakeyou.foundation.polling import PollingLoop, PollSchedule
 from fakeyou.foundation.resources import load_bridged_script
@@ -28,7 +30,12 @@ from fakeyou.perception.meet_protocol import (
 )
 from fakeyou.perception.percepts import IncomingChat, ParticipantRef
 from fakeyou.perception.roster import MeetRoster, RosterChange, StreamAssignment
-from fakeyou.perception.timeline import CameraSample, MeetingTimeline
+from fakeyou.perception.timeline import (
+    SCREEN_SOURCE_ID,
+    CameraSample,
+    FrameSample,
+    MeetingTimeline,
+)
 
 PERCEPTION_ASSET = "perception.js"
 PERCEPTION_DRAIN_JS = "() => window.__fakeyouPerception ? window.__fakeyouPerception.drain() : null"
@@ -37,6 +44,7 @@ PERCEPTION_ASSIGN_JS = (
     "? window.__fakeyouPerception.assign(assignments) : null"
 )
 PERCEPTION_POLL_SECONDS = 0.5
+FRAME_SAMPLE_CACHE_SIZE = 512
 DRAIN_STATS_EVERY = 30
 BACKLOG_GRACE = timedelta(seconds=2)
 BACKLOG_WINDOW = timedelta(seconds=45)
@@ -71,6 +79,22 @@ class DrainedFrame(DrainPart):
     height: int
     reason: str
     jpeg_b64: str
+    sequence: int | None = None
+
+
+class DrainedSample(DrainPart):
+    stream_id: str
+    role: Literal["screen", "camera"]
+    page_ms: float
+    sequence: int
+    media_timestamp: float | None = None
+    width: int = 0
+    height: int = 0
+    pixel_format: str = ""
+    algorithm: str = ""
+    version: int = 0
+    digest: str | None = None
+    skip_reason: str | None = None
 
 
 class ActiveSampler(DrainPart):
@@ -82,12 +106,14 @@ class ActiveSampler(DrainPart):
 class DrainBatch(DrainPart):
     messages: list[DrainedMessage] = []
     frames: list[DrainedFrame] = []
+    samples: list[DrainedSample] = []
     tracks: list[str] = []
     sampling: list[str] = []
     active: list[ActiveSampler] = []
     peers: list[str] = []
     dropped_messages: int = 0
     dropped_frames: int = 0
+    dropped_samples: int = 0
     drained_page_ms: float = 0
 
 
@@ -134,6 +160,10 @@ class PerceptionSensors:
         self._audio_outputs: set[tuple[str, str]] = set()
         self._admitted_at: datetime | None = None
         self._sampler_samples: dict[str, float] = {}
+        self._frame_samples: OrderedDict[tuple[str, int], FrameSample] = OrderedDict()
+        self._recording_streams: set[str] = set()
+        self.samples_seen = 0
+        self.samples_irregular = 0
 
     def _invalidate_camera(self, participant_id: str | None = None) -> None:
         if self._on_camera_invalidate is not None:
@@ -163,9 +193,55 @@ class PerceptionSensors:
         for message in batch.messages:
             if message.channel == COLLECTIONS_CHANNEL:
                 self._accept_collection(message)
+        for sample in batch.samples:
+            self._accept_sample(sample)
         self._touch_active(batch.active)
         for frame in batch.frames:
             await self._accept_frame(frame)
+
+    def _accept_sample(self, sample: DrainedSample) -> None:
+        assignment = self.roster.assignment_for(sample.stream_id)
+        if assignment is None or assignment.role != sample.role:
+            return
+        subject_id = (
+            SCREEN_SOURCE_ID
+            if sample.role == "screen"
+            else self._person(assignment.device_id).participant_id
+        )
+        captured_at = page_time(sample.page_ms)
+        frame_sample = FrameSample(
+            DigestRecord(
+                algorithm=sample.algorithm,
+                version=sample.version,
+                width=sample.width,
+                height=sample.height,
+                pixel_format=sample.pixel_format,
+                role=sample.role,
+                stream_id=sample.stream_id,
+                subject_id=subject_id,
+                sequence=sample.sequence,
+                media_timestamp=sample.media_timestamp,
+                digest=sample.digest,
+                skip_reason=sample.skip_reason,
+            ),
+            self.capture_instant(captured_at),
+        )
+        self._recording_streams.add(sample.stream_id)
+        self._frame_samples[sample.stream_id, sample.sequence] = frame_sample
+        while len(self._frame_samples) > FRAME_SAMPLE_CACHE_SIZE:
+            self._frame_samples.popitem(last=False)
+        self.samples_seen += 1
+        outcome = self.timeline.confirm(frame_sample, captured_at=captured_at)
+        if outcome != "accepted":
+            self.samples_irregular += 1
+            self._journal.record(
+                "perception_sample_rejected",
+                source="perception",
+                stream_id=sample.stream_id,
+                role=sample.role,
+                sequence=sample.sequence,
+                outcome=outcome,
+            )
 
     async def on_response(self, response: ResponseLike) -> None:
         if SYNC_COLLECTIONS_PATH not in response.url:
@@ -328,6 +404,10 @@ class PerceptionSensors:
             if not self._sampling_advanced(sampler):
                 continue
             self.timeline.camera_frames.touch(assignment.device_id, seen_at=seen)
+            if sampler.stream_id not in self._recording_streams:
+                self.timeline.camera_frames.unverified_heartbeat(
+                    assignment.device_id, captured_at=page_time(sampler.last_sample_page_ms)
+                )
 
     def _sampling_advanced(self, sampler: ActiveSampler) -> bool:
         if sampler.last_sample_page_ms <= 0:
@@ -408,8 +488,13 @@ class PerceptionSensors:
             return
         self.frames_seen += 1
         person = self._person(device_id)
+        sample = (
+            None
+            if frame.sequence is None
+            else self._frame_samples.get((frame.stream_id, frame.sequence))
+        )
         if frame.role == "screen":
-            self.timeline.show_screen(keyframe, person, data=data)
+            self.timeline.show_screen(keyframe, person, data=data, sample=sample)
         else:
             participant_id = person.participant_id
             current = self.timeline.camera_frames.get(participant_id)
@@ -423,6 +508,7 @@ class PerceptionSensors:
                     captured_at=page_time(frame.page_ms),
                     epoch=self.epoch,
                     seen_at=self.monotonic(),
+                    sample=sample,
                 ),
             )
 

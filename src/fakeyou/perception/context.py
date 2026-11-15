@@ -32,7 +32,7 @@ from fakeyou.perception.interpreter import (
     EmptyVisionResponse,
     PerceptionInterpreter,
 )
-from fakeyou.perception.percepts import ScreenSegment
+from fakeyou.perception.percepts import Keyframe, ScreenSegment
 from fakeyou.perception.roster import MeetingState
 from fakeyou.perception.timeline import CameraFrame, MeetingTimeline, TimelineSnapshot
 from fakeyou.perception.view import (
@@ -105,15 +105,15 @@ def _unavailable(
     )
 
 
-def _screen_snapshot(segment: ScreenSegment) -> SnapshotRef:
+def _screen_snapshot(segment: ScreenSegment, keyframe: Keyframe) -> SnapshotRef:
     return SnapshotRef(
         source="screen",
         subject_id=segment.ref,
-        stream_id=segment.keyframe.sha256,
+        stream_id=keyframe.sha256,
         epoch=0,
         sequence=0,
         generation=0,
-        captured_at=segment.keyframe.captured_at,
+        captured_at=keyframe.captured_at,
     )
 
 
@@ -159,7 +159,14 @@ class PerceptionContext:
         self._state = state
         self._camera_epoch = camera_epoch or (lambda: 0)
         self._camera_monotonic = camera_monotonic
-        self.capture_clock: Callable[[datetime], MappedInstant | None] | None = None
+
+    @property
+    def capture_clock(self) -> Callable[[datetime], MappedInstant | None] | None:
+        return self.timeline.capture_clock
+
+    @capture_clock.setter
+    def capture_clock(self, clock: Callable[[datetime], MappedInstant | None] | None) -> None:
+        self.timeline.capture_clock = clock
 
     def view(self) -> MeetingView:
         meeting = self._state() if self._state is not None else None
@@ -183,7 +190,8 @@ class PerceptionContext:
                 "not_meeting_content",
                 subject_label=reading.title if reading is not None else None,
             )
-        data = self.timeline.keyframes.get(segment.keyframe.sha256)
+        keyframe = self._analyzable_keyframe(segment)
+        data = self.timeline.keyframes.get(keyframe.sha256)
         if data is None:
             return _unavailable("screen", segment.ref, "frame_unavailable")
         return await self._look(
@@ -191,13 +199,21 @@ class PerceptionContext:
             question,
             source=SCREEN_SOURCE,
             subject_id=segment.ref,
-            ref=_screen_snapshot(segment),
+            ref=_screen_snapshot(segment, keyframe),
         )
+
+    def _analyzable_keyframe(self, segment: ScreenSegment) -> Keyframe:
+        latest = self.timeline.latest_keyframe(segment)
+        if self.timeline.keyframes.get(latest.sha256) is not None:
+            return latest
+        return segment.keyframe
 
     def current_scene(self, bound: SnapshotRef) -> CameraFrame | SnapshotRef | None:
         if bound.source == "screen":
             segment = self.timeline.snapshot().current_screen
-            return None if segment is None else _screen_snapshot(segment)
+            if segment is None:
+                return None
+            return _screen_snapshot(segment, self.timeline.latest_keyframe(segment))
         frame = self.timeline.camera_frames.get(bound.subject_id)
         if frame is None or not self._camera_live(bound.subject_id, frame):
             return None
@@ -444,6 +460,11 @@ class MeetingEvidence:
     def _binding(self, need: str, attempt_id: str, result: EvidenceResult) -> EvidenceBinding:
         attempt = result.attempt
         mapped = self._capture(result)
+        analyzed = (
+            None
+            if result.snapshot is None
+            else self._context.timeline.analyzed_sample(result.snapshot)
+        )
         return EvidenceBinding(
             kind=need,
             gather_attempt_id=attempt_id,
@@ -463,6 +484,7 @@ class MeetingEvidence:
             ),
             observation_clock_domain=LOCAL_MONOTONIC if attempt is not None else "utc",
             status=result.status,
+            digest=analyzed.record if analyzed is not None else None,
         )
 
 
