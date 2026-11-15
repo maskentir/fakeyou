@@ -1,0 +1,472 @@
+{
+  "manifest": {
+    "image": "sha256:d06aa1b9f064b101e0ecca0c2c251686a630b3c31f9af1320c233689ad353932",
+    "commit": "eba185d7c4c6ac93a897d57e8eb192bceb31059f",
+    "pulseaudio": "pulseaudio 17.0",
+    "packages": [
+      "libpulse0:arm64\t17.0+dfsg1-2+b1",
+      "pulseaudio\t17.0+dfsg1-2+b1",
+      ""
+    ],
+    "kernel": "7.0.14-linuxkit",
+    "machine": "aarch64",
+    "cpus": 10,
+    "python": "3.12.14",
+    "default_pa_sha256": "0fda90ea728a8302912afb97c2f9416d769f2ef5990246c829b6791a9a2a8ad6",
+    "daemon_conf_sha256": "5fc52554b1b82377bb8a0bb1e5bcafbc8975f007b1230cee68ebb7e7dd7b6ec6",
+    "code_sha256": {
+      "__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "observer.py": "ab31cf6163f1a35dc72b30a0a045d890c1a56b0e714536f06dfe466d93762017",
+      "preflight.py": "04d9074b6646e5a4b20a5db41f44460cb17d1a862a2326c01ce3227664cdf3b9",
+      "pulse.py": "72601f2fd8bf8710aa01535a51c1e50c34a324b76bbece7a6cb70e57a879d9e2",
+      "relay.py": "583e69447f050010002c985e87e5b159324346ae5f818bc966219ae1bfc680f3"
+    }
+  },
+  "SETUP-stream-start": {
+    "no_prebuffer_relative_write": {
+      "clips_written": 100,
+      "clips_observed_whole": 0,
+      "runs_partial_or_unattributed": 0,
+      "write_invoked_to_observer_receipt_ns": {
+        "count": 0
+      },
+      "final_read_index": 825262,
+      "final_write_index": 96000,
+      "started_notifications": 1,
+      "underflow_notifications": 0
+    },
+    "no_prebuffer_write_at_read_index": {
+      "clips_written": 100,
+      "clips_observed_whole": 100,
+      "runs_partial_or_unattributed": 0,
+      "write_invoked_to_observer_receipt_ns": {
+        "count": 100,
+        "p50": 599875.0,
+        "p99": 7055875,
+        "max": 7055875
+      },
+      "final_read_index": 820076,
+      "final_write_index": 765596,
+      "started_notifications": 1,
+      "underflow_notifications": 100
+    },
+    "one_frame_prebuffer_relative_write": {
+      "clips_written": 100,
+      "clips_observed_whole": 2,
+      "runs_partial_or_unattributed": 98,
+      "write_invoked_to_observer_receipt_ns": {
+        "count": 2,
+        "p50": 420875.0,
+        "p99": 433625,
+        "max": 433625
+      },
+      "final_read_index": 96000,
+      "final_write_index": 96000,
+      "started_notifications": 100,
+      "underflow_notifications": 100
+    },
+    "seconds": 57.7
+  },
+  "PF8": {
+    "established": true,
+    "foreign_source_outputs": [],
+    "modules": [
+      "module-native-protocol-unix",
+      "module-null-sink",
+      "module-null-sink",
+      "module-remap-source"
+    ],
+    "clients": [
+      "pactl"
+    ],
+    "sink_inputs": [],
+    "source_outputs": [
+      "0\t1\t-\tmodule-remap-source.c\ts16le 1ch 24000Hz"
+    ],
+    "seconds": 0.0
+  },
+  "PF5": {
+    "established": true,
+    "idle": {
+      "sink": [
+        "Latency: 1935815 usec, configured 2000000 usec"
+      ],
+      "monitor": [
+        "Latency: 0 usec, configured 2000000 usec"
+      ]
+    },
+    "with_stream": {
+      "sink": [
+        "Latency: 1808261 usec, configured 20000 usec"
+      ],
+      "monitor": [
+        "Latency: 0 usec, configured 2000000 usec"
+      ],
+      "stream_configured_sink_usec": [
+        20000
+      ],
+      "stream_sink_usec": [
+        1911124
+      ]
+    },
+    "seconds": 0.1
+  },
+  "PF6": {
+    "established": true,
+    "repetitions": 200,
+    "unconfirmed": 0,
+    "not_resumed": 0,
+    "threads": 3,
+    "confirm_delay_ns": {
+      "count": 200,
+      "p50": 87500.5,
+      "p99": 2480709,
+      "max": 3272792
+    },
+    "seconds": 4.6
+  },
+  "PF9": {
+    "established": true,
+    "repetitions": 1000,
+    "callbacks_during_writable_query": 0,
+    "callbacks_during_write": 0,
+    "callbacks_during_uncork_request": 0,
+    "mainloop_iterations_in_section": 0,
+    "callbacks_seen_outside_section": {
+      "state": 2,
+      "started": 1,
+      "underflow": 1,
+      "overflow": 0,
+      "suspended": 0,
+      "moved": 0,
+      "latency_update": 0,
+      "buffer_attr": 0,
+      "write": 1000
+    },
+    "seconds": 4.4
+  },
+  "PF1": {
+    "established": true,
+    "normal": {
+      "write_ns": {
+        "count": 1000,
+        "p50": 4417.0,
+        "p99": 11000,
+        "max": 28834
+      },
+      "return_codes": {
+        "0": 1000
+      },
+      "writes_issued_beyond_writable_size": 0
+    },
+    "full_buffer_without_pumping": {
+      "write_ns": {
+        "count": 1000,
+        "p50": 4375.0,
+        "p99": 25708,
+        "max": 53750
+      },
+      "return_codes": {
+        "0": 1000
+      },
+      "writes_issued_beyond_writable_size": 998
+    },
+    "daemon_stopped": {
+      "write_ns": {
+        "count": 1000,
+        "p50": 4125.0,
+        "p99": 21625,
+        "max": 69167
+      },
+      "return_codes": {
+        "0": 1000
+      },
+      "writes_issued_beyond_writable_size": 998
+    },
+    "daemon_stop_confirmed": true,
+    "iterate_ns_while_daemon_stopped": {
+      "count": 1000,
+      "p50": 1542.0,
+      "p99": 2375,
+      "max": 167333
+    },
+    "seconds": 1.0
+  },
+  "PF2-socket": {
+    "established": true,
+    "transport": "socket only, shared memory disabled in the client for this check",
+    "client_to_server_frames": 205,
+    "repetitions": 200,
+    "held_without_pumping_seconds": 0.5,
+    "repetitions_with_bytes_before_first_pump": 0,
+    "bytes_before_first_pump": 0,
+    "repetitions_with_bytes_after_first_pump": 200,
+    "first_byte_after_pump_ns": {
+      "count": 200,
+      "p50": 330999.5,
+      "p99": 1330292,
+      "max": 2401584
+    },
+    "descriptors_passed": 0,
+    "pending_query": {
+      "idle": false,
+      "true_after_write_before_pump": 200,
+      "with_reply_outstanding_after_send": true,
+      "after_reply": false
+    },
+    "seconds": 121.7
+  },
+  "PF2-observed": {
+    "established": true,
+    "transport": "production: shared memory and shared ring channel",
+    "repetitions": 200,
+    "held_without_pumping_seconds": 0.5,
+    "clips_observed": 200,
+    "clips_observed_before_first_pump": 0,
+    "runs_not_attributed": 0,
+    "first_pump_to_observer_receipt_ns": {
+      "count": 200,
+      "p50": 5688687.0,
+      "p99": 6977875,
+      "max": 7007875
+    },
+    "seconds": 134.3
+  },
+  "PF3": {
+    "refuted": false,
+    "repetitions": 100,
+    "stop_unconfirmed": 0,
+    "replies_received_while_daemon_stopped": 0,
+    "replies_received_after_resume": 100,
+    "reply_after_resume_ns": {
+      "count": 100,
+      "p50": 366875.5,
+      "p99": 788000,
+      "max": 788000
+    },
+    "seconds": 40.2
+  },
+  "PF7": {
+    "established": true,
+    "library_clips": 100000,
+    "clips_played_full": 200,
+    "clips_played_partial": 100,
+    "recorded_seconds": 54.131791666666665,
+    "fragments": 11427,
+    "nonzero_samples_in_silence": 0,
+    "runs": 300,
+    "attributed_exactly": 300,
+    "misattributed": 0,
+    "ambiguous": 0,
+    "missing": 0,
+    "runs_too_short_to_attribute": 0,
+    "clips_too_short_to_attribute": 0,
+    "write_invoked_to_observer_receipt_ns": {
+      "count": 300,
+      "p50": 377604.0,
+      "p99": 7033208,
+      "max": 7599375
+    },
+    "seconds": 58.7
+  },
+  "PF4": {
+    "silent_stream_holding_sink_latency": false,
+    "repetitions": 50,
+    "written_bytes_per_stream": 48000,
+    "played_before_disconnect_seconds": 0.1,
+    "streams_still_listed_after_disconnect": 0,
+    "observed_bytes_per_stream": {
+      "count": 50,
+      "p50": 4965.0,
+      "p99": 5036,
+      "max": 5036
+    },
+    "bytes_in_fragments_received_after_teardown_confirmed": {
+      "count": 50,
+      "p50": 0.0,
+      "p99": 0,
+      "max": 0
+    },
+    "latest_receipt_after_teardown_confirmed_ns": {
+      "count": 50,
+      "p50": 0.0,
+      "p99": 0,
+      "max": 0
+    },
+    "runs_not_attributed": 0,
+    "observation_window_seconds": 2.5,
+    "seconds": 133.7
+  },
+  "PF4-held": {
+    "silent_stream_holding_sink_latency": true,
+    "repetitions": 50,
+    "written_bytes_per_stream": 48000,
+    "played_before_disconnect_seconds": 0.1,
+    "streams_still_listed_after_disconnect": 0,
+    "observed_bytes_per_stream": {
+      "count": 50,
+      "p50": 4924.0,
+      "p99": 5030,
+      "max": 5030
+    },
+    "bytes_in_fragments_received_after_teardown_confirmed": {
+      "count": 50,
+      "p50": 0.0,
+      "p99": 0,
+      "max": 0
+    },
+    "latest_receipt_after_teardown_confirmed_ns": {
+      "count": 50,
+      "p50": 0.0,
+      "p99": 0,
+      "max": 0
+    },
+    "runs_not_attributed": 0,
+    "observation_window_seconds": 2.5,
+    "seconds": 133.7
+  },
+  "DIAG-late-release": {
+    "lead_bytes_for_absolute_index": 1920,
+    "hold_seconds": 0.5,
+    "at_read_index/pumped_at_once": {
+      "clips_written": 50,
+      "clips_observed_whole": 50,
+      "clips_observed_in_part": 0,
+      "clips_not_observed": 0,
+      "runs_not_attributed": 0,
+      "observed_bytes_per_observed_clip": {
+        "count": 50,
+        "p50": 960.0,
+        "p99": 960,
+        "max": 960
+      },
+      "write_invoked_to_observer_receipt_ns": {
+        "count": 50,
+        "p50": 777000.0,
+        "p99": 7082916,
+        "max": 7082916
+      },
+      "observed_with_lower_bound_past_250ms": 0,
+      "daemon_stop_unconfirmed": 0
+    },
+    "at_read_index/pump_held": {
+      "clips_written": 50,
+      "clips_observed_whole": 50,
+      "clips_observed_in_part": 0,
+      "clips_not_observed": 0,
+      "runs_not_attributed": 0,
+      "observed_bytes_per_observed_clip": {
+        "count": 50,
+        "p50": 960.0,
+        "p99": 960,
+        "max": 960
+      },
+      "write_invoked_to_observer_receipt_ns": {
+        "count": 50,
+        "p50": 505593001.0,
+        "p99": 507241792,
+        "max": 507241792
+      },
+      "observed_with_lower_bound_past_250ms": 0,
+      "daemon_stop_unconfirmed": 0
+    },
+    "at_read_index/daemon_stopped_before_release": {
+      "clips_written": 50,
+      "clips_observed_whole": 50,
+      "clips_observed_in_part": 0,
+      "clips_not_observed": 0,
+      "runs_not_attributed": 0,
+      "observed_bytes_per_observed_clip": {
+        "count": 50,
+        "p50": 960.0,
+        "p99": 960,
+        "max": 960
+      },
+      "write_invoked_to_observer_receipt_ns": {
+        "count": 50,
+        "p50": 500823188.0,
+        "p99": 501575125,
+        "max": 501575125
+      },
+      "observed_with_lower_bound_past_250ms": 50,
+      "daemon_stop_unconfirmed": 0
+    },
+    "absolute_index/pumped_at_once": {
+      "clips_written": 50,
+      "clips_observed_whole": 50,
+      "clips_observed_in_part": 0,
+      "clips_not_observed": 0,
+      "runs_not_attributed": 0,
+      "observed_bytes_per_observed_clip": {
+        "count": 50,
+        "p50": 960.0,
+        "p99": 960,
+        "max": 960
+      },
+      "write_invoked_to_observer_receipt_ns": {
+        "count": 50,
+        "p50": 41559250.0,
+        "p99": 47699125,
+        "max": 47699125
+      },
+      "observed_with_lower_bound_past_250ms": 0,
+      "daemon_stop_unconfirmed": 0
+    },
+    "absolute_index/pump_held": {
+      "clips_written": 50,
+      "clips_observed_whole": 0,
+      "clips_observed_in_part": 0,
+      "clips_not_observed": 50,
+      "runs_not_attributed": 0,
+      "observed_bytes_per_observed_clip": {
+        "count": 0
+      },
+      "write_invoked_to_observer_receipt_ns": {
+        "count": 0
+      },
+      "observed_with_lower_bound_past_250ms": 0,
+      "daemon_stop_unconfirmed": 0
+    },
+    "absolute_index/daemon_stopped_before_release": {
+      "clips_written": 50,
+      "clips_observed_whole": 50,
+      "clips_observed_in_part": 0,
+      "clips_not_observed": 0,
+      "runs_not_attributed": 0,
+      "observed_bytes_per_observed_clip": {
+        "count": 50,
+        "p50": 960.0,
+        "p99": 960,
+        "max": 960
+      },
+      "write_invoked_to_observer_receipt_ns": {
+        "count": 50,
+        "p50": 500815729.5,
+        "p99": 501778584,
+        "max": 501778584
+      },
+      "observed_with_lower_bound_past_250ms": 50,
+      "daemon_stop_unconfirmed": 0
+    },
+    "seconds": 185.1
+  },
+  "raw_files_sha256": {
+    "diag-absolute_index-daemon_stopped_before_release.rec": "1fdf05ebd1294927c965ad331d028bc39667ed6c8755799a8328c2463ebee2e6",
+    "diag-absolute_index-pump_held.rec": "eb9cd24fb787e0c558c700b036f54422e3b00208351ecafe8ca0fd0781ec4b04",
+    "diag-absolute_index-pumped_at_once.rec": "fde3670b86b43494420e1401c1f1d29c3c93bd3bd422ca1dfeebae8f66efab19",
+    "diag-at_read_index-daemon_stopped_before_release.rec": "40d08f41bf28f28dc45c31d7f34a87e6e4863bd089166bb084ab145aec9fc303",
+    "diag-at_read_index-pump_held.rec": "c14174b70b8f857666d43896f3dc8a6e6f0bcbb23fdd701eb2ae7f0998159f56",
+    "diag-at_read_index-pumped_at_once.rec": "69c18343a5503e4ac715a1490ab62b79b913b7fb06dbd470d00d88adc8e2a812",
+    "pf2-relay.jsonl": "5d4f43f3cf826a925c4b91df5ae3acc5d66b7361054af411ee2fc6d1653cb104",
+    "pf2.rec": "e6e73b4d343088be5521566a4e5a5c4a83809c65cea63fa5dce6b96b1627aa62",
+    "pf4-held.rec": "d7101d6c5c594ecfd9517116afc01142893d4cc7098a317f901f1912764f1cdc",
+    "pf4.rec": "92cd598b51ddd1c4e3b6f8d9604349fd1bbbe7a5da70fa5c37c40165610daad4",
+    "pf7.rec": "7396c7c84242a7312ba9963448aca1b4b18034d944410436c3fd5e44d8d1eea3",
+    "preflight.log": "37536a675c46d1e1c5973f259095ea05c2bc9fe5b264cbcbee49dae0fe451710",
+    "pulseaudio-17.0.tar.xz": "053794d6671a3e397d849e478a80b82a63cb9d8ca296bd35b73317bb5ceb87b5",
+    "setup-no_prebuffer_relative_write.rec": "e8799e4d5fb436663d36e02175ccf8d01dd18d5bfdee1678599a1e9beca46700",
+    "setup-no_prebuffer_write_at_read_index.rec": "908ed9434765800bf6526c7096eaebe3f3fd1371be650d66b03aa502ba33b9b7",
+    "setup-one_frame_prebuffer_relative_write.rec": "9e621c0c69852a89cf9c60891586df09824e2ec98c657281938a7906fdefb30f"
+  },
+  "raw_files_location": "not committed; kept locally under .runtime/writer-spike/eba185d7"
+}
