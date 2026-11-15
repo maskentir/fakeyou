@@ -37,7 +37,13 @@ condition holds. Each failure has its own explicit gap:
 | `publication_identity_unverified` | the sentence was matched by an unverified method |
 | `participant_clock_unmapped` | the observer clock has no mapping to the measurement clock |
 
-Without standing consent the observer is never asked what it heard. Verified
+The observer is asked what it heard only after the consent record is complete:
+state granted, an attesting source, the measurement scope, a finite grant time,
+and no revocation at or before the grant. Anything less returns its gap with no
+read. A grant that starts after the sentence, and a revocation at or before the
+sentence ended, can only be judged once the sentence interval is known, so those
+two are rejected after the read and the report is discarded. Closing that last
+window needs a trusted read-time clock, which this contract does not have. Verified
 identity methods are `watermark` and `fingerprint`; a transcript or timing match
 is not accepted. The observer clock uses the same `RemoteClock` mapping as 2/5;
 mapping uncertainty above 50 ms stays `participant_clock_unmeasurable`.
@@ -48,6 +54,9 @@ with the playback receipt from 1/5:
 - The local write flag is read from the receipt of the same publication ID:
   written audio is true, a settled receipt without audio is false, anything else
   is unknown. A receipt for another publication says nothing.
+- A settled matching receipt is authoritative. A caller-supplied
+  `local_write_observed` is used only when no matching receipt has settled, and
+  can neither assert a write the receipt denies nor hide one it reports.
 - A gap never produces a compliant verdict. The result always carries
   `participant_gap` and `participant_observer_id`.
 - A gate veto with a valid consented observation stays `observed_noncompliant`.
@@ -67,8 +76,9 @@ controls for the contract, not measurements of a meeting.
 
 ## Deterministic proof
 
-`tests/test_participant_audio.py` (58 tests): the compliant control, every consent
-gap against allowed and vetoed decisions, no read without standing consent,
+`tests/test_participant_audio.py` (72 tests): the compliant control, every consent
+gap against allowed and vetoed decisions, no read without a provable grant,
+no caller override of the receipt,
 observer and identity mismatches, unverified identity methods, unmapped, stale,
 and uncertain clocks, veto with observation, veto with a no-write receipt, the
 receipt-to-local-write mapping, and the conflict case.

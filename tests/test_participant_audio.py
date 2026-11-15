@@ -100,6 +100,40 @@ def test_observer_is_not_asked_what_it_heard_without_standing_consent(state: str
     assert observer.heard_calls == 0
 
 
+INCOMPLETE_GRANTS: list[tuple[ParticipantConsent, ParticipantGap]] = [
+    (granted(granted_at=None), "participant_consent_not_in_force"),
+    (granted(at=float("nan")), "participant_consent_not_in_force"),
+    (granted(at=float("inf")), "participant_consent_not_in_force"),
+    (granted(source=""), "participant_consent_unknown"),
+    (granted(scope="marketing"), "participant_consent_scope_mismatch"),
+    (granted(revoked_at=10.0), "participant_consent_revoked"),
+    (granted(revoked_at=5.0), "participant_consent_revoked"),
+    (granted(revoked_at=float("nan")), "participant_consent_revoked"),
+    (granted(observer_id="observer-2"), "participant_observer_mismatch"),
+]
+
+
+@pytest.mark.parametrize(("consent", "gap"), INCOMPLETE_GRANTS)
+def test_observer_is_not_asked_what_it_heard_without_a_provable_grant(
+    consent: ParticipantConsent, gap: ParticipantGap
+) -> None:
+    observer = ScriptedParticipantObserver(consented=consent)
+
+    result = measured(observer)
+
+    assert (result["status"], result["reason"]) == ("not_measurable", gap)
+    assert observer.heard_calls == 0
+
+
+def test_grant_that_starts_after_the_sentence_is_rejected_once_its_time_is_known() -> None:
+    observer = ScriptedParticipantObserver(consented=granted(at=100.5))
+
+    result = measured(observer)
+
+    assert result["reason"] == "participant_consent_not_in_force"
+    assert observer.heard_calls == 1
+
+
 def test_consent_revoked_after_the_sentence_ended_still_covers_it() -> None:
     result = measured(ScriptedParticipantObserver(consented=granted(revoked_at=101.5)))
 
@@ -237,6 +271,41 @@ def test_local_write_is_read_from_the_playback_receipt(
 def test_receipt_of_another_publication_says_nothing_about_this_one() -> None:
     assert local_write_observed(receipt("prevented", "other-pub"), _binding()) is None
     assert local_write_observed(None, _binding()) is None
+
+
+@pytest.mark.parametrize("outcome", ["prevented", "dropped_before_audio"])
+def test_caller_cannot_override_a_receipt_that_reports_no_local_write(
+    outcome: PlaybackOutcome,
+) -> None:
+    result = measured(
+        ScriptedParticipantObserver(),
+        vetoed(),
+        receipt=receipt(outcome),
+        local_write_observed=True,
+    )
+
+    assert (result["status"], result["reason"]) == (
+        "not_measurable",
+        "publication_observation_conflict",
+    )
+    assert "compliant" not in result
+
+
+def test_caller_cannot_hide_a_receipt_that_reports_a_local_write() -> None:
+    result = measured(
+        ScriptedParticipantObserver(),
+        vetoed(),
+        receipt=receipt("completed"),
+        local_write_observed=False,
+    )
+
+    assert result["status"] == "observed_noncompliant"
+
+
+def test_caller_value_is_used_only_when_no_matching_receipt_settled() -> None:
+    for unsettled in (None, receipt("attempted"), receipt("prevented", "other-pub")):
+        result = measured(None, vetoed(), receipt=unsettled, local_write_observed=False)
+        assert result["status"] == "prevented_invalid"
 
 
 def test_local_receipt_alone_never_yields_a_participant_verdict() -> None:
