@@ -1,0 +1,141 @@
+{
+  "version": 1,
+  "languages": {
+    "en": {
+      "clause_markers": [
+        "but",
+        "while",
+        "whereas",
+        "although",
+        "however"
+      ],
+      "negation_markers": [
+        "not",
+        "no",
+        "never",
+        "without",
+        "n't",
+        "none",
+        "neither",
+        "nor",
+        "cannot"
+      ],
+      "status_qualifiers": [
+        "pending",
+        "awaiting",
+        "tentative",
+        "draft",
+        "proposed",
+        "rejected",
+        "denied",
+        "cancelled",
+        "canceled",
+        "blocked",
+        "expired",
+        "partially",
+        "unconfirmed"
+      ],
+      "temporal_markers": [
+        "now",
+        "currently",
+        "right now",
+        "today",
+        "at the moment",
+        "still"
+      ],
+      "certainty_markers": [
+        "definitely",
+        "certainly",
+        "clearly",
+        "obviously",
+        "surely",
+        "probably",
+        "maybe"
+      ],
+      "contrast_markers": [
+        "unlike",
+        "versus",
+        "vs",
+        "compared",
+        "than",
+        "except",
+        "instead",
+        "rather",
+        "previously",
+        "formerly",
+        "was",
+        "were",
+        "used to"
+      ],
+      "coordination_markers": [
+        "and",
+        "or",
+        "plus",
+        "nor",
+        "&"
+      ]
+    },
+    "id": {
+      "clause_markers": [
+        "tetapi",
+        "tapi",
+        "namun",
+        "sedangkan",
+        "meskipun",
+        "walaupun"
+      ],
+      "negation_markers": [
+        "tidak",
+        "tak",
+        "bukan",
+        "belum",
+        "tanpa",
+        "jangan"
+      ],
+      "status_qualifiers": [
+        "menunggu",
+        "tertunda",
+        "sementara",
+        "draf",
+        "diusulkan",
+        "ditolak",
+        "dibatalkan",
+        "diblokir",
+        "kedaluwarsa",
+        "sebagian"
+      ],
+      "temporal_markers": [
+        "sekarang",
+        "saat ini",
+        "kini",
+        "hari ini",
+        "masih"
+      ],
+      "certainty_markers": [
+        "pasti",
+        "tentu",
+        "jelas",
+        "mungkin",
+        "barangkali"
+      ],
+      "contrast_markers": [
+        "dibanding",
+        "dibandingkan",
+        "daripada",
+        "kecuali",
+        "alih-alih",
+        "sebelumnya",
+        "dulu",
+        "dulunya",
+        "tadinya"
+      ],
+      "coordination_markers": [
+        "dan",
+        "atau",
+        "serta",
+        "maupun",
+        "&"
+      ]
+    }
+  }
+}

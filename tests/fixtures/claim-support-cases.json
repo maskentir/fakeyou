@@ -1,0 +1,932 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "en-eav-supported",
+      "language": "en",
+      "answer": "Revenue for Project A is $1.2M.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "Project A",
+        "attribute": "revenue",
+        "value": "$1.2M"
+      },
+      "expected": "ok",
+      "row": "L1"
+    },
+    {
+      "id": "en-eav-colon",
+      "language": "en",
+      "answer": "Project A revenue: $1.2M",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "Project A",
+        "attribute": "revenue",
+        "value": "$1.2M"
+      },
+      "expected": "ok",
+      "row": "L1"
+    },
+    {
+      "id": "en-eav-case-and-spacing",
+      "language": "en",
+      "answer": "REVENUE for project a is  $1.2m.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "Project A",
+        "attribute": "revenue",
+        "value": "$1.2M"
+      },
+      "expected": "ok",
+      "row": "L1"
+    },
+    {
+      "id": "en-eav-date",
+      "language": "en",
+      "answer": "The Beta launch is on 17 March 2027.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "Beta",
+        "attribute": "launch",
+        "value": "17 March 2027"
+      },
+      "expected": "ok",
+      "row": "L1"
+    },
+    {
+      "id": "en-eav-second-clause",
+      "language": "en",
+      "answer": "Alpha shipped in January, the Beta launch is on 17 March 2027.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "Beta",
+        "attribute": "launch",
+        "value": "17 March 2027"
+      },
+      "expected": "ok",
+      "row": "L1"
+    },
+    {
+      "id": "en-eav-percent",
+      "language": "en",
+      "answer": "Churn for the Pro plan is 4%.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "the Pro plan",
+        "attribute": "churn",
+        "value": "4%"
+      },
+      "expected": "ok",
+      "row": "L1"
+    },
+    {
+      "id": "en-status-supported",
+      "language": "en",
+      "answer": "The budget is approved.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_status",
+        "entity": "the budget",
+        "status": "approved"
+      },
+      "expected": "ok",
+      "row": "L1"
+    },
+    {
+      "id": "en-status-qualifier-claimed",
+      "language": "en",
+      "answer": "The budget is pending.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_status",
+        "entity": "the budget",
+        "status": "pending"
+      },
+      "expected": "ok",
+      "row": "L1"
+    },
+    {
+      "id": "en-item-supported",
+      "language": "en",
+      "answer": "A bar chart of monthly signups.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "item_presence",
+        "item": "a bar chart"
+      },
+      "expected": "ok",
+      "row": "L1"
+    },
+    {
+      "id": "en-camera-item",
+      "language": "en",
+      "answer": "Budi is wearing a grey shirt.",
+      "status": "produced",
+      "claim": {
+        "kind": "participant",
+        "shape": "item_presence",
+        "item": "a grey shirt"
+      },
+      "expected": "ok",
+      "row": "L1"
+    },
+    {
+      "id": "en-negative-claim-supported",
+      "language": "en",
+      "answer": "The budget is not approved.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_status",
+        "entity": "the budget",
+        "status": "approved",
+        "polarity": "negative"
+      },
+      "expected": "ok",
+      "row": "L1"
+    },
+    {
+      "id": "en-cost-not-revenue",
+      "language": "en",
+      "answer": "Costs for Project A are $1.2M.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "Project A",
+        "attribute": "revenue",
+        "value": "$1.2M"
+      },
+      "expected": "claim_relation_unsupported",
+      "row": "L4"
+    },
+    {
+      "id": "en-other-entity",
+      "language": "en",
+      "answer": "Revenue for Project B is $1.2M.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "Project A",
+        "attribute": "revenue",
+        "value": "$1.2M"
+      },
+      "expected": "claim_relation_unsupported",
+      "row": "L4"
+    },
+    {
+      "id": "en-attribute-in-another-sentence",
+      "language": "en",
+      "answer": "Project A costs $1.2M. Revenue is flat.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "Project A",
+        "attribute": "revenue",
+        "value": "$1.2M"
+      },
+      "expected": "claim_relation_unsupported",
+      "row": "L4"
+    },
+    {
+      "id": "en-entity-in-another-clause",
+      "language": "en",
+      "answer": "Unlike Project B, the revenue for Project A is $1.2M.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "Project B",
+        "attribute": "revenue",
+        "value": "$1.2M"
+      },
+      "expected": "claim_relation_unsupported",
+      "row": "L4"
+    },
+    {
+      "id": "en-value-absent",
+      "language": "en",
+      "answer": "Revenue for Project A is $1.2M.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "Project A",
+        "attribute": "revenue",
+        "value": "$1.3M"
+      },
+      "expected": "claim_untraceable",
+      "row": "L5"
+    },
+    {
+      "id": "en-value-inside-a-longer-number",
+      "language": "en",
+      "answer": "Revenue for Project A is $11.2M.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "Project A",
+        "attribute": "revenue",
+        "value": "1.2"
+      },
+      "expected": "claim_untraceable",
+      "row": "L5"
+    },
+    {
+      "id": "en-value-without-its-unit",
+      "language": "en",
+      "answer": "Churn for the Pro plan is 4%.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "the Pro plan",
+        "attribute": "churn",
+        "value": "4"
+      },
+      "expected": "claim_untraceable",
+      "row": "L5"
+    },
+    {
+      "id": "en-value-without-currency",
+      "language": "en",
+      "answer": "Revenue for Project A is $1.2M.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "Project A",
+        "attribute": "revenue",
+        "value": "1.2M"
+      },
+      "expected": "claim_untraceable",
+      "row": "L5"
+    },
+    {
+      "id": "en-item-absent",
+      "language": "en",
+      "answer": "A bar chart of monthly signups.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "item_presence",
+        "item": "a pie chart"
+      },
+      "expected": "claim_untraceable",
+      "row": "L5"
+    },
+    {
+      "id": "en-not-approved",
+      "language": "en",
+      "answer": "The budget is not approved.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_status",
+        "entity": "the budget",
+        "status": "approved"
+      },
+      "expected": "claim_polarity_unsupported",
+      "row": "L6"
+    },
+    {
+      "id": "en-isnt-approved",
+      "language": "en",
+      "answer": "The budget isn't approved.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_status",
+        "entity": "the budget",
+        "status": "approved"
+      },
+      "expected": "claim_polarity_unsupported",
+      "row": "L6"
+    },
+    {
+      "id": "en-pending-approval",
+      "language": "en",
+      "answer": "The budget is pending approval.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_status",
+        "entity": "the budget",
+        "status": "approved"
+      },
+      "expected": "claim_polarity_unsupported",
+      "row": "L6"
+    },
+    {
+      "id": "en-partially-approved",
+      "language": "en",
+      "answer": "The budget is partially approved.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_status",
+        "entity": "the budget",
+        "status": "approved"
+      },
+      "expected": "claim_polarity_unsupported",
+      "row": "L6"
+    },
+    {
+      "id": "en-no-longer",
+      "language": "en",
+      "answer": "Project A is no longer approved.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_status",
+        "entity": "Project A",
+        "status": "approved"
+      },
+      "expected": "claim_polarity_unsupported",
+      "row": "L6"
+    },
+    {
+      "id": "en-item-negated",
+      "language": "en",
+      "answer": "There is no bar chart on the slide.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "item_presence",
+        "item": "bar chart"
+      },
+      "expected": "claim_polarity_unsupported",
+      "row": "L6"
+    },
+    {
+      "id": "en-negative-claim-on-positive-answer",
+      "language": "en",
+      "answer": "The budget is approved.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_status",
+        "entity": "the budget",
+        "status": "approved",
+        "polarity": "negative"
+      },
+      "expected": "claim_polarity_unsupported",
+      "row": "L6"
+    },
+    {
+      "id": "en-negated-value",
+      "language": "en",
+      "answer": "Revenue for Project A is not $1.2M.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "Project A",
+        "attribute": "revenue",
+        "value": "$1.2M"
+      },
+      "expected": "claim_polarity_unsupported",
+      "row": "L6"
+    },
+    {
+      "id": "en-two-figures-one-clause",
+      "language": "en",
+      "answer": "Project A revenue $1.2M and costs $0.8M.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "Project A",
+        "attribute": "revenue",
+        "value": "$1.2M"
+      },
+      "expected": "claim_relation_ambiguous",
+      "row": "L7"
+    },
+    {
+      "id": "en-coordinated-roles",
+      "language": "en",
+      "answer": "The owner is Alice and the reviewer is Bob.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "The",
+        "attribute": "owner",
+        "value": "Bob"
+      },
+      "expected": "claim_relation_ambiguous",
+      "row": "L7"
+    },
+    {
+      "id": "en-contrast",
+      "language": "en",
+      "answer": "Unlike Project B the revenue for Project A is $1.2M.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "Project B",
+        "attribute": "revenue",
+        "value": "$1.2M"
+      },
+      "expected": "claim_relation_ambiguous",
+      "row": "L7"
+    },
+    {
+      "id": "en-former-value",
+      "language": "en",
+      "answer": "Revenue for Project A was $1.2M.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "Project A",
+        "attribute": "revenue",
+        "value": "$1.2M"
+      },
+      "expected": "claim_relation_ambiguous",
+      "row": "L7"
+    },
+    {
+      "id": "en-range",
+      "language": "en",
+      "answer": "Revenue for Project A is between $1.2M and $1.5M.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "Project A",
+        "attribute": "revenue",
+        "value": "$1.2M"
+      },
+      "expected": "claim_relation_ambiguous",
+      "row": "L7"
+    },
+    {
+      "id": "en-missing-attribute",
+      "language": "en",
+      "answer": "Revenue for Project A is $1.2M.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "Project A",
+        "value": "$1.2M"
+      },
+      "expected": "claim_incomplete",
+      "row": "L8"
+    },
+    {
+      "id": "en-empty-item",
+      "language": "en",
+      "answer": "A bar chart.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "item_presence",
+        "item": "  "
+      },
+      "expected": "claim_incomplete",
+      "row": "L8"
+    },
+    {
+      "id": "en-insufficient-look",
+      "language": "en",
+      "answer": "Revenue for Project A is $1.2M.",
+      "status": "insufficient",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "Project A",
+        "attribute": "revenue",
+        "value": "$1.2M"
+      },
+      "expected": "validation_support_unknown",
+      "row": "L9"
+    },
+    {
+      "id": "en-unavailable-look",
+      "language": "en",
+      "answer": null,
+      "status": "unavailable",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "Project A",
+        "attribute": "revenue",
+        "value": "$1.2M"
+      },
+      "expected": "validation_support_unknown",
+      "row": "L9"
+    },
+    {
+      "id": "en-produced-without-answer",
+      "language": "en",
+      "answer": "",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "Project A",
+        "attribute": "revenue",
+        "value": "$1.2M"
+      },
+      "expected": "validation_support_unknown",
+      "row": "L9"
+    },
+    {
+      "id": "id-eav-supported",
+      "language": "id",
+      "answer": "Pendapatan untuk Proyek A adalah Rp1,2 miliar.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "Proyek A",
+        "attribute": "pendapatan",
+        "value": "Rp1,2 miliar"
+      },
+      "expected": "ok",
+      "row": "L1"
+    },
+    {
+      "id": "id-eav-colon",
+      "language": "id",
+      "answer": "Proyek A pendapatan: Rp1,2 miliar",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "Proyek A",
+        "attribute": "pendapatan",
+        "value": "Rp1,2 miliar"
+      },
+      "expected": "ok",
+      "row": "L1"
+    },
+    {
+      "id": "id-eav-date",
+      "language": "id",
+      "answer": "Peluncuran Beta dijadwalkan 17 Maret 2027.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "Beta",
+        "attribute": "peluncuran",
+        "value": "17 Maret 2027"
+      },
+      "expected": "ok",
+      "row": "L1"
+    },
+    {
+      "id": "id-status-supported",
+      "language": "id",
+      "answer": "Anggaran sudah disetujui.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_status",
+        "entity": "anggaran",
+        "status": "disetujui"
+      },
+      "expected": "ok",
+      "row": "L1"
+    },
+    {
+      "id": "id-status-qualifier-claimed",
+      "language": "id",
+      "answer": "Anggaran masih tertunda.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_status",
+        "entity": "anggaran",
+        "status": "tertunda"
+      },
+      "expected": "ok",
+      "row": "L1"
+    },
+    {
+      "id": "id-item-supported",
+      "language": "id",
+      "answer": "Grafik batang pendaftaran bulanan.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "item_presence",
+        "item": "grafik batang"
+      },
+      "expected": "ok",
+      "row": "L1"
+    },
+    {
+      "id": "id-camera-item",
+      "language": "id",
+      "answer": "Budi memakai kemeja abu-abu.",
+      "status": "produced",
+      "claim": {
+        "kind": "participant",
+        "shape": "item_presence",
+        "item": "kemeja abu-abu"
+      },
+      "expected": "ok",
+      "row": "L1"
+    },
+    {
+      "id": "id-negative-claim-supported",
+      "language": "id",
+      "answer": "Anggaran belum disetujui.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_status",
+        "entity": "anggaran",
+        "status": "disetujui",
+        "polarity": "negative"
+      },
+      "expected": "ok",
+      "row": "L1"
+    },
+    {
+      "id": "id-cost-not-revenue",
+      "language": "id",
+      "answer": "Biaya untuk Proyek A adalah Rp1,2 miliar.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "Proyek A",
+        "attribute": "pendapatan",
+        "value": "Rp1,2 miliar"
+      },
+      "expected": "claim_relation_unsupported",
+      "row": "L4"
+    },
+    {
+      "id": "id-other-entity",
+      "language": "id",
+      "answer": "Pendapatan untuk Proyek B adalah Rp1,2 miliar.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "Proyek A",
+        "attribute": "pendapatan",
+        "value": "Rp1,2 miliar"
+      },
+      "expected": "claim_relation_unsupported",
+      "row": "L4"
+    },
+    {
+      "id": "id-attribute-in-another-sentence",
+      "language": "id",
+      "answer": "Biaya Proyek A Rp1,2 miliar. Pendapatan stabil.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "Proyek A",
+        "attribute": "pendapatan",
+        "value": "Rp1,2 miliar"
+      },
+      "expected": "claim_relation_unsupported",
+      "row": "L4"
+    },
+    {
+      "id": "id-value-absent",
+      "language": "id",
+      "answer": "Pendapatan untuk Proyek A adalah Rp1,2 miliar.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "Proyek A",
+        "attribute": "pendapatan",
+        "value": "Rp1,3 miliar"
+      },
+      "expected": "claim_untraceable",
+      "row": "L5"
+    },
+    {
+      "id": "id-value-without-unit",
+      "language": "id",
+      "answer": "Pendapatan untuk Proyek A adalah Rp1,2 miliar.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "Proyek A",
+        "attribute": "pendapatan",
+        "value": "1,2"
+      },
+      "expected": "claim_untraceable",
+      "row": "L5"
+    },
+    {
+      "id": "id-item-absent",
+      "language": "id",
+      "answer": "Grafik batang pendaftaran bulanan.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "item_presence",
+        "item": "grafik lingkaran"
+      },
+      "expected": "claim_untraceable",
+      "row": "L5"
+    },
+    {
+      "id": "id-not-approved",
+      "language": "id",
+      "answer": "Anggaran tidak disetujui.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_status",
+        "entity": "anggaran",
+        "status": "disetujui"
+      },
+      "expected": "claim_polarity_unsupported",
+      "row": "L6"
+    },
+    {
+      "id": "id-not-yet-approved",
+      "language": "id",
+      "answer": "Anggaran belum disetujui.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_status",
+        "entity": "anggaran",
+        "status": "disetujui"
+      },
+      "expected": "claim_polarity_unsupported",
+      "row": "L6"
+    },
+    {
+      "id": "id-pending",
+      "language": "id",
+      "answer": "Anggaran masih menunggu persetujuan.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_status",
+        "entity": "anggaran",
+        "status": "disetujui"
+      },
+      "expected": "claim_polarity_unsupported",
+      "row": "L6"
+    },
+    {
+      "id": "id-partially",
+      "language": "id",
+      "answer": "Anggaran sebagian disetujui.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_status",
+        "entity": "anggaran",
+        "status": "disetujui"
+      },
+      "expected": "claim_polarity_unsupported",
+      "row": "L6"
+    },
+    {
+      "id": "id-item-negated",
+      "language": "id",
+      "answer": "Tidak ada grafik batang di slide.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "item_presence",
+        "item": "grafik batang"
+      },
+      "expected": "claim_polarity_unsupported",
+      "row": "L6"
+    },
+    {
+      "id": "id-negative-claim-on-positive-answer",
+      "language": "id",
+      "answer": "Anggaran sudah disetujui.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_status",
+        "entity": "anggaran",
+        "status": "disetujui",
+        "polarity": "negative"
+      },
+      "expected": "claim_polarity_unsupported",
+      "row": "L6"
+    },
+    {
+      "id": "id-two-figures-one-clause",
+      "language": "id",
+      "answer": "Proyek A pendapatan Rp1,2 miliar dan biaya Rp0,8 miliar.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "Proyek A",
+        "attribute": "pendapatan",
+        "value": "Rp1,2 miliar"
+      },
+      "expected": "claim_relation_ambiguous",
+      "row": "L7"
+    },
+    {
+      "id": "id-swapped-figures",
+      "language": "id",
+      "answer": "Proyek A pendapatan Rp1,2 miliar dan biaya Rp0,8 miliar.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "Proyek A",
+        "attribute": "biaya",
+        "value": "Rp1,2 miliar"
+      },
+      "expected": "claim_relation_ambiguous",
+      "row": "L7"
+    },
+    {
+      "id": "id-contrast",
+      "language": "id",
+      "answer": "Dibandingkan Proyek B pendapatan Proyek A Rp1,2 miliar.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "Proyek B",
+        "attribute": "pendapatan",
+        "value": "Rp1,2 miliar"
+      },
+      "expected": "claim_relation_ambiguous",
+      "row": "L7"
+    },
+    {
+      "id": "id-former-value",
+      "language": "id",
+      "answer": "Pendapatan Proyek A sebelumnya Rp1,2 miliar.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "Proyek A",
+        "attribute": "pendapatan",
+        "value": "Rp1,2 miliar"
+      },
+      "expected": "claim_relation_ambiguous",
+      "row": "L7"
+    },
+    {
+      "id": "id-missing-attribute",
+      "language": "id",
+      "answer": "Pendapatan untuk Proyek A adalah Rp1,2 miliar.",
+      "status": "produced",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "Proyek A",
+        "value": "Rp1,2 miliar"
+      },
+      "expected": "claim_incomplete",
+      "row": "L8"
+    },
+    {
+      "id": "id-insufficient-look",
+      "language": "id",
+      "answer": "Pendapatan untuk Proyek A adalah Rp1,2 miliar.",
+      "status": "insufficient",
+      "claim": {
+        "kind": "screen",
+        "shape": "entity_attribute_value",
+        "entity": "Proyek A",
+        "attribute": "pendapatan",
+        "value": "Rp1,2 miliar"
+      },
+      "expected": "validation_support_unknown",
+      "row": "L9"
+    }
+  ]
+}
