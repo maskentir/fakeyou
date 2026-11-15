@@ -47,7 +47,7 @@ written.
 | 9 | `put-object-retention` with `Mode=GOVERNANCE` | accepted; `get-object-retention` returned the mode and the date |
 | 10 | `delete-object --version-id` on the Governance-retained version | **succeeded**; the version disappeared from `list-object-versions` |
 | 11 | `put-object-retention` with `Mode=COMPLIANCE`, then `delete-object --version-id` | **succeeded**; `get-object` afterwards returned `NoSuchVersion` |
-| 12 | `delete-object --bypass-governance-retention` | succeeded, as an ordinary delete |
+| 12 | `delete-object --bypass-governance-retention` | explicit bypass-header probe succeeded; ordinary deletes in steps 10 and 11 had already removed retained versions without bypass |
 | 13 | Controlled restart of the container | health 200 after restart; versioning, Object Lock configuration, versions and retention metadata all still present |
 | 14 | Re-read both versions after the restart | each returned its own content |
 | 15 | `delete-object` for every remaining version, then `delete-bucket` | all removed, bucket deleted; `fakeyou` untouched |
@@ -62,7 +62,7 @@ written.
 | Retention applied at upload time | **refuted** | `--object-lock-mode` and `--object-lock-retain-until-date` on `put-object` are accepted with exit 0 and then ignored; the object has no retention |
 | Governance retention prevents deletion | **refuted** | A version with Governance retention until a future date was deleted successfully and vanished from the version list |
 | Compliance retention prevents deletion | **refuted** | A version with Compliance retention until a future date was deleted; reading that version afterwards returned `NoSuchVersion` |
-| Bypass header has a distinct meaning here | **refuted** | It behaves like an ordinary delete, and an ordinary delete bypasses retention too |
+| Bypass-header probe | **succeeded; distinct enforcement effect not established** | Step 12 explicitly supplied the bypass header. Ordinary deletes in steps 10 and 11 also succeeded against retained versions; this does not establish functioning bypass authorization |
 | Retention survives a restart | **established for the metadata only** | Mode and date are still readable after the container restart. Whether they would still block a delete after the restart is untested, and untestable while retention blocks nothing |
 | Objects and versions survive a restart | **established** | All probe objects and both versions were present and readable after the restart |
 | Data is durable beyond the host | **unproven** | The volume is on the same disk as the local archive it is meant to safeguard. No second copy exists |
@@ -74,7 +74,7 @@ written.
 | Item | State |
 | --- | --- |
 | Retained objects left behind | None that could not be removed. Retained versions were removed by ordinary delete, which is itself the finding above |
-| Retention bypassed to clean up | No. Every removal used the ordinary `delete-object` call; no header or administrative override was used |
+| Retention bypassed to clean up | No. Cleanup in step 15 used ordinary `delete-object` calls without the bypass header or an administrative override. Step 12 separately tested the explicit bypass header; the claim of ordinary deletion applies to cleanup, not every operation in the capability test |
 | Test bucket | Deleted; `list-buckets` shows `fakeyou` only |
 | Existing `fakeyou` bucket | Untouched: 1,000 objects and 1,000 versions before and after |
 | Docker volumes | Not deleted, not altered |
@@ -84,7 +84,7 @@ written.
 
 ## Operational and security limitations
 
-1. **Retention is not enforced.** This is the decisive finding. Object Lock is
+1. **P0: retention is not enforced on the tested alpha.81 image.** This is the decisive finding. Object Lock is
    configured and reported, but a retained version can be deleted with the
    ordinary API. An evidence store that cannot refuse a deletion cannot hold
    anything immutable, whatever its metadata says.
@@ -119,3 +119,8 @@ verified to refuse a deletion on that deployment, versioning confirmed, Object
 Lock and its retention fixed at bucket creation, credentials not default,
 encryption at rest, and a defined access list. That is a new deployment and a
 new authorization, not a configuration of this one.
+
+Wording correction, 2026-11-16: the bypass header was exercised once in step 12;
+cleanup used ordinary deletion without bypass. No storage operation was rerun
+for this correction. The Governance and Compliance retention findings remain
+P0, and **EVIDENCE CUSTODY PENDING** remains in force.

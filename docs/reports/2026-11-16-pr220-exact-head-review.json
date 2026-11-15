@@ -1,0 +1,206 @@
+{
+  "date": "2026-11-16",
+  "pr": 220,
+  "reviewed_head": "77e51c797ddbc9df75a5eeeac73331d306cdd2e1",
+  "worktree_test_sha": "36da8ca296b59920e01b4189a647ec6376eff56b",
+  "base": "a79197b5cf20d4235861b46edeb20165f4112bed",
+  "equivalence": {
+    "head_tree": "d91907ebfcc4453740ead1b600d5b1e2b26c9446",
+    "test_tree": "d91907ebfcc4453740ead1b600d5b1e2b26c9446",
+    "same_parent": true,
+    "whole_tree_diff_empty": true,
+    "ported_paths": [
+      "src/fakeyou/assets/perception.js",
+      "src/fakeyou/foundation/content_digest.py",
+      "src/fakeyou/foundation/publication.py",
+      "src/fakeyou/perception/context.py",
+      "src/fakeyou/perception/revalidation.py",
+      "src/fakeyou/perception/samples.py",
+      "src/fakeyou/perception/sensors.py",
+      "src/fakeyou/perception/timeline.py",
+      "tests/test_content_digest.py",
+      "tests/test_publication_t6_regression.py",
+      "tests/test_revalidation_match.py",
+      "tests/test_samples_ledger.py",
+      "tests/test_sensors_browser.py",
+      "tests/test_sensors_samples.py"
+    ],
+    "ported_paths_byte_identical_to_pr207": true
+  },
+  "environment": {
+    "platform": "macOS-27.0.1-arm64-arm-64bit",
+    "python": "3.12.13",
+    "interpreter": "/Users/pushmove/Desktop/side_projects/jemboed/fakeyou/.venv/bin/python",
+    "head_worktree": "/Users/pushmove/.codex/worktrees/97ea/fakeyou",
+    "baseline_worktree": "/Users/pushmove/.codex/worktrees/844a/fakeyou",
+    "source_imports": "PYTHONPATH begins with the respective exact worktree src and root; imported module paths checked",
+    "browser_binary": "/Users/pushmove/.cloakbrowser/chromium-145.0.7632.109.2/Chromium.app/Contents/MacOS/Chromium",
+    "binary_download": false,
+    "browser_auto_update": false,
+    "network_policy": "macOS sandbox-exec denies outbound except localhost; separate non-local connect control returned PermissionError errno 1",
+    "network_profile_sha256": "cf35cca89f2e1b677995e788c0fe365bf627c641f260a3e4ea80cbde31a0c60e"
+  },
+  "observed_runs": {
+    "pr220-browser": {
+      "artifact": "pr220-browser.xml",
+      "sha256": "8f704dbd301598b7798647672d35b26c14d1db5223c3eb4cb3505a4772a0b33d",
+      "tests": 4,
+      "passed": 4,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "failures": [],
+      "log_sha256": "3d4c267031cb69d9f5ad4c719d4f116af475425b53d39edfb0d64df3045520ba"
+    },
+    "pr220-offline": {
+      "artifact": "pr220-offline.xml",
+      "sha256": "257a8cf7c7a558e60cff3970980d6376a00f8bf18ab96808e0ac7dadcbfd4569",
+      "tests": 12266,
+      "passed": 12152,
+      "failed": 1,
+      "errors": 0,
+      "skipped": 113,
+      "failures": [
+        {
+          "node": "tests.test_actor_early_commit::test_a_repeated_interim_does_not_restart_the_hold",
+          "message": "AssertionError: assert [] == ['Rani, when is the beta?']\n  \n  Right contains one more item: 'Rani, when is the beta?'\n  Use -v to get more diff"
+        }
+      ],
+      "log_sha256": "4111ae4be9c457996878b6ffc6bb638b83607113695ddbc5b7393c136fbc469b"
+    },
+    "pr220-focused": {
+      "artifact": "pr220-focused.xml",
+      "sha256": "eca1312f9ab7270238a95b3abaa2a6729816fcb0c5331feaa75c4f4f35a1d720",
+      "tests": 60,
+      "passed": 60,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "failures": [],
+      "log_sha256": "35e8737a358031df562267e0f58e9ae8e0361ead8fe729c819840e2019f497a2"
+    },
+    "main-baseline-selected": {
+      "artifact": "main-baseline-selected.xml",
+      "sha256": "28e8c7915ccef1114b5a9337eedda3eec81a5df82a307e9d8b13b9cad343f781",
+      "tests": 2,
+      "passed": 2,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "failures": [],
+      "log_sha256": "bcf5f81aa8a76b645311c629db761d9176402b2d7495dd637fd3d904740a18ad"
+    },
+    "main-early-selected": {
+      "artifact": "main-early-selected.xml",
+      "sha256": "a35494426599fe561f97e423b03426ac23080884640ebb227df77a09fe707b8b",
+      "tests": 1,
+      "passed": 1,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "failures": [],
+      "log_sha256": "83e93e4ded38ad20edd36d0de4695030773d96e0bb3019193d145d972052dc42"
+    }
+  },
+  "historical_run": {
+    "evidence": "PR #220 body at reviewed_head; original raw log not recovered in this review",
+    "reported_test_sha": "36da8ca296b59920e01b4189a647ec6376eff56b",
+    "passed": 12151,
+    "skipped": 113,
+    "deselected": 91,
+    "failed": 2,
+    "failures": [
+      {
+        "node": "tests/test_resources.py::test_resource_handle_is_the_bundled_file_on_disk",
+        "status": "historical failure retained; not fixed or waived"
+      },
+      {
+        "node": "tests/test_turn_graph_nonstreamed.py::test_whole_respond_over_the_turn_budget_is_cut_journaled_and_counted",
+        "status": "historical failure retained; not fixed or waived"
+      }
+    ],
+    "reported_main_reproduction": "a79197b5cf20d4235861b46edeb20165f4112bed",
+    "new_focused_passes_do_not_replace_historical_failures": true
+  },
+  "ci": {
+    "check_runs": [
+      {
+        "name": "python",
+        "head_sha": "77e51c797ddbc9df75a5eeeac73331d306cdd2e1",
+        "conclusion": "success",
+        "url": "https://github.com/maskentir/fakeyou/actions/runs/43747722393/job/132914599176"
+      },
+      {
+        "name": "node",
+        "head_sha": "77e51c797ddbc9df75a5eeeac73331d306cdd2e1",
+        "conclusion": "success",
+        "url": "https://github.com/maskentir/fakeyou/actions/runs/43747722393/job/132914599085"
+      },
+      {
+        "name": "secrets",
+        "head_sha": "77e51c797ddbc9df75a5eeeac73331d306cdd2e1",
+        "conclusion": "success",
+        "url": "https://github.com/maskentir/fakeyou/actions/runs/43747722393/job/132914598926"
+      },
+      {
+        "name": "replay",
+        "head_sha": "77e51c797ddbc9df75a5eeeac73331d306cdd2e1",
+        "conclusion": "success",
+        "url": "https://github.com/maskentir/fakeyou/actions/runs/43747722420/job/132914598748"
+      },
+      {
+        "name": "node",
+        "head_sha": "77e51c797ddbc9df75a5eeeac73331d306cdd2e1",
+        "conclusion": "success",
+        "url": "https://github.com/maskentir/fakeyou/actions/runs/43746782346/job/132911724614"
+      },
+      {
+        "name": "secrets",
+        "head_sha": "77e51c797ddbc9df75a5eeeac73331d306cdd2e1",
+        "conclusion": "success",
+        "url": "https://github.com/maskentir/fakeyou/actions/runs/43746782346/job/132911724579"
+      },
+      {
+        "name": "python",
+        "head_sha": "77e51c797ddbc9df75a5eeeac73331d306cdd2e1",
+        "conclusion": "success",
+        "url": "https://github.com/maskentir/fakeyou/actions/runs/43746782346/job/132911724242"
+      }
+    ],
+    "foundation_url": "https://github.com/maskentir/fakeyou/actions/runs/43747722393",
+    "replay_url": "https://github.com/maskentir/fakeyou/actions/runs/43747722420",
+    "foundation_log_sha256": "a6a53cb33a8fb151d5f720613f4abd56ae0cbcace6d1fec29f99c72398ec0e01",
+    "python_passed": 12258,
+    "python_skipped": 8,
+    "python_deselected": 91,
+    "mypy_files": 739,
+    "vulnerabilities": "No known vulnerabilities found"
+  },
+  "review_disposition": "MERGE HOLD: local full run failed; evidence gathered, no approval/mark-ready/merge issued",
+  "unresolved": [
+    "two historical pytest failures retained without waiver",
+    "new full-run early-commit failure; isolated head and main reruns passed; root cause and baseline reproducibility unproven",
+    "PR B waits for #220 merged and a subsequent implementation directive",
+    "P0 RustFS retention failure on tested alpha.81",
+    "EVIDENCE CUSTODY PENDING",
+    "V6 NO-GO; no production activation"
+  ],
+  "boundaries": {
+    "publication_context": "OFF",
+    "phase5b": "NO-GO",
+    "v6": "NO-GO",
+    "new_provider_requests": 0,
+    "new_provider_spend_usd": 0,
+    "production_activation": false,
+    "contract_205_changed": false,
+    "original_pr_refs_modified": false,
+    "pr_b_implementation_branch_created": false,
+    "deployment_provisioned": false,
+    "archive_uploaded": false,
+    "external_model_code_review": false
+  },
+  "archive_read_only": {
+    "size": 3088788,
+    "sha256": "974bc6012f2a5c28ea2d9b264c3821948167b747ed05c15d18603f918faa4513"
+  }
+}
