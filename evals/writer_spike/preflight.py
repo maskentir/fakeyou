@@ -13,6 +13,7 @@ import sys
 import time
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
+from functools import partial
 from pathlib import Path
 
 from evals.writer_spike.observer import MIN_ATTRIBUTABLE_BYTES, Recording, load
@@ -239,7 +240,9 @@ def pf9_no_callback_in_section(repetitions: int = 1000) -> dict[str, object]:
     }
 
 
-def _timed_writes(playback: Playback, frame: bytes, count: int, *, pump: bool) -> dict[str, object]:
+def _timed_writes(
+    playback: Playback, frame: bytes, count: int, *, pump: bool
+) -> tuple[int, dict[str, object]]:
     durations: list[int] = []
     codes: dict[int, int] = {}
     beyond_writable = 0
@@ -252,7 +255,7 @@ def _timed_writes(playback: Playback, frame: bytes, count: int, *, pump: bool) -
         code = playback.write(frame)
         durations.append(now_ns() - started)
         codes[code] = codes.get(code, 0) + 1
-    return {
+    return max(durations), {
         "write_ns": summary(durations),
         "return_codes": codes,
         "writes_issued_beyond_writable_size": beyond_writable,
@@ -263,13 +266,13 @@ def pf1_write_never_blocks(count: int = 1000) -> dict[str, object]:
     frame = clip(1)
     client = Client("pf1-normal")
     playback = Playback(client, "pf1-normal")
-    normal = _timed_writes(playback, frame, count, pump=True)
+    slowest_normal, normal = _timed_writes(playback, frame, count, pump=True)
     playback.close()
     client.close()
 
     client = Client("pf1-full")
     playback = Playback(client, "pf1-full")
-    full = _timed_writes(playback, frame, count, pump=False)
+    slowest_full, full = _timed_writes(playback, frame, count, pump=False)
     playback.flush()
     client.pump(0.2)
     playback.close()
@@ -279,7 +282,7 @@ def pf1_write_never_blocks(count: int = 1000) -> dict[str, object]:
     playback = Playback(client, "pf1-stopped")
     pid = daemon_pid()
     confirmed = stop_daemon(pid)
-    stopped = _timed_writes(playback, frame, count, pump=False)
+    slowest_stopped, stopped = _timed_writes(playback, frame, count, pump=False)
     iterate_durations: list[int] = []
     for _ in range(count):
         started = now_ns()
@@ -292,10 +295,7 @@ def pf1_write_never_blocks(count: int = 1000) -> dict[str, object]:
     playback.close()
     client.close()
 
-    worst = max(
-        int(section["write_ns"]["max"])  # type: ignore[index]
-        for section in (normal, full, stopped)
-    )
+    worst = max(slowest_normal, slowest_full, slowest_stopped)
     return {
         "established": confirmed is not None and worst < NON_BLOCKING_NS,
         "normal": normal,
@@ -595,7 +595,7 @@ def pf3_reply_not_from_stopped_daemon(repetitions: int = 100) -> dict[str, objec
         info = playback.timings[-1].write_index if playback.timings else 0
         write_index_advanced_while_stopped += info > before and not moments
         resumed = resume_daemon(pid)
-        if client.pump_until(lambda: bool(moments), 2.0):  # noqa: B023
+        if client.pump_until(partial(bool, moments), 2.0):
             replies_after_resume += 1
             reply_delay.append(moments[0] - resumed)
     playback.close()
