@@ -32,8 +32,9 @@ from fakeyou.perception.interpreter import (
     EmptyVisionResponse,
     PerceptionInterpreter,
 )
+from fakeyou.perception.percepts import ScreenSegment
 from fakeyou.perception.roster import MeetingState
-from fakeyou.perception.timeline import MeetingTimeline, TimelineSnapshot
+from fakeyou.perception.timeline import CameraFrame, MeetingTimeline, TimelineSnapshot
 from fakeyou.perception.view import (
     MeetingView,
     ScreenFact,
@@ -101,6 +102,18 @@ def _unavailable(
         answer=None,
         observed_at=datetime.now(UTC),
         subject_label=subject_label,
+    )
+
+
+def _screen_snapshot(segment: ScreenSegment) -> SnapshotRef:
+    return SnapshotRef(
+        source="screen",
+        subject_id=segment.ref,
+        stream_id=segment.keyframe.sha256,
+        epoch=0,
+        sequence=0,
+        generation=0,
+        captured_at=segment.keyframe.captured_at,
     )
 
 
@@ -178,15 +191,25 @@ class PerceptionContext:
             question,
             source=SCREEN_SOURCE,
             subject_id=segment.ref,
-            ref=SnapshotRef(
-                source="screen",
-                subject_id=segment.ref,
-                stream_id=segment.keyframe.sha256,
-                epoch=0,
-                sequence=0,
-                generation=0,
-                captured_at=segment.keyframe.captured_at,
-            ),
+            ref=_screen_snapshot(segment),
+        )
+
+    def current_scene(self, bound: SnapshotRef) -> CameraFrame | SnapshotRef | None:
+        if bound.source == "screen":
+            segment = self.timeline.snapshot().current_screen
+            return None if segment is None else _screen_snapshot(segment)
+        frame = self.timeline.camera_frames.get(bound.subject_id)
+        if frame is None or not self._camera_live(bound.subject_id, frame):
+            return None
+        return frame
+
+    def _camera_live(self, participant_id: str, frame: CameraFrame) -> bool:
+        meeting = self._state() if self._state is not None else None
+        camera_on = meeting.cameras_on if meeting is not None else None
+        return (
+            (camera_on is None or participant_id in camera_on)
+            and frame.ref.epoch == self._camera_epoch()
+            and self._camera_monotonic() - frame.seen_at <= CAMERA_LIVENESS_TIMEOUT_SECONDS
         )
 
     def backlog_chat(self, limit: int = 20) -> dict[str, Any]:
@@ -212,14 +235,7 @@ class PerceptionContext:
         if frame is None:
             self.interpreter.invalidate_answers(person.participant_id)
             return _unavailable("camera", person.ref, "camera_unavailable")
-        meeting = self._state() if self._state is not None else None
-        camera_on = meeting.cameras_on if meeting is not None else None
-        live = (
-            (camera_on is None or person.participant_id in camera_on)
-            and frame.ref.epoch == self._camera_epoch()
-            and self._camera_monotonic() - frame.seen_at <= CAMERA_LIVENESS_TIMEOUT_SECONDS
-        )
-        if not live:
+        if not self._camera_live(person.participant_id, frame):
             self.interpreter.invalidate_answers(person.participant_id)
             return _unavailable("camera", person.ref, "camera_unavailable")
         try:
@@ -446,6 +462,7 @@ class MeetingEvidence:
                 mapped.uncertainty_seconds if mapped is not None else None
             ),
             observation_clock_domain=LOCAL_MONOTONIC if attempt is not None else "utc",
+            status=result.status,
         )
 
 

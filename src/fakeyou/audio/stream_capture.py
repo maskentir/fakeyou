@@ -767,6 +767,7 @@ class SlotFactories:
     stt: Callable[[int], SpeechSessionFactory] | None = None
     playback: Callable[[int], PlaybackPort] | None = None
     turn_tap: Callable[[int], TurnAudioTap] | None = None
+    publication: PublicationContext | None = None
 
 
 DEFAULT_SLOT_FACTORIES = SlotFactories()
@@ -807,6 +808,7 @@ async def open_stream_fleet(
                                 factories.turn_tap(slot) if factories.turn_tap is not None else None
                             ),
                             own_speech=own_speech,
+                            publication=factories.publication,
                         ),
                         diagnostics=diagnostics,
                         policy=policy,
