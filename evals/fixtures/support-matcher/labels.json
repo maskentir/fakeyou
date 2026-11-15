@@ -1,0 +1,499 @@
+{
+  "version": 1,
+  "inputs": {
+    "evals/fixtures/visual-inspection/provider-cassette.jsonl": "806e9c4b610707305a74f9815d5557f6333a69567d3fb0bfcc213eeec6f5e4a9",
+    "evals/fixtures/simulator/cassettes/sim-s3-camera.jsonl": "4957d647de7602eb6946c92c66c0bed11a935f0f2f5ed31197723c8fc02dd025",
+    "evals/fixtures/simulator/cassettes/sim-s3-screen.jsonl": "ec24a310e917ad70f1106df620f3be557436be8fc2824a9677d5ba3d35eb0236"
+  },
+  "note": "Hand-written labels over look responses already recorded in existing cassettes. The cassettes are read-only inputs; true_of_frame says whether the claim is true of the frame according to the look's own response.",
+  "looks": [
+    {
+      "source": "evals/fixtures/visual-inspection/provider-cassette.jsonl",
+      "line": 0,
+      "language": "en",
+      "kind": "screen",
+      "claims": [
+        {
+          "claim": {
+            "kind": "screen",
+            "shape": "item_presence",
+            "item": "17 March 2027"
+          },
+          "true_of_frame": true,
+          "note": "the answer itself"
+        },
+        {
+          "claim": {
+            "kind": "screen",
+            "shape": "entity_attribute_value",
+            "entity": "Beta",
+            "attribute": "date",
+            "value": "17 March 2027"
+          },
+          "true_of_frame": true,
+          "note": "the frame reads Beta: 17 March 2027; the word date is in the question only"
+        },
+        {
+          "claim": {
+            "kind": "screen",
+            "shape": "entity_status",
+            "entity": "Beta",
+            "status": "17 March 2027"
+          },
+          "true_of_frame": true,
+          "note": "relation stated without an attribute word"
+        },
+        {
+          "claim": {
+            "kind": "screen",
+            "shape": "item_presence",
+            "item": "18 March 2027"
+          },
+          "true_of_frame": false,
+          "note": "one digit off"
+        },
+        {
+          "claim": {
+            "kind": "screen",
+            "shape": "entity_attribute_value",
+            "entity": "Beta",
+            "attribute": "date",
+            "value": "18 March 2027"
+          },
+          "true_of_frame": false,
+          "note": "one digit off"
+        },
+        {
+          "claim": {
+            "kind": "screen",
+            "shape": "entity_attribute_value",
+            "entity": "Alpha",
+            "attribute": "date",
+            "value": "17 March 2027"
+          },
+          "true_of_frame": false,
+          "note": "another entity"
+        }
+      ]
+    },
+    {
+      "source": "evals/fixtures/visual-inspection/provider-cassette.jsonl",
+      "line": 1,
+      "language": "en",
+      "kind": "screen",
+      "claims": [
+        {
+          "claim": {
+            "kind": "screen",
+            "shape": "item_presence",
+            "item": "Budi"
+          },
+          "true_of_frame": true,
+          "note": "the answer itself"
+        },
+        {
+          "claim": {
+            "kind": "screen",
+            "shape": "entity_attribute_value",
+            "entity": "Project Orchid",
+            "attribute": "owner",
+            "value": "Budi"
+          },
+          "true_of_frame": true,
+          "note": "Owner: Budi under Project Orchid"
+        },
+        {
+          "claim": {
+            "kind": "screen",
+            "shape": "entity_attribute_value",
+            "entity": "Project Orchid",
+            "attribute": "owner",
+            "value": "Ayu"
+          },
+          "true_of_frame": false,
+          "note": "another value"
+        },
+        {
+          "claim": {
+            "kind": "screen",
+            "shape": "entity_attribute_value",
+            "entity": "Project Lotus",
+            "attribute": "owner",
+            "value": "Budi"
+          },
+          "true_of_frame": false,
+          "note": "another entity"
+        },
+        {
+          "claim": {
+            "kind": "screen",
+            "shape": "entity_attribute_value",
+            "entity": "Project Orchid",
+            "attribute": "reviewer",
+            "value": "Budi"
+          },
+          "true_of_frame": false,
+          "note": "another attribute"
+        }
+      ]
+    },
+    {
+      "source": "evals/fixtures/visual-inspection/provider-cassette.jsonl",
+      "line": 2,
+      "language": "en",
+      "kind": "screen",
+      "claims": [
+        {
+          "claim": {
+            "kind": "screen",
+            "shape": "item_presence",
+            "item": "Project Orchid"
+          },
+          "true_of_frame": true,
+          "note": "the answer itself"
+        },
+        {
+          "claim": {
+            "kind": "screen",
+            "shape": "item_presence",
+            "item": "Project Lotus"
+          },
+          "true_of_frame": false,
+          "note": "another name"
+        },
+        {
+          "claim": {
+            "kind": "screen",
+            "shape": "entity_attribute_value",
+            "entity": "the project",
+            "attribute": "name",
+            "value": "Project Orchid"
+          },
+          "true_of_frame": true,
+          "note": "the words project name are in the question only"
+        }
+      ]
+    },
+    {
+      "source": "evals/fixtures/visual-inspection/provider-cassette.jsonl",
+      "line": 3,
+      "language": "en",
+      "kind": "screen",
+      "claims": [
+        {
+          "claim": {
+            "kind": "screen",
+            "shape": "entity_attribute_value",
+            "entity": "Project Orchid",
+            "attribute": "budget",
+            "value": "$1.2M"
+          },
+          "true_of_frame": false,
+          "note": "the look did not produce"
+        },
+        {
+          "claim": {
+            "kind": "screen",
+            "shape": "item_presence",
+            "item": "Project Orchid"
+          },
+          "true_of_frame": false,
+          "note": "the look did not produce, so nothing may be claimed from it"
+        }
+      ]
+    },
+    {
+      "source": "evals/fixtures/visual-inspection/provider-cassette.jsonl",
+      "line": 4,
+      "language": "en",
+      "kind": "participant",
+      "claims": [
+        {
+          "claim": {
+            "kind": "participant",
+            "shape": "item_presence",
+            "item": "blue"
+          },
+          "true_of_frame": true,
+          "note": "the answer itself"
+        },
+        {
+          "claim": {
+            "kind": "participant",
+            "shape": "item_presence",
+            "item": "a blue shirt"
+          },
+          "true_of_frame": true,
+          "note": "blue torso representing a shirt"
+        },
+        {
+          "claim": {
+            "kind": "participant",
+            "shape": "item_presence",
+            "item": "a red mug"
+          },
+          "true_of_frame": true,
+          "note": "only in the observed facts"
+        },
+        {
+          "claim": {
+            "kind": "participant",
+            "shape": "entity_attribute_value",
+            "entity": "the person",
+            "attribute": "shirt",
+            "value": "blue"
+          },
+          "true_of_frame": true,
+          "note": "relation not stated in one clause"
+        },
+        {
+          "claim": {
+            "kind": "participant",
+            "shape": "item_presence",
+            "item": "a red shirt"
+          },
+          "true_of_frame": false,
+          "note": "red is the mug"
+        },
+        {
+          "claim": {
+            "kind": "participant",
+            "shape": "item_presence",
+            "item": "green"
+          },
+          "true_of_frame": false,
+          "note": "not in the frame"
+        },
+        {
+          "claim": {
+            "kind": "participant",
+            "shape": "item_presence",
+            "item": "a blue mug"
+          },
+          "true_of_frame": false,
+          "note": "blue is the shirt"
+        }
+      ]
+    },
+    {
+      "source": "evals/fixtures/visual-inspection/provider-cassette.jsonl",
+      "line": 5,
+      "language": "en",
+      "kind": "participant",
+      "claims": [
+        {
+          "claim": {
+            "kind": "participant",
+            "shape": "item_presence",
+            "item": "Harun"
+          },
+          "true_of_frame": false,
+          "note": "the look did not produce"
+        }
+      ]
+    },
+    {
+      "source": "evals/fixtures/visual-inspection/provider-cassette.jsonl",
+      "line": 6,
+      "language": "en",
+      "kind": "screen",
+      "claims": [
+        {
+          "claim": {
+            "kind": "screen",
+            "shape": "item_presence",
+            "item": "17 March 2027"
+          },
+          "true_of_frame": false,
+          "note": "the date is occluded; the look did not produce"
+        },
+        {
+          "claim": {
+            "kind": "screen",
+            "shape": "entity_attribute_value",
+            "entity": "Beta",
+            "attribute": "date",
+            "value": "17 March 2027"
+          },
+          "true_of_frame": false,
+          "note": "the date is occluded"
+        }
+      ]
+    },
+    {
+      "source": "evals/fixtures/visual-inspection/provider-cassette.jsonl",
+      "line": 7,
+      "language": "en",
+      "kind": "screen",
+      "claims": [
+        {
+          "claim": {
+            "kind": "screen",
+            "shape": "item_presence",
+            "item": "Budi"
+          },
+          "true_of_frame": true,
+          "note": "the answer itself"
+        },
+        {
+          "claim": {
+            "kind": "screen",
+            "shape": "entity_attribute_value",
+            "entity": "Project Orchid",
+            "attribute": "owner",
+            "value": "Budi"
+          },
+          "true_of_frame": true,
+          "note": "Owner: Budi below Project Orchid"
+        },
+        {
+          "claim": {
+            "kind": "screen",
+            "shape": "entity_attribute_value",
+            "entity": "Project Orchid",
+            "attribute": "owner",
+            "value": "Rani"
+          },
+          "true_of_frame": false,
+          "note": "another value"
+        }
+      ]
+    },
+    {
+      "source": "evals/fixtures/simulator/cassettes/sim-s3-camera.jsonl",
+      "line": 46,
+      "language": "en",
+      "kind": "participant",
+      "claims": [
+        {
+          "claim": {
+            "kind": "participant",
+            "shape": "item_presence",
+            "item": "red"
+          },
+          "true_of_frame": true,
+          "note": "the answer itself"
+        },
+        {
+          "claim": {
+            "kind": "participant",
+            "shape": "item_presence",
+            "item": "a red shirt"
+          },
+          "true_of_frame": true,
+          "note": "wearing a red shirt"
+        },
+        {
+          "claim": {
+            "kind": "participant",
+            "shape": "entity_attribute_value",
+            "entity": "Harun",
+            "attribute": "shirt",
+            "value": "red"
+          },
+          "true_of_frame": true,
+          "note": "Harun is wearing a red shirt"
+        },
+        {
+          "claim": {
+            "kind": "participant",
+            "shape": "item_presence",
+            "item": "a blue shirt"
+          },
+          "true_of_frame": false,
+          "note": "another colour"
+        },
+        {
+          "claim": {
+            "kind": "participant",
+            "shape": "entity_attribute_value",
+            "entity": "Harun",
+            "attribute": "shirt",
+            "value": "blue"
+          },
+          "true_of_frame": false,
+          "note": "another colour"
+        },
+        {
+          "claim": {
+            "kind": "participant",
+            "shape": "entity_attribute_value",
+            "entity": "Budi",
+            "attribute": "shirt",
+            "value": "red"
+          },
+          "true_of_frame": false,
+          "note": "another person"
+        }
+      ]
+    },
+    {
+      "source": "evals/fixtures/simulator/cassettes/sim-s3-screen.jsonl",
+      "line": 21,
+      "language": "en",
+      "kind": "screen",
+      "claims": [
+        {
+          "claim": {
+            "kind": "screen",
+            "shape": "item_presence",
+            "item": "Orchid Launch Plan"
+          },
+          "true_of_frame": true,
+          "note": "the answer itself"
+        },
+        {
+          "claim": {
+            "kind": "screen",
+            "shape": "entity_attribute_value",
+            "entity": "Beta",
+            "attribute": "launch",
+            "value": "21 October 2026"
+          },
+          "true_of_frame": true,
+          "note": "Beta launch: 21 October 2026"
+        },
+        {
+          "claim": {
+            "kind": "screen",
+            "shape": "entity_attribute_value",
+            "entity": "Beta",
+            "attribute": "launch",
+            "value": "17 March 2027"
+          },
+          "true_of_frame": false,
+          "note": "another date"
+        },
+        {
+          "claim": {
+            "kind": "screen",
+            "shape": "entity_attribute_value",
+            "entity": "Beta",
+            "attribute": "launch",
+            "value": "21 October 2027"
+          },
+          "true_of_frame": false,
+          "note": "another year"
+        },
+        {
+          "claim": {
+            "kind": "screen",
+            "shape": "item_presence",
+            "item": "Checklist: Rani"
+          },
+          "true_of_frame": true,
+          "note": "shown, but holds clause punctuation"
+        },
+        {
+          "claim": {
+            "kind": "screen",
+            "shape": "item_presence",
+            "item": "Budget Plan"
+          },
+          "true_of_frame": false,
+          "note": "another title"
+        }
+      ]
+    }
+  ]
+}

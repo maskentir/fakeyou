@@ -1,0 +1,151 @@
+{
+  "version": 1,
+  "inputs": {
+    "evals/fixtures/visual-inspection/provider-cassette.jsonl": "806e9c4b610707305a74f9815d5557f6333a69567d3fb0bfcc213eeec6f5e4a9",
+    "evals/fixtures/simulator/cassettes/sim-s3-camera.jsonl": "4957d647de7602eb6946c92c66c0bed11a935f0f2f5ed31197723c8fc02dd025",
+    "evals/fixtures/simulator/cassettes/sim-s3-screen.jsonl": "ec24a310e917ad70f1106df620f3be557436be8fc2824a9677d5ba3d35eb0236"
+  },
+  "provider_requests": 0,
+  "cassette_looks": 10,
+  "cassette": {
+    "answer": {
+      "en": {
+        "claims": 41,
+        "true_claims": 19,
+        "false_claims": 22,
+        "false_support": 0,
+        "false_support_rate": 0.0,
+        "false_rejection": 12,
+        "false_rejection_rate": 0.6316,
+        "coverage": 0.3684,
+        "abstention_rate": 0.8293,
+        "abstentions_by_category": {
+          "missing_evidence": 5,
+          "ambiguous_relation": 0,
+          "unsupported_shape": 0,
+          "other_unsupported": 29
+        },
+        "abstentions_by_reason": {
+          "claim_relation_unsupported": 11,
+          "claim_untraceable": 18,
+          "validation_support_unknown": 5
+        }
+      },
+      "id": {
+        "claims": 0,
+        "true_claims": 0,
+        "false_claims": 0,
+        "false_support": 0,
+        "false_support_rate": null,
+        "false_rejection": 0,
+        "false_rejection_rate": null,
+        "coverage": null,
+        "abstention_rate": null,
+        "abstentions_by_category": {
+          "missing_evidence": 0,
+          "ambiguous_relation": 0,
+          "unsupported_shape": 0,
+          "other_unsupported": 0
+        },
+        "abstentions_by_reason": {}
+      }
+    },
+    "answer_and_observed_facts": {
+      "en": {
+        "claims": 41,
+        "true_claims": 19,
+        "false_claims": 22,
+        "false_support": 0,
+        "false_support_rate": 0.0,
+        "false_rejection": 8,
+        "false_rejection_rate": 0.4211,
+        "coverage": 0.5789,
+        "abstention_rate": 0.7317,
+        "abstentions_by_category": {
+          "missing_evidence": 5,
+          "ambiguous_relation": 0,
+          "unsupported_shape": 4,
+          "other_unsupported": 21
+        },
+        "abstentions_by_reason": {
+          "claim_relation_unsupported": 7,
+          "claim_render_unsupported": 4,
+          "claim_untraceable": 14,
+          "validation_support_unknown": 5
+        }
+      },
+      "id": {
+        "claims": 0,
+        "true_claims": 0,
+        "false_claims": 0,
+        "false_support": 0,
+        "false_support_rate": null,
+        "false_rejection": 0,
+        "false_rejection_rate": null,
+        "coverage": null,
+        "abstention_rate": null,
+        "abstentions_by_category": {
+          "missing_evidence": 0,
+          "ambiguous_relation": 0,
+          "unsupported_shape": 0,
+          "other_unsupported": 0
+        },
+        "abstentions_by_reason": {}
+      }
+    }
+  },
+  "synthetic": {
+    "en": {
+      "claims": 38,
+      "true_claims": 11,
+      "false_claims": 27,
+      "false_support": 0,
+      "false_support_rate": 0.0,
+      "false_rejection": 1,
+      "false_rejection_rate": 0.0909,
+      "coverage": 0.9091,
+      "abstention_rate": 0.7368,
+      "abstentions_by_category": {
+        "missing_evidence": 3,
+        "ambiguous_relation": 5,
+        "unsupported_shape": 1,
+        "other_unsupported": 19
+      },
+      "abstentions_by_reason": {
+        "claim_incomplete": 2,
+        "claim_polarity_unsupported": 8,
+        "claim_relation_ambiguous": 5,
+        "claim_relation_unsupported": 4,
+        "claim_render_unsupported": 1,
+        "claim_untraceable": 5,
+        "validation_support_unknown": 3
+      }
+    },
+    "id": {
+      "claims": 26,
+      "true_claims": 8,
+      "false_claims": 18,
+      "false_support": 0,
+      "false_support_rate": 0.0,
+      "false_rejection": 1,
+      "false_rejection_rate": 0.125,
+      "coverage": 0.875,
+      "abstention_rate": 0.7308,
+      "abstentions_by_category": {
+        "missing_evidence": 1,
+        "ambiguous_relation": 4,
+        "unsupported_shape": 1,
+        "other_unsupported": 13
+      },
+      "abstentions_by_reason": {
+        "claim_incomplete": 1,
+        "claim_polarity_unsupported": 6,
+        "claim_relation_ambiguous": 4,
+        "claim_relation_unsupported": 3,
+        "claim_render_unsupported": 1,
+        "claim_untraceable": 3,
+        "validation_support_unknown": 1
+      }
+    }
+  }
+}
