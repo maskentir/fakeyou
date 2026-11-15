@@ -239,3 +239,69 @@ async def test_heartbeat_of_a_stream_that_sends_records_adds_no_sample() -> None
 
     assert latest is not None
     assert latest.record.skip_reason is None
+
+
+async def test_sampler_restart_resets_counters_without_binding_a_retired_frame() -> None:
+    sensed, timeline, journal = sensors()
+    await sensed.accept_batch(
+        DrainBatch(
+            messages=[message(people())],
+            samples=[sample("stream-screen", "screen", 500, generation=1)],
+        )
+    )
+    await sensed.accept_batch(
+        DrainBatch(
+            samples=[
+                sample(
+                    "stream-screen",
+                    "screen",
+                    1,
+                    "new-frame",
+                    generation=2,
+                    page_ms=JOINED_MS + 501_000,
+                    media_timestamp=1.0,
+                )
+            ],
+            frames=[
+                sequenced("stream-screen", "screen", ROADMAP, 1).model_copy(
+                    update={
+                        "generation": 2,
+                        "page_ms": JOINED_MS + 501_000,
+                    }
+                )
+            ],
+        )
+    )
+    latest = timeline.samples.latest("screen", SCREEN_SOURCE_ID)
+    assert latest is not None
+    assert latest.record.generation == 2
+    assert timeline.analyzed_sample(current_screen_ref(timeline)) == latest
+    before = current_screen_ref(timeline)
+
+    await sensed.accept_batch(
+        DrainBatch(
+            samples=[
+                sample(
+                    "stream-screen",
+                    "screen",
+                    501,
+                    "retired",
+                    generation=1,
+                    page_ms=JOINED_MS + 502_000,
+                )
+            ],
+            frames=[
+                sequenced("stream-screen", "screen", ROADMAP, 501).model_copy(
+                    update={
+                        "generation": 1,
+                        "page_ms": JOINED_MS + 502_000,
+                    }
+                )
+            ],
+        )
+    )
+
+    assert timeline.samples.latest("screen", SCREEN_SOURCE_ID) == latest
+    assert current_screen_ref(timeline) == before
+    assert journal.events("perception_sample_rejected")[-1]["outcome"] == "retired_stream"
+    assert journal.events("perception_frame_dropped")[-1]["reason"] == "retired_stream"

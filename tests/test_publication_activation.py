@@ -116,6 +116,11 @@ class Meeting(FakeSession):
         FakeSession.__init__(self)
         self.page_clock = RemoteClock(now=self.clock, drift_ppm=0)
         self.timeline = MeetingTimeline()
+        if self.mapped:
+            self.timeline.capture_clock = lambda captured_at: self.page_clock.map(
+                captured_at.timestamp() * 1000
+            )
+        self.advance(CAPTURED_AT)
         presenter = self.timeline.participant("device-ayu", "Ayu")
         self.timeline.participant("device-budi", "Budi")
         self.timeline.show_screen(keyframe(ROADMAP, seconds=0), presenter, data=ROADMAP)
@@ -145,10 +150,6 @@ class Meeting(FakeSession):
             clock=lambda: START,
             camera_monotonic=self.clock,
         )
-        if self.mapped:
-            self.perception.capture_clock = lambda captured_at: self.page_clock.map(
-                captured_at.timestamp() * 1000
-            )
         ids = (f"publication-{number}" for number in range(1, 100))
         self.publication_context = (
             opt_in_publication_context(
@@ -345,8 +346,7 @@ async def test_finding_static_slide_older_than_five_seconds_is_prevented(age: fl
 
     turn = await ask(meeting, "When is beta?", needs=("screen",))
 
-    expected = "unknown:capture_time_unmapped" if age > 120 else "invalid:capture_too_old"
-    assert turn.meeting.prevented == expected
+    assert turn.meeting.prevented == "invalid:capture_too_old"
     assert turn.counted == []
 
 
@@ -388,8 +388,8 @@ def stop_sharing(meeting: Meeting) -> None:
 @pytest.mark.parametrize(
     ("change", "reason"),
     [
-        (show_budget, "invalid:subject_changed"),
-        (stop_sharing, "unknown:scene_continuity_unknown"),
+        (show_budget, "invalid:scene_changed"),
+        (stop_sharing, "invalid:scene_changed"),
     ],
 )
 async def test_screen_change_between_the_look_and_the_write_prevents_the_claim(
@@ -399,6 +399,7 @@ async def test_screen_change_between_the_look_and_the_write_prevents_the_claim(
 
     assert turn.meeting.prevented == reason
     assert turn.counted == []
+    assert not turn.meeting.writer.written
 
 
 async def test_unmapped_capture_clock_prevents_the_claim() -> None:
@@ -434,7 +435,9 @@ async def test_camera_that_went_away_before_the_write_prevents_the_claim() -> No
         meeting, "What is Budi wearing?", needs=("participant",), reply="Budi wears grey."
     )
 
-    assert turn.meeting.prevented == "unknown:scene_continuity_unknown"
+    assert turn.meeting.prevented == "invalid:scene_changed"
+    assert turn.counted == []
+    assert not turn.meeting.writer.written
 
 
 async def test_reply_without_visual_needs_is_published_under_the_composed_gate() -> None:

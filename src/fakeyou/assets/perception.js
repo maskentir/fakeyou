@@ -2,6 +2,11 @@
   if (window.__fakeyouPerception) return;
   const bridge = window.__fakeyouRtc;
   if (!bridge) return;
+  const pageSession = crypto.randomUUID
+    ? crypto.randomUUID()
+    : Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
+        byte.toString(16).padStart(2, "0")
+      ).join("");
   const PROTOCOL_CHANNELS = ["collections"];
   const MAX_MESSAGES = 2000;
   const MAX_FRAMES = 8;
@@ -27,7 +32,9 @@
   const samples = [];
   const videoTracks = new Map();
   const roles = new Map();
+  const owners = new Map();
   const samplers = new Map();
+  let samplerGeneration = 0;
   const channels = [];
   let droppedMessages = 0;
   let droppedFrames = 0;
@@ -43,7 +50,7 @@
   }
 
   function pushMessage(label, bytes) {
-    messages.push({ channel: label, page_ms: bridge.pageNow(), b64: encodeBase64(bytes) });
+    messages.push({ page_session: pageSession, channel: label, page_ms: bridge.pageNow(), b64: encodeBase64(bytes) });
     if (messages.length > MAX_MESSAGES) {
       messages.splice(0, messages.length - MAX_MESSAGES);
       droppedMessages += 1;
@@ -136,7 +143,9 @@
   async function digestRecord(state, frame, page_ms) {
     state.sequence += 1;
     const record = {
+      page_session: pageSession,
       stream_id: state.id,
+      generation: state.generation,
       role: state.role,
       page_ms,
       sequence: state.sequence,
@@ -198,7 +207,9 @@
       .then((blob) => blob.arrayBuffer())
       .then((buffer) =>
         pushFrame({
+          page_session: pageSession,
           stream_id: state.id,
+          generation: state.generation,
           role: state.role,
           page_ms,
           sequence,
@@ -278,12 +289,12 @@
         }
       }
     }
-    stop(state.id);
+    stop(state.id, state);
   }
 
-  function stop(id) {
+  function stop(id, expected) {
     const state = samplers.get(id);
-    if (!state) return;
+    if (!state || (expected && state !== expected)) return;
     samplers.delete(id);
     state.stopped = true;
     try {
@@ -314,6 +325,8 @@
       sampledAt: 0,
       lastSamplePageMs: 0,
       sequence: 0,
+      generation: ++samplerGeneration,
+      owner: owners.get(id) || "",
       hashing: false,
       lastThumb: null,
       emittedThumb: null,
@@ -331,10 +344,13 @@
     for (const stream of entry.streams) {
       const id = String((stream && stream.id) || "");
       if (!id) continue;
+      const previous = videoTracks.get(id);
+      if (previous && previous.track !== track) stop(id);
       videoTracks.set(id, { track });
       track.addEventListener(
         "ended",
         () => {
+          if (videoTracks.get(id)?.track !== track) return;
           videoTracks.delete(id);
           stop(id);
         },
@@ -346,18 +362,22 @@
 
   function assign(assignments) {
     const wanted = new Map();
+    const wantedOwners = new Map();
     for (const item of assignments || []) {
       if (item && (item.role === "screen" || item.role === "camera")) {
         wanted.set(String(item.stream_id), item.role);
+        wantedOwners.set(String(item.stream_id), String(item.device_id || ""));
       }
     }
     for (const id of [...samplers.keys()]) {
       const state = samplers.get(id);
-      if (!wanted.has(id) || wanted.get(id) !== state.role) stop(id);
+      if (!wanted.has(id) || wanted.get(id) !== state.role || wantedOwners.get(id) !== state.owner) stop(id);
     }
     roles.clear();
+    owners.clear();
     for (const [id, role] of wanted) {
       roles.set(id, role);
+      owners.set(id, wantedOwners.get(id));
       start(id);
     }
     return { sampling: [...samplers.keys()], known: [...videoTracks.keys()] };
@@ -387,7 +407,9 @@
 
   function activeSamplers() {
     return [...samplers.values()].map((state) => ({
+      page_session: pageSession,
       stream_id: state.id,
+      generation: state.generation,
       role: state.role,
       last_sample_page_ms: state.lastSamplePageMs,
     }));
@@ -401,6 +423,7 @@
       (item) => item.jpeg_b64.length
     );
     return {
+      page_session: pageSession,
       drained_page_ms: bridge.pageNow(),
       messages: sizedMessages.taken,
       frames: sizedFrames.taken,

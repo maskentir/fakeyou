@@ -20,7 +20,7 @@ def sample(sequence: int, digest: str | None = "aa", **changes: Any) -> DigestRe
 def ingest(ledger: SampleLedger, record: DigestRecord, seconds: float) -> str:
     return ledger.ingest(
         record, captured_at=at(seconds), capture=MappedInstant(100.0 + seconds, 0.01)
-    )
+    ).outcome
 
 
 def test_accepted_sample_becomes_the_latest_with_its_own_capture() -> None:
@@ -139,3 +139,104 @@ def test_heartbeat_record_carries_no_digest() -> None:
     assert latest is not None
     assert latest.record.same_content_as(sample(1)) is None
     assert latest.capture is None
+
+
+def test_restarted_stream_accepts_reset_sequence_and_media_timestamp() -> None:
+    ledger = SampleLedger()
+    ingest(ledger, sample(500, stream_id="old-stream"), 0.0)
+    ledger.stop("screen", "screen")
+
+    outcome = ingest(ledger, sample(1, stream_id="new-stream", media_timestamp=1.0), 1.0)
+
+    assert outcome == "accepted"
+    latest = ledger.latest("screen", "screen")
+    assert latest is not None
+    assert latest.record.stream_id == "new-stream"
+    assert latest.record.sequence == 1
+    assert latest.record.media_timestamp == 1.0
+    assert latest.continuity > 0
+
+
+def test_late_retired_stream_cannot_replace_the_restarted_stream() -> None:
+    ledger = SampleLedger()
+    ingest(ledger, sample(500, stream_id="old-stream"), 0.0)
+    ledger.stop("screen", "screen")
+    ingest(ledger, sample(1, stream_id="new-stream", media_timestamp=1.0), 1.0)
+
+    outcome = ingest(ledger, sample(501, stream_id="old-stream"), 2.0)
+
+    assert outcome == "retired_stream"
+    latest = ledger.latest("screen", "screen")
+    assert latest is not None
+    assert latest.record.stream_id == "new-stream"
+
+
+def test_same_stream_id_new_sampler_generation_can_reset_counters() -> None:
+    ledger = SampleLedger()
+    ingest(ledger, sample(500, generation=1), 0.0)
+    ledger.stop("screen", "screen")
+
+    assert ingest(ledger, sample(1, generation=2, media_timestamp=1.0), 1.0) == "accepted"
+    assert ingest(ledger, sample(501, generation=1), 2.0) == "retired_stream"
+    assert ingest(ledger, sample(2, generation=2, media_timestamp=2.0), 2.0) == "accepted"
+    latest = ledger.latest("screen", "screen")
+    assert latest is not None
+    assert latest.record.generation == 2
+    assert latest.record.sequence == 2
+
+
+def test_stopped_sampler_cannot_reopen_itself_with_a_late_packet() -> None:
+    ledger = SampleLedger()
+    ingest(ledger, sample(500, generation=1), 0.0)
+    ledger.stop("screen", "screen")
+
+    assert ingest(ledger, sample(501, generation=1), 1.0) == "retired_stream"
+    assert ledger.stopped("screen", "screen")
+
+
+def test_retired_camera_sampler_cannot_be_relabelled_as_a_new_subject() -> None:
+    ledger = SampleLedger()
+    ingest(ledger, sample(500, role="camera", subject_id="old-person", generation=1), 0.0)
+    ledger.stop("camera", "old-person")
+
+    outcome = ingest(ledger, sample(501, role="camera", subject_id="new-person", generation=1), 1.0)
+
+    assert outcome == "retired_stream"
+    assert ledger.latest("camera", "new-person") is None
+
+
+def test_page_epoch_scopes_generation_and_rejects_old_page_records() -> None:
+    ledger = SampleLedger()
+    ledger.begin_page(0, "page-a")
+    first = sample(500, generation=8, page_session="page-a")
+    assert ingest(ledger, first, 10.0) == "accepted"
+    original = ledger.latest("screen", "screen")
+    assert original is not None
+    ledger.begin_page(1, "page-b")
+
+    assert (
+        ingest(ledger, sample(1, generation=1, page_epoch=1, page_session="page-b"), 1.0)
+        == "accepted"
+    )
+    latest = ledger.latest("screen", "screen")
+    assert latest is not None
+    assert latest.consistent is True
+    assert latest.record.sampler_identity != original.record.sampler_identity
+    assert latest.continuity > original.continuity
+    assert ingest(ledger, sample(999, generation=99, page_session="page-a"), 20.0) == "retired_page"
+    assert ledger.latest("screen", "screen") == latest
+
+
+def test_stream_owner_lookup_does_not_relabel_old_page_evidence() -> None:
+    ledger = SampleLedger()
+    ledger.begin_page(0, "page-a")
+    ingest(ledger, sample(1, role="camera", subject_id="person-a", page_session="page-a"), 1.0)
+    ledger.begin_page(1, "page-b")
+    ingest(
+        ledger,
+        sample(1, role="camera", subject_id="person-b", page_epoch=1, page_session="page-b"),
+        2.0,
+    )
+
+    assert ledger.subject_of_stream("camera", "stream-screen", page=(0, "page-a")) == "person-a"
+    assert ledger.subject_of_stream("camera", "stream-screen", page=(1, "page-b")) == "person-b"
