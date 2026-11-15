@@ -452,7 +452,7 @@ async def test_nothing_is_synthesized_ahead_of_a_selected_statement() -> None:
     assert meeting.synth.texts == ["I am well."]
 
 
-AUTHORIZED: tuple[RuntimeSynthesis, ...] = ("local", "provider")
+AUTHORIZED: tuple[RuntimeSynthesis, ...] = ("local",)
 
 
 @pytest.mark.parametrize("mode", AUTHORIZED)
@@ -464,10 +464,10 @@ async def test_every_runtime_synthesis_request_is_journaled_with_its_authorizati
     turn = await ask(meeting, "When is beta?", needs=("screen",))
 
     requested = [
-        fields for event, fields in turn.journal.entries if event == "runtime_synthesis_requested"
+        fields for event, fields in turn.journal.entries if event == "runtime_preparation_requested"
     ]
     finished = [
-        fields for event, fields in turn.journal.entries if event == "runtime_synthesis_finished"
+        fields for event, fields in turn.journal.entries if event == "runtime_preparation_finished"
     ]
     assert [item["authorization"] for item in requested] == [mode]
     assert [item["purpose"] for item in requested] == ["current"]
@@ -481,7 +481,7 @@ async def test_synthesis_that_is_prevented_from_publication_is_still_in_the_ledg
     turn = await ask(meeting, "When is beta?", needs=("screen",))
 
     requested = [
-        fields for event, fields in turn.journal.entries if event == "runtime_synthesis_requested"
+        fields for event, fields in turn.journal.entries if event == "runtime_preparation_requested"
     ]
     assert [item["purpose"] for item in requested] == ["current", "historical"]
     assert meeting.prevented == "invalid:scene_changed"
@@ -522,13 +522,13 @@ async def test_failed_and_cancelled_synthesis_requests_are_in_the_ledger() -> No
     with pytest.raises(asyncio.CancelledError):
         await pending
 
-    assert [row["purpose"] for row in journal.events("runtime_synthesis_requested")] == [
+    assert [row["purpose"] for row in journal.events("runtime_preparation_requested")] == [
         "current",
         "historical",
     ]
-    assert [row["error"] for row in journal.events("runtime_synthesis_failed")] == ["OSError"]
-    assert len(journal.events("runtime_synthesis_cancelled")) == 1
-    assert journal.events("runtime_synthesis_finished") == []
+    assert [row["error"] for row in journal.events("runtime_preparation_failed")] == ["OSError"]
+    assert len(journal.events("runtime_preparation_cancelled")) == 1
+    assert journal.events("runtime_preparation_finished") == []
     await meeting.engine.close()
 
 
@@ -557,3 +557,15 @@ async def test_fresh_confirmation_is_still_spoken_as_a_current_statement() -> No
 
     assert spoken_texts(meeting) == [BETA_STATEMENT]
     assert GREY_SHIRT["kind"] == "participant"
+
+
+async def test_provider_mode_without_a_physical_attempt_ledger_fails_closed() -> None:
+    meeting = Meeting(runtime_synthesis="provider")
+
+    turn = await ask(meeting, "When is beta?", needs=("screen",))
+
+    assert meeting.synth.texts == []
+    assert turn.counted == []
+    skipped = [row for event, row in turn.journal.entries if event == "runtime_statement_skipped"]
+    assert skipped
+    assert all(row["reason"] == "provider_attempt_ledger_unavailable" for row in skipped)

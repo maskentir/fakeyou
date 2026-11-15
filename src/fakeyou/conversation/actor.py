@@ -78,6 +78,7 @@ from fakeyou.speech.contract import (
     PublicationSpeaker,
     ReceiptObserver,
     ReceiptSource,
+    VisualTurnSpeaker,
     speak_no_visual,
 )
 
@@ -1506,6 +1507,11 @@ class _ActorSpeaker:
     def publication_context(self) -> PublicationContext | None:
         session = self._actor.session
         return session.publication_context if isinstance(session, PublicationSpeaker) else None
+
+    def mark_visual_turn(self, transcript_id: str) -> None:
+        session = self._session()
+        if isinstance(session, VisualTurnSpeaker):
+            session.mark_visual_turn(transcript_id)
 
     def bind_publication(self, prepared: PreparedSpeech, binding: SentenceBinding) -> None:
         session = self._session()

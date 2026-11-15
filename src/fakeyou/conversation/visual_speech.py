@@ -118,18 +118,20 @@ class RuntimeSpeech:
     ) -> tuple[PreparedSpeech, int] | None:
         mode = self.context.runtime_synthesis
         common = {"transcript_id": self.identity.transcript_id, "purpose": purpose}
-        if mode == "unavailable":
+        if mode != "local":
             self.journal.record(
                 "runtime_statement_skipped",
                 source="agent",
-                reason=SYNTHESIS_UNAVAILABLE,
+                reason=SYNTHESIS_UNAVAILABLE
+                if mode == "unavailable"
+                else "provider_attempt_ledger_unavailable",
                 statement=text,
                 **common,
             )
             return None
         index = self.next_index()
         request = {"authorization": mode, "text_sha256": sentence_digest(text), **common}
-        self.journal.record("runtime_synthesis_requested", source="agent", **request)
+        self.journal.record("runtime_preparation_requested", source="agent", **request)
         try:
             prepared = await self.speaker.prepare(
                 text,
@@ -138,15 +140,15 @@ class RuntimeSpeech:
                 language=language,
             )
         except asyncio.CancelledError:
-            self.journal.record("runtime_synthesis_cancelled", source="agent", **request)
+            self.journal.record("runtime_preparation_cancelled", source="agent", **request)
             raise
         except Exception as error:
             self.journal.record(
-                "runtime_synthesis_failed", source="agent", error=type(error).__name__, **request
+                "runtime_preparation_failed", source="agent", error=type(error).__name__, **request
             )
             raise
         self.journal.record(
-            "runtime_synthesis_finished",
+            "runtime_preparation_finished",
             source="agent",
             outcome="empty" if prepared is None else "prepared",
             **request,

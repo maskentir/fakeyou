@@ -172,7 +172,7 @@ class Meeting(FakeSession):
             )
         self.writer.now = self.clock
         self.synth = FakeSynth(audio=b"\x01\x00" * FRAME_BYTES)
-        self.engine = build_engine(self.synth, self.writer, self.events)
+        self.engine = build_engine(self.synth, self.writer, self.events, journal=self.journal)
         self.engine.configure_publication(self.publication_context)
         self.engine.observe_receipts(self.receipts.append)
 
@@ -219,6 +219,9 @@ class Meeting(FakeSession):
         )
         assert prepared is not None
         return prepared
+
+    def mark_visual_turn(self, transcript_id: str) -> None:
+        self.engine.mark_visual_turn(transcript_id)
 
     def bind_publication(self, prepared: PreparedSpeech, binding: SentenceBinding) -> None:
         self.bindings.append(binding)

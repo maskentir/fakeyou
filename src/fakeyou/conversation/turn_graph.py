@@ -95,6 +95,7 @@ from fakeyou.session.policy import UNATTRIBUTED, Channel, Grant, authorize
 from fakeyou.speech.contract import (
     PreparedSpeech,
     PublicationSpeaker,
+    VisualTurnSpeaker,
     speak_no_visual,
 )
 
@@ -679,6 +680,9 @@ class TurnSink:
         self._publication_needs = tuple(
             need for need in event.evidence_needs if need in {"screen", "participant"}
         )
+
+        if self._publication_needs and isinstance(self._runtime.speaker, VisualTurnSpeaker):
+            self._runtime.speaker.mark_visual_turn(event.id)
 
     @property
     def render_only(self) -> bool:

@@ -49,6 +49,7 @@ from fakeyou.speech.contract import (
     PublicationSpeaker,
     ReceiptObserver,
     ReceiptSource,
+    VisualTurnSpeaker,
     speak_no_visual,
 )
 
@@ -706,6 +707,11 @@ class StreamFleetSession:
     def publication_context(self) -> PublicationContext | None:
         session = self._voice()
         return session.publication_context if isinstance(session, PublicationSpeaker) else None
+
+    def mark_visual_turn(self, transcript_id: str) -> None:
+        for session in self._sessions:
+            if isinstance(session, VisualTurnSpeaker):
+                session.mark_visual_turn(transcript_id)
 
     def bind_publication(self, prepared: PreparedSpeech, binding: SentenceBinding) -> None:
         session = self._prepared_sessions.get(prepared)

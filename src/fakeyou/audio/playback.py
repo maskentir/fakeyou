@@ -257,6 +257,8 @@ class _PreparedSpeech:
         line: _Line,
         faults: FaultReporter | None,
         voicing: _Voicing,
+        *,
+        deferred: bool = False,
     ) -> None:
         self._source = source
         self._voicing = voicing
@@ -265,8 +267,14 @@ class _PreparedSpeech:
         self._chunks: asyncio.Queue[bytes | None] = asyncio.Queue()
         self._failure: BaseException | None = None
         self._closed = False
-        self._fill = asyncio.create_task(self._pull())
-        self._fill.add_done_callback(self._capture)
+        self._fill: asyncio.Task[None] | None = None
+        if not deferred:
+            self._start()
+
+    def _start(self) -> None:
+        if self._fill is None and not self._closed:
+            self._fill = asyncio.create_task(self._pull())
+            self._fill.add_done_callback(self._capture)
 
     @property
     def text(self) -> str:
@@ -304,6 +312,9 @@ class _PreparedSpeech:
         return self
 
     async def __anext__(self) -> bytes:
+        if self._closed:
+            raise StopAsyncIteration
+        self._start()
         chunk = await self._chunks.get()
         if chunk is None:
             failure = self._failure
@@ -316,11 +327,16 @@ class _PreparedSpeech:
         if self._closed:
             return
         self._closed = True
-        self._fill.cancel()
+        fill = self._fill
+        if fill is None:
+            if isinstance(self._source, SupportsAclose):
+                await self._source.aclose()
+            return
+        fill.cancel()
 
         async def drain() -> None:
             with suppress(asyncio.CancelledError):
-                await self._fill
+                await fill
 
         await close_safely(
             drain,
@@ -457,6 +473,7 @@ class PlaybackEngine:
         self._receipt_observers: list[ReceiptObserver] = []
         self._outcomes: OrderedDict[str, PlaybackReceipt] = OrderedDict()
         self._publication_context: PublicationContext | None = None
+        self._visual_turns: set[str] = set()
         self._publication_bindings: dict[PreparedSpeech, SentenceBinding] = {}
         self._publication_ids: set[str] = set()
         self._publication_checked: set[int] = set()
@@ -476,6 +493,9 @@ class PlaybackEngine:
 
     def configure_publication(self, context: PublicationContext | None) -> None:
         self._publication_context = context
+
+    def mark_visual_turn(self, transcript_id: str) -> None:
+        self._visual_turns.add(transcript_id)
 
     @property
     def publication_context(self) -> PublicationContext | None:
@@ -628,12 +648,21 @@ class PlaybackEngine:
             yield chunk
 
     async def _retryable_stream(
-        self, line: _Line, generation: int, voicing: _Voicing
+        self,
+        line: _Line,
+        generation: int,
+        voicing: _Voicing,
+        authorize: Callable[[], str | None] | None = None,
     ) -> AsyncIterator[bytes]:
         turn_id = line.utterance.transcript_id
         for attempt in range(2):
+            refusal = authorize() if authorize is not None else self._direct_synthesis_refusal(line)
+            if refusal is not None:
+                raise _PublicationPrevented("unknown", refusal)
             emitted = False
             chunks: AsyncIterator[bytes] | None = None
+            attempt_id = uuid.uuid4().hex
+            self._record_synthesis_attempt("requested", attempt_id, line, attempt)
             try:
                 chunks = voicing.segment = self._turn_for(turn_id, line.language).speak(
                     line.text, sentence_index=line.utterance.sentence_index
@@ -642,9 +671,11 @@ class PlaybackEngine:
                     if chunk:
                         emitted = True
                     yield chunk
-            except asyncio.CancelledError:
+            except (asyncio.CancelledError, GeneratorExit):
+                self._record_synthesis_attempt("cancelled", attempt_id, line, attempt)
                 raise
             except Exception as error:
+                self._record_synthesis_attempt("failed", attempt_id, line, attempt)
                 if self._should_retry(error, attempt, emitted=emitted, generation=generation):
                     self._record_retry(streaming=True)
                     continue
@@ -653,9 +684,71 @@ class PlaybackEngine:
                     raise
                 raise fault from error
             else:
+                self._record_synthesis_attempt("finished", attempt_id, line, attempt)
                 return
             finally:
                 await self._close_stream(chunks)
+
+    def _record_synthesis_attempt(
+        self, outcome: str, attempt_id: str, line: _Line, attempt: int
+    ) -> None:
+        context = self._publication_context
+        if context is None or not context.render_only or self._journal is None:
+            return
+        binding = next(
+            (
+                bound
+                for prepared, bound in self._publication_bindings.items()
+                if prepared.transcript_id == line.utterance.transcript_id
+                and prepared.sentence_index == line.utterance.sentence_index
+            ),
+            None,
+        )
+        self._journal.record(
+            "runtime_synthesis_attempt_" + outcome,
+            source="tts",
+            attempt_id=attempt_id,
+            attempt_number=attempt + 1,
+            transcript_id=line.utterance.transcript_id,
+            sentence_index=line.utterance.sentence_index,
+            text_sha256=sentence_digest(line.text),
+            authorization="local" if context.runtime_synthesis == "local" else "legacy_nonvisual",
+            physical_provider_request=False,
+            publication_id=None if binding is None else binding.publication_id,
+        )
+
+    def _direct_synthesis_refusal(self, line: _Line) -> str | None:
+        if line.utterance.no_visual and line.utterance.transcript_id not in self._visual_turns:
+            return None
+        return self._synthesis_refusal(line.utterance.publication, line.utterance.transcript_id)
+
+    def _synthesis_refusal(
+        self, binding: SentenceBinding | None, transcript_id: str | None
+    ) -> str | None:
+        context = self._publication_context
+        if context is None or not context.render_only:
+            return None
+        if binding is None:
+            return "statement_not_rendered"
+        refusal = abstention_refusal(binding.abstention, binding.scope) or _unrendered(
+            binding, context
+        )
+        if refusal is not None:
+            return refusal
+        visual = (
+            binding.scope in {"current", "historical"}
+            or binding.abstention is not None
+            or transcript_id in self._visual_turns
+        )
+        if not visual:
+            return None
+        if binding.scope == "no_visual" and binding.abstention is None:
+            return "statement_not_rendered"
+        if context.runtime_synthesis != "local":
+            return "synthesis_authorization_unproven"
+        if not getattr(self._synthesizer, "local_only", False):
+            return "local_synthesizer_unproven"
+        return None
 
     async def speak(
         self,
@@ -715,8 +808,22 @@ class PlaybackEngine:
             return None
         line = _Line(text, Utterance(transcript_id, sentence_index), language)
         voicing = _Voicing()
-        source = self._retryable_stream(line, self._generation, voicing)
-        prepared = _PreparedSpeech(source, line, self._faults, voicing)
+        source = self._retryable_stream(
+            line,
+            self._generation,
+            voicing,
+            lambda: self._synthesis_refusal(
+                self._publication_bindings.get(prepared), prepared.transcript_id
+            ),
+        )
+        context = self._publication_context
+        prepared = _PreparedSpeech(
+            source,
+            line,
+            self._faults,
+            voicing,
+            deferred=context is not None and context.render_only,
+        )
         self._prepared.add(prepared)
         return prepared
 
@@ -725,18 +832,23 @@ class PlaybackEngine:
         if self._closed:
             await prepared.aclose()
             return
-        await self._play_queued(
-            prepared,
-            prepared.text,
-            utterance=Utterance(
-                prepared.transcript_id,
-                prepared.sentence_index,
-                self._publication_bindings.pop(prepared, None),
-            ),
-            spoken=prepared,
-        )
+        try:
+            await self._play_queued(
+                prepared,
+                prepared.text,
+                utterance=Utterance(
+                    prepared.transcript_id,
+                    prepared.sentence_index,
+                    self._publication_bindings.get(prepared),
+                ),
+                spoken=prepared,
+            )
+        finally:
+            self._publication_bindings.pop(prepared, None)
 
     async def prepare_cue(self, text: str) -> None:
+        if self._publication_context is not None and self._publication_context.render_only:
+            return
         if self._closed or text in self._cues:
             return
         for _attempt in range(CUE_RENDER_ATTEMPTS):
@@ -763,6 +875,8 @@ class PlaybackEngine:
             self._end_later(turn.finish)
 
     async def play_cue(self, text: str, *, transcript_id: str | None = None) -> bool:
+        if self._publication_context is not None and self._publication_context.render_only:
+            return False
         pcm = self._cues.get(text)
         if pcm is None or self._closed or self._speaking or not self._queue.empty():
             return False
@@ -869,10 +983,18 @@ class PlaybackEngine:
                 timeout_seconds=self._cleanup_timeout_seconds,
             )
 
+    def _require_synthesis_permission(self, clip: _Clip) -> None:
+        if clip.utterance.no_visual and clip.utterance.transcript_id not in self._visual_turns:
+            return
+        refusal = self._synthesis_refusal(clip.publication, clip.utterance.transcript_id)
+        if refusal is not None:
+            raise _PublicationPrevented("unknown", refusal)
+
     async def _consume_audio(self, clip: _Clip, generation: int, *, gain: bool = True) -> bool:
         audio = clip.audio
         pending = b""
         try:
+            self._require_synthesis_permission(clip)
             async for chunk in audio:
                 pending += chunk
                 while len(pending) >= FRAME_BYTES:

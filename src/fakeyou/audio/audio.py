@@ -73,6 +73,7 @@ from fakeyou.speech.contract import (
     ReceiptObserver,
     ReceiptSource,
     SupportsWarmup,
+    VisualTurnSpeaker,
     speak_no_visual,
 )
 from fakeyou.speech.registry import build_speech_synthesizer
@@ -597,6 +598,10 @@ class MeetingAudioSession:
             if isinstance(self._engine, PublicationSpeaker)
             else None
         )
+
+    def mark_visual_turn(self, transcript_id: str) -> None:
+        if isinstance(self._engine, VisualTurnSpeaker):
+            self._engine.mark_visual_turn(transcript_id)
 
     def bind_publication(self, prepared: PreparedSpeech, binding: SentenceBinding) -> None:
         if not isinstance(self._engine, PublicationSpeaker):

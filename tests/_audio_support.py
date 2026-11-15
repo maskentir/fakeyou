@@ -135,6 +135,8 @@ class FakePlayback(PreparedSpeaker):
 
 
 class FakeSynth(SentenceSynth):
+    local_only = True
+
     def __init__(self, audio: bytes = b"\x00" * 480, error: Exception | None = None) -> None:
         self.audio = audio
         self.error = error

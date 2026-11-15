@@ -68,6 +68,11 @@ class PreparedSpeech(Protocol):
 
 
 @runtime_checkable
+class VisualTurnSpeaker(Protocol):
+    def mark_visual_turn(self, transcript_id: str) -> None: ...
+
+
+@runtime_checkable
 class PublicationSpeaker(Protocol):
     @property
     def publication_context(self) -> PublicationContext | None: ...
