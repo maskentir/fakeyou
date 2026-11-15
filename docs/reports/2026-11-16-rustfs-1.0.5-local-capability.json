@@ -1,0 +1,1851 @@
+{
+  "date": "2026-11-16",
+  "custody_status": "EVIDENCE CUSTODY PENDING",
+  "scope": "One candidate build, three isolated setup attempts, one S3 capability sequence plus same-container restart follow-up; only synthetic text; no existing storage API or real archive upload",
+  "candidate": {
+    "candidate_tag": "rustfs/rustfs:1.0.5",
+    "container": "fakeyou-rnext-cap-ce59d40f84",
+    "volume": "fakeyou-rnext-cap-ce59d40f84-data",
+    "network": "fakeyou-rnext-cap-ce59d40f84-net",
+    "operations": [
+      {
+        "label": "create-synthetic-bucket",
+        "api": "create_bucket",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "ObjectLockEnabledForBucket": true
+        },
+        "start_ns": 250115809160083,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "c5737312-15ba-48dc-8cd9-b65df129f973",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {},
+        "end_ns": 250115865834416
+      },
+      {
+        "label": "bucket-versioning",
+        "api": "get_bucket_versioning",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84"
+        },
+        "start_ns": 250115873708708,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "92372f3d-45f8-409d-b79d-be24885c16e9",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "Status": "Enabled"
+        },
+        "end_ns": 250115880796041
+      },
+      {
+        "label": "bucket-lock",
+        "api": "get_object_lock_configuration",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84"
+        },
+        "start_ns": 250115881429666,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "e6e6a85e-b703-4b07-9c83-7883e9034641",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "ObjectLockConfiguration": {
+            "ObjectLockEnabled": "Enabled"
+          }
+        },
+        "end_ns": 250115891921583
+      },
+      {
+        "label": "version-one",
+        "api": "put_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "version-probe"
+        },
+        "start_ns": 250115892679375,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "4c129624-f5aa-48f6-ab51-e14d646d84bd",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "ETag": "\"4a53eed3a09ec82c2520e904e8f537c9\"",
+          "ChecksumCRC32": "0xETag==",
+          "VersionId": "a004c800-d2d0-40a7-9697-c732dddb6cbd"
+        },
+        "end_ns": 250115918475750
+      },
+      {
+        "label": "version-one-read-retention",
+        "api": "get_object_retention",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "version-probe",
+          "VersionId": "a004c800-d2d0-40a7-9697-c732dddb6cbd"
+        },
+        "start_ns": 250115919584916,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "7e44cc96-fd21-47bd-9357-5c95fd92ca95",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "Retention": {}
+        },
+        "end_ns": 250115926352958
+      },
+      {
+        "label": "version-one-before-delete",
+        "api": "get_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "version-probe",
+          "VersionId": "a004c800-d2d0-40a7-9697-c732dddb6cbd"
+        },
+        "start_ns": 250115927190708,
+        "body_sha256": "325e2cfe71d9f32e8b2f611145e2e3e01f6a6c37b0d44b0bdc20effecf2fbd1c",
+        "body_bytes": 42,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "c9ddb2dd-5051-41e7-917c-753d659dd26d",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "AcceptRanges": "bytes",
+          "LastModified": "2026-11-15 19:18:50+00:00",
+          "ContentLength": 42,
+          "ETag": "\"4a53eed3a09ec82c2520e904e8f537c9\"",
+          "ChecksumCRC32": "0xETag==",
+          "VersionId": "a004c800-d2d0-40a7-9697-c732dddb6cbd",
+          "ContentType": "application/octet-stream",
+          "Metadata": {}
+        },
+        "end_ns": 250115933599333
+      },
+      {
+        "label": "version-two",
+        "api": "put_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "version-probe"
+        },
+        "start_ns": 250115934364541,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "d73c265c-e032-4787-9f03-4f43121f7c6b",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "ETag": "\"be6d96a90feeb1f34d356ffdf232c0e5\"",
+          "ChecksumCRC32": "gjGbkA==",
+          "VersionId": "1a721e9f-cffd-411e-a2b6-da9d05ec262c"
+        },
+        "end_ns": 250115942268666
+      },
+      {
+        "label": "version-two-read-retention",
+        "api": "get_object_retention",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "version-probe",
+          "VersionId": "1a721e9f-cffd-411e-a2b6-da9d05ec262c"
+        },
+        "start_ns": 250115943047750,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "25b02a21-6f7a-4647-a4cb-740648c49ddd",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "Retention": {}
+        },
+        "end_ns": 250115945940791
+      },
+      {
+        "label": "version-two-before-delete",
+        "api": "get_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "version-probe",
+          "VersionId": "1a721e9f-cffd-411e-a2b6-da9d05ec262c"
+        },
+        "start_ns": 250115946687083,
+        "body_sha256": "88aaea584a37c9abea2381ce93c5968c2ff45d908b7cbe95b17d7772c3132e97",
+        "body_bytes": 42,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "1d921252-cd62-4fca-b66d-9b2dbff7dc57",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "AcceptRanges": "bytes",
+          "LastModified": "2026-11-15 19:18:50+00:00",
+          "ContentLength": 42,
+          "ETag": "\"be6d96a90feeb1f34d356ffdf232c0e5\"",
+          "ChecksumCRC32": "gjGbkA==",
+          "VersionId": "1a721e9f-cffd-411e-a2b6-da9d05ec262c",
+          "ContentType": "application/octet-stream",
+          "Metadata": {}
+        },
+        "end_ns": 250115951059416
+      },
+      {
+        "label": "old-version-readable",
+        "api": "get_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "version-probe",
+          "VersionId": "a004c800-d2d0-40a7-9697-c732dddb6cbd"
+        },
+        "start_ns": 250115952475166,
+        "body_sha256": "325e2cfe71d9f32e8b2f611145e2e3e01f6a6c37b0d44b0bdc20effecf2fbd1c",
+        "body_bytes": 42,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "7b4fe146-8511-48d1-93ee-68d2a95e059f",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "AcceptRanges": "bytes",
+          "LastModified": "2026-11-15 19:18:50+00:00",
+          "ContentLength": 42,
+          "ETag": "\"4a53eed3a09ec82c2520e904e8f537c9\"",
+          "ChecksumCRC32": "0xETag==",
+          "VersionId": "a004c800-d2d0-40a7-9697-c732dddb6cbd",
+          "ContentType": "application/octet-stream",
+          "Metadata": {}
+        },
+        "end_ns": 250115961215333
+      },
+      {
+        "label": "new-version-readable",
+        "api": "get_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "version-probe",
+          "VersionId": "1a721e9f-cffd-411e-a2b6-da9d05ec262c"
+        },
+        "start_ns": 250115962428500,
+        "body_sha256": "88aaea584a37c9abea2381ce93c5968c2ff45d908b7cbe95b17d7772c3132e97",
+        "body_bytes": 42,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "b3f2c4bb-5a12-4dcd-aa1c-fe1e47cba62d",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "AcceptRanges": "bytes",
+          "LastModified": "2026-11-15 19:18:50+00:00",
+          "ContentLength": 42,
+          "ETag": "\"be6d96a90feeb1f34d356ffdf232c0e5\"",
+          "ChecksumCRC32": "gjGbkA==",
+          "VersionId": "1a721e9f-cffd-411e-a2b6-da9d05ec262c",
+          "ContentType": "application/octet-stream",
+          "Metadata": {}
+        },
+        "end_ns": 250115968878958
+      },
+      {
+        "label": "latest-version-readable",
+        "api": "get_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "version-probe"
+        },
+        "start_ns": 250115970523166,
+        "body_sha256": "88aaea584a37c9abea2381ce93c5968c2ff45d908b7cbe95b17d7772c3132e97",
+        "body_bytes": 42,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "757c7f28-6403-4a6c-b688-f5ea3a8885f7",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "AcceptRanges": "bytes",
+          "LastModified": "2026-11-15 19:18:50+00:00",
+          "ContentLength": 42,
+          "ETag": "\"be6d96a90feeb1f34d356ffdf232c0e5\"",
+          "ChecksumCRC32": "gjGbkA==",
+          "VersionId": "1a721e9f-cffd-411e-a2b6-da9d05ec262c",
+          "ContentType": "application/octet-stream",
+          "Metadata": {}
+        },
+        "end_ns": 250115976275291
+      },
+      {
+        "label": "governance-upload",
+        "api": "put_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "governance-upload",
+          "ObjectLockMode": "GOVERNANCE",
+          "ObjectLockRetainUntilDate": "2026-11-15 20:18:50.146957+00:00"
+        },
+        "start_ns": 250115977408000,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "bfe3a7e1-a9f4-4858-9434-baf51b251dcd",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "ETag": "\"6c9bbcfa9a7b3b46df913b584f9372af\"",
+          "ChecksumCRC32": "t56uMQ==",
+          "VersionId": "e03820ad-bc3f-4b79-8161-ef0911beae31"
+        },
+        "end_ns": 250115987708458
+      },
+      {
+        "label": "governance-upload-read-retention",
+        "api": "get_object_retention",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "governance-upload",
+          "VersionId": "e03820ad-bc3f-4b79-8161-ef0911beae31"
+        },
+        "start_ns": 250115988988041,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "f8b9d432-bff7-45ee-8f4c-80b76807ef96",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "Retention": {
+            "Mode": "GOVERNANCE",
+            "RetainUntilDate": "2026-11-15 20:18:50+00:00"
+          }
+        },
+        "end_ns": 250115994996500
+      },
+      {
+        "label": "governance-upload-before-delete",
+        "api": "get_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "governance-upload",
+          "VersionId": "e03820ad-bc3f-4b79-8161-ef0911beae31"
+        },
+        "start_ns": 250115996238125,
+        "body_sha256": "ffa86cfa871c9c701b961cea2b33057b9ad92a8df72d17220e705f76a1e7399f",
+        "body_bytes": 52,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "4f14ca82-876d-4bed-8f1f-d80aa298b482",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "AcceptRanges": "bytes",
+          "LastModified": "2026-11-15 19:18:50+00:00",
+          "ContentLength": 52,
+          "ETag": "\"6c9bbcfa9a7b3b46df913b584f9372af\"",
+          "ChecksumCRC32": "t56uMQ==",
+          "VersionId": "e03820ad-bc3f-4b79-8161-ef0911beae31",
+          "ContentType": "application/octet-stream",
+          "Metadata": {}
+        },
+        "end_ns": 250116009777458
+      },
+      {
+        "label": "governance-ordinary-delete",
+        "api": "delete_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "governance-upload",
+          "VersionId": "e03820ad-bc3f-4b79-8161-ef0911beae31"
+        },
+        "start_ns": 250116011290250,
+        "ok": false,
+        "http_status": 403,
+        "error": "AccessDenied",
+        "end_ns": 250116026981125
+      },
+      {
+        "label": "governance-after-ordinary-delete",
+        "api": "get_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "governance-upload",
+          "VersionId": "e03820ad-bc3f-4b79-8161-ef0911beae31"
+        },
+        "start_ns": 250116028073666,
+        "body_sha256": "ffa86cfa871c9c701b961cea2b33057b9ad92a8df72d17220e705f76a1e7399f",
+        "body_bytes": 52,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "6a64de20-f53a-465a-9904-d5963ffa1416",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "AcceptRanges": "bytes",
+          "LastModified": "2026-11-15 19:18:50+00:00",
+          "ContentLength": 52,
+          "ETag": "\"6c9bbcfa9a7b3b46df913b584f9372af\"",
+          "ChecksumCRC32": "t56uMQ==",
+          "VersionId": "e03820ad-bc3f-4b79-8161-ef0911beae31",
+          "ContentType": "application/octet-stream",
+          "Metadata": {}
+        },
+        "end_ns": 250116032411541
+      },
+      {
+        "label": "governance-shorten-without-bypass",
+        "api": "put_object_retention",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "governance-upload",
+          "VersionId": "e03820ad-bc3f-4b79-8161-ef0911beae31",
+          "Retention": {
+            "Mode": "GOVERNANCE",
+            "RetainUntilDate": "2026-11-15 19:48:50.146957+00:00"
+          }
+        },
+        "start_ns": 250116033666291,
+        "ok": false,
+        "http_status": 403,
+        "error": "AccessDenied",
+        "end_ns": 250116040859000
+      },
+      {
+        "label": "governance-after-shorten",
+        "api": "get_object_retention",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "governance-upload",
+          "VersionId": "e03820ad-bc3f-4b79-8161-ef0911beae31"
+        },
+        "start_ns": 250116042175416,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "6e4f13d7-93d9-46cc-bad6-d830ddd54a4f",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "Retention": {
+            "Mode": "GOVERNANCE",
+            "RetainUntilDate": "2026-11-15 20:18:50+00:00"
+          }
+        },
+        "end_ns": 250116046242916
+      },
+      {
+        "label": "governance-post-set",
+        "api": "put_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "governance-post-set"
+        },
+        "start_ns": 250116047524291,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "2b6a1268-fbeb-4533-ba5d-5db5402502f0",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "ETag": "\"ecc366322ab6f3b345b0161d86f55d72\"",
+          "ChecksumCRC32": "IF4Reg==",
+          "VersionId": "7d569679-0eed-4939-b208-8ad3d57c3376"
+        },
+        "end_ns": 250116072156958
+      },
+      {
+        "label": "governance-post-set-set-retention",
+        "api": "put_object_retention",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "governance-post-set",
+          "VersionId": "7d569679-0eed-4939-b208-8ad3d57c3376",
+          "Retention": {
+            "Mode": "GOVERNANCE",
+            "RetainUntilDate": "2026-11-15 20:18:50.146957+00:00"
+          }
+        },
+        "start_ns": 250116073512375,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "96b13244-ded0-4ba3-a52e-0bbe1a9f0598",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "RequestCharged": "requester"
+        },
+        "end_ns": 250116082785583
+      },
+      {
+        "label": "governance-post-set-read-retention",
+        "api": "get_object_retention",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "governance-post-set",
+          "VersionId": "7d569679-0eed-4939-b208-8ad3d57c3376"
+        },
+        "start_ns": 250116084580500,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "0bc6de84-98bc-4a96-ba24-ec265f0b0bbc",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "Retention": {
+            "Mode": "GOVERNANCE",
+            "RetainUntilDate": "2026-11-15 20:18:50.146000+00:00"
+          }
+        },
+        "end_ns": 250116091728833
+      },
+      {
+        "label": "governance-post-set-before-delete",
+        "api": "get_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "governance-post-set",
+          "VersionId": "7d569679-0eed-4939-b208-8ad3d57c3376"
+        },
+        "start_ns": 250116093031583,
+        "body_sha256": "8829e2e6ce45b93cc882917e29845a7eb2707491418c1464bfd0e24475b6eb4b",
+        "body_bytes": 56,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "c0c29855-b033-4893-96b4-e665aee6d210",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "AcceptRanges": "bytes",
+          "LastModified": "2026-11-15 19:18:50+00:00",
+          "ContentLength": 56,
+          "ETag": "\"ecc366322ab6f3b345b0161d86f55d72\"",
+          "ChecksumCRC32": "IF4Reg==",
+          "VersionId": "7d569679-0eed-4939-b208-8ad3d57c3376",
+          "ContentType": "application/octet-stream",
+          "Metadata": {}
+        },
+        "end_ns": 250116097596541
+      },
+      {
+        "label": "governance-post-set-delete",
+        "api": "delete_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "governance-post-set",
+          "VersionId": "7d569679-0eed-4939-b208-8ad3d57c3376"
+        },
+        "start_ns": 250116103550875,
+        "ok": false,
+        "http_status": 403,
+        "error": "AccessDenied",
+        "end_ns": 250116110756541
+      },
+      {
+        "label": "governance-post-set-after-delete",
+        "api": "get_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "governance-post-set",
+          "VersionId": "7d569679-0eed-4939-b208-8ad3d57c3376"
+        },
+        "start_ns": 250116112282833,
+        "body_sha256": "8829e2e6ce45b93cc882917e29845a7eb2707491418c1464bfd0e24475b6eb4b",
+        "body_bytes": 56,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "a3c29254-2ed6-493e-b416-fb50a9bb4558",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "AcceptRanges": "bytes",
+          "LastModified": "2026-11-15 19:18:50+00:00",
+          "ContentLength": 56,
+          "ETag": "\"ecc366322ab6f3b345b0161d86f55d72\"",
+          "ChecksumCRC32": "IF4Reg==",
+          "VersionId": "7d569679-0eed-4939-b208-8ad3d57c3376",
+          "ContentType": "application/octet-stream",
+          "Metadata": {}
+        },
+        "end_ns": 250116118188041
+      },
+      {
+        "label": "governance-bypass-probe",
+        "api": "put_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "governance-bypass",
+          "ObjectLockMode": "GOVERNANCE",
+          "ObjectLockRetainUntilDate": "2026-11-15 20:18:50.146957+00:00"
+        },
+        "start_ns": 250116120123375,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "bd567439-0d56-4fb3-9c63-b3a678da89ef",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "ETag": "\"8b858f3fa6f498fc4f0c20ee8c9ca2e6\"",
+          "ChecksumCRC32": "6Gwn6g==",
+          "VersionId": "de7820e1-865d-4766-90b3-405ddc9d77f7"
+        },
+        "end_ns": 250116132735958
+      },
+      {
+        "label": "governance-bypass-probe-read-retention",
+        "api": "get_object_retention",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "governance-bypass",
+          "VersionId": "de7820e1-865d-4766-90b3-405ddc9d77f7"
+        },
+        "start_ns": 250116134720208,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "8a8c6034-6605-4583-a165-9fcdadae94bc",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "Retention": {
+            "Mode": "GOVERNANCE",
+            "RetainUntilDate": "2026-11-15 20:18:50+00:00"
+          }
+        },
+        "end_ns": 250116141544625
+      },
+      {
+        "label": "governance-bypass-probe-before-delete",
+        "api": "get_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "governance-bypass",
+          "VersionId": "de7820e1-865d-4766-90b3-405ddc9d77f7"
+        },
+        "start_ns": 250116143383250,
+        "body_sha256": "5a956df26849c8eff3461ff3add2ef2be3a3b82df9d366f565443a8e233e4669",
+        "body_bytes": 58,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "a381e4bf-a3e2-4e17-ade7-065dfd0f6fa7",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "AcceptRanges": "bytes",
+          "LastModified": "2026-11-15 19:18:50+00:00",
+          "ContentLength": 58,
+          "ETag": "\"8b858f3fa6f498fc4f0c20ee8c9ca2e6\"",
+          "ChecksumCRC32": "6Gwn6g==",
+          "VersionId": "de7820e1-865d-4766-90b3-405ddc9d77f7",
+          "ContentType": "application/octet-stream",
+          "Metadata": {}
+        },
+        "end_ns": 250116148489958
+      },
+      {
+        "label": "governance-explicit-bypass-delete",
+        "api": "delete_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "governance-bypass",
+          "VersionId": "de7820e1-865d-4766-90b3-405ddc9d77f7",
+          "BypassGovernanceRetention": true
+        },
+        "start_ns": 250116150251708,
+        "ok": true,
+        "http_status": 204,
+        "request_id": "ede8e5a2-6782-42ec-b3c0-3cff75e1c54b",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "DeleteMarker": false,
+          "VersionId": "de7820e1-865d-4766-90b3-405ddc9d77f7"
+        },
+        "end_ns": 250116179055083
+      },
+      {
+        "label": "governance-after-explicit-bypass",
+        "api": "get_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "governance-bypass",
+          "VersionId": "de7820e1-865d-4766-90b3-405ddc9d77f7"
+        },
+        "start_ns": 250116180741458,
+        "ok": false,
+        "http_status": 404,
+        "error": "NoSuchVersion",
+        "end_ns": 250116186247250
+      },
+      {
+        "label": "compliance-upload",
+        "api": "put_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "compliance-upload",
+          "ObjectLockMode": "COMPLIANCE",
+          "ObjectLockRetainUntilDate": "2026-11-15 20:18:50.146957+00:00"
+        },
+        "start_ns": 250116188470416,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "d9ff120e-b031-48f1-a571-da1988b26255",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "ETag": "\"b33901e4ce8c0121b81eb67d215d5faa\"",
+          "ChecksumCRC32": "gzAYww==",
+          "VersionId": "aa8d3831-1534-4c61-8e27-d23a812ba08f"
+        },
+        "end_ns": 250116202126916
+      },
+      {
+        "label": "compliance-upload-read-retention",
+        "api": "get_object_retention",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "compliance-upload",
+          "VersionId": "aa8d3831-1534-4c61-8e27-d23a812ba08f"
+        },
+        "start_ns": 250116204155583,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "032d0c20-e04a-4e37-bc36-e4d1403dcdf7",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "Retention": {
+            "Mode": "COMPLIANCE",
+            "RetainUntilDate": "2026-11-15 20:18:50+00:00"
+          }
+        },
+        "end_ns": 250116209407291
+      },
+      {
+        "label": "compliance-upload-before-delete",
+        "api": "get_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "compliance-upload",
+          "VersionId": "aa8d3831-1534-4c61-8e27-d23a812ba08f"
+        },
+        "start_ns": 250116211210708,
+        "body_sha256": "057667c35dcc9952422cb761e8390c51e12a3de7b09bb4b731a0967733a255ee",
+        "body_bytes": 52,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "829f3351-25b2-4bcd-8729-237188fae232",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "AcceptRanges": "bytes",
+          "LastModified": "2026-11-15 19:18:50+00:00",
+          "ContentLength": 52,
+          "ETag": "\"b33901e4ce8c0121b81eb67d215d5faa\"",
+          "ChecksumCRC32": "gzAYww==",
+          "VersionId": "aa8d3831-1534-4c61-8e27-d23a812ba08f",
+          "ContentType": "application/octet-stream",
+          "Metadata": {}
+        },
+        "end_ns": 250116216384916
+      },
+      {
+        "label": "compliance-ordinary-delete",
+        "api": "delete_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "compliance-upload",
+          "VersionId": "aa8d3831-1534-4c61-8e27-d23a812ba08f"
+        },
+        "start_ns": 250116218421833,
+        "ok": false,
+        "http_status": 403,
+        "error": "AccessDenied",
+        "end_ns": 250116224764291
+      },
+      {
+        "label": "compliance-after-ordinary-delete",
+        "api": "get_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "compliance-upload",
+          "VersionId": "aa8d3831-1534-4c61-8e27-d23a812ba08f"
+        },
+        "start_ns": 250116226770083,
+        "body_sha256": "057667c35dcc9952422cb761e8390c51e12a3de7b09bb4b731a0967733a255ee",
+        "body_bytes": 52,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "6bce7647-5f53-406a-9aeb-cd0680bdc9a6",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "AcceptRanges": "bytes",
+          "LastModified": "2026-11-15 19:18:50+00:00",
+          "ContentLength": 52,
+          "ETag": "\"b33901e4ce8c0121b81eb67d215d5faa\"",
+          "ChecksumCRC32": "gzAYww==",
+          "VersionId": "aa8d3831-1534-4c61-8e27-d23a812ba08f",
+          "ContentType": "application/octet-stream",
+          "Metadata": {}
+        },
+        "end_ns": 250116231744916
+      },
+      {
+        "label": "compliance-bypass-delete",
+        "api": "delete_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "compliance-upload",
+          "VersionId": "aa8d3831-1534-4c61-8e27-d23a812ba08f",
+          "BypassGovernanceRetention": true
+        },
+        "start_ns": 250116233491291,
+        "ok": false,
+        "http_status": 403,
+        "error": "AccessDenied",
+        "end_ns": 250116241610666
+      },
+      {
+        "label": "compliance-after-bypass-delete",
+        "api": "get_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "compliance-upload",
+          "VersionId": "aa8d3831-1534-4c61-8e27-d23a812ba08f"
+        },
+        "start_ns": 250116247499875,
+        "body_sha256": "057667c35dcc9952422cb761e8390c51e12a3de7b09bb4b731a0967733a255ee",
+        "body_bytes": 52,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "c1c668b8-1e20-4979-984e-e03628823f4d",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "AcceptRanges": "bytes",
+          "LastModified": "2026-11-15 19:18:50+00:00",
+          "ContentLength": 52,
+          "ETag": "\"b33901e4ce8c0121b81eb67d215d5faa\"",
+          "ChecksumCRC32": "gzAYww==",
+          "VersionId": "aa8d3831-1534-4c61-8e27-d23a812ba08f",
+          "ContentType": "application/octet-stream",
+          "Metadata": {}
+        },
+        "end_ns": 250116255038041
+      },
+      {
+        "label": "compliance-shorten",
+        "api": "put_object_retention",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "compliance-upload",
+          "VersionId": "aa8d3831-1534-4c61-8e27-d23a812ba08f",
+          "Retention": {
+            "Mode": "COMPLIANCE",
+            "RetainUntilDate": "2026-11-15 19:48:50.146957+00:00"
+          }
+        },
+        "start_ns": 250116257578166,
+        "ok": false,
+        "http_status": 403,
+        "error": "AccessDenied",
+        "end_ns": 250116262799208
+      },
+      {
+        "label": "compliance-after-shorten",
+        "api": "get_object_retention",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "compliance-upload",
+          "VersionId": "aa8d3831-1534-4c61-8e27-d23a812ba08f"
+        },
+        "start_ns": 250116264701375,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "0c3bd83f-ee2c-4376-93a8-d3407443ff6b",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "Retention": {
+            "Mode": "COMPLIANCE",
+            "RetainUntilDate": "2026-11-15 20:18:50+00:00"
+          }
+        },
+        "end_ns": 250116269250875
+      },
+      {
+        "label": "compliance-post-set",
+        "api": "put_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "compliance-post-set"
+        },
+        "start_ns": 250116270786666,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "6688fa37-fbdc-4a7d-8bc3-5e313f4d1c20",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "ETag": "\"2320f054f149525db290ebe112b535aa\"",
+          "ChecksumCRC32": "S9F54A==",
+          "VersionId": "1fe6ab4a-6fa9-4358-a767-4c6a346e16c0"
+        },
+        "end_ns": 250116278550541
+      },
+      {
+        "label": "compliance-post-set-set-retention",
+        "api": "put_object_retention",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "compliance-post-set",
+          "VersionId": "1fe6ab4a-6fa9-4358-a767-4c6a346e16c0",
+          "Retention": {
+            "Mode": "COMPLIANCE",
+            "RetainUntilDate": "2026-11-15 20:18:50.146957+00:00"
+          }
+        },
+        "start_ns": 250116280053750,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "9ead8a94-0afb-45d9-babf-1033d9fb5c26",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "RequestCharged": "requester"
+        },
+        "end_ns": 250116287734708
+      },
+      {
+        "label": "compliance-post-set-read-retention",
+        "api": "get_object_retention",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "compliance-post-set",
+          "VersionId": "1fe6ab4a-6fa9-4358-a767-4c6a346e16c0"
+        },
+        "start_ns": 250116289211958,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "02d7aba6-6a1c-4414-a729-4aff7ba358c9",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "Retention": {
+            "Mode": "COMPLIANCE",
+            "RetainUntilDate": "2026-11-15 20:18:50.146000+00:00"
+          }
+        },
+        "end_ns": 250116292598458
+      },
+      {
+        "label": "compliance-post-set-before-delete",
+        "api": "get_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "compliance-post-set",
+          "VersionId": "1fe6ab4a-6fa9-4358-a767-4c6a346e16c0"
+        },
+        "start_ns": 250116294173208,
+        "body_sha256": "8892c4e872f1c18fe6f96866c12a6413c42a939391273f7a21722b458b6fddd8",
+        "body_bytes": 56,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "d3ccc0fa-0a0d-422b-9295-cf2c0d873df7",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "AcceptRanges": "bytes",
+          "LastModified": "2026-11-15 19:18:50+00:00",
+          "ContentLength": 56,
+          "ETag": "\"2320f054f149525db290ebe112b535aa\"",
+          "ChecksumCRC32": "S9F54A==",
+          "VersionId": "1fe6ab4a-6fa9-4358-a767-4c6a346e16c0",
+          "ContentType": "application/octet-stream",
+          "Metadata": {}
+        },
+        "end_ns": 250116297467416
+      },
+      {
+        "label": "compliance-post-set-delete",
+        "api": "delete_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "compliance-post-set",
+          "VersionId": "1fe6ab4a-6fa9-4358-a767-4c6a346e16c0"
+        },
+        "start_ns": 250116299190375,
+        "ok": false,
+        "http_status": 403,
+        "error": "AccessDenied",
+        "end_ns": 250116304842125
+      },
+      {
+        "label": "compliance-post-set-after-delete",
+        "api": "get_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "compliance-post-set",
+          "VersionId": "1fe6ab4a-6fa9-4358-a767-4c6a346e16c0"
+        },
+        "start_ns": 250116306827833,
+        "body_sha256": "8892c4e872f1c18fe6f96866c12a6413c42a939391273f7a21722b458b6fddd8",
+        "body_bytes": 56,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "5ab9e8af-dd9a-43b9-90eb-1f2bd1b2cb76",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "AcceptRanges": "bytes",
+          "LastModified": "2026-11-15 19:18:50+00:00",
+          "ContentLength": 56,
+          "ETag": "\"2320f054f149525db290ebe112b535aa\"",
+          "ChecksumCRC32": "S9F54A==",
+          "VersionId": "1fe6ab4a-6fa9-4358-a767-4c6a346e16c0",
+          "ContentType": "application/octet-stream",
+          "Metadata": {}
+        },
+        "end_ns": 250116311476916
+      },
+      {
+        "label": "versions-before-restart",
+        "api": "list_object_versions",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84"
+        },
+        "start_ns": 250116313327041,
+        "ok": true,
+        "http_status": 200,
+        "request_id": "04bb2385-382a-43e6-9712-37903a6c4696",
+        "server_date": "Sun, 15 Nov 2026 19:18:50 GMT",
+        "result": {
+          "IsTruncated": false,
+          "KeyMarker": "",
+          "VersionIdMarker": "",
+          "Versions": [
+            {
+              "ETag": "\"2320f054f149525db290ebe112b535aa\"",
+              "Size": 56,
+              "StorageClass": "STANDARD",
+              "Key": "compliance-post-set",
+              "VersionId": "1fe6ab4a-6fa9-4358-a767-4c6a346e16c0",
+              "IsLatest": true,
+              "LastModified": "2026-11-15 19:18:50.610000+00:00"
+            },
+            {
+              "ETag": "\"b33901e4ce8c0121b81eb67d215d5faa\"",
+              "Size": 52,
+              "StorageClass": "STANDARD",
+              "Key": "compliance-upload",
+              "VersionId": "aa8d3831-1534-4c61-8e27-d23a812ba08f",
+              "IsLatest": true,
+              "LastModified": "2026-11-15 19:18:50.532000+00:00"
+            },
+            {
+              "ETag": "\"ecc366322ab6f3b345b0161d86f55d72\"",
+              "Size": 56,
+              "StorageClass": "STANDARD",
+              "Key": "governance-post-set",
+              "VersionId": "7d569679-0eed-4939-b208-8ad3d57c3376",
+              "IsLatest": true,
+              "LastModified": "2026-11-15 19:18:50.396000+00:00"
+            },
+            {
+              "ETag": "\"6c9bbcfa9a7b3b46df913b584f9372af\"",
+              "Size": 52,
+              "StorageClass": "STANDARD",
+              "Key": "governance-upload",
+              "VersionId": "e03820ad-bc3f-4b79-8161-ef0911beae31",
+              "IsLatest": true,
+              "LastModified": "2026-11-15 19:18:50.317000+00:00"
+            },
+            {
+              "ETag": "\"be6d96a90feeb1f34d356ffdf232c0e5\"",
+              "Size": 42,
+              "StorageClass": "STANDARD",
+              "Key": "version-probe",
+              "VersionId": "1a721e9f-cffd-411e-a2b6-da9d05ec262c",
+              "IsLatest": true,
+              "LastModified": "2026-11-15 19:18:50.274000+00:00"
+            },
+            {
+              "ETag": "\"4a53eed3a09ec82c2520e904e8f537c9\"",
+              "Size": 42,
+              "StorageClass": "STANDARD",
+              "Key": "version-probe",
+              "VersionId": "a004c800-d2d0-40a7-9697-c732dddb6cbd",
+              "IsLatest": false,
+              "LastModified": "2026-11-15 19:18:50.244000+00:00"
+            }
+          ],
+          "Name": "rnext-synthetic-ce59d40f84",
+          "Prefix": "",
+          "MaxKeys": 1000,
+          "EncodingType": "url"
+        },
+        "end_ns": 250116320212291
+      }
+    ],
+    "cleanup": [
+      {
+        "kind": "container",
+        "removed": true,
+        "name": "fakeyou-rnext-cap-ce59d40f84"
+      },
+      {
+        "kind": "volume",
+        "removed": true,
+        "name": "fakeyou-rnext-cap-ce59d40f84-data"
+      },
+      {
+        "kind": "network",
+        "removed": true,
+        "name": "fakeyou-rnext-cap-ce59d40f84-net"
+      }
+    ],
+    "scope": "Disposable synthetic localhost-only capability test; no existing deployment, final custody bucket or archive upload.",
+    "started_utc": "2026-11-15T19:18:46.027995+00:00",
+    "pinned_image": "rustfs/rustfs@sha256:b81d16a90ee25bd9511280127ca1471788c6e874cf0f0da759645f46b2dc1d74",
+    "image_id": "sha256:b81d16a90ee25bd9511280127ca1471788c6e874cf0f0da759645f46b2dc1d74",
+    "image_architecture": "arm64",
+    "image_labels": {
+      "build-date": "",
+      "description": "RustFS is a distributed object storage system written in Rust, supporting erasure coding, multi-tenant management, and observability.",
+      "license": "Apache-2.0",
+      "maintainer": "RustFS Team <dev@rustfs.com>",
+      "name": "RustFS",
+      "org.opencontainers.image.title": "RustFS,org.opencontainers.image.description=RustFS distributed object storage system,org.opencontainers.image.version=1.0.5,org.opencontainers.image.revision=34e6449ed90e3d3a106f6655342e0b3127f33082,org.opencontainers.image.source=https://github.com/rustfs/rustfs,org.opencontainers.image.created=2026-11-10T17:57:01Z,org.opencontainers.image.build-type=release",
+      "release": "1.0.5",
+      "summary": "High-performance distributed object storage system compatible with S3 API",
+      "url": "https://rustfs.com",
+      "vcs-ref": "",
+      "vendor": "RustFS Team",
+      "version": "v1.0.5"
+    },
+    "setup_inspect": {
+      "mounts": [
+        {
+          "Type": "volume",
+          "Name": "fakeyou-rnext-cap-ce59d40f84-data",
+          "Source": "/var/lib/docker/volumes/fakeyou-rnext-cap-ce59d40f84-data/_data",
+          "Destination": "/data",
+          "Driver": "local",
+          "Mode": "z",
+          "RW": true,
+          "Propagation": ""
+        }
+      ],
+      "runtime_ports": {
+        "9000/tcp": [
+          {
+            "HostIp": "127.0.0.1",
+            "HostPort": "61140"
+          }
+        ]
+      },
+      "configured_ports": {
+        "9000/tcp": [
+          {
+            "HostIp": "127.0.0.1",
+            "HostPort": ""
+          }
+        ]
+      }
+    },
+    "endpoint": "http://127.0.0.1:61140",
+    "mounts": [
+      {
+        "Type": "volume",
+        "Name": "fakeyou-rnext-cap-ce59d40f84-data",
+        "Source": "/var/lib/docker/volumes/fakeyou-rnext-cap-ce59d40f84-data/_data",
+        "Destination": "/data",
+        "Driver": "local",
+        "Mode": "z",
+        "RW": true,
+        "Propagation": ""
+      }
+    ],
+    "bindings": [
+      {
+        "HostIp": "127.0.0.1",
+        "HostPort": "61140"
+      }
+    ],
+    "network_details": {
+      "Name": "fakeyou-rnext-cap-ce59d40f84-net",
+      "IPAM": {
+        "Driver": "default",
+        "Options": {},
+        "Config": [
+          {
+            "Subnet": "172.28.0.0/16",
+            "Gateway": "172.28.0.1"
+          }
+        ]
+      },
+      "Internal": false,
+      "Options": {
+        "com.docker.network.bridge.enable_ip_masquerade": "false",
+        "com.docker.network.enable_ipv4": "true",
+        "com.docker.network.enable_ipv6": "false"
+      }
+    },
+    "bucket": "rnext-synthetic-ce59d40f84",
+    "completed": false,
+    "fatal": {
+      "type": "RuntimeError",
+      "detail": "No restart health"
+    },
+    "container_state_before_cleanup": {
+      "Status": "running",
+      "Running": true,
+      "Paused": false,
+      "Restarting": false,
+      "OOMKilled": false,
+      "Dead": false,
+      "Pid": 93975,
+      "ExitCode": 0,
+      "Error": "",
+      "StartedAt": "2026-11-15T19:18:50.954844052Z",
+      "FinishedAt": "2026-11-15T19:18:50.75970776Z"
+    },
+    "cleanup_method": "Destroy disposable container, isolated volume and network only; no S3 cleanup bypass claimed. Volume destruction can remove retained synthetic objects and is not an immutability proof.",
+    "finished_utc": "2026-11-15T19:20:22.311703+00:00"
+  },
+  "restart_followup": {
+    "old_endpoint": "http://127.0.0.1:61140",
+    "observed_restart_endpoint": "http://127.0.0.1:61145",
+    "bindings": [
+      {
+        "HostIp": "127.0.0.1",
+        "HostPort": "61145"
+      }
+    ],
+    "observed_at_utc": "2026-11-15T19:19:40.405756+00:00",
+    "operations": [
+      {
+        "label": "versioning-after-restart",
+        "api": "get_bucket_versioning",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84"
+        },
+        "start_ns": 250166112410083,
+        "ok": true,
+        "http_status": 200,
+        "result": {
+          "Status": "Enabled"
+        },
+        "server_date": "Sun, 15 Nov 2026 19:19:40 GMT",
+        "end_ns": 250166129638208
+      },
+      {
+        "label": "lock-after-restart",
+        "api": "get_object_lock_configuration",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84"
+        },
+        "start_ns": 250166130811541,
+        "ok": true,
+        "http_status": 200,
+        "result": {
+          "ObjectLockConfiguration": {
+            "ObjectLockEnabled": "Enabled"
+          }
+        },
+        "server_date": "Sun, 15 Nov 2026 19:19:40 GMT",
+        "end_ns": 250166139073458
+      },
+      {
+        "label": "version-one-after-restart",
+        "api": "get_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "version-probe",
+          "VersionId": "a004c800-d2d0-40a7-9697-c732dddb6cbd"
+        },
+        "start_ns": 250166140020541,
+        "body_sha256": "325e2cfe71d9f32e8b2f611145e2e3e01f6a6c37b0d44b0bdc20effecf2fbd1c",
+        "body_bytes": 42,
+        "ok": true,
+        "http_status": 200,
+        "result": {
+          "AcceptRanges": "bytes",
+          "LastModified": "2026-11-15 19:18:50+00:00",
+          "ContentLength": 42,
+          "ETag": "\"4a53eed3a09ec82c2520e904e8f537c9\"",
+          "ChecksumCRC32": "0xETag==",
+          "VersionId": "a004c800-d2d0-40a7-9697-c732dddb6cbd",
+          "ContentType": "application/octet-stream",
+          "Metadata": {}
+        },
+        "server_date": "Sun, 15 Nov 2026 19:19:40 GMT",
+        "end_ns": 250166160794458
+      },
+      {
+        "label": "version-two-after-restart",
+        "api": "get_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "version-probe",
+          "VersionId": "1a721e9f-cffd-411e-a2b6-da9d05ec262c"
+        },
+        "start_ns": 250166162009000,
+        "body_sha256": "88aaea584a37c9abea2381ce93c5968c2ff45d908b7cbe95b17d7772c3132e97",
+        "body_bytes": 42,
+        "ok": true,
+        "http_status": 200,
+        "result": {
+          "AcceptRanges": "bytes",
+          "LastModified": "2026-11-15 19:18:50+00:00",
+          "ContentLength": 42,
+          "ETag": "\"be6d96a90feeb1f34d356ffdf232c0e5\"",
+          "ChecksumCRC32": "gjGbkA==",
+          "VersionId": "1a721e9f-cffd-411e-a2b6-da9d05ec262c",
+          "ContentType": "application/octet-stream",
+          "Metadata": {}
+        },
+        "server_date": "Sun, 15 Nov 2026 19:19:40 GMT",
+        "end_ns": 250166178736958
+      },
+      {
+        "label": "governance-upload-after-restart",
+        "api": "get_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "governance-upload",
+          "VersionId": "e03820ad-bc3f-4b79-8161-ef0911beae31"
+        },
+        "start_ns": 250166179467458,
+        "body_sha256": "ffa86cfa871c9c701b961cea2b33057b9ad92a8df72d17220e705f76a1e7399f",
+        "body_bytes": 52,
+        "ok": true,
+        "http_status": 200,
+        "result": {
+          "AcceptRanges": "bytes",
+          "LastModified": "2026-11-15 19:18:50+00:00",
+          "ContentLength": 52,
+          "ETag": "\"6c9bbcfa9a7b3b46df913b584f9372af\"",
+          "ChecksumCRC32": "t56uMQ==",
+          "VersionId": "e03820ad-bc3f-4b79-8161-ef0911beae31",
+          "ContentType": "application/octet-stream",
+          "Metadata": {}
+        },
+        "server_date": "Sun, 15 Nov 2026 19:19:40 GMT",
+        "end_ns": 250166191367625
+      },
+      {
+        "label": "governance-upload-retention-after-restart",
+        "api": "get_object_retention",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "governance-upload",
+          "VersionId": "e03820ad-bc3f-4b79-8161-ef0911beae31"
+        },
+        "start_ns": 250166192403250,
+        "ok": true,
+        "http_status": 200,
+        "result": {
+          "Retention": {
+            "Mode": "GOVERNANCE",
+            "RetainUntilDate": "2026-11-15 20:18:50+00:00"
+          }
+        },
+        "server_date": "Sun, 15 Nov 2026 19:19:40 GMT",
+        "end_ns": 250166198545625
+      },
+      {
+        "label": "governance-upload-delete-after-restart",
+        "api": "delete_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "governance-upload",
+          "VersionId": "e03820ad-bc3f-4b79-8161-ef0911beae31"
+        },
+        "start_ns": 250166199361666,
+        "ok": false,
+        "http_status": 403,
+        "error": "AccessDenied",
+        "end_ns": 250166240995958
+      },
+      {
+        "label": "governance-upload-after-restart-delete",
+        "api": "get_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "governance-upload",
+          "VersionId": "e03820ad-bc3f-4b79-8161-ef0911beae31"
+        },
+        "start_ns": 250166242315583,
+        "body_sha256": "ffa86cfa871c9c701b961cea2b33057b9ad92a8df72d17220e705f76a1e7399f",
+        "body_bytes": 52,
+        "ok": true,
+        "http_status": 200,
+        "result": {
+          "AcceptRanges": "bytes",
+          "LastModified": "2026-11-15 19:18:50+00:00",
+          "ContentLength": 52,
+          "ETag": "\"6c9bbcfa9a7b3b46df913b584f9372af\"",
+          "ChecksumCRC32": "t56uMQ==",
+          "VersionId": "e03820ad-bc3f-4b79-8161-ef0911beae31",
+          "ContentType": "application/octet-stream",
+          "Metadata": {}
+        },
+        "server_date": "Sun, 15 Nov 2026 19:19:40 GMT",
+        "end_ns": 250166256818708
+      },
+      {
+        "label": "compliance-upload-after-restart",
+        "api": "get_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "compliance-upload",
+          "VersionId": "aa8d3831-1534-4c61-8e27-d23a812ba08f"
+        },
+        "start_ns": 250166258256500,
+        "body_sha256": "057667c35dcc9952422cb761e8390c51e12a3de7b09bb4b731a0967733a255ee",
+        "body_bytes": 52,
+        "ok": true,
+        "http_status": 200,
+        "result": {
+          "AcceptRanges": "bytes",
+          "LastModified": "2026-11-15 19:18:50+00:00",
+          "ContentLength": 52,
+          "ETag": "\"b33901e4ce8c0121b81eb67d215d5faa\"",
+          "ChecksumCRC32": "gzAYww==",
+          "VersionId": "aa8d3831-1534-4c61-8e27-d23a812ba08f",
+          "ContentType": "application/octet-stream",
+          "Metadata": {}
+        },
+        "server_date": "Sun, 15 Nov 2026 19:19:40 GMT",
+        "end_ns": 250166267530250
+      },
+      {
+        "label": "compliance-upload-retention-after-restart",
+        "api": "get_object_retention",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "compliance-upload",
+          "VersionId": "aa8d3831-1534-4c61-8e27-d23a812ba08f"
+        },
+        "start_ns": 250166268785125,
+        "ok": true,
+        "http_status": 200,
+        "result": {
+          "Retention": {
+            "Mode": "COMPLIANCE",
+            "RetainUntilDate": "2026-11-15 20:18:50+00:00"
+          }
+        },
+        "server_date": "Sun, 15 Nov 2026 19:19:40 GMT",
+        "end_ns": 250166299478208
+      },
+      {
+        "label": "compliance-upload-delete-after-restart",
+        "api": "delete_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "compliance-upload",
+          "VersionId": "aa8d3831-1534-4c61-8e27-d23a812ba08f"
+        },
+        "start_ns": 250166300465375,
+        "ok": false,
+        "http_status": 403,
+        "error": "AccessDenied",
+        "end_ns": 250166314928708
+      },
+      {
+        "label": "compliance-upload-after-restart-delete",
+        "api": "get_object",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84",
+          "Key": "compliance-upload",
+          "VersionId": "aa8d3831-1534-4c61-8e27-d23a812ba08f"
+        },
+        "start_ns": 250166316039416,
+        "body_sha256": "057667c35dcc9952422cb761e8390c51e12a3de7b09bb4b731a0967733a255ee",
+        "body_bytes": 52,
+        "ok": true,
+        "http_status": 200,
+        "result": {
+          "AcceptRanges": "bytes",
+          "LastModified": "2026-11-15 19:18:50+00:00",
+          "ContentLength": 52,
+          "ETag": "\"b33901e4ce8c0121b81eb67d215d5faa\"",
+          "ChecksumCRC32": "gzAYww==",
+          "VersionId": "aa8d3831-1534-4c61-8e27-d23a812ba08f",
+          "ContentType": "application/octet-stream",
+          "Metadata": {}
+        },
+        "server_date": "Sun, 15 Nov 2026 19:19:40 GMT",
+        "end_ns": 250166328601208
+      },
+      {
+        "label": "versions-after-restart",
+        "api": "list_object_versions",
+        "parameters": {
+          "Bucket": "rnext-synthetic-ce59d40f84"
+        },
+        "start_ns": 250166329521916,
+        "ok": true,
+        "http_status": 200,
+        "result": {
+          "IsTruncated": false,
+          "KeyMarker": "",
+          "VersionIdMarker": "",
+          "Versions": [
+            {
+              "ETag": "\"2320f054f149525db290ebe112b535aa\"",
+              "Size": 56,
+              "StorageClass": "STANDARD",
+              "Key": "compliance-post-set",
+              "VersionId": "1fe6ab4a-6fa9-4358-a767-4c6a346e16c0",
+              "IsLatest": true,
+              "LastModified": "2026-11-15 19:18:50.610000+00:00"
+            },
+            {
+              "ETag": "\"b33901e4ce8c0121b81eb67d215d5faa\"",
+              "Size": 52,
+              "StorageClass": "STANDARD",
+              "Key": "compliance-upload",
+              "VersionId": "aa8d3831-1534-4c61-8e27-d23a812ba08f",
+              "IsLatest": true,
+              "LastModified": "2026-11-15 19:18:50.532000+00:00"
+            },
+            {
+              "ETag": "\"ecc366322ab6f3b345b0161d86f55d72\"",
+              "Size": 56,
+              "StorageClass": "STANDARD",
+              "Key": "governance-post-set",
+              "VersionId": "7d569679-0eed-4939-b208-8ad3d57c3376",
+              "IsLatest": true,
+              "LastModified": "2026-11-15 19:18:50.396000+00:00"
+            },
+            {
+              "ETag": "\"6c9bbcfa9a7b3b46df913b584f9372af\"",
+              "Size": 52,
+              "StorageClass": "STANDARD",
+              "Key": "governance-upload",
+              "VersionId": "e03820ad-bc3f-4b79-8161-ef0911beae31",
+              "IsLatest": true,
+              "LastModified": "2026-11-15 19:18:50.317000+00:00"
+            },
+            {
+              "ETag": "\"be6d96a90feeb1f34d356ffdf232c0e5\"",
+              "Size": 42,
+              "StorageClass": "STANDARD",
+              "Key": "version-probe",
+              "VersionId": "1a721e9f-cffd-411e-a2b6-da9d05ec262c",
+              "IsLatest": true,
+              "LastModified": "2026-11-15 19:18:50.274000+00:00"
+            },
+            {
+              "ETag": "\"4a53eed3a09ec82c2520e904e8f537c9\"",
+              "Size": 42,
+              "StorageClass": "STANDARD",
+              "Key": "version-probe",
+              "VersionId": "a004c800-d2d0-40a7-9697-c732dddb6cbd",
+              "IsLatest": false,
+              "LastModified": "2026-11-15 19:18:50.244000+00:00"
+            }
+          ],
+          "Name": "rnext-synthetic-ce59d40f84",
+          "Prefix": "",
+          "MaxKeys": 1000,
+          "EncodingType": "url"
+        },
+        "server_date": "Sun, 15 Nov 2026 19:19:40 GMT",
+        "end_ns": 250166347142291
+      }
+    ],
+    "purpose": "Read the same disposable candidate after restart; ephemeral host port changed. No production or existing deployment calls.",
+    "health_status": 200
+  },
+  "setup_attempts": [
+    {
+      "candidate_tag": "rustfs/rustfs:1.0.5",
+      "container": "fakeyou-rnext-cap-4466b5a88c",
+      "volume": "fakeyou-rnext-cap-4466b5a88c-data",
+      "network": "fakeyou-rnext-cap-4466b5a88c-net",
+      "operations": [],
+      "cleanup": [
+        {
+          "kind": "container",
+          "removed": true,
+          "name": "fakeyou-rnext-cap-4466b5a88c"
+        },
+        {
+          "kind": "volume",
+          "removed": true,
+          "name": "fakeyou-rnext-cap-4466b5a88c-data"
+        },
+        {
+          "kind": "network",
+          "removed": true,
+          "name": "fakeyou-rnext-cap-4466b5a88c-net"
+        }
+      ],
+      "scope": "Disposable synthetic localhost-only capability test; no existing deployment, final custody bucket or archive upload.",
+      "started_utc": "2026-11-15T19:15:59.191272+00:00",
+      "pinned_image": "rustfs/rustfs@sha256:b81d16a90ee25bd9511280127ca1471788c6e874cf0f0da759645f46b2dc1d74",
+      "image_id": "sha256:b81d16a90ee25bd9511280127ca1471788c6e874cf0f0da759645f46b2dc1d74",
+      "image_architecture": "arm64",
+      "image_labels": {
+        "build-date": "",
+        "description": "RustFS is a distributed object storage system written in Rust, supporting erasure coding, multi-tenant management, and observability.",
+        "license": "Apache-2.0",
+        "maintainer": "RustFS Team <dev@rustfs.com>",
+        "name": "RustFS",
+        "org.opencontainers.image.title": "RustFS,org.opencontainers.image.description=RustFS distributed object storage system,org.opencontainers.image.version=1.0.5,org.opencontainers.image.revision=34e6449ed90e3d3a106f6655342e0b3127f33082,org.opencontainers.image.source=https://github.com/rustfs/rustfs,org.opencontainers.image.created=2026-11-10T17:57:01Z,org.opencontainers.image.build-type=release",
+        "release": "1.0.5",
+        "summary": "High-performance distributed object storage system compatible with S3 API",
+        "url": "https://rustfs.com",
+        "vcs-ref": "",
+        "vendor": "RustFS Team",
+        "version": "v1.0.5"
+      },
+      "completed": false,
+      "fatal": {
+        "type": "AssertionError",
+        "detail": ""
+      },
+      "container_state_before_cleanup": {
+        "Status": "running",
+        "Running": true,
+        "Paused": false,
+        "Restarting": false,
+        "OOMKilled": false,
+        "Dead": false,
+        "Pid": 90218,
+        "ExitCode": 0,
+        "Error": "",
+        "StartedAt": "2026-11-15T19:16:29.341864833Z",
+        "FinishedAt": "0001-01-01T00:00:00Z"
+      },
+      "cleanup_method": "Destroy disposable container, isolated volume and network only; no S3 cleanup bypass claimed. Volume destruction can remove retained synthetic objects and is not an immutability proof.",
+      "finished_utc": "2026-11-15T19:16:39.291615+00:00"
+    },
+    {
+      "candidate_tag": "rustfs/rustfs:1.0.5",
+      "container": "fakeyou-rnext-cap-79b788bc1c",
+      "volume": "fakeyou-rnext-cap-79b788bc1c-data",
+      "network": "fakeyou-rnext-cap-79b788bc1c-net",
+      "operations": [],
+      "cleanup": [
+        {
+          "kind": "container",
+          "removed": true,
+          "name": "fakeyou-rnext-cap-79b788bc1c"
+        },
+        {
+          "kind": "volume",
+          "removed": true,
+          "name": "fakeyou-rnext-cap-79b788bc1c-data"
+        },
+        {
+          "kind": "network",
+          "removed": true,
+          "name": "fakeyou-rnext-cap-79b788bc1c-net"
+        }
+      ],
+      "scope": "Disposable synthetic localhost-only capability test; no existing deployment, final custody bucket or archive upload.",
+      "started_utc": "2026-11-15T19:17:57.817266+00:00",
+      "pinned_image": "rustfs/rustfs@sha256:b81d16a90ee25bd9511280127ca1471788c6e874cf0f0da759645f46b2dc1d74",
+      "image_id": "sha256:b81d16a90ee25bd9511280127ca1471788c6e874cf0f0da759645f46b2dc1d74",
+      "image_architecture": "arm64",
+      "image_labels": {
+        "build-date": "",
+        "description": "RustFS is a distributed object storage system written in Rust, supporting erasure coding, multi-tenant management, and observability.",
+        "license": "Apache-2.0",
+        "maintainer": "RustFS Team <dev@rustfs.com>",
+        "name": "RustFS",
+        "org.opencontainers.image.title": "RustFS,org.opencontainers.image.description=RustFS distributed object storage system,org.opencontainers.image.version=1.0.5,org.opencontainers.image.revision=34e6449ed90e3d3a106f6655342e0b3127f33082,org.opencontainers.image.source=https://github.com/rustfs/rustfs,org.opencontainers.image.created=2026-11-10T17:57:01Z,org.opencontainers.image.build-type=release",
+        "release": "1.0.5",
+        "summary": "High-performance distributed object storage system compatible with S3 API",
+        "url": "https://rustfs.com",
+        "vcs-ref": "",
+        "vendor": "RustFS Team",
+        "version": "v1.0.5"
+      },
+      "setup_inspect": {
+        "mounts": [
+          {
+            "Type": "volume",
+            "Name": "fakeyou-rnext-cap-79b788bc1c-data",
+            "Source": "/var/lib/docker/volumes/fakeyou-rnext-cap-79b788bc1c-data/_data",
+            "Destination": "/data",
+            "Driver": "local",
+            "Mode": "z",
+            "RW": true,
+            "Propagation": ""
+          }
+        ],
+        "runtime_ports": {
+          "9000/tcp": []
+        },
+        "configured_ports": {
+          "9000/tcp": [
+            {
+              "HostIp": "127.0.0.1",
+              "HostPort": ""
+            }
+          ]
+        }
+      },
+      "completed": false,
+      "fatal": {
+        "type": "RuntimeError",
+        "detail": "Runtime port binding is not an observed localhost-only mapping: {\"mounts\": [{\"Type\": \"volume\", \"Name\": \"fakeyou-rnext-cap-79b788bc1c-data\", \"Source\": \"/var/lib/docker/volumes/fakeyou-rnext-cap-79b788bc1c-data/_data\", \"Destination\": \"/data\", \"Driver\": \"local\", \"Mode\": \"z\", \"RW\": true, \"Propagation\": \"\"}], \"runtime_ports\": {\"9000/tcp\": []}, \"configured_ports\": {\"9000/tcp\": [{\"HostIp\": \"127.0.0.1\", \"HostPort\": \"\"}]}}"
+      },
+      "container_state_before_cleanup": {
+        "Status": "running",
+        "Running": true,
+        "Paused": false,
+        "Restarting": false,
+        "OOMKilled": false,
+        "Dead": false,
+        "Pid": 92581,
+        "ExitCode": 0,
+        "Error": "",
+        "StartedAt": "2026-11-15T19:18:01.092589459Z",
+        "FinishedAt": "0001-01-01T00:00:00Z"
+      },
+      "cleanup_method": "Destroy disposable container, isolated volume and network only; no S3 cleanup bypass claimed. Volume destruction can remove retained synthetic objects and is not an immutability proof.",
+      "finished_utc": "2026-11-15T19:18:11.182144+00:00"
+    }
+  ],
+  "assertion_verification": "Recorded HTTP results, retention dates versus server Date, version IDs and content hashes checked by publish_storage_report.py; this does not relabel main harness completed=false as success",
+  "release_metadata": {
+    "assets": [
+      {
+        "name": "release-recovery.json",
+        "size": 4561
+      },
+      {
+        "name": "rustfs-1.0.5.provenance.json",
+        "size": 3204
+      },
+      {
+        "name": "rustfs-1.0.5.sbom.cdx.json",
+        "size": 343362
+      },
+      {
+        "name": "rustfs-linux-aarch64-gnu-latest.zip",
+        "size": 118741539
+      },
+      {
+        "name": "rustfs-linux-aarch64-gnu-v1.0.5.deb",
+        "size": 83636218
+      },
+      {
+        "name": "rustfs-linux-aarch64-gnu-v1.0.5.rpm",
+        "size": 116123184
+      },
+      {
+        "name": "rustfs-linux-aarch64-gnu-v1.0.5.zip",
+        "size": 118741539
+      },
+      {
+        "name": "rustfs-linux-aarch64-musl-latest.zip",
+        "size": 99986524
+      },
+      {
+        "name": "rustfs-linux-aarch64-musl-v1.0.5.deb",
+        "size": 72589698
+      },
+      {
+        "name": "rustfs-linux-aarch64-musl-v1.0.5.rpm",
+        "size": 99742375
+      },
+      {
+        "name": "rustfs-linux-aarch64-musl-v1.0.5.zip",
+        "size": 99986524
+      },
+      {
+        "name": "rustfs-linux-x86_64-gnu-latest.zip",
+        "size": 122476523
+      },
+      {
+        "name": "rustfs-linux-x86_64-gnu-v1.0.5.deb",
+        "size": 85434598
+      },
+      {
+        "name": "rustfs-linux-x86_64-gnu-v1.0.5.rpm",
+        "size": 119277713
+      },
+      {
+        "name": "rustfs-linux-x86_64-gnu-v1.0.5.zip",
+        "size": 122476523
+      },
+      {
+        "name": "rustfs-linux-x86_64-musl-latest.zip",
+        "size": 108471605
+      },
+      {
+        "name": "rustfs-linux-x86_64-musl-v1.0.5.deb",
+        "size": 77709664
+      },
+      {
+        "name": "rustfs-linux-x86_64-musl-v1.0.5.rpm",
+        "size": 107665920
+      },
+      {
+        "name": "rustfs-linux-x86_64-musl-v1.0.5.zip",
+        "size": 108471605
+      },
+      {
+        "name": "rustfs-macos-aarch64-latest.zip",
+        "size": 97090032
+      },
+      {
+        "name": "rustfs-macos-aarch64-v1.0.5.zip",
+        "size": 97090032
+      },
+      {
+        "name": "rustfs-windows-x86_64-latest.zip",
+        "size": 117223006
+      },
+      {
+        "name": "rustfs-windows-x86_64-v1.0.5.zip",
+        "size": 117223006
+      },
+      {
+        "name": "SHA256SUMS",
+        "size": 2026
+      },
+      {
+        "name": "SHA512SUMS",
+        "size": 3306
+      }
+    ],
+    "html_url": "https://github.com/rustfs/rustfs/releases/tag/1.0.5",
+    "published_at": "2026-11-10T17:55:02Z",
+    "tag_name": "1.0.5",
+    "target_commitish": "main"
+  },
+  "source_tag_metadata": {
+    "object": {
+      "sha": "34e6449ed90e3d3a106f6655342e0b3127f33082",
+      "type": "commit",
+      "url": "https://api.github.com/repos/rustfs/rustfs/git/commits/34e6449ed90e3d3a106f6655342e0b3127f33082"
+    },
+    "tag": "1.0.5",
+    "verification": {
+      "reason": "unsigned",
+      "verified": false
+    }
+  },
+  "existing_deployment_metadata_unchanged": true,
+  "existing_deployment_before_sha256": "6ad797f1243563291c8c02118319da1705879acd2a8c15a499b3e63b66abae08",
+  "existing_deployment_after_sha256": "6ad797f1243563291c8c02118319da1705879acd2a8c15a499b3e63b66abae08",
+  "archive_unchanged": {
+    "path": "/Users/pushmove/Desktop/side_projects/jemboed/fakeyou/.runtime/writer-spike/writer-spike-raw-eba185d7.tar.xz",
+    "size": 3088788,
+    "sha256": "974bc6012f2a5c28ea2d9b264c3821948167b747ed05c15d18603f918faa4513"
+  },
+  "unproven": [
+    "Independent failure domain and auditor access",
+    "TLS, encryption at rest and key recovery",
+    "Non-root IAM/bypass denial and credential separation",
+    "Bucket default retention and 12-month enforcement",
+    "Long-duration expiry, multi-node, crash/disk recovery, replication and other builds",
+    "Reproducible build provenance; image labels and Git tag are metadata, not independent binary verification"
+  ],
+  "decisions": {
+    "alpha81": "Rejected as immutable evidence storage; no retest or reversal",
+    "option_a": "Preferred architecture per ruling; local capability result is not deployment or custody approval",
+    "external_deployment": "Not authorized",
+    "cost_incurring_operation": "Not authorized",
+    "real_archive_upload": "Not authorized",
+    "final_custody_bucket": "Not authorized",
+    "custody": "EVIDENCE CUSTODY PENDING"
+  },
+  "artifacts": {
+    "rustfs-attempt01-result.json": "eead17cb96e94da5cf603245a0126d828f3b9d4891cfb243deface6b4dcda916",
+    "rustfs-attempt02-driver.log": "fb7209c3c77fbddd4e28f8a669d20f1d98ce324841caf09948820d95c2aff192",
+    "rustfs-attempt01-volume-events.jsonl": "ad42dc57d9a84ae2a599925dc67a1aee7de7d82d763482fcf393f495690e3300",
+    "rustfs-restart-followup.json": "aa4920bdfb55fe12bc983b247bfe7be12fffcfe3bb7a832e889a22b400fd2d1c",
+    "rustfs_candidate.py": "1043b64ba131db8fd8e4f556803662be46c5ce7c0da7e0428f6c2cb4d48a9556",
+    "rustfs-attempt02-result.json": "1e70800bb48cb675f908bf4149e77ed0ed513f3ecb64b595ddb7ab1b9f1b61f4",
+    "rustfs-attempt01-harness.py": "bab30ff0fa8384e7600b25fcf4f54a0fe62077ccb54ed44ee1fa2500c2a69ba0",
+    "restart_followup.py": "7fcef4fd994a9e519c0208db740a38030edd94ca427a6ae1f239afc3c347236e",
+    "rustfs-attempt02-harness.py": "aaea6e2685cb24ff1e91cf4ce0175fb209556956ff842ba77e709a81a8ac10e4",
+    "rustfs-attempt01-driver.log": "134e72ca6b4d23dfe92170701b16e5dca6f350d8b9fc5aa676756aef2c3802b7",
+    "rustfs-candidate-result.json": "cfe0a82d4445e4b8815e189cd78e8d49633f5f58c1d428f32a097388379cf3f9",
+    "rustfs-release.json": "14c6c5509748bf666ad31ecb4172cae03c026cee374c9a55b98c868d05e909eb",
+    "rustfs-driver.log": "be6cca132fab688c967fe64cbf9305cb1b3e6e99d8b4d17f21bdb411002238b2",
+    "rustfs-source-tag.json": "170f725526a5ec3ca9c59e012805e58ad3cb2cbdf17c8663c10989e5395d5a81",
+    "rustfs-candidate-container.log": "6e3485f7cf4cbfb6bc5f088b9c044cf9530a12c5d142024e4aa2219b8d013485"
+  },
+  "boundaries": {
+    "provider_requests": 0,
+    "provider_spend_usd": 0,
+    "production_activation": false,
+    "publication_context": "OFF",
+    "phase5b": "NO-GO",
+    "v6": "NO-GO",
+    "existing_deployment_modified": false,
+    "real_evidence_uploaded": false,
+    "final_custody_bucket_created": false
+  }
+}
