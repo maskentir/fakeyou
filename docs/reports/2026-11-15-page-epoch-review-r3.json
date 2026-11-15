@@ -1,0 +1,109 @@
+{
+  "revision": 3,
+  "reviewed_head": "c750780438b6a9510f589842d9ccb2fc252c63e7",
+  "implementation_head": "76f047bf58c47298f914560ba760a3909f3410bb",
+  "provider_requests": 0,
+  "new_provider_usd": 0,
+  "publication_context": "OFF",
+  "phase5b": "NO-GO",
+  "binding_contract_sha256": "fb0b8861764dd49930ff01feb30de3b4b82b494055d6aa8a33eb71d1997e8d87",
+  "red_evidence": {
+    "head": "c750780438b6a9510f589842d9ccb2fc252c63e7",
+    "command": ".venv/bin/pytest tests/test_sensors_epoch.py -q",
+    "failed_tests": [
+      "tests/test_sensors_epoch.py::test_new_page_epoch_accepts_reset_sampler_generation_and_counters",
+      "tests/test_sensors_epoch.py::test_retired_page_cannot_replace_new_page_with_a_higher_generation"
+    ],
+    "failed": 2
+  },
+  "page_controls": [
+    {
+      "id": "PE-01",
+      "node": "tests/test_sensors_epoch.py::test_new_page_epoch_accepts_reset_sampler_generation_and_counters",
+      "passed_cases": 1
+    },
+    {
+      "id": "PE-02",
+      "node": "tests/test_sensors_epoch.py::test_retired_page_cannot_replace_new_page_with_a_higher_generation",
+      "passed_cases": 1
+    },
+    {
+      "id": "PE-03",
+      "node": "tests/test_sensors_epoch.py::test_new_batch_cannot_relabel_retired_page_parts",
+      "passed_cases": 4
+    },
+    {
+      "id": "PE-04",
+      "node": "tests/test_sensors_epoch.py::test_generation_regression_is_still_rejected_within_the_same_page",
+      "passed_cases": 1
+    },
+    {
+      "id": "PE-05",
+      "node": "tests/test_sensors_epoch.py::test_drain_in_flight_cannot_cross_a_python_page_epoch",
+      "passed_cases": 1
+    },
+    {
+      "id": "PE-06",
+      "node": "tests/test_sensors_epoch.py::test_reload_detected_by_the_drain_starts_a_new_page_and_reassigns_streams",
+      "passed_cases": 1
+    },
+    {
+      "id": "PE-07",
+      "node": "tests/test_sensors_epoch.py::test_new_epoch_does_not_reuse_the_previous_page_clock_exchange",
+      "passed_cases": 1
+    },
+    {
+      "id": "PE-08",
+      "node": "tests/test_sensors_epoch.py::test_missing_page_session_cannot_bind_a_new_production_epoch",
+      "passed_cases": 1
+    },
+    {
+      "id": "PE-09",
+      "node": "tests/test_sensors_epoch.py::test_decode_in_flight_does_not_admit_the_rest_of_a_retired_batch",
+      "passed_cases": 1
+    },
+    {
+      "id": "PE-10",
+      "node": "tests/test_samples_ledger.py::test_page_epoch_scopes_generation_and_rejects_old_page_records",
+      "passed_cases": 1
+    },
+    {
+      "id": "PE-11",
+      "node": "tests/test_samples_ledger.py::test_stream_owner_lookup_does_not_relabel_old_page_evidence",
+      "passed_cases": 1
+    },
+    {
+      "id": "PE-12",
+      "node": "tests/test_sensors_generation.py::test_sampler_reassignment_and_old_completion_preserve_the_successor",
+      "passed_cases": 1
+    }
+  ],
+  "verification": {
+    "passed": 12769,
+    "skipped": 8,
+    "failures": 0,
+    "errors": 0,
+    "junit_sha256": "450b171d8866da435571392418907d8a747e8a7d382a6a68e5ca8da0edd02191",
+    "mypy_files": 759,
+    "import_contracts_kept": 7,
+    "warnings": "Seven suite warnings, including the previously reported fake Cartesia websocket cleanup warning."
+  },
+  "original_audit": {
+    "file": "2026-11-15-hardening-audit-r2.json",
+    "sha256": "326d1b5b0441712117664cdf38a4c4d6e2eb54a5e178846c1ca2f368b57cc08e",
+    "counts_retained": {
+      "covered": 98,
+      "partial": 20,
+      "blocked": 1
+    },
+    "original_controls_with_passing_executed_references": 119,
+    "no_new_coverage_credit_for_proposed_amendment": true
+  },
+  "remaining_gates": [
+    "NC-76 unchanged under #205; separate docs-only amendment proposal requires review",
+    "V6 physical writer bounds/cancellation unresolved",
+    "Y2 per-physical-provider authorization/budget ledger unresolved; provider mode remains unavailable",
+    "Product liveness: 7/19 EN labelled coverage, no ID cassette looks and unmeasured model-to-parser proposal availability",
+    "Real-page hashing stability/CPU, participant consent/clocks/audibility not established"
+  ]
+}
