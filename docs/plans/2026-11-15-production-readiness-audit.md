@@ -35,7 +35,7 @@ short of complete evidence produce a compliant verdict?
    gate time, a query time, a matching clock domain, a grant at or before the
    earliest possible audio start, and no revocation at or before the query.
 2. **One removal at a time.** Starting from the fully evidenced control, each of
-   33 removals, three of them with a contradicting caller override, yields its
+   32 removals, three of them with a contradicting caller override, yields its
    own named status and reason, none compliant.
 3. **End to end.** A real actor, playback engine, kernel port, perception
    timeline, composed gate, and playback receipt, with the scripted observer. The
