@@ -10,7 +10,9 @@ OBSERVER_EPOCH_MS = 1_000_000.0
 
 
 def granted(at: float = 10.0, **changes: Any) -> ParticipantConsent:
-    consent = ParticipantConsent(OBSERVER_ID, "granted", "participant_confirmed", granted_at=at)
+    consent = ParticipantConsent(
+        OBSERVER_ID, "granted", "participant_confirmed", granted_at=at, clock_domain="fake"
+    )
     return replace(consent, **changes)
 
 

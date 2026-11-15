@@ -32,18 +32,39 @@ condition holds. Each failure has its own explicit gap:
 | `participant_consent_denied` | consent denied |
 | `participant_consent_revoked` | revoked, or revoked at or before the sentence ended |
 | `participant_consent_scope_mismatch` | consent given for a different purpose |
-| `participant_consent_not_in_force` | no grant time, or granted after the sentence started |
+| `participant_consent_not_in_force` | no grant time, or granted after the earliest possible audio start |
+| `participant_consent_reference_missing` | no trusted gate time or query time to prove the grant against |
+| `participant_consent_clock_incomparable` | consent, reference, or observer clock are in different or unknown domains |
 | `participant_sentence_not_reported` | the observer reported nothing for this sentence |
 | `publication_identity_unverified` | the sentence was matched by an unverified method |
 | `participant_clock_unmapped` | the observer clock has no mapping to the measurement clock |
 
-The observer is asked what it heard only after the consent record is complete:
-state granted, an attesting source, the measurement scope, a finite grant time,
-and no revocation at or before the grant. Anything less returns its gap with no
-read. A grant that starts after the sentence, and a revocation at or before the
-sentence ended, can only be judged once the sentence interval is known, so those
-two are rejected after the read and the report is discarded. Closing that last
-window needs a trusted read-time clock, which this contract does not have. Verified
+The observer is asked what it heard only after two checks pass, both without
+touching its data.
+
+The consent record must be complete: state granted, an attesting source, the
+measurement scope, a finite grant time, and no revocation at or before the grant.
+
+The grant must then be proven against a trusted `ConsentReference` in the same
+clock domain as the consent record:
+
+- `audio_not_before` is the earliest moment the sentence's audio can have
+  existed. It is the gate decision time minus its uncertainty, because the gate
+  runs before the first PCM write. The grant must be at or before it.
+- `queried_at` is the trusted time of the read. A grant in the future relative to
+  it is not in force, and consent revoked at or before it permits no new read.
+
+A missing or non-finite reference time, or a query time before the audio bound,
+is `participant_consent_reference_missing`. A consent record without a clock
+domain, or one in a different domain than the reference or the mapped observer
+clock, is `participant_consent_clock_incomparable`. In each case `heard()` is
+not called.
+
+Revocation has two separate rules. A report read while consent was in force
+stays usable when the revocation came after the sentence ended. A read attempted
+after the revocation is never made, even for a sentence that ended before it. A
+revocation at or before the sentence end still discards a report that was read
+earlier. Verified
 identity methods are `watermark` and `fingerprint`; a transcript or timing match
 is not accepted. The observer clock uses the same `RemoteClock` mapping as 2/5;
 mapping uncertainty above 50 ms stays `participant_clock_unmeasurable`.
@@ -76,8 +97,9 @@ controls for the contract, not measurements of a meeting.
 
 ## Deterministic proof
 
-`tests/test_participant_audio.py` (72 tests): the compliant control, every consent
-gap against allowed and vetoed decisions, no read without a provable grant,
+`tests/test_participant_audio.py` (93 tests): the compliant control, every consent
+gap against allowed and vetoed decisions, no read without a grant proven against the trusted reference, no new read
+after revocation,
 no caller override of the receipt,
 observer and identity mismatches, unverified identity methods, unmapped, stale,
 and uncertain clocks, veto with observation, veto with a no-write receipt, the

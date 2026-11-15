@@ -22,6 +22,8 @@ ParticipantGap = Literal[
     "participant_consent_revoked",
     "participant_consent_scope_mismatch",
     "participant_consent_not_in_force",
+    "participant_consent_reference_missing",
+    "participant_consent_clock_incomparable",
     "participant_sentence_not_reported",
     "participant_observer_mismatch",
     "publication_identity_unverified",
@@ -37,6 +39,7 @@ class ParticipantConsent:
     scope: str = AUDIO_MEASUREMENT_SCOPE
     granted_at: float | None = None
     revoked_at: float | None = None
+    clock_domain: str = ""
 
     def gap(self, started_at: float, ended_at: float) -> ParticipantGap | None:
         if self.state == "denied":
@@ -62,6 +65,38 @@ class HeardSentence:
     identity_method: str
     started_ms: float
     ended_ms: float
+
+
+@dataclass(frozen=True, slots=True)
+class ConsentReference:
+    audio_not_before: float | None
+    queried_at: float | None
+    clock_domain: str | None
+
+    def gap(self, consent: ParticipantConsent) -> ParticipantGap | None:
+        earliest, queried = self.audio_not_before, self.queried_at
+        if earliest is None or queried is None:
+            return "participant_consent_reference_missing"
+        if not (math.isfinite(earliest) and math.isfinite(queried)) or queried < earliest:
+            return "participant_consent_reference_missing"
+        if not self.clock_domain or consent.clock_domain != self.clock_domain:
+            return "participant_consent_clock_incomparable"
+        granted_at, revoked_at = consent.granted_at, consent.revoked_at
+        if granted_at is None or granted_at > earliest:
+            return "participant_consent_not_in_force"
+        if revoked_at is not None and not revoked_at > queried:
+            return "participant_consent_revoked"
+        return None
+
+
+def consent_reference(
+    decision: PublicationDecision | None, queried_at: float | None
+) -> ConsentReference:
+    if decision is None or decision.checked_at is None:
+        return ConsentReference(None, queried_at, None)
+    return ConsentReference(
+        decision.checked_at - decision.uncertainty_seconds, queried_at, decision.clock_domain
+    )
 
 
 class ParticipantAudioObserver(Protocol):
@@ -94,17 +129,17 @@ class ParticipantObservation:
 
 
 def observe_participant(
-    binding: SentenceBinding, observer: ParticipantAudioObserver | None
+    binding: SentenceBinding,
+    observer: ParticipantAudioObserver | None,
+    reference: ConsentReference,
 ) -> ParticipantObservation:
     if observer is None:
         return ParticipantObservation(None, "participant_observer_unavailable")
     observer_id = observer.observer_id
     consent = observer.consent()
-    if consent.observer_id != observer_id:
-        return ParticipantObservation(None, "participant_observer_mismatch", observer_id)
-    standing = _standing_gap(consent)
-    if standing is not None:
-        return ParticipantObservation(None, standing, observer_id)
+    unread = _read_gap(consent, observer_id, reference)
+    if unread is not None:
+        return ParticipantObservation(None, unread, observer_id)
     heard = observer.heard(binding)
     if heard is None:
         return ParticipantObservation(None, "participant_sentence_not_reported", observer_id)
@@ -116,6 +151,8 @@ def observe_participant(
     ended = observer.instant(heard.ended_ms)
     if started is None or ended is None or started.clock_domain != ended.clock_domain:
         return ParticipantObservation(None, "participant_clock_unmapped", observer_id)
+    if started.clock_domain != consent.clock_domain:
+        return ParticipantObservation(None, "participant_consent_clock_incomparable", observer_id)
     in_force = consent.gap(started.monotonic, ended.monotonic)
     if in_force is not None:
         return ParticipantObservation(None, in_force, observer_id)
@@ -137,6 +174,14 @@ def observe_participant(
     )
 
 
+def _read_gap(
+    consent: ParticipantConsent, observer_id: str, reference: ConsentReference
+) -> ParticipantGap | None:
+    if consent.observer_id != observer_id:
+        return "participant_observer_mismatch"
+    return _standing_gap(consent) or reference.gap(consent)
+
+
 def _standing_gap(consent: ParticipantConsent) -> ParticipantGap | None:
     if consent.state in ("denied", "revoked", "unknown") or not consent.source:
         return consent.gap(0.0, 0.0)
@@ -149,6 +194,10 @@ def _standing_gap(consent: ParticipantConsent) -> ParticipantGap | None:
     if revoked_at is not None and not revoked_at > granted_at:
         return "participant_consent_revoked"
     return None
+
+
+class ParticipantMeasurementOptions(MeasurementOptions, total=False):
+    queried_at: float | None
 
 
 def local_write_observed(
@@ -168,18 +217,18 @@ def measure_participant_publication(
     decision: PublicationDecision | None,
     clock_domain: str,
     receipt: LocalWriteReceipt | None = None,
-    **options: Unpack[MeasurementOptions],
+    **options: Unpack[ParticipantMeasurementOptions],
 ) -> dict[str, Any]:
-    observation = observe_participant(binding, observer)
+    reference = consent_reference(decision, options.get("queried_at"))
+    observation = observe_participant(binding, observer, reference)
     written = local_write_observed(receipt, binding)
-    if written is not None:
-        options["local_write_observed"] = written
     result = measure_publication(
         binding,
         observation.publication,
         decision=decision,
         clock_domain=clock_domain,
-        **options,
+        local_write_observed=options.get("local_write_observed") if written is None else written,
+        post_validations=options.get("post_validations"),
     )
     result["participant_observer_id"] = observation.observer_id
     result["participant_gap"] = observation.gap
