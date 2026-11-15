@@ -89,18 +89,37 @@ confirmed violations alone.
 
 ## Evidence custody — PENDING
 
-Ruling: the raw archive goes to private, immutable object storage owned by the
-organization. Recordings are not committed to the repository, synthetic PCM
-included; the house rule stands.
+Ruling: the raw archive goes to private object storage the project already
+runs, RustFS, in a dedicated bucket `fakeyou-evidence`. No new cloud dependency
+is introduced; an earlier ruling naming AWS S3 is withdrawn. Recordings are not
+committed to the repository, synthetic PCM included; the house rule stands.
 
 | Item | State |
 | --- | --- |
 | Results | Committed: `docs/reports/2026-11-15-writer-spike-preflight.json`, with SHA-256 of each raw file |
 | Archive | `writer-spike-raw-eba185d7.tar.xz`, 3,088,788 bytes, SHA-256 `974bc6012f2a5c28ea2d9b264c3821948167b747ed05c15d18603f918faa4513`, re-verified on 2026-11-15 |
-| Destination convention | `s3://<org-private-evidence-bucket>/fakeyou/writer-spike/2026-11-15/eba185d7/writer-spike-raw-eba185d7.tar.xz`. A convention, not a statement that the bucket exists |
+| Destination | `s3://fakeyou-evidence/fakeyou/writer-spike/2026-11-15/eba185d7/writer-spike-raw-eba185d7.tar.xz` on RustFS. The `s3://` form is the S3-compatible address, not AWS |
 | Current location | **The author's machine only**, `.runtime/writer-spike/`. Not reachable by an auditor. The local copy is kept until an upload is verified |
-| Upload | **Not done.** No evidence bucket has been named |
+| Upload | **Not done.** The bucket does not exist (see the check below) |
 | Replay tool | `evals/writer_spike/replay.py`, no audio server needed: `python -m evals.writer_spike.replay <directory>` |
+
+Check of the existing deployment, 2026-11-15, read-only:
+
+| Fact | Finding |
+| --- | --- |
+| Where RustFS runs | Only as the `rustfs` service of `compose.yaml`, `rustfs/rustfs:1.0.0-alpha.81`, on the author's machine. No RustFS appears in the deployment manifests |
+| Reachability | Ports bound to `127.0.0.1` only |
+| Data | Docker volume `fakeyou_rustfs_data` on the same disk as the local archive |
+| Buckets present | `fakeyou` only |
+| `fakeyou-evidence` | **Does not exist** (`head-bucket` returned 404). Not created |
+| Versioning, Object Lock | Not verified on this version; that needs a bucket to test against |
+
+Two consequences for custody. An upload to this instance would not make the
+archive reachable by anyone but the author, and it would sit on the same disk
+as the copy it is meant to safeguard. And Object Lock is normally fixed when a
+bucket is created, so the bucket should not be created before the retention
+configuration is decided. Until a RustFS instance that an auditor can reach
+holds the bucket, custody stays pending.
 
 Storage requirements, to be confirmed at upload:
 
