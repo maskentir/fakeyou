@@ -10,7 +10,9 @@ OBSERVER_EPOCH_MS = 1_000_000.0
 
 
 def granted(at: float = 10.0, **changes: Any) -> ParticipantConsent:
-    consent = ParticipantConsent(OBSERVER_ID, "granted", "participant_confirmed", granted_at=at)
+    consent = ParticipantConsent(
+        OBSERVER_ID, "granted", "participant_confirmed", granted_at=at, clock_domain="fake"
+    )
     return replace(consent, **changes)
 
 
@@ -41,6 +43,7 @@ class ScriptedParticipantObserver:
     identity_method: str = "watermark"
     reported_hash: str | None = None
     reported_by: str | None = None
+    clock_domain: str = "fake"
     heard_calls: int = 0
 
     def consent(self) -> ParticipantConsent:
@@ -67,4 +70,6 @@ class ScriptedParticipantObserver:
         mapped = self.clock.map(observer_ms)
         if mapped is None:
             return None
-        return MappedInstant(mapped.monotonic, mapped.uncertainty_seconds, "fake", mapped.origin)
+        return MappedInstant(
+            mapped.monotonic, mapped.uncertainty_seconds, self.clock_domain, mapped.origin
+        )

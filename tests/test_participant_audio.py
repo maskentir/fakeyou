@@ -4,6 +4,7 @@ import pytest
 
 from fakeyou.foundation.publication import PublicationDecision, PublicationValidity
 from fakeyou.observability.participant_audio import (
+    ConsentReference,
     ParticipantConsent,
     ParticipantGap,
     local_write_observed,
@@ -30,9 +31,13 @@ def receipt(outcome: PlaybackOutcome, publication_id: str = "pub") -> PlaybackRe
     return PlaybackReceipt("attempt-1", outcome, "Sentence.", publication_id=publication_id)
 
 
+QUERIED_AT = 101.2
+REFERENCE = ConsentReference(99.89, QUERIED_AT, "fake")
+
+
 def measured(
     observer: ScriptedParticipantObserver | None,
-    decision: PublicationDecision = ALLOWED,
+    decision: PublicationDecision | None = ALLOWED,
     **options: Any,
 ) -> dict[str, Any]:
     return measure_participant_publication(
@@ -40,8 +45,7 @@ def measured(
         observer,
         decision=decision,
         clock_domain="fake",
-        post_validations=_post(),
-        **options,
+        **{"post_validations": _post(), "queried_at": QUERIED_AT, **options},
     )
 
 
@@ -94,7 +98,7 @@ def test_observation_without_consent_in_force_is_never_used(
 def test_observer_is_not_asked_what_it_heard_without_standing_consent(state: str) -> None:
     observer = ScriptedParticipantObserver(consented=granted(state=state))
 
-    observation = observe_participant(_binding(), observer)
+    observation = observe_participant(_binding(), observer, REFERENCE)
 
     assert observation.publication is None
     assert observer.heard_calls == 0
@@ -125,19 +129,123 @@ def test_observer_is_not_asked_what_it_heard_without_a_provable_grant(
     assert observer.heard_calls == 0
 
 
-def test_grant_that_starts_after_the_sentence_is_rejected_once_its_time_is_known() -> None:
-    observer = ScriptedParticipantObserver(consented=granted(at=100.5))
+@pytest.mark.parametrize("granted_at", [99.895, 99.95, 100.0, 100.5, 101.1, 150.0])
+def test_grant_after_the_earliest_possible_audio_start_never_reads_the_observer(
+    granted_at: float,
+) -> None:
+    observer = ScriptedParticipantObserver(consented=granted(at=granted_at))
 
     result = measured(observer)
 
-    assert result["reason"] == "participant_consent_not_in_force"
+    assert (result["status"], result["reason"]) == (
+        "not_measurable",
+        "participant_consent_not_in_force",
+    )
+    assert observer.heard_calls == 0
+
+
+def test_grant_at_the_earliest_possible_audio_start_is_in_force() -> None:
+    observer = ScriptedParticipantObserver(consented=granted(at=99.89))
+
+    assert measured(observer)["status"] == "observed_compliant"
     assert observer.heard_calls == 1
 
 
-def test_consent_revoked_after_the_sentence_ended_still_covers_it() -> None:
-    result = measured(ScriptedParticipantObserver(consented=granted(revoked_at=101.5)))
+def test_gate_uncertainty_moves_the_earliest_possible_audio_start_back() -> None:
+    uncertain = PublicationDecision("valid", "ok", 99.9, "fake", 0.04)
+    observer = ScriptedParticipantObserver(consented=granted(at=99.88))
 
-    assert result["status"] == "observed_compliant"
+    result = measured(observer, uncertain)
+
+    assert result["reason"] == "participant_consent_not_in_force"
+    assert observer.heard_calls == 0
+
+
+UNPROVEN_REFERENCES: list[tuple[dict[str, Any], ParticipantGap]] = [
+    ({"decision": None}, "participant_consent_reference_missing"),
+    (
+        {"decision": PublicationDecision("valid", "ok", None, "fake")},
+        "participant_consent_reference_missing",
+    ),
+    (
+        {"decision": PublicationDecision("valid", "ok", float("nan"), "fake")},
+        "participant_consent_reference_missing",
+    ),
+    ({"queried_at": None}, "participant_consent_reference_missing"),
+    ({"queried_at": float("inf")}, "participant_consent_reference_missing"),
+    ({"queried_at": 99.0}, "participant_consent_reference_missing"),
+    (
+        {"decision": PublicationDecision("valid", "ok", 99.9, None)},
+        "participant_consent_clock_incomparable",
+    ),
+    (
+        {"decision": PublicationDecision("valid", "ok", 99.9, "page_wall_utc")},
+        "participant_consent_clock_incomparable",
+    ),
+]
+
+
+@pytest.mark.parametrize(("options", "gap"), UNPROVEN_REFERENCES)
+def test_observer_is_not_read_without_a_comparable_trusted_reference(
+    options: dict[str, Any], gap: ParticipantGap
+) -> None:
+    observer = ScriptedParticipantObserver()
+
+    result = measured(observer, **options)
+
+    assert result["participant_gap"] == gap
+    assert result["status"] == "not_measurable"
+    assert "compliant" not in result
+    assert observer.heard_calls == 0
+
+
+def test_consent_without_a_clock_domain_cannot_be_compared() -> None:
+    observer = ScriptedParticipantObserver(consented=granted(clock_domain=""))
+
+    result = measured(observer)
+
+    assert result["reason"] == "participant_consent_clock_incomparable"
+    assert observer.heard_calls == 0
+
+
+def test_observer_clock_in_another_domain_than_the_consent_is_not_used() -> None:
+    observer = ScriptedParticipantObserver(clock_domain="observer_wall")
+
+    result = measured(observer)
+
+    assert (result["status"], result["reason"]) == (
+        "not_measurable",
+        "participant_consent_clock_incomparable",
+    )
+
+
+def test_consent_revoked_after_the_sentence_ended_still_covers_it() -> None:
+    observer = ScriptedParticipantObserver(consented=granted(revoked_at=101.5))
+
+    assert measured(observer)["status"] == "observed_compliant"
+    assert observer.heard_calls == 1
+
+
+@pytest.mark.parametrize("queried_at", [101.5, 102.0, 200.0])
+def test_no_new_read_is_made_once_consent_has_been_revoked(queried_at: float) -> None:
+    observer = ScriptedParticipantObserver(consented=granted(revoked_at=101.5))
+
+    result = measured(observer, queried_at=queried_at)
+
+    assert (result["status"], result["reason"]) == (
+        "not_measurable",
+        "participant_consent_revoked",
+    )
+    assert observer.heard_calls == 0
+
+
+def test_revocation_during_the_sentence_discards_a_report_read_before_it() -> None:
+    observer = ScriptedParticipantObserver(consented=granted(revoked_at=100.6))
+
+    result = measured(observer, queried_at=100.55)
+
+    assert result["reason"] == "participant_consent_revoked"
+    assert "compliant" not in result
 
 
 def test_consent_for_another_observer_is_a_mismatch() -> None:
