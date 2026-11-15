@@ -1,0 +1,43 @@
+{
+  "provider_requests": 0,
+  "publication_id": "publication-1",
+  "current_receipt": "prevented",
+  "current_local_audio_written": false,
+  "synthesis_before_final_commit": true,
+  "events": [
+    {
+      "event": "runtime_synthesis_attempt_requested",
+      "publication_id": "publication-1",
+      "attempt_number": 1
+    },
+    {
+      "event": "runtime_synthesis_attempt_finished",
+      "publication_id": "publication-1",
+      "attempt_number": 1
+    },
+    {
+      "event": "publication_gate_decided",
+      "publication_id": "publication-1",
+      "validity": "valid",
+      "reason": "ok"
+    },
+    {
+      "event": "publication_commit_decided",
+      "publication_id": "publication-1",
+      "validity": "invalid",
+      "reason": "scene_changed"
+    }
+  ],
+  "constraint_cycle": [
+    "NC-76 requires final committed-valid before current synthesis",
+    "Dynamic first PCM requires synthesis",
+    "I7 requires final evaluation and first-PCM handoff together without suspension"
+  ],
+  "delayed_post_commit_synthesis_example": {
+    "evaluated_at": 100.0,
+    "first_pcm_ready_at": 100.3,
+    "validation_allowance_seconds": 0.25,
+    "can_write_without_recommit": false,
+    "recommit_would_leave_original_synthesis_before_final_commit": true
+  }
+}
