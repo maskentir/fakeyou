@@ -29,11 +29,13 @@ Eight production files, exactly the plan allowlist:
 
 Compared with the historical stack head `62b58e2f`:
 
-- `content_digest.py`, `context.py`, `revalidation.py`, `samples.py` and
-  `sensors.py` are byte-identical to it.
+- `content_digest.py`, `context.py`, `revalidation.py` and `samples.py` are
+  byte-identical to it.
+- `sensors.py` differs deliberately, see findings 5 and 6.
 - `publication.py` omits every #209/#210/#213/#214 hunk: no abstention import,
   no rendering or replacement fields, no commit/revision/sample callbacks on
   `PublicationContext`, no runtime synthesis mode and no historical decision.
+  It also differs deliberately, see finding 4.
 - `timeline.py` differs deliberately, see finding 1.
 - `perception.js` differs deliberately, see finding 2.
 
@@ -68,6 +70,51 @@ Not imported: #209 writer and W2 claims, #210 abstention activation, #212
 | `test_publication_activation` another slide | `invalid:subject_changed` | `invalid:scene_changed` | NC-21, #208 |
 | `test_publication_activation` share stopped | `unknown:scene_continuity_unknown` | `invalid:scene_changed` | #208 |
 | `test_publication_activation` static slide older than 120 s | `unknown:capture_time_unmapped` | `invalid:capture_too_old` | capture mapped at ingestion, #208 |
+
+## Findings from independent review of the first head
+
+An independent read-only review of head `6180918c` found no production path
+to a wrong `valid`. It confirmed four defects inherited from the historical
+design; each was reproduced with a local probe before any change.
+
+4. **Latent fail-open in the pure decision.** A screen `Validation` with an
+   exact match, `unchanged=False` and the default `source_changed=False`
+   returned `valid` for a source or undeclared claim; before this extraction
+   `unchanged=False` was `invalid`. The production revalidator always sets
+   `source_changed` in that case, so it was not reachable, but any other
+   producer would fail open. `unchanged is False` now counts as a changed
+   source: `unknown` for source and undeclared claims, content claims as in
+   NC-22 to NC-24. Three rows added to `test_screen_identity_table`, RED first.
+5. **A camera turned off and on inside one drain stayed blind.** The stop
+   retired the sampler incarnation while the assignment list was unchanged,
+   so the page sampler kept its retired generation and every later sample and
+   frame was refused until reassignment or reload. The drain now restarts the
+   page sampler of a stopped device that is still assigned, which yields a new
+   generation. Control:
+   `test_camera_turned_off_and_on_inside_one_drain_restarts_its_sampler`.
+6. **A frame drained before its digest sample was dropped.** The asset
+   produces the JPEG and the digest on independent asynchronous chains, so a
+   drain can land between them. `main` showed such a frame; the first port
+   dropped it as `retired_stream`, leaving a settled slide unseen. The frame
+   now waits for exactly one more drain and is dropped as `sample_missing` if
+   its sample still has not arrived. A frame whose sample was refused is still
+   dropped at once as `retired_stream`, and a repeated sample cannot unbind
+   the admitted one. Controls:
+   `test_frame_drained_before_its_sample_is_shown_once_the_sample_arrives`,
+   `test_frame_whose_sample_never_arrives_is_dropped_after_one_more_drain`,
+   `test_repeated_sample_does_not_unbind_the_frame_of_the_admitted_one`.
+7. **Not fixed here: a revisited slide stays `unknown` under a new presenter.**
+   The source check compares the segment's first presenter with the latest
+   one, not the presenter at binding time, so a source or undeclared claim on
+   a slide first shown by someone else is `unknown: source_identity_changed`
+   whenever a newer sample exists. This is over-conservative, never
+   publishable, and only reachable through the publication gate, which is
+   OFF. Tracked in [#225](https://github.com/maskentir/fakeyou/issues/225).
+
+The review also listed lower-severity observations that are left as they
+are: unused `SampleLedger.since`, confirmation bounds that ignore mapping
+uncertainty within the 5 s rule, and several tests that assert less than
+their names suggest.
 
 `test_publication_audit.py` and `test_publication_activation.py` are outside
 the plan's candidate test list; they are touched only for the rows above and
@@ -105,8 +152,12 @@ workers, default marker exclusions (`not browser and not live and not container`
 | Focused files, first run | 319 passed, **1 failed** (`test_publication_audit` lost camera; finding 3) |
 | Full offline suite before the asset fix | 12,281 passed, 113 skipped, 0 failed; JUnit SHA-256 `323219505f0724581ca3fc20d347580d84ece9eb77d4b18228950fefc7501ead` |
 | Browser controls, first port | 2 passed, **2 failed** (finding 2); `main` baseline 4 passed |
-| Browser controls, final tree | 4 passed; JUnit SHA-256 `59bb756afc9e1a75bc5f21c2bcf86895fe0ad71283c77ef4ff109a0d5830030b` |
-| Full offline suite, final tree | 12,281 passed, 113 skipped, 0 failed; JUnit SHA-256 `8a9ccb68d2b71290f5b8c36d6e37d24a0e5b715c0adf4339d0bba8f28bc31dde` |
+| Browser controls, first head | 4 passed; JUnit SHA-256 `59bb756afc9e1a75bc5f21c2bcf86895fe0ad71283c77ef4ff109a0d5830030b` |
+| Full offline suite, first head | 12,281 passed, 113 skipped, 0 failed; JUnit SHA-256 `8a9ccb68d2b71290f5b8c36d6e37d24a0e5b715c0adf4339d0bba8f28bc31dde` |
+| Exact-head CI on first head `6180918c` | 12,386 passed, 8 skipped, 91 deselected; node, secrets and simulator replay passed |
+| Review regression tests before the fixes | **6 failed** (findings 4 to 6) |
+| Full offline suite after the review fixes | 12,288 passed, 113 skipped, 0 failed; JUnit SHA-256 `6baa2a0ff6ef78cdfcc9631d985158a444cfdb30c9a39d1399010a4f65423493` |
+| Browser controls after the review fixes | 4 passed; JUnit SHA-256 `597095018ed9f8caa53c6ae1fa3fd73c6b94eb1bd95742695c219fb350f895f3` |
 | Node VM harness | passed, Node 26.5.1 |
 | Ruff check and format, mypy (743 files), import-linter (7 contracts), deptry | passed |
 
