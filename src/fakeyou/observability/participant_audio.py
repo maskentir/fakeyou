@@ -234,7 +234,20 @@ def measure_participant_publication(
     result["participant_gap"] = observation.gap
     if observation.gap is not None and result.get("reason") in _GENERIC_GAPS:
         result["reason"] = observation.gap
+    if _write_freshness_unproven(receipt, binding) and str(result["status"]).startswith(
+        "observed_"
+    ):
+        result.pop("compliant", None)
+        result["status"] = "not_measurable"
+        result["reason"] = "fresh_at_write_unproven"
     return result
+
+
+def _write_freshness_unproven(receipt: LocalWriteReceipt | None, binding: SentenceBinding) -> bool:
+    if receipt is None or receipt.publication_id != binding.publication_id:
+        return False
+    commit = getattr(receipt, "commit", None)
+    return bool(getattr(commit, "fresh_at_write_unproven", False))
 
 
 _GENERIC_GAPS = frozenset({"no_participant_observation", "publication_outcome_unknown"})

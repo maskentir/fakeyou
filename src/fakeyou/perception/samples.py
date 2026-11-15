@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
@@ -31,10 +32,17 @@ class _Source:
     discarded: int = 0
 
 
+HISTORY_SIZE = 512
+
+
 @dataclass(slots=True)
 class SampleLedger:
     revision: int = 0
     _sources: dict[SourceKey, _Source] = field(default_factory=dict)
+    _history: deque[ContentSample] = field(default_factory=lambda: deque(maxlen=HISTORY_SIZE))
+
+    def since(self, revision: int) -> tuple[ContentSample, ...]:
+        return tuple(sample for sample in self._history if sample.revision > revision)
 
     def ingest(
         self, record: DigestRecord, *, captured_at: datetime, capture: MappedInstant | None
@@ -62,6 +70,7 @@ class SampleLedger:
         self.revision += 1
         source.stopped = False
         source.latest = self._sample(source, record, captured_at, capture, consistent=consistent)
+        self._history.append(source.latest)
         return Ingested("accepted" if consistent else "inconsistent_time", source.latest)
 
     def _sample(

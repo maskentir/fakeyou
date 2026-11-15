@@ -3,10 +3,13 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass
+from functools import partial
 
 from pasimple import PA_SAMPLE_S16LE, PA_STREAM_PLAYBACK, PaSimple, PaSimpleError
 
+from fakeyou.audio.commit import WriteWithheld
 from fakeyou.audio.playback import PlaybackError
+from fakeyou.foundation.clock import monotonic
 from fakeyou.foundation.invariants import PCM_CHANNELS
 from fakeyou.foundation.pcm import PCM16_SAMPLE_BYTES
 
@@ -21,7 +24,15 @@ DEFAULT_PULSE_BUFFER = PulseBuffer()
 
 
 class PulseWriter:
-    def __init__(self, *, sink: str, rate: int, buffer: PulseBuffer = DEFAULT_PULSE_BUFFER) -> None:
+    def __init__(
+        self,
+        *,
+        sink: str,
+        rate: int,
+        buffer: PulseBuffer = DEFAULT_PULSE_BUFFER,
+        now: Callable[[], float] = monotonic,
+    ) -> None:
+        self._now = now
         self._sink = sink
         self._rate = rate
         self._buffer = buffer
@@ -43,6 +54,14 @@ class PulseWriter:
 
     async def write(self, pcm: bytes) -> None:
         await self._call(self._write, pcm)
+
+    async def write_before(self, pcm: bytes, deadline: float) -> None:
+        await self._call(partial(self._write_before, deadline), pcm)
+
+    def _write_before(self, deadline: float, pcm: bytes) -> None:
+        if self._now() > deadline:
+            raise WriteWithheld
+        self._write(pcm)
 
     async def drain(self) -> None:
         await self._call(self._drain)

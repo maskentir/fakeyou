@@ -10,10 +10,19 @@ from typing import Any, Literal, Protocol, runtime_checkable
 
 import numpy as np
 
+from fakeyou.audio.commit import (
+    BOUNDED_SCOPES,
+    COMMIT_EVALUATIONS,
+    WRITE_DELAYED,
+    CommitProgress,
+    DeadlineWriter,
+    WriteWithheld,
+)
 from fakeyou.foundation.invariants import PLAYBACK_SAMPLE_RATE
 from fakeyou.foundation.pcm import PCM16_SAMPLE_BYTES, VoicedClip, voiced_clip
 from fakeyou.foundation.protocols import SupportsAclose
 from fakeyou.foundation.publication import (
+    VALIDATION_AGE_SECONDS,
     PublicationContext,
     PublicationDecision,
     SentenceBinding,
@@ -26,6 +35,7 @@ from fakeyou.observability.faults import ConsumerSink, FaultReporter, guard_obse
 from fakeyou.observability.journal import Journal
 from fakeyou.observability.provider_faults import ProviderFault, classify_exception
 from fakeyou.speech.contract import (
+    CommitTiming,
     PlaybackOutcome,
     PlaybackReceipt,
     PreparedSpeech,
@@ -219,6 +229,7 @@ class _OpenTurn:
 @dataclass(slots=True)
 class _Progress:
     pcm_bytes: int = 0
+    commit: CommitProgress = field(default_factory=CommitProgress)
 
 
 @dataclass(frozen=True, slots=True)
@@ -873,23 +884,78 @@ class PlaybackEngine:
         if should_check:
             self._publication_checked.add(id(clip))
             decision = await self._publication_decision(clip)
-            if generation != self._generation:
-                raise _PublicationPrevented("unknown", "cancelled")
-            if not self._thawed.is_set():
+            self._raise_if_superseded(generation)
+            if not self._thawed.is_set() and not self._commits(clip):
                 raise _PublicationPrevented("unknown", "frozen")
-            if self._closed:
-                raise _PublicationPrevented("unknown", "closed")
             if decision is None:
                 raise _PublicationPrevented("unknown", "unresolved")
             if not decision.allows:
                 raise _PublicationPrevented(decision.validity, decision.reason)
         pcm = self._apply_gain(frame) if gain else frame
         self._last_sample = _pcm_last_sample(pcm)
-        await self._writer.write(pcm)
+        if should_check and self._commits(clip):
+            await self._write_committed(pcm, clip, generation)
+        else:
+            await self._writer.write(pcm)
         first = clip.progress.pcm_bytes == 0
         clip.progress.pcm_bytes += len(pcm)
         if first:
             self._emit_clip("playback_audio_started", clip)
+
+    def _raise_if_superseded(self, generation: int) -> None:
+        if generation != self._generation:
+            raise _PublicationPrevented("unknown", "cancelled")
+        if self._closed:
+            raise _PublicationPrevented("unknown", "closed")
+
+    def _commits(self, clip: _Clip) -> bool:
+        context = self._publication_context
+        return context is not None and context.commit is not None and clip.publication is not None
+
+    async def _write_committed(self, pcm: bytes, clip: _Clip, generation: int) -> None:
+        context = self._publication_context
+        binding = clip.publication
+        if context is None or binding is None or context.commit is None:
+            raise _PublicationPrevented("unknown", "unresolved")
+        progress = clip.progress.commit
+        bounded = binding.scope in BOUNDED_SCOPES
+        for _evaluation in range(COMMIT_EVALUATIONS):
+            await self._thawed.wait()
+            self._raise_if_superseded(generation)
+            decision = context.commit(binding)
+            if decision is None:
+                raise _PublicationPrevented("unknown", "unresolved")
+            evaluated_at = progress.evaluated(decision, context, bounded=bounded)
+            self._journal_commit(binding, decision, progress)
+            if not decision.allows:
+                raise _PublicationPrevented(decision.validity, decision.reason)
+            progress.accepted_at = evaluated_at
+            try:
+                if bounded and isinstance(self._writer, DeadlineWriter):
+                    await self._writer.write_before(pcm, evaluated_at + VALIDATION_AGE_SECONDS)
+                else:
+                    await self._writer.write(pcm)
+            except WriteWithheld:
+                continue
+            progress.written(context)
+            return
+        raise _PublicationPrevented("unknown", WRITE_DELAYED)
+
+    def _journal_commit(
+        self, binding: SentenceBinding, decision: PublicationDecision, progress: CommitProgress
+    ) -> None:
+        if self._journal is None:
+            return
+        self._journal.record(
+            "publication_commit_decided",
+            source="playback",
+            publication_id=binding.publication_id,
+            validity=decision.validity,
+            reason=decision.reason,
+            evaluated_at=progress.evaluated_at,
+            commit_revision=progress.commit_revision,
+            evaluations=progress.evaluations,
+        )
 
     async def _publication_decision(self, clip: _Clip) -> PublicationDecision | None:
         context = self._publication_context
@@ -923,8 +989,8 @@ class PlaybackEngine:
             async with asyncio.timeout(context.timeout_seconds):
                 decision = await gate(binding)
                 effective = (
-                    None
-                    if decision is None
+                    decision
+                    if decision is None or context.commit is not None
                     else _fresh_publication_decision(decision, binding, context)
                 )
                 if self._journal is not None:
@@ -1039,8 +1105,13 @@ class PlaybackEngine:
             publication_id=None if binding is None else binding.publication_id,
             transcript_id=utterance.transcript_id,
             sentence_index=utterance.sentence_index,
+            commit=self._commit_timing(clip),
         )
         self._publish(PlaybackEvent(kind, clip.text, detail, clip.cue, utterance, heard, receipt))
+
+    def _commit_timing(self, clip: _Clip) -> CommitTiming | None:
+        context = self._publication_context
+        return None if context is None else clip.progress.commit.timing(context)
 
     def _emit_dropped(self, clip: _Clip, detail: str, *, heard: str | None) -> None:
         self._emit_clip("playback_dropped", clip, detail, heard=heard)

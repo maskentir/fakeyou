@@ -92,6 +92,28 @@ _SETTLED: frozenset[PlaybackOutcome] = frozenset(
 
 
 @dataclass(frozen=True, slots=True)
+class PostCommitSample:
+    role: str
+    subject_id: str
+    sequence: int
+    captured_at: float | None
+    before_first_write: bool
+    captured_before_commit: bool | None
+
+
+@dataclass(frozen=True, slots=True)
+class CommitTiming:
+    evaluated_at: float
+    accepted_at: float | None
+    first_written_at: float | None
+    clock_domain: str
+    commit_revision: int | None = None
+    evaluations: int = 1
+    fresh_at_write_unproven: bool = False
+    post_commit: tuple[PostCommitSample, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class PlaybackReceipt:
     attempt_id: str
     outcome: PlaybackOutcome
@@ -102,6 +124,7 @@ class PlaybackReceipt:
     publication_id: str | None = None
     transcript_id: str | None = None
     sentence_index: int | None = None
+    commit: CommitTiming | None = None
 
     @property
     def local_audio_written(self) -> bool:

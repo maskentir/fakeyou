@@ -4,6 +4,7 @@ import pytest
 from pasimple import PaSimpleError
 
 import fakeyou.audio.pulse_writer as pulse_writer
+from fakeyou.audio.commit import DeadlineWriter, WriteWithheld
 from fakeyou.audio.playback import PlaybackError
 from fakeyou.audio.pulse_writer import PulseBuffer, PulseWriter
 
@@ -125,3 +126,30 @@ async def test_a_closed_writer_refuses_writes(streams: list[FakeStream]) -> None
     with pytest.raises(PlaybackError, match="closed"):
         await writer.write(b"\x00\x00")
     assert [name for name, _thread in streams[0].calls].count("close") == 1
+
+
+async def test_a_write_before_its_deadline_reaches_the_stream(streams: list[FakeStream]) -> None:
+    writer = PulseWriter(sink="agent_output", rate=24000, now=lambda: 100.0)
+
+    await writer.write_before(b"\x01\x00" * 480, 100.25)
+
+    [stream] = streams
+    assert stream.written[-1] == b"\x01\x00" * 480
+    assert isinstance(writer, DeadlineWriter)
+
+
+async def test_a_write_past_its_deadline_is_withheld_on_the_writer_thread(
+    streams: list[FakeStream],
+) -> None:
+    clock = [100.0]
+    writer = PulseWriter(sink="agent_output", rate=24000, now=lambda: clock[0])
+    await writer.drain()
+    clock[0] = 100.3
+
+    with pytest.raises(WriteWithheld):
+        await writer.write_before(b"\x01\x00" * 480, 100.25)
+
+    [stream] = streams
+    assert stream.written == [b"\x00" * 960]
+    await writer.write(b"\x02\x00" * 480)
+    assert stream.written[-1] == b"\x02\x00" * 480

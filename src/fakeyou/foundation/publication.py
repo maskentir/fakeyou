@@ -233,6 +233,9 @@ class PublicationContext:
     now: Callable[[], float] = monotonic
     timeout_seconds: float = 0.25
     id_factory: Callable[[], str] = lambda: str(uuid.uuid4())
+    commit: Callable[[SentenceBinding], PublicationDecision | None] | None = None
+    revision: Callable[[], int] | None = None
+    samples_since: Callable[[int], tuple[ContentSample, ...]] | None = None
 
 
 def _finite(value: float | None) -> bool:
