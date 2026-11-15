@@ -1,11 +1,15 @@
 # Writer spike protocol — libpulse asynchronous stream
 
-Status: **PROTOCOL REVISION 2 — UNDER REVIEW. NOT AUTHORIZED TO RUN. NO TRIAL HAS RUN.**
+Status: **PROTOCOL REVISION 3 — UNDER REVIEW. NOT AUTHORIZED TO RUN. NO TRIAL HAS RUN.**
 
-Revision 1 (`3d9c784c`) was rejected in review: its ordering invariant
-contradicted the corked-upload design, it let PCM cross the process boundary
-before authorization, and it treated client-updated indices as server proof.
-This revision replaces it. Thresholds and counts ruled earlier are unchanged.
+| Revision | Head | Outcome |
+| --- | --- | --- |
+| 1 | `3d9c784c` | Rejected: ordering invariant contradicted corked upload; PCM staged before authorization; client-updated indices used as server proof |
+| 2 | `b2713b85` | Changes requested: write-return time used as a causal lower bound; revocation after commit held to a precommit criterion; playback-started used as per-clip acknowledgment; absence of output and delivery delay claimed without a bound; thread boundary of the commit section unspecified |
+| 3 | this file | Closes those six items. Trial definitions changed for C3 and C7, so the revision is raised before any run |
+
+Unchanged from the rulings: 5 ms refusal, p99.9 ≤ 100 ms, V1 250 ms, and the
+trial counts of C0–C10.
 
 Parent: `2026-11-15-architecture-decision-review.md`, ADR-2. Scope once
 authorized: an offline experiment in the audio container against the real
@@ -18,17 +22,16 @@ code and cannot by itself lift V6.
 | # | Question | Kind |
 | --- | --- | --- |
 | P1 | Does a write ever block, or is a short buffer reported? | Mechanism |
-| P2 | Which signals are valid evidence of server acceptance and of buffer read, and how wide is the uncertainty on observed output? | Evidence |
+| P2 | What can be shown about server processing of a write, and how wide is the interval on observed output? | Evidence |
 | P3 | How long from final evaluation to observed output on an idle stream? | Performance |
 | P4 | When the first sample cannot meet its deadline, can the writer make any output of that clip impossible? | **Safety — decisive** |
 | P5 | Can any sample be heard before, or without, a valid final evaluation? | **Safety — decisive** |
-| P6 | After a stop, is the writer's account of what left consistent with what was observed? | Accounting |
+| P6 | After a stop, is the writer's account consistent with what was observed? | Accounting |
 | P7 | Do restart, zero-byte clips and clock faults yield failure or `unproven`, never a fabricated instant? | Honesty |
 
 **Prediction recorded before running:** P4 fails under a stalled daemon for both
-arms, because the stop is an asynchronous command to the process that owns the
-render thread. P5 is expected to hold for arm R by construction and to be
-unprovable for arm S. These are hypotheses.
+arms. P5 holds for arm R by construction and cannot be proven for arm S. These
+are hypotheses.
 
 ## Arms
 
@@ -37,8 +40,58 @@ without permission to play, Z2 released after a valid final evaluation.
 
 | Arm | Design | PCM path | Standing |
 | --- | --- | --- | --- |
-| R | Release is the write (W-A2). Stream running and empty, no prebuffer; the commit section is final evaluation then a non-blocking write of the first 20 ms frame after a writable-size check | Z0 → Z2 | Candidate |
-| S | Stage, then release (W-A1). First frame uploaded to a corked stream; the commit section is final evaluation then an uncork request | Z0 → Z1 → Z2 | Characterization only. Outside I7 as written; no result from this arm can be put forward for V6 |
+| R | Release is the write. Stream running and empty, no prebuffer; the first 20 ms frame is written inside the commit section | Z0 → Z2 | Candidate |
+| S | Stage, then release. First frame written to a corked stream; the commit section issues the uncork | Z0 → Z1 → Z2 | Characterization only. Outside I7 as written; no result from this arm can be put forward for V6 |
+
+## Execution context and the commit section
+
+One thread owns everything: the event loop thread runs the final evaluation and
+every libpulse call. libpulse is driven by non-blocking iterations of a plain
+mainloop on that thread. There is no threaded mainloop, no lock, and no hop to
+another thread anywhere between evaluation and write.
+
+A threaded mainloop is rejected for this spike: the caller would wait for the
+mainloop lock, and the bytes would be sent to the server later by the mainloop
+thread, which is an asynchronous handoff after the evaluation with no proven
+bound.
+
+| Step | Where | May wait |
+| --- | --- | --- |
+| 1. Readiness | Before the section | Yes. Stream ready and not corked (arm R), writable size ≥ one frame, no data pending on the connection |
+| 2. Readiness re-check | Section | No. Synchronous query only; if it fails the section is abandoned and step 1 repeats |
+| 3. Final evaluation | Section | No |
+| 4. Release | Section | No. `release_invoked_at`, the write (arm R) or uncork request (arm S), `release_returned_at` |
+| 5. Send | Section | No. Non-blocking iterations until nothing is pending on the connection, at most a fixed count; then `sent_at`, or `send_incomplete` |
+
+The section is one synchronous function. The readiness re-check comes before the
+evaluation so that the evaluation is the last decision before the write. If
+readiness is lost, the evaluation is not reused; it is made again after the next
+wait.
+
+What this does not claim: a writable-size check says the client may queue a
+frame. It says nothing about the path downstream of the socket, or about output
+meeting a deadline.
+
+## Preflight
+
+Preflight is part of the spike and runs only once the protocol is authorized. A
+failed item stops the spike before trial 1 and requires a protocol revision.
+Each item below is an assumption of this protocol, not an established fact.
+
+| # | Assumption | Established by |
+| --- | --- | --- |
+| PF1 | In this context the write call queues and returns without blocking, including with a full buffer and a stopped daemon | Test |
+| PF2 | Bytes leave the process only during iterations made by the owning thread, and the pending-data query reflects unsent data | Reading the client library source for the version in the image, plus a test with the socket observed externally |
+| PF3 | The reply to a timing request issued after a write cannot be produced before the server has processed that write | A written argument from the daemon source for the version in the image, naming the code path. Trials cannot establish this |
+| PF4 | Once the server no longer lists a stream, no PCM of that stream can be rendered | Written argument from the daemon source, plus a test |
+| PF5 | Configured latency of `agent_output` and its monitor | Read from the running server and recorded in the manifest |
+| PF6 | The daemon can be confirmed stopped: every thread reported stopped by the kernel before the next step proceeds | Test |
+| PF7 | The observer attributes samples to clips with no false match on silence, on other clips, or on partial fragments | 100,000 clip patterns against recorded silence and each other |
+| PF8 | No other client or module can uncork, move or feed the streams under test | Module list and client list recorded; test |
+
+If PF3 is not established, server processing is reported as `unproven` for the
+whole run. No criterion depends on it. If PF4 is not established, no trial with
+released or staged PCM can be classed "no output, proven".
 
 ## Setup
 
@@ -46,116 +99,175 @@ without permission to play, Z2 released after a valid final evaluation.
 | --- | --- |
 | Environment | `docker/audio` image, daemon and `default.pa` unmodified; image digest, PulseAudio version, kernel and CPU count in the manifest |
 | Sink | `agent_output`, 24 kHz, mono, s16le, as in production |
-| Independent observer | A separate process recording `agent_output.monitor`, stamping each fragment at receipt on `CLOCK_MONOTONIC`. It shares no state with the writer |
-| Clip content | Each clip carries a unique sample pattern, so the observer identifies clip and sample offset from audio alone |
+| Streams | C0–C3 and C10: one persistent stream, as in production. Every condition with a no-output claim: one stream per trial, identified by its server index |
+| Independent observer | A separate process recording `agent_output.monitor`, stamping each fragment at receipt. It shares no state with the writer. It reads from the same daemon, which limits what it can prove (see "No output") |
+| Control connection | A third process that queries the server for stream existence. It is not the writer's connection |
+| Clip content | A unique sample pattern per clip, so the observer identifies clip and sample offset from audio alone |
 | Clock | One host, `CLOCK_MONOTONIC` in every process |
-| Final evaluation | A deterministic stub returning a scheduled `valid`, `invalid` or `unknown`; the perception store is not part of this spike |
+| Final evaluation | A deterministic stub returning a scheduled `valid`, `invalid` or `unknown` |
+| Order counter | One counter incremented only on the owning thread, stamped on the commit section and on every applied revocation or stop |
 | Code | `evals/writer_spike/`, outside `src/`; a direct binding for the spike only, no product dependency |
 
 ## Recorded per trial
 
-Precommit and postcommit instants are separate fields. None is named or mapped
-to the contract's `accepted_at` or `first_written_at`.
+No field is named or mapped to the contract's `accepted_at` or
+`first_written_at`.
 
-| Phase | Field | Source |
+| Phase | Field | Meaning |
 | --- | --- | --- |
-| Precommit (arm S only) | `staged_enqueued_at` | Write call returned |
-| | `staged_ack_at` | Server-originated signal, as defined below |
-| Commit | `evaluated_at` | Stub evaluation instant |
-| | `released_at` | Arm R: first-frame write call returned. Arm S: uncork request issued |
-| Postcommit | `ordered_reply_at` | Reply received to a command issued after the release on the same connection |
-| | `started_notified_at` | Server playback-started notification received |
-| | `buffer_read_at` | Receipt of a timing snapshot requested after the release, not flagged corrupt, with read index past the clip start |
-| | `output_interval` | From the observer, as defined below |
-| Stop | `stop_requested_at`, `stop_effective_at` | Request by the caller; instant after which the writer releases nothing |
-| | `fill_at_stop` | PCM released and not yet shown read, in samples |
-| Fault | `stall_from`, `stall_until` | Instants the daemon was stopped and resumed |
+| Precommit, arm S | `stage_invoked_at`, `stage_returned_at` | Around the staging write. `stage_invoked_at` is the first instant any PCM of the clip was handed to libpulse |
+| | `stage_sent_at` | Nothing pending on the connection after staging |
+| Commit | `evaluated_at`, `commit_seq` | Final evaluation; order counter value of the section |
+| | `release_invoked_at`, `release_returned_at` | Immediately before and after the release call |
+| | `sent_at` or `send_incomplete` | Step 5 |
+| | `loop_turns_in_section` | Event-loop iterations between steps 2 and 5; must be 0 |
+| Postcommit | `ordered_reply_at` | Receipt of the reply to a timing request issued after the release |
+| | `buffer_read_at` | Receipt of a timing snapshot requested after the release, not flagged corrupt, read index past the clip start |
+| | `started_notified_at` | Playback-started notification. **Diagnostic only** |
+| | `output_interval` | From the observer, defined below |
+| Stop | `stop_requested_at`, `stop_applied_at`, `stop_seq` | Request by the caller; application on the owning thread; order counter value |
+| | `handoff_log` | Every release call for the clip with byte count and order counter value |
+| | `fill_at_stop` | Bytes released and not shown read by a valid snapshot |
+| Closure | `teardown_confirmed_at`, `observed_until` | Control connection no longer lists the stream; end of the observation window |
+| Fault | `stall_confirmed_at`, `stall_until` | Daemon confirmed stopped (PF6); resume signal sent |
 
-**Evidence rules.**
+### What each signal shows
 
-- The local `write_index` is recorded and is evidence of nothing. The client
-  library advances it at the write call.
-- `ordered_reply_at` and `started_notified_at` are *candidate* evidence of server
-  acceptance. A candidate is validated only if, across all trials, it never
-  occurs inside `[stall_from, stall_until)` for a release made during the stall,
-  and never later than the observer's upper bound for a clip that was heard. A
-  candidate that fails once is discarded for the whole report.
-- `buffer_read_at` is evidence that the stream buffer was read. It is not
-  evidence of sink output and is never used for K4 or K5.
-- Interpolated time and latency are recorded as estimates only.
+Three different facts, never substituted for one another.
 
-**Output interval.** A sample was output no later than the observer received its
-fragment and no earlier than it was released.
+| Fact | Signal | Limits |
+| --- | --- | --- |
+| The server processed this write | `ordered_reply_at`, only if PF3 is established. The proof is the ordering argument together with the local fact that the write preceded the request on the same stream. The reply alone proves nothing about a write | A late reply is not a false reply. Callbacks can be delayed; no timing test accepts or rejects this signal |
+| When that happened | Nothing gives an instant. It lies in `[release_invoked_at, ordered_reply_at]` | Reported as an interval |
+| A sample reached output | The observer only | See below |
 
-| Bound | Value |
-| --- | --- |
-| Upper, `out_hi` | Receipt instant of the fragment holding the sample |
-| Lower, `out_lo` | The latest of: `released_at`; `stall_until` when the release fell inside the stall; `out_hi − U` when the observer was not under fault |
-| `U` | Fragment duration plus the observer's delivery delay bound, measured in a calibration run before each condition and reported. Under any fault that can delay the observer itself (C1, C4, C5), `U` is treated as unbounded and the third term is dropped |
+- The local `write_index` is recorded and is evidence of nothing.
+- `started_notified_at` reports that playback began after an underrun or at
+  start-up. It is not an acknowledgment of any frame and is used in no criterion
+  and no bound.
+- `buffer_read_at` shows the stream buffer was read. It is not sink output and is
+  used in no timing criterion.
+- One falsification check applies to `ordered_reply_at`: a reply received while
+  the daemon is confirmed stopped, for a request issued after the stop, means the
+  signal is not server-originated and it is discarded for the whole report. This
+  can refute the signal. It cannot validate it.
 
-**Classification against a deadline `d`.**
+### Output interval
+
+Only deterministic bounds are used in classification.
+
+| Bound | Value | Why it is a bound |
+| --- | --- | --- |
+| Upper, `out_hi` | Receipt instant of the observer fragment holding the sample | A sample cannot be recorded before it was output. Scheduling and transport delay only move this later |
+| Lower, `out_lo`, arm R | `release_invoked_at`, provided `handoff_log` shows no earlier handoff of the clip; raised to `stall_until` when `stall_confirmed_at ≤ release_invoked_at` | No PCM of the clip existed outside the worker before the call began. A stopped daemon renders nothing |
+| Lower, `out_lo`, arm S | `stage_invoked_at`, raised to `stall_until` under the same stall rule | The uncork instant is **not** a lower bound: whether staged PCM can play before it is the property under test |
+
+The write-return instant is never a lower bound: the server can process a frame
+before the call returns.
+
+The observer's delivery delay `U` is measured in a calibration run and reported
+as a distribution. It is an empirical figure. It is used in no bound and no
+classification.
+
+### Classification against a deadline `d`
 
 | Result | Condition |
 | --- | --- |
 | Within bound, proven | `out_hi ≤ d` |
 | Confirmed violation | `out_lo > d` |
 | Unproven | `out_lo ≤ d < out_hi` |
-| No output, proven | No sample of the clip observed for the rest of the run, and the observer demonstrably alive (a sentinel clip is observed afterwards) |
 
-An unproven trial is neither a pass nor a violation. It is counted and listed.
+Errors run one way: a sample truly within bound may be classed unproven; a
+sample truly late is never classed within bound. Without a stall `out_lo` is the
+release instant, so late output can be *confirmed* only in the stall conditions
+and is otherwise unproven. That is a limit of the instrument and is reported as
+one.
+
+### No output
+
+"No output, proven" has two routes. Anything else is `unproven`.
+
+| Route | Applies when | Requirements |
+| --- | --- | --- |
+| N1 Never handed over | Arm R, clip not released | `handoff_log` is empty for the clip. This is a fact about the worker and does not depend on the observer. The observer window below is run as corroboration; a sample seen there is a K7 failure |
+| N2 Handed over, then destroyed | PCM was staged or released | All of: the stream is the trial's own; discard and disconnect were requested; the control connection confirms the server no longer lists the stream; PF4 is established; no sample of the clip is observed from the first handoff until `observed_until`; a sentinel clip on a new stream is observed after `observed_until` |
+
+Observation window: `observed_until` is `teardown_confirmed_at` plus the larger
+of 2 s and ten times the latency recorded in PF5.
+
+N2 is a statement about a destroyed stream within a closed window. It rests on
+PF4, not on the silence alone: the observer reads from the same daemon, and
+silence followed by a sentinel shows the observer was alive, not that old PCM
+could never appear. Where teardown cannot be confirmed (daemon stopped or
+killed, control connection failed) or the daemon restarted inside the window,
+the trial is `unproven`.
 
 ## Deadlines
 
-- **First frame.** `d = evaluated_at + 250 ms` in this spike; the sample
-  freshness term of the production deadline is fixed at a constant by the stub
-  and reported. V1 applies to the first sample only.
+- **First frame.** `d = evaluated_at + 250 ms` in this spike; the freshness term
+  of the production deadline is held constant by the stub and reported. V1
+  applies to the first sample only.
 - **Whole clip, when the first sample missed.** No sample of the clip may be
   output at any time (V2, V3).
 - **Continuation.** Frames after a first sample that met its deadline have no
-  deadline in #205. Their timing is recorded as information. No criterion
-  below applies to them, and none is introduced here.
+  deadline in #205. Their timing is recorded as information; no criterion
+  applies to them and none is introduced here.
 
 ## Conditions and trials
 
 | Condition | Injection | Arm R | Arm S |
 | --- | --- | --- | --- |
 | C0 Baseline | Idle stream, evaluation `valid` | 10,000 clips | 2,000 |
-| C1 CPU contention | All cores saturated; separately, a thread holding the interpreter lock in the writer | 1,000 each | — |
+| C1 CPU contention | All cores saturated; separately, a second thread holding the interpreter lock | 1,000 each | — |
 | C2 Back-pressure | Stream buffer full; sink suspended | 1,000 each | — |
-| C3 Delayed callback | Mainloop thread blocked 50, 250, 1,000 ms around the commit | 1,000 each | 1,000 each |
-| C4 Stalled server | Daemon stopped **before** the release, resumed 50, 300, 1,000 ms later; and stopped just after the release | 1,000 each | 1,000 each |
+| C3 Delayed dispatch | Owning thread blocked 50, 250, 1,000 ms: between readiness and the section; and right after the section, before any further iteration | 1,000 each | 1,000 each |
+| C4 Stalled server | Daemon confirmed stopped **before** the release, resumed 50, 300, 1,000 ms later; and stopped just after the release | 1,000 each | 1,000 each |
 | C5 Server restart | Daemon killed and restarted at idle and mid-clip | 200 each | 200 each |
-| C6a Precommit cancel | Cancel or revoke at random instants before the commit | 1,000 | 1,000 |
-| C6b Postcommit stop | Stop at random offsets from 0 to 200 ms after the release | 2,000 | — |
-| C7 Revocation at commit | Authorization withdrawn within ±5 ms of the commit section | 1,000 | 1,000 |
-| C8 Expired deadline | Deadline already passed at the commit section | 1,000 | 1,000 |
+| C6a Precommit cancel | Cancel applied before the commit section, at random earlier instants | 1,000 | 1,000 |
+| C6b Postcommit stop | Stop requested 0 to 200 ms after the release | 2,000 | — |
+| C7 Revocation near commit | Revocation requested from another thread within ±5 ms of the section. Each trial is classed afterwards from the order counter, not from the offset | 1,000 | 1,000 |
+| C8 Expired deadline | Deadline already passed at the section | 1,000 | 1,000 |
 | C9 Zero-byte clip | Empty PCM | 200 | — |
 | C10 Clock fault | Instant missing; instant from another clock | 200 each | — |
 | C11 Not valid | Final evaluation `invalid` or `unknown` | 1,000 | 1,000 |
 | C12 Restart while staged | Daemon killed and restarted between staging and evaluation | — | 200 |
-| C13 Release ordering | Mainloop blocked between staging and evaluation; evaluation `invalid`; discard and a following valid clip issued back to back | — | 1,000 |
+| C13 Release ordering | Owning thread blocked between staging and evaluation; evaluation `invalid`; discard and a following valid clip issued back to back | — | 1,000 |
 
-Stopping the daemon before the release (C4) makes `out_lo = stall_until`, so a
-sample heard after a deadline that expired during the stall is a confirmed
-violation, not an ambiguous one.
+**C7 classes.** A revocation takes effect when the owning thread applies it,
+which is the order the final evaluation can see.
+
+| Class | Record | Judged by |
+| --- | --- | --- |
+| C7a Before commit | `stop_seq < commit_seq` | K6: zero handoff, no output proven |
+| C7b After commit | `stop_seq > commit_seq` | K8: postcommit stop. The commit stands |
+| C7c Undetermined | Either counter value missing, or the record cannot order them | `unproven`; counted |
+
+A revocation requested before the section and applied after it is class C7b.
+Its request-to-application delay is reported; it is not relabelled as precommit.
+A class with fewer than 100 trials is reported `unproven` for that class.
 
 ## Criteria
 
 | # | Criterion | Conditions | Status |
 | --- | --- | --- | --- |
-| K1 | No write call exceeds 5 ms; a short buffer is reported, not waited on | C0–C4, C8 | Experiment target |
-| K2 | An expired first frame is refused within 5 ms, and no output is proven | C8 | Target for the 5 ms; invariant for the output |
+| K1 | No release call exceeds 5 ms from invocation to return; a short buffer is reported, not waited on | C0–C4, C8 | Experiment target |
+| K2 | An expired first frame is refused within 5 ms, and no output is proven by route N1 | C8 | Target for the 5 ms; invariant for the output |
 | K3 | `out_hi − evaluated_at` p99.9 ≤ 100 ms | C0 | Experiment target |
 | K4 | No clip is reported as written within bound unless its first sample is within bound, proven | all | Invariant |
-| K5 | For a clip whose first sample was not proven within bound: zero confirmed violations, that is, no sample with `out_lo > d` | C1–C4, C8 | Invariant; one occurrence fails the arm for V6 |
-| K6 | Precommit cancel, revocation, or an evaluation that is not `valid`: no output, proven | C6a, C7, C11–C13 | Invariant |
-| K7 | No sample observed with `out_hi < released_at` | all | Invariant |
-| K8 | Postcommit stop: nothing released after `stop_effective_at`; samples observed after it do not exceed `fill_at_stop` plus one frame; the receipt states audio was written when any sample was observed | C6b | Invariant |
-| K9 | Ordering. Arm R: `evaluated ≤ released`, and every validated postcommit signal and `out_hi` are at or after `released`. Arm S: `staged_enqueued ≤ staged_ack ≤ evaluated ≤ released`, with the same postcommit rule | all | Invariant |
+| K5 | For a clip whose first sample was not proven within bound: no confirmed violation | C1–C4, C8 | Invariant; one occurrence fails the arm for V6 |
+| K6 | Cancel or revocation applied before commit, or an evaluation that is not `valid`: empty `handoff_log` in arm R, and no output proven | C6a, C7a, C11–C13 | Invariant |
+| K7 | Arm R: no sample with `out_hi < release_invoked_at`. An occurrence means a handoff outside the commit section or a faulty instrument; the run's observer evidence is void until explained. Arm S: a sample with `out_hi < release_invoked_at` is confirmed output before authorization | all | Invariant |
+| K8 | Postcommit stop: `handoff_log` shows no release with an order value after `stop_seq`; bytes observed after `stop_applied_at` do not exceed `fill_at_stop` plus one frame; the receipt states audio was written when any sample was observed | C6b, C7b | Invariant |
+| K9 | Ordering. Arm R: `evaluated ≤ release_invoked ≤ release_returned`; `ordered_reply`, `buffer_read` and `out_hi` are not before `release_invoked`. Arm S: `stage_invoked ≤ stage_returned ≤ evaluated ≤ release_invoked ≤ release_returned`; the same signals are not before `stage_invoked` | all | Invariant |
 | K10 | No instant recorded for an event that did not occur; a restart is reported as failure; a missing or foreign-clock instant yields `unproven` | C5, C9, C10 | Invariant |
+| K11 | `loop_turns_in_section` is 0 in every trial. `send_incomplete` trials are counted and listed with the delay until the bytes were sent | all | Invariant for the first; report for the second |
 
-K8 does not claim a rollback. The committed decision stands; the criterion is
-that the stop releases nothing further and the account is truthful.
+K8 does not claim a rollback. The committed decision stands; buffered audio may
+still be heard and is reported as heard.
+
+In arm S a valid trial cannot show that its audio began only after the uncork:
+`out_lo` is the staging instant, which precedes it. Authorization order in arm S
+is therefore `unproven` in every valid trial, by design of the measurement.
 
 ## Verdict rules
 
@@ -165,30 +277,30 @@ that the stop releases nothing further and the account is truthful.
    full distributions.
 3. Unproven trials never support a pass. A criterion passes only if every trial
    in scope is proven; otherwise its result is `unproven` with the count.
-4. Thresholds, counts and classification rules are not edited after the first
-   trial. A change is a new protocol revision and a new run.
-5. Zero confirmed violations of K5 does **not** establish prevention. Arm R is
-   put forward for V6 only with a design argument that names the mechanism
-   making late output impossible, and only if that argument survives review.
+4. Thresholds, counts, bounds and classification rules are not edited after the
+   first trial. A change is a new protocol revision and a new run.
+5. No confirmed violation of K5 does **not** establish prevention. Arm R is put
+   forward for V6 only with a design argument that names the mechanism making
+   late output impossible, and only if that argument survives review.
 6. If K5 fails, the report states the measured exposure, samples and lateness,
-   as a finding. It is not presented as a mitigated risk.
-7. Arm S results are labelled characterization throughout. A clean K6 in arm S
-   is not a proof that staged audio cannot play.
+   as a finding. It is not presented as a mitigated risk, and no guard-band
+   variant is proposed in its place.
+7. Arm S results are labelled characterization throughout.
 8. A FIFO spike follows only if the report identifies a boundary where the
    consuming stage enforces the deadline.
 
 ## Outputs
 
-- Raw trial rows as JSONL with SHA-256, the environment manifest, calibration
-  runs, and the spike code at the commit that produced them.
+- Raw trial rows as JSONL with SHA-256, the environment manifest, preflight
+  results and arguments, calibration runs, and the spike code at the commit that
+  produced them.
 - A report: each criterion's result; distributions for targets; every confirmed
-  violation with its trace; every unproven trial with the reason; which
-  server-acceptance candidates were validated or discarded; the latency
-  difference between arms; and the design argument, or the statement that none
-  was found.
+  violation with its trace; every unproven trial with the reason; the C7 class
+  counts; whether PF3 and PF4 were established; the latency difference between
+  arms; and the design argument, or the statement that none was found.
 
 ## What this spike cannot establish
 
 Participant audibility; behavior in a browser or a real meeting; a deterministic
-guarantee from trial counts; which event satisfies `first_written_at`;
-production readiness of any binding.
+guarantee from trial counts; the instant at which the server processed a write;
+which event satisfies `first_written_at`; production readiness of any binding.

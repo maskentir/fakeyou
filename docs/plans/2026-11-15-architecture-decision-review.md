@@ -15,6 +15,11 @@ process boundary before authorization, server indices used as proof they are
 not) and four sharpenings (timing intervals, first-frame deadline, cancellation
 before and after commit, fallback entry into the machine).
 
+The review of PR #218 at `b2713b85` accepted the direction of all three records
+and asked for one more revision of the spike protocol only. The matching
+corrections here are confined to ADR-2: the execution context of the commit
+section, and playback-started reduced to a diagnostic.
+
 | Record | Verdict on r2 | State after revision 3 | Still open |
 | --- | --- | --- | --- |
 | ADR-1 Preparation and publication | Design direction accepted | Unchanged in substance; silence terminology corrected | Contract amendment review; local engine evaluation |
@@ -92,7 +97,7 @@ and its own grant, links the attempt it replaces, and never resumes it.
 
 | Entry | Precondition, checked by the runtime before the attempt exists | Then |
 | --- | --- | --- |
-| `HistoricalCandidate` | The replaced attempt carries verified provenance for the same claim and evidence; its end reason is one H5 allows; no reason excluded by H6 | Support is re-confirmed by the one matcher and H1–H6 are checked. Only then `Verified`, rendered with the historical pattern. H1–H6 are checked again at the attempt's own commit, as the contract requires |
+| `HistoricalCandidate` | The replaced attempt carries verified provenance for the same claim and evidence; its end reason is one H5 allows; no reason excluded by H6 | Support is re-confirmed by the one matcher and H1–H6 are checked. Only then `Verified`, rendered with the historical pattern. H1–H6 are checked again at the attempt's own commit, as the contract requires. `HistoricalRefused` is terminal for this attempt; an abstention, if the catalog rules allow one, is a further new attempt and leaves this record untouched |
 | `AbstentionCandidate` | No historical statement is available for the claim; the catalog condition (AB1, AB2 or AB3) is derived from the look status, never from the model | Entry and version are selected. Existing lawful audio goes to `Prepared`, sealed to entry and version; otherwise `Rendered`, needing a grant like any statement |
 | retry | The earlier attempt ended in `PrepAbandoned` before commit | A new attempt at `Rendered` with a new grant |
 
@@ -271,7 +276,7 @@ release ordering. No such proof is known.
 | | W-A2 — release is the write | W-A1 — stage, then release |
 | --- | --- | --- |
 | Before the final evaluation | Stream connected, running, empty. No PCM outside the worker | First frame uploaded to a corked stream (Z1) |
-| Commit section | Final evaluation, then a non-blocking write of the first frame after a writable-size check | Final evaluation, then an uncork request |
+| Commit section | One synchronous function on the thread that owns both the evaluation and libpulse: readiness re-check, final evaluation, non-blocking write of the first frame, send. No lock and no hop to another thread | Final evaluation, then an uncork request |
 | Final evaluation not `valid` | Nothing was handed over; nothing to undo | Staged PCM must be destroyed in another process, by asynchronous commands |
 | Fits I7 as written | Yes | No |
 | Latency after commit | Transport of the frame plus server start | Start only |
@@ -289,7 +294,7 @@ revision 2 proposal to evaluate V1 at a read-index event is withdrawn.
 | Event | Evidence accepted | Not evidence |
 | --- | --- | --- |
 | Client enqueue | The write call returned success. A local fact | — |
-| Server acceptance | A server-originated signal that can only follow the write: the reply to a command issued after it on the same ordered connection, or the server's playback-started notification. Each is a hypothesis until the spike validates it against the independent observer and against a stopped daemon | The local `write_index`. The client library advances it at the write call, before any server confirmation |
+| Server processed the write | The reply to a timing request issued after the write, and only if an argument from the daemon source shows that reply cannot precede processing of the write. Sharing a connection is not that argument. The reply gives no instant, only an interval, and a late reply is not a false one | The local `write_index`, which the client library advances at the write call. The playback-started notification, which reports a start after underrun and acknowledges no frame; it is diagnostic only |
 | Buffer read | A timing snapshot requested after the release, not flagged corrupt, whose read index is past the clip start. It shows the stream buffer was read | Interpolated time or latency. A read index is not sink output: latency remains downstream of it |
 | Sink output | An independent recorder on `agent_output.monitor` identifying the clip's own samples, reported as a time interval with measured uncertainty | The writer's own bookkeeping, or any of the rows above |
 
@@ -511,7 +516,7 @@ Tracking only. Each is its own review; none implies the next.
 | --- | --- | --- |
 | 1 | ADR revised with five rulings and three corrections | Direction accepted conditionally on r2; revision 3 awaiting review |
 | 2 | State machine, ownership, authority, revoked and consumed transitions fixed | Fallback entries and silence added in revision 3, awaiting review |
-| 3 | Writer spike protocol with pre-registered thresholds | Revision 2 of the protocol, awaiting review |
+| 3 | Writer spike protocol with pre-registered thresholds | Protocol revision 3, awaiting review |
 | 4 | Offline writer spike, no meeting, no provider | **Not authorized** until gate 3 passes |
 | 5 | Contract diff against #205 reviewed separately | Not started |
 | 6 | NCA-01–27 and NCT-01–12 proven under the approved amendment | Not started |
