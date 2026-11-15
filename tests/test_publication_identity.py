@@ -73,6 +73,24 @@ SCREEN_ROWS: list[tuple[str, Validation, Dependence | None, tuple[str, str]]] = 
         ("invalid", "scene_changed"),
     ),
     (
+        "exact content on a changed scene, source",
+        validated("exact", sampled(99.0, sequence=2), unchanged=False),
+        "source",
+        ("unknown", "source_identity_changed"),
+    ),
+    (
+        "exact content on a changed scene, undeclared",
+        validated("exact", sampled(99.0, sequence=2), unchanged=False),
+        None,
+        ("unknown", "source_identity_changed"),
+    ),
+    (
+        "exact content on a changed scene, content",
+        validated("exact", sampled(99.0, sequence=2), unchanged=False),
+        "content",
+        ("valid", "content_confirmed_after_interruption"),
+    ),
+    (
         "subject dependence on a screen is treated as source",
         INTERRUPTED,
         "subject",

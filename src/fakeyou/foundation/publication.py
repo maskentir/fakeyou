@@ -494,7 +494,7 @@ def _freshness_decision(
             and analyzed is not None
             and confirmation.continuity != analyzed.continuity
         )
-        if interrupted or validation.source_changed:
+        if interrupted or validation.source_changed or validation.unchanged is False:
             if dependence != "content":
                 return _unknown("source_identity_changed", at, clock_domain)
             reason = "content_confirmed_after_interruption"
