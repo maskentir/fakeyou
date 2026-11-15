@@ -70,7 +70,7 @@ def test_one_digit_change_is_not_a_distinct_screen_to_the_comparison(
 
 
 @pytest.mark.parametrize(("before", "after", "comparison"), CASES)
-def test_one_digit_change_keeps_the_segment_and_the_first_keyframe_identity(
+def test_one_digit_change_keeps_the_segment_but_the_scene_reports_the_newer_sample(
     before: bytes, after: bytes, comparison: str
 ) -> None:
     del comparison
@@ -91,7 +91,11 @@ def test_one_digit_change_keeps_the_segment_and_the_first_keyframe_identity(
     assert current.keyframe.sha256 == keyframe(before).sha256
     assert shown.arrival is not None
     assert shown.arrival.sha256 == keyframe(after).sha256
-    assert meeting.perception.current_scene(bound) == bound
+    scene = meeting.perception.current_scene(bound)
+    assert isinstance(scene, SnapshotRef)
+    assert scene.subject_id == bound.subject_id
+    assert scene.stream_id == keyframe(after).sha256
+    assert meeting.timeline.latest_keyframe(current).sha256 == keyframe(after).sha256
 
 
 @pytest.mark.parametrize(("before", "after", "comparison"), CASES)
@@ -102,8 +106,26 @@ async def test_claim_about_a_figure_is_not_published_after_one_digit_changed(
     turn = await revenue_turn(figure_meeting(before, after))
 
     assert [item.outcome for item in turn.meeting.settled] == ["prevented"]
-    assert turn.meeting.writer.written == []
+    assert turn.meeting.prevented == "unknown:content_changed_unverified"
     assert turn.counted == []
+
+
+@pytest.mark.parametrize(("before", "after", "comparison"), CASES)
+async def test_look_after_the_change_analyzes_the_newer_frame_and_is_published(
+    before: bytes, after: bytes, comparison: str
+) -> None:
+    del comparison
+    meeting = figure_meeting(before, None)
+    presenter = meeting.timeline.participant("device-ayu", "Ayu")
+    meeting.timeline.show_screen(keyframe(after, seconds=0.8), presenter, data=after)
+
+    turn = await revenue_turn(meeting)
+
+    [binding] = turn.meeting.bindings
+    [evidence] = binding.evidence
+    assert evidence.snapshot is not None
+    assert evidence.snapshot.stream_id == keyframe(after).sha256
+    assert [item.outcome for item in turn.meeting.settled] == ["completed"]
 
 
 @pytest.mark.parametrize(("before", "after", "comparison"), CASES)

@@ -1,0 +1,241 @@
+from typing import Any
+
+import pytest
+
+from fakeyou.foundation.clock_mapping import ClockExchange
+from fakeyou.foundation.content_digest import (
+    DECODED_PIXELS_SHA256,
+    HEARTBEAT_WITHOUT_RECORD,
+    ContentSample,
+)
+from fakeyou.foundation.publication import SnapshotRef
+from fakeyou.perception.sensors import ActiveSampler, DrainBatch, DrainedFrame, DrainedSample
+from fakeyou.perception.timeline import SCREEN_SOURCE_ID, MeetingTimeline
+from tests._perception_fakes import slide_jpeg
+from tests.test_sensors import BUDI, JOINED_MS, frame, message, people, sensors
+
+ROADMAP = slide_jpeg("Launch Timeline", ["Beta: 17 March 2027"])
+
+
+def sample(
+    stream_id: str, role: str, sequence: int, digest: str | None = "aa", **changes: Any
+) -> DrainedSample:
+    return DrainedSample.model_validate(
+        {
+            "stream_id": stream_id,
+            "role": role,
+            "page_ms": JOINED_MS + 1000 * sequence,
+            "sequence": sequence,
+            "media_timestamp": 33_000.0 * sequence,
+            "width": 1920,
+            "height": 1080,
+            "pixel_format": "I420",
+            "algorithm": DECODED_PIXELS_SHA256,
+            "version": 1,
+            "digest": digest,
+            **changes,
+        }
+    )
+
+
+def sequenced(stream_id: str, role: str, data: bytes, sequence: int) -> DrainedFrame:
+    return frame(stream_id, role, data, at_ms=JOINED_MS + 1000 * sequence).model_copy(
+        update={"sequence": sequence}
+    )
+
+
+async def test_screen_sample_reaches_the_ledger_with_its_page_record() -> None:
+    sensed, timeline, _ = sensors()
+
+    await sensed.accept_batch(
+        DrainBatch(messages=[message(people())], samples=[sample("stream-screen", "screen", 1)])
+    )
+
+    latest = timeline.samples.latest("screen", SCREEN_SOURCE_ID)
+    assert latest is not None
+    assert latest.record.algorithm == DECODED_PIXELS_SHA256
+    assert (latest.record.width, latest.record.height, latest.record.pixel_format) == (
+        1920,
+        1080,
+        "I420",
+    )
+    assert latest.record.stream_id == "stream-screen"
+    assert latest.record.media_timestamp == 33_000.0
+    assert sensed.samples_seen == 1
+
+
+async def test_capture_time_is_the_page_time_of_the_frame_not_of_the_drain() -> None:
+    sensed, timeline, _ = sensors()
+    sensed.monotonic = lambda: 500.0
+    assert sensed.page_clock.observe(ClockExchange(JOINED_MS + 9000, 499.98, 500.0))
+
+    await sensed.accept_batch(
+        DrainBatch(messages=[message(people())], samples=[sample("stream-screen", "screen", 1)])
+    )
+
+    latest = timeline.samples.latest("screen", SCREEN_SOURCE_ID)
+    assert latest is not None
+    assert latest.capture is not None
+    assert latest.capture.monotonic == pytest.approx(491.99, abs=0.001)
+    assert latest.capture.uncertainty_seconds < 0.05
+
+
+async def test_sample_without_a_clock_exchange_is_stored_unmapped() -> None:
+    sensed, timeline, _ = sensors()
+
+    await sensed.accept_batch(
+        DrainBatch(messages=[message(people())], samples=[sample("stream-screen", "screen", 1)])
+    )
+
+    latest = timeline.samples.latest("screen", SCREEN_SOURCE_ID)
+    assert latest is not None
+    assert latest.capture is None
+
+
+async def test_camera_sample_is_keyed_by_the_participant() -> None:
+    sensed, timeline, _ = sensors()
+
+    await sensed.accept_batch(
+        DrainBatch(messages=[message(people())], samples=[sample("stream-budi", "camera", 1)])
+    )
+
+    latest = timeline.samples.latest("camera", BUDI)
+    assert latest is not None
+    assert latest.record.subject_id == BUDI
+
+
+async def test_sample_of_an_unassigned_or_mismatched_stream_is_ignored() -> None:
+    sensed, timeline, _ = sensors()
+
+    await sensed.accept_batch(
+        DrainBatch(
+            messages=[message(people())],
+            samples=[sample("stream-unknown", "screen", 1), sample("stream-budi", "screen", 1)],
+        )
+    )
+
+    assert timeline.samples.latest("screen", SCREEN_SOURCE_ID) is None
+    assert timeline.samples.latest("camera", BUDI) is None
+    assert sensed.samples_seen == 0
+
+
+async def test_emitted_frame_is_bound_to_the_page_record_of_its_sequence() -> None:
+    sensed, timeline, _ = sensors()
+
+    await sensed.accept_batch(
+        DrainBatch(
+            messages=[message(people())],
+            samples=[sample("stream-screen", "screen", 4, "frame-digest")],
+            frames=[sequenced("stream-screen", "screen", ROADMAP, 4)],
+        )
+    )
+
+    analyzed = timeline.analyzed_sample(current_screen_ref(timeline))
+    assert analyzed is not None
+    assert analyzed.record.digest == "frame-digest"
+    assert analyzed.record.sequence == 4
+    assert analyzed.record.algorithm == DECODED_PIXELS_SHA256
+
+
+def current_screen_ref(timeline: MeetingTimeline) -> SnapshotRef:
+    segment = timeline.snapshot().current_screen
+    assert segment is not None
+    keyframe = timeline.latest_keyframe(segment)
+    return SnapshotRef("screen", segment.ref, keyframe.sha256, 0, 0, 0, keyframe.captured_at)
+
+
+async def test_frame_whose_record_never_arrived_falls_back_to_a_byte_record() -> None:
+    sensed, timeline, _ = sensors()
+
+    await sensed.accept_batch(
+        DrainBatch(
+            messages=[message(people())],
+            frames=[sequenced("stream-screen", "screen", ROADMAP, 4)],
+        )
+    )
+    await sensed.accept_batch(DrainBatch(samples=[sample("stream-screen", "screen", 5)]))
+
+    analyzed = timeline.analyzed_sample(current_screen_ref(timeline))
+    latest = timeline.samples.latest("screen", SCREEN_SOURCE_ID)
+    assert analyzed is not None
+    assert latest is not None
+    assert analyzed.record.same_content_as(latest.record) is None
+
+
+async def test_skipped_hash_is_carried_with_its_reason() -> None:
+    sensed, timeline, _ = sensors()
+
+    await sensed.accept_batch(
+        DrainBatch(
+            messages=[message(people())],
+            samples=[
+                sample("stream-screen", "screen", 1),
+                sample("stream-screen", "screen", 2, None, skip_reason="hash_over_budget"),
+            ],
+        )
+    )
+
+    latest = timeline.samples.latest("screen", SCREEN_SOURCE_ID)
+    assert latest is not None
+    assert latest.record.digest is None
+    assert latest.record.skip_reason == "hash_over_budget"
+
+
+async def test_out_of_order_and_repeated_samples_are_journaled_and_not_latest() -> None:
+    sensed, timeline, journal = sensors()
+
+    await sensed.accept_batch(
+        DrainBatch(
+            messages=[message(people())],
+            samples=[
+                sample("stream-screen", "screen", 3),
+                sample("stream-screen", "screen", 2, "bb"),
+                sample("stream-screen", "screen", 4, "cc", media_timestamp=99_000.0),
+            ],
+        )
+    )
+
+    latest = timeline.samples.latest("screen", SCREEN_SOURCE_ID)
+    assert latest is not None
+    assert latest.record.sequence == 3
+    assert [row["outcome"] for row in journal.events("perception_sample_rejected")] == [
+        "out_of_order",
+        "repeated",
+    ]
+    assert sensed.samples_irregular == 2
+
+
+async def camera_with_heartbeat(*, records: bool) -> ContentSample | None:
+    sensed, timeline, _ = sensors()
+    await sensed.accept_batch(
+        DrainBatch(
+            messages=[message(people())],
+            frames=[frame("stream-budi", "camera", ROADMAP)],
+            samples=[sample("stream-budi", "camera", 1)] if records else [],
+        )
+    )
+    await sensed.accept_batch(
+        DrainBatch(
+            active=[
+                ActiveSampler(
+                    stream_id="stream-budi", role="camera", last_sample_page_ms=JOINED_MS + 9000
+                )
+            ]
+        )
+    )
+    return timeline.samples.latest("camera", BUDI)
+
+
+async def test_heartbeat_of_a_stream_without_records_is_an_unverified_sample() -> None:
+    latest = await camera_with_heartbeat(records=False)
+
+    assert latest is not None
+    assert latest.record.skip_reason == HEARTBEAT_WITHOUT_RECORD
+    assert latest.record.digest is None
+
+
+async def test_heartbeat_of_a_stream_that_sends_records_adds_no_sample() -> None:
+    latest = await camera_with_heartbeat(records=True)
+
+    assert latest is not None
+    assert latest.record.skip_reason is None
