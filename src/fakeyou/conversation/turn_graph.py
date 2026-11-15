@@ -72,6 +72,7 @@ from fakeyou.conversation.visual_speech import (
     RuntimeSpeech,
     StatementSpeaker,
     TurnIdentity,
+    VisualTurn,
     produced,
 )
 from fakeyou.foundation.gathered_evidence import GatheredEvidence
@@ -665,6 +666,7 @@ class TurnSink:
         self._indices: dict[PreparedSpeech, int] = {}
         self._publication_evidence: GatheredEvidence | None = None
         self._publication_needs: tuple[str, ...] = ()
+        self._withheld: list[str] = []
 
     @property
     def started(self) -> bool:
@@ -678,7 +680,30 @@ class TurnSink:
             need for need in event.evidence_needs if need in {"screen", "participant"}
         )
 
+    @property
+    def render_only(self) -> bool:
+        speech = self.runtime_speech(None)
+        return speech is not None and speech.context.render_only
+
+    def withhold(self, model_text: str) -> None:
+        if model_text:
+            self._withheld.append(model_text)
+
+    async def speak_rendered(self, language: str | None) -> bool:
+        speech = self.runtime_speech(language)
+        if speech is None:
+            return False
+        self._started = True
+        _raise_if_failed(self._runtime)
+        turn = VisualTurn(speech, self._publication_evidence, self._publication_needs)
+        await turn.speak(" ".join(self._withheld))
+        self._spoken += len(speech.spoken)
+        return bool(speech.spoken)
+
     async def prepare(self, sentence: str, language: str) -> PreparedSpeech | None:
+        if self.render_only:
+            self.withhold(sentence)
+            return None
         sentence_index = self._offered
         self._offered += 1
         scrubbed = scrub_internal_refs(sentence)
@@ -1282,10 +1307,14 @@ async def _speak_reply(
                 streamed=streamed,
             )
             return
+        whole = _turn_whole(runtime, reply_batch, hook)
+        if sink.render_only:
+            responder = None if responder is None else WithheldReplies(responder, sink.withhold)
+            whole = None if whole is None else WithheldReply(whole, sink.withhold)
         context = replace(
             _speech_context(runtime, sink, scope, generations, final.id),
             responder=responder,
-            whole=_turn_whole(runtime, reply_batch, hook),
+            whole=whole,
             sentences=runtime.sentences,
             cue_state=cue_state,
         )
@@ -1297,6 +1326,9 @@ async def _speak_reply(
             ),
             context=context,
         )
+        _raise_reply_failure(output)
+        if sink.render_only and await sink.speak_rendered(_reply_language(runtime)):
+            output = {**output, "completed": True, "delivered": (RENDERED,)}
     finally:
         farewell.started = sink.started
         if draft is not None:
@@ -1315,6 +1347,31 @@ async def _speak_reply(
 
 
 ABSTAINED = "abstained"
+RENDERED = "rendered"
+
+
+class WithheldReply:
+    def __init__(self, inner: WholeResponder, withhold: Callable[[str], None]) -> None:
+        self._inner = inner
+        self._withhold = withhold
+
+    async def respond(self, transcript: str) -> SpokenChunk:
+        chunk = await self._inner.respond(transcript)
+        self._withhold(chunk.text)
+        return SpokenChunk(text="", language=chunk.language)
+
+
+class WithheldReplies:
+    def __init__(self, inner: Responder, withhold: Callable[[str], None]) -> None:
+        self._inner = inner
+        self._withhold = withhold
+
+    async def stream_reply(self, transcript: str) -> AsyncIterator[SpokenChunk]:
+        async for chunk in self._inner.stream_reply(transcript):
+            self._withhold(chunk.text)
+        nothing: tuple[SpokenChunk, ...] = ()
+        for chunk in nothing:
+            yield chunk
 
 
 def _reply_language(runtime: TurnContext) -> str | None:

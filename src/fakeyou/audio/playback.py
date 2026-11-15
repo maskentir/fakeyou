@@ -29,6 +29,7 @@ from fakeyou.foundation.publication import (
     SentenceBinding,
     sentence_digest,
 )
+from fakeyou.foundation.statement import rendering_refusal, statement_digest
 from fakeyou.foundation.taxonomy import Subsystem
 from fakeyou.observability.cleanup import close_safely
 from fakeyou.observability.diagnostics import DEFAULT_DIAGNOSTICS, Diagnostics
@@ -356,6 +357,14 @@ def _pcm_last_sample(pcm: bytes) -> int:
     return int.from_bytes(pcm[-PCM16_SAMPLE_BYTES:], "little", signed=True)
 
 
+def _unrendered(binding: SentenceBinding, context: PublicationContext) -> str | None:
+    if not context.render_only or binding.scope != "current":
+        return None
+    rendering = binding.rendering
+    digest = "" if rendering is None else rendering.text_digest
+    return rendering_refusal(rendering, binding.scope, digest)
+
+
 def _fresh_publication_decision(
     decision: PublicationDecision,
     binding: SentenceBinding,
@@ -463,6 +472,9 @@ class PlaybackEngine:
         abstention = binding.abstention
         if abstention is not None and abstention.text_digest != abstention_digest(prepared.text):
             raise ValueError("publication abstention digest does not match prepared speech")
+        rendering = binding.rendering
+        if rendering is not None and rendering.text_digest != statement_digest(prepared.text):
+            raise ValueError("publication rendering digest does not match prepared speech")
         if binding.sentence_index != prepared.sentence_index:
             raise ValueError("publication sentence index does not match prepared speech")
         if binding.transcript_id != prepared.transcript_id:
@@ -972,7 +984,9 @@ class PlaybackEngine:
                     "valid", "declared_no_visual", context.now(), context.clock_domain
                 )
             return None
-        refused = abstention_refusal(binding.abstention, binding.scope)
+        refused = abstention_refusal(binding.abstention, binding.scope) or _unrendered(
+            binding, context
+        )
         if refused is not None:
             return PublicationDecision("unknown", refused, context.now(), context.clock_domain)
         gate = context.gate

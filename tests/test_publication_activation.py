@@ -1,10 +1,11 @@
 import ast
 import asyncio
-from collections.abc import Callable, Mapping
+import json
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
-from typing import TypedDict, Unpack, override
+from typing import Any, TypedDict, Unpack, override
 
 import pytest
 
@@ -92,7 +93,7 @@ class Clock:
 @dataclass
 class Meeting(FakeSession):
     inspections: tuple[VisualInspection, ...] = (
-        VisualInspection(verdict="supported", answer="Beta is 17 March 2027."),
+        VisualInspection(verdict="supported", answer="Beta launch is 17 March 2027."),
     )
     mapped: bool = True
     gated: bool = True
@@ -110,6 +111,7 @@ class Meeting(FakeSession):
     timeline: MeetingTimeline = field(init=False)
     perception: PerceptionContext = field(init=False)
     engine: PlaybackEngine = field(init=False)
+    synth: FakeSynth = field(init=False)
     publication_context: PublicationContext | None = field(init=False)
 
     def __post_init__(self) -> None:
@@ -162,9 +164,8 @@ class Meeting(FakeSession):
             if self.gated
             else None
         )
-        self.engine = build_engine(
-            FakeSynth(audio=b"\x01\x00" * FRAME_BYTES), self.writer, self.events
-        )
+        self.synth = FakeSynth(audio=b"\x01\x00" * FRAME_BYTES)
+        self.engine = build_engine(self.synth, self.writer, self.events)
         self.engine.configure_publication(self.publication_context)
         self.engine.observe_receipts(self.receipts.append)
 
@@ -254,6 +255,21 @@ class Turn:
 class Spoken(TypedDict, total=False):
     reply: str
     language: str
+    claims: Sequence[Mapping[str, str]]
+
+
+BETA_CLAIM = {
+    "kind": "screen",
+    "shape": "entity_attribute_value",
+    "entity": "Beta",
+    "attribute": "launch",
+    "value": "17 March 2027",
+}
+BETA_STATEMENT = "The currently displayed screen lists launch for Beta as 17 March 2027."
+
+
+def with_claims(reply: str, claims: Sequence[Mapping[str, str]]) -> str:
+    return f"{reply} CLAIMS: {json.dumps(list(claims))}" if claims else reply
 
 
 async def ask(
@@ -264,7 +280,8 @@ async def ask(
     state_question: StateQuestion | None = None,
     **spoken: Unpack[Spoken],
 ) -> Turn:
-    reply = spoken.get("reply", "Beta is on 17 March 2027.")
+    declared = spoken.get("claims", (BETA_CLAIM,) if needs == ("screen",) else ())
+    reply = with_claims(spoken.get("reply", "Beta is on 17 March 2027."), declared)
     language = spoken.get("language", "en")
 
     def planning(event: TranscriptEvent, reading: Reading, channel: Channel) -> PlannedTurn:
@@ -422,16 +439,31 @@ async def test_unmapped_capture_clock_prevents_the_claim() -> None:
     assert turn.meeting.prevented == "unknown:capture_time_unmapped"
 
 
-async def test_fresh_camera_claim_is_published() -> None:
-    meeting = Meeting(inspections=(VisualInspection(verdict="supported", answer="A grey shirt."),))
+GREY_SHIRT = {"kind": "participant", "shape": "item_presence", "item": "a grey shirt"}
+NOT_ENOUGH = "I don't have enough reliable information to answer that."
 
-    turn = await ask(
-        meeting, "What is Budi wearing?", needs=("participant",), reply="Budi wears grey."
+
+async def camera_turn(meeting: Meeting) -> Turn:
+    return await ask(
+        meeting,
+        "What is Budi wearing?",
+        needs=("participant",),
+        reply="Budi wears grey.",
+        claims=(GREY_SHIRT,),
     )
 
+
+def camera_meeting(**options: Any) -> Meeting:
+    look = VisualInspection(verdict="supported", answer="Budi wears a grey shirt.")
+    return Meeting(inspections=(look,), **options)
+
+
+async def test_camera_claim_has_no_current_pattern_and_is_never_spoken_as_current() -> None:
+    turn = await camera_turn(camera_meeting())
+
     [binding] = turn.meeting.bindings
-    assert binding.evidence[0].kind == "participant"
-    assert turn.meeting.writer.written
+    assert binding.scope != "current"
+    assert [item.text for item in turn.meeting.settled] == [NOT_ENOUGH]
     assert len(turn.counted) == 1
 
 
@@ -439,17 +471,11 @@ def camera_goes_stale(meeting: Meeting) -> None:
     meeting.timeline.camera_frames.drop("device-budi")
 
 
-async def test_camera_that_went_away_before_the_write_prevents_the_claim() -> None:
-    meeting = Meeting(
-        inspections=(VisualInspection(verdict="supported", answer="A grey shirt."),),
-        before_write=camera_goes_stale,
-    )
+async def test_camera_that_went_away_never_yields_a_current_camera_statement() -> None:
+    turn = await camera_turn(camera_meeting(before_write=camera_goes_stale))
 
-    turn = await ask(
-        meeting, "What is Budi wearing?", needs=("participant",), reply="Budi wears grey."
-    )
-
-    assert turn.meeting.prevented == "invalid:scene_changed"
+    assert all(binding.scope != "current" for binding in turn.meeting.bindings)
+    assert "grey" not in " ".join(item.text for item in turn.meeting.receipts)
 
 
 async def test_reply_without_visual_needs_is_published_under_the_composed_gate() -> None:

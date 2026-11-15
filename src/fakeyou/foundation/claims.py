@@ -87,6 +87,7 @@ class LanguageMarkers:
     certainty: tuple[str, ...]
     contrast: tuple[str, ...]
     coordination: tuple[str, ...]
+    value_words: frozenset[str]
 
 
 @cache
@@ -103,6 +104,7 @@ def _languages() -> dict[str, LanguageMarkers]:
             tuple(entry["certainty_markers"]),
             tuple(entry["contrast_markers"]),
             tuple(entry["coordination_markers"]),
+            frozenset(entry["value_words"]),
         )
         for language, entry in raw["languages"].items()
     }
@@ -140,7 +142,7 @@ def _find(haystack: str, needle: str, offset: int = 0) -> Span | None:
     return Span(offset + found.start(), offset + found.end(), found.group())
 
 
-def _has_marker(text: str, markers: tuple[str, ...]) -> bool:
+def has_marker(text: str, markers: tuple[str, ...]) -> bool:
     lowered = text.casefold()
     return any(
         (marker in lowered)
@@ -153,7 +155,7 @@ def _has_marker(text: str, markers: tuple[str, ...]) -> bool:
 def _coordinated(answer: str, spans: Mapping[str, Span], markers: LanguageMarkers) -> bool:
     ordered = sorted(spans.values(), key=lambda span: span.start)
     return any(
-        _has_marker(answer[left.end : right.start], markers.coordination)
+        has_marker(answer[left.end : right.start], markers.coordination)
         for left, right in zip(ordered, ordered[1:], strict=False)
     )
 
@@ -230,7 +232,7 @@ def _missing_reason(claim: Claim, answer: str, markers: LanguageMarkers) -> str:
     for sentence in _spans(answer, SENTENCE_BREAK):
         if _find(sentence.text, entity) is None:
             continue
-        if _has_marker(sentence.text, markers.status + markers.negation):
+        if has_marker(sentence.text, markers.status + markers.negation):
             return "claim_polarity_unsupported"
     return "claim_untraceable"
 
@@ -238,14 +240,14 @@ def _missing_reason(claim: Claim, answer: str, markers: LanguageMarkers) -> str:
 def _clause_refusal(
     claim: Claim, clause: Span, spans: Mapping[str, Span], markers: LanguageMarkers
 ) -> str | None:
-    negated = _has_marker(clause.text, markers.negation)
+    negated = has_marker(clause.text, markers.negation)
     if negated != (claim.polarity == "negative"):
         return "claim_polarity_unsupported"
-    if claim.shape == "entity_status" and _has_marker(clause.text, markers.status):
-        qualifier_is_the_claim = _has_marker(claim.field("status") or "", markers.status)
+    if claim.shape == "entity_status" and has_marker(clause.text, markers.status):
+        qualifier_is_the_claim = has_marker(claim.field("status") or "", markers.status)
         if not qualifier_is_the_claim:
             return "claim_polarity_unsupported"
-    if _has_marker(clause.text, markers.contrast):
+    if has_marker(clause.text, markers.contrast):
         return "claim_relation_ambiguous"
     if claim.shape == "entity_attribute_value" and _other_values(clause, spans.get("value")):
         return "claim_relation_ambiguous"

@@ -239,7 +239,13 @@ async def test_look_that_inspected_no_frame_is_answered_with_the_uninspected_ent
 async def test_without_a_publication_context_the_reply_is_spoken_as_today() -> None:
     meeting = Meeting(inspections=(VisualInspection(verdict="unclear"),), gated=False)
 
-    await ask(meeting, "When is beta?", needs=("screen",), reply="I cannot see that on the screen.")
+    await ask(
+        meeting,
+        "When is beta?",
+        needs=("screen",),
+        reply="I cannot see that on the screen.",
+        claims=(),
+    )
 
     assert meeting.bindings == []
     assert [item.text for item in meeting.settled] == ["I cannot see that on the screen."]

@@ -103,6 +103,7 @@ def opt_in_publication_context(
         now=now,
         id_factory=id_factory,
         commit=compose_publication_commit(sources, now=now),
+        render_only=True,
         revision=None if samples is None else lambda: samples.revision,
         samples_since=None if samples is None else samples.since,
     )

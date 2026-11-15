@@ -39,6 +39,8 @@ from tests.test_publication_activation import (
     Turn,
     ask,
     camera_goes_stale,
+    camera_meeting,
+    camera_turn,
     show_budget,
 )
 from tests.test_publication_measurement import _binding, _post
@@ -541,17 +543,11 @@ async def test_end_to_end_unmapped_capture_is_prevented_unknown() -> None:
     assert result["reason"] == "capture_time_unmapped"
 
 
-async def test_end_to_end_camera_claim_with_a_lost_camera_is_prevented_invalid() -> None:
-    turn = await ask(
-        Audited(before_write=camera_goes_stale),
-        "What is Budi wearing?",
-        needs=("participant",),
-        reply="Budi wears grey.",
-    )
+async def test_end_to_end_camera_claim_with_a_lost_camera_is_never_a_current_statement() -> None:
+    turn = await camera_turn(camera_meeting(before_write=camera_goes_stale))
 
-    result = await measured(turn, participant(heard=False), continuity_at=AFTER_SPEECH)
-
-    assert result["status"] == "prevented_invalid"
+    assert all(binding.scope != "current" for binding in turn.meeting.bindings)
+    assert all("grey" not in item.text for item in turn.meeting.receipts)
 
 
 PATHS: list[tuple[str, dict[str, Any], dict[str, Any], int]] = [

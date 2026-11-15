@@ -11,6 +11,7 @@ from typing import Literal
 from fakeyou.foundation.abstention import AbstentionRef, abstention_refusal
 from fakeyou.foundation.clock import monotonic
 from fakeyou.foundation.content_digest import ContentSample, MatchLevel
+from fakeyou.foundation.statement import Rendering
 
 EvidenceSource = Literal["camera", "screen"]
 PublicationValidity = Literal["valid", "invalid", "unknown"]
@@ -103,6 +104,7 @@ class SentenceBinding:
     state: StateProvenance | None = None
     abstention: AbstentionRef | None = None
     dependence: Dependence | None = None
+    rendering: Rendering | None = None
 
     def __post_init__(self) -> None:
         _validate_sentence_identity(self)
@@ -244,6 +246,7 @@ class PublicationContext:
     commit: Callable[[SentenceBinding], PublicationDecision | None] | None = None
     revision: Callable[[], int] | None = None
     samples_since: Callable[[int], tuple[ContentSample, ...]] | None = None
+    render_only: bool = False
 
 
 def _finite(value: float | None) -> bool:

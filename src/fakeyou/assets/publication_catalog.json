@@ -22,5 +22,35 @@
         "id": "Saya tidak bisa memeriksa informasi visual yang diperlukan untuk menjawabnya."
       }
     }
+  },
+  "patterns": {
+    "current": {
+      "entity_attribute_value": {
+        "en": "The currently displayed screen lists {attribute} for {entity} as {value}.",
+        "id": "Pada layar yang sedang ditampilkan, {attribute} untuk {entity} tercantum sebagai {value}."
+      },
+      "entity_status": {
+        "en": "The currently displayed screen lists the status of {entity} as {status}.",
+        "id": "Pada layar yang sedang ditampilkan, status {entity} tercantum sebagai {status}."
+      },
+      "item_presence": {
+        "en": "The currently displayed screen shows {item}.",
+        "id": "Pada layar yang sedang ditampilkan, terlihat {item}."
+      }
+    },
+    "historical": {
+      "entity_attribute_value": {
+        "en": "The checked frame listed {attribute} for {entity} as {value}.",
+        "id": "Pada gambar yang saya periksa, {attribute} untuk {entity} tercantum sebagai {value}."
+      },
+      "entity_status": {
+        "en": "The checked frame listed the status of {entity} as {status}.",
+        "id": "Pada gambar yang saya periksa, status {entity} tercantum sebagai {status}."
+      },
+      "item_presence": {
+        "en": "The checked frame showed {item}.",
+        "id": "Gambar yang saya periksa menampilkan {item}."
+      }
+    }
   }
 }

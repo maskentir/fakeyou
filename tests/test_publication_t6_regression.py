@@ -29,6 +29,13 @@ LARGE_BEFORE = figure_slide("1.2")
 LARGE_AFTER = figure_slide("1.3")
 SMALL_BEFORE = slide_jpeg("Quarterly Review", ["Revenue: $1.2M"])
 SMALL_AFTER = slide_jpeg("Quarterly Review", ["Revenue: $1.3M"])
+REVENUE_CLAIM = {
+    "kind": "screen",
+    "shape": "entity_attribute_value",
+    "entity": "Project A",
+    "attribute": "revenue",
+    "value": "$1.2M",
+}
 CASES = [
     pytest.param(LARGE_BEFORE, LARGE_AFTER, "minor", id="large_figure_minor"),
     pytest.param(SMALL_BEFORE, SMALL_AFTER, "same", id="small_figure_below_threshold"),
@@ -42,7 +49,7 @@ def figure_meeting(before: bytes, after: bytes | None) -> Meeting:
         meeting.timeline.show_screen(keyframe(after, seconds=1.5), presenter, data=after)
 
     meeting = Meeting(
-        inspections=(VisualInspection(verdict="supported", answer="Revenue is $1.2M."),),
+        inspections=(VisualInspection(verdict="supported", answer="Project A revenue is $1.2M."),),
         before_write=None if after is None else one_digit_changes,
     )
     presenter = meeting.timeline.participant("device-ayu", "Ayu")
@@ -55,7 +62,13 @@ def figure_meeting(before: bytes, after: bytes | None) -> Meeting:
 
 
 async def revenue_turn(meeting: Meeting) -> Turn:
-    return await ask(meeting, "What is revenue?", needs=("screen",), reply="Revenue is $1.2M.")
+    return await ask(
+        meeting,
+        "What is revenue?",
+        needs=("screen",),
+        reply="Revenue is $1.2M.",
+        claims=(REVENUE_CLAIM,),
+    )
 
 
 @pytest.mark.parametrize(("before", "after", "comparison"), CASES)
