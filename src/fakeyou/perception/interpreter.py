@@ -6,6 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
@@ -21,7 +22,7 @@ from fakeyou.perception.camera_evidence import (
     StaleEvidence,
     observations_match,
 )
-from fakeyou.perception.evidence import EvidenceResult, inspection_outcome
+from fakeyou.perception.evidence import EvidenceResult, ProviderAttempt, inspection_outcome
 from fakeyou.perception.frames import keyframe_from_jpeg
 from fakeyou.perception.inspector import VisualInspection
 from fakeyou.perception.percepts import ScreenReading
@@ -89,6 +90,12 @@ def image_payload(data: bytes) -> ImagePayload:
     return ImagePayload(data=buffer.getvalue(), width=image.width, height=image.height)
 
 
+@dataclass(frozen=True, slots=True)
+class Inspected:
+    inspection: VisualInspection
+    attempt: ProviderAttempt
+
+
 class EmptyVisionResponse(Exception):
     pass
 
@@ -103,7 +110,9 @@ class PerceptionInterpreter:
         snapshots: CameraFrameStore,
         journal: Journal | None = None,
         monotonic: Callable[[], float] = time.monotonic,
+        provider: str | None = None,
     ) -> None:
+        self._provider = provider
         self._model = model
         self._budget = budget
         self._journal = journal or Journal("", echo=False)
@@ -144,6 +153,10 @@ class PerceptionInterpreter:
         return parsed
 
     async def answer(self, image: bytes, question: str, *, source: str) -> VisualInspection | None:
+        inspected = await self.inspect(image, question, source=source)
+        return None if inspected is None else inspected.inspection
+
+    async def inspect(self, image: bytes, question: str, *, source: str) -> Inspected | None:
         payload = await asyncio.to_thread(image_payload, image)
         estimate = estimate_image_tokens(payload.width, payload.height)
         reservation = self._budget.reserve(estimate, operation="look")
@@ -155,8 +168,14 @@ class PerceptionInterpreter:
             result = await self._invoke(lambda: structured.ainvoke([message]))
             raw, _parsed = structured_parts(result)
             reservation.charge(tokens_used(raw.usage_metadata if raw else None, estimate))
+        attempt = ProviderAttempt(
+            attempt_id=uuid4().hex,
+            provider=self._provider,
+            response_id=(raw.id if raw is not None else None) or None,
+            finished_at=self._monotonic(),
+        )
         try:
-            return VisualInspection.model_validate_json(raw_text(raw))
+            return Inspected(VisualInspection.model_validate_json(raw_text(raw)), attempt)
         except ValueError as error:
             raise FakeYouError(ErrorCode.PERCEPTION_INSPECTION_UNPARSED) from error
 
@@ -198,10 +217,11 @@ class PerceptionInterpreter:
                         observed_at=cached.ref.captured_at,
                         age_ms=round(age * 1000),
                         vision_latency_ms=0,
+                        attempt=cached.attempt,
                     )
             started = self._monotonic()
-            inspection = await self.answer(frame.data, question, source=source)
-            if inspection is None:
+            inspected = await self.inspect(frame.data, question, source=source)
+            if inspected is None:
                 return EvidenceResult(
                     source="camera",
                     subject_id=subject_id,
@@ -220,12 +240,14 @@ class PerceptionInterpreter:
                 participant_id,
                 AnswerEntry(
                     question=question,
-                    inspection=inspection,
+                    inspection=inspected.inspection,
                     ref=frame.ref,
                     keyframe=keyframe,
                     stored_at=self._monotonic(),
+                    attempt=inspected.attempt,
                 ),
             )
+            inspection = inspected.inspection
             status, code = inspection_outcome(inspection)
             return EvidenceResult(
                 source="camera",
@@ -240,6 +262,7 @@ class PerceptionInterpreter:
                 observed_at=frame.ref.captured_at,
                 age_ms=0,
                 vision_latency_ms=round((self._monotonic() - started) * 1000),
+                attempt=inspected.attempt,
             )
 
     def _snapshot_current(self, participant_id: str, frame: CameraFrame) -> bool:

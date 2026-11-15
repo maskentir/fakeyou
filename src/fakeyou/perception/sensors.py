@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import PerceptionSettings
+from fakeyou.foundation.clock_mapping import ClockExchange, MappedInstant, RemoteClock
 from fakeyou.foundation.invariants import PERCEPTION_POLL_TIMEOUT_MULTIPLIER
 from fakeyou.foundation.polling import PollingLoop, PollSchedule
 from fakeyou.foundation.resources import load_bridged_script
@@ -87,6 +88,7 @@ class DrainBatch(DrainPart):
     peers: list[str] = []
     dropped_messages: int = 0
     dropped_frames: int = 0
+    drained_page_ms: float = 0
 
 
 def page_time(page_ms: float) -> datetime:
@@ -113,6 +115,7 @@ class PerceptionSensors:
     ) -> None:
         self.timeline = timeline
         self.monotonic: Callable[[], float] = time.monotonic
+        self.page_clock = RemoteClock(now=lambda: self.monotonic())
         self.roster = MeetRoster()
         self.roster_listener: Callable[[MeetRoster], None] | None = None
         self._settings = settings
@@ -150,6 +153,9 @@ class PerceptionSensors:
                 continue
             self.timeline.camera_frames.drop(device_id)
             self._invalidate_camera(device_id)
+
+    def capture_instant(self, captured_at: datetime) -> MappedInstant | None:
+        return self.page_clock.map(captured_at.timestamp() * 1000)
 
     async def accept_batch(self, batch: DrainBatch) -> None:
         self.drained_at = self.monotonic()
@@ -478,8 +484,10 @@ class PerceptionDrain(PollingLoop):
 
     async def drain_once(self) -> None:
         self.polls += 1
+        sent = self._sensors.monotonic()
         async with asyncio.timeout(PERCEPTION_POLL_TIMEOUT_MULTIPLIER * self._poll_interval):
             raw = await self._page.evaluate(PERCEPTION_DRAIN_JS)
+        received = self._sensors.monotonic()
         if raw is None:
             return
         try:
@@ -491,6 +499,7 @@ class PerceptionDrain(PollingLoop):
                     "perception_batch_rejected", source="perception", rejected=self.batches_rejected
                 )
             return
+        self._sensors.page_clock.observe(ClockExchange(batch.drained_page_ms, sent, received))
         await self._sensors.accept_batch(batch)
         if self._journal is not None and (
             batch.frames or batch.dropped_frames or self.polls % DRAIN_STATS_EVERY == 0

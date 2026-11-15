@@ -1,7 +1,7 @@
 import asyncio
 import json
 import time
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import cast
 
 import pytest
@@ -115,10 +115,12 @@ async def test_gathered_provenance_stays_out_of_model_payload_and_keeps_capture_
     assert provenance.snapshot is not None
     assert provenance.snapshot.captured_at.isoformat() == resolved["captured_at"]
     assert provenance.capture_monotonic is None
+    assert provenance.capture_mapping_clock_domain is None
     assert provenance.capture_mapping_uncertainty_seconds is None
-    assert provenance.provider_attempt_id is None
-    assert provenance.observation_clock_domain == "utc"
-    assert provenance.observed_at == datetime.fromisoformat(resolved["observed_at"]).timestamp()
+    assert resolved["capture_mapped"] is False
+    assert provenance.provider is None
+    assert provenance.provider_attempt_id == resolved["provider_attempt_id"]
+    assert provenance.observation_clock_domain == "local_monotonic"
     payload = json.dumps(dict(gathered))
     assert "gather_attempt_id" not in payload
     assert "capture_monotonic" not in payload
@@ -198,7 +200,7 @@ async def test_unknown_needs_are_ignored_and_chat_history_needs_no_model() -> No
 
 
 class StalledInterpreter:
-    async def answer(self, image: bytes, question: str, *, source: str) -> str | None:
+    async def inspect(self, image: bytes, question: str, *, source: str) -> str | None:
         del image, question, source
         await asyncio.sleep(5.0)
         return "too late"

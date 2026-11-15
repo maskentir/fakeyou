@@ -323,6 +323,7 @@
       (item) => item.jpeg_b64.length
     );
     return {
+      drained_page_ms: bridge.pageNow(),
       messages: sizedMessages.taken,
       frames: sizedFrames.taken,
       tracks: [...videoTracks.keys()],

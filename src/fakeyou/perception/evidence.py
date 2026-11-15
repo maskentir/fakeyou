@@ -26,6 +26,14 @@ EvidenceCode = Literal[
 
 
 @dataclass(frozen=True, slots=True)
+class ProviderAttempt:
+    attempt_id: str
+    provider: str | None
+    response_id: str | None
+    finished_at: float
+
+
+@dataclass(frozen=True, slots=True)
 class EvidenceResult:
     source: EvidenceSource
     subject_id: str
@@ -41,6 +49,7 @@ class EvidenceResult:
     vision_latency_ms: int = 0
     error_type: str | None = None
     subject_label: str | None = None
+    attempt: ProviderAttempt | None = None
 
 
 def inspection_outcome(inspection: VisualInspection) -> tuple[EvidenceStatus, EvidenceCode]:
