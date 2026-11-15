@@ -46,6 +46,17 @@ class SceneRevalidator:
         current = scene.ref if isinstance(scene, CameraFrame) else scene
         same_scene = bound is not None and current is not None and _same_source(bound, current)
         latest = None if bound is None else self._latest(bound)
+        analyzed = evidence.analyzed
+        if (
+            bound is not None
+            and bound.source == "camera"
+            and analyzed is not None
+            and latest is not None
+        ):
+            same_scene = same_scene and (analyzed.record.stream_id, analyzed.record.generation) == (
+                latest.record.stream_id,
+                latest.record.generation,
+            )
         return Validation(
             checked_at=checked_at,
             clock_domain=self._clock_domain,
@@ -87,8 +98,8 @@ class SceneRevalidator:
         if not same_scene:
             return True
         streams = (
-            None if analyzed is None else analyzed.record.stream_id,
-            None if latest is None else latest.record.stream_id,
+            None if analyzed is None else (analyzed.record.stream_id, analyzed.record.generation),
+            None if latest is None else (latest.record.stream_id, latest.record.generation),
         )
         if streams[0] and streams[1] and streams[0] != streams[1]:
             return True
@@ -127,7 +138,11 @@ def _match(
     if analyzed is None:
         return "unknown"
     record = analyzed.record
-    if latest.record.sequence <= record.sequence:
+    if (
+        latest.record.stream_id == record.stream_id
+        and latest.record.generation == record.generation
+        and latest.record.sequence <= record.sequence
+    ):
         return None
     same = record.same_content_as(latest.record)
     if same is None or not latest.consistent:

@@ -28,6 +28,7 @@
   const videoTracks = new Map();
   const roles = new Map();
   const samplers = new Map();
+  let samplerGeneration = 0;
   const channels = [];
   let droppedMessages = 0;
   let droppedFrames = 0;
@@ -137,6 +138,7 @@
     state.sequence += 1;
     const record = {
       stream_id: state.id,
+      generation: state.generation,
       role: state.role,
       page_ms,
       sequence: state.sequence,
@@ -199,6 +201,7 @@
       .then((buffer) =>
         pushFrame({
           stream_id: state.id,
+      generation: state.generation,
           role: state.role,
           page_ms,
           sequence,
@@ -278,12 +281,12 @@
         }
       }
     }
-    stop(state.id);
+    stop(state.id, state);
   }
 
-  function stop(id) {
+  function stop(id, expected) {
     const state = samplers.get(id);
-    if (!state) return;
+    if (!state || (expected && state !== expected)) return;
     samplers.delete(id);
     state.stopped = true;
     try {
@@ -314,6 +317,7 @@
       sampledAt: 0,
       lastSamplePageMs: 0,
       sequence: 0,
+      generation: ++samplerGeneration,
       hashing: false,
       lastThumb: null,
       emittedThumb: null,
@@ -331,10 +335,13 @@
     for (const stream of entry.streams) {
       const id = String((stream && stream.id) || "");
       if (!id) continue;
+      const previous = videoTracks.get(id);
+      if (previous && previous.track !== track) stop(id);
       videoTracks.set(id, { track });
       track.addEventListener(
         "ended",
         () => {
+          if (videoTracks.get(id)?.track !== track) return;
           videoTracks.delete(id);
           stop(id);
         },
@@ -388,6 +395,7 @@
   function activeSamplers() {
     return [...samplers.values()].map((state) => ({
       stream_id: state.id,
+      generation: state.generation,
       role: state.role,
       last_sample_page_ms: state.lastSamplePageMs,
     }));

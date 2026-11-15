@@ -8,7 +8,9 @@ from typing import Literal
 from fakeyou.foundation.clock_mapping import MappedInstant
 from fakeyou.foundation.content_digest import ContentSample, DigestRecord, DigestRole
 
-IngestOutcome = Literal["accepted", "repeated", "out_of_order", "inconsistent_time"]
+IngestOutcome = Literal[
+    "accepted", "repeated", "out_of_order", "inconsistent_time", "retired_stream"
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,6 +24,8 @@ SourceKey = tuple[DigestRole, str]
 
 @dataclass(slots=True)
 class _Source:
+    incarnation: tuple[str, int] | None = None
+    retired: set[tuple[str, int]] = field(default_factory=set)
     latest: ContentSample | None = None
     highest_sequence: int | None = None
     media_timestamp: float | None = None
@@ -52,6 +56,10 @@ class SampleLedger:
         self, record: DigestRecord, *, captured_at: datetime, capture: MappedInstant | None
     ) -> Ingested:
         source = self._sources.setdefault((record.role, record.subject_id), _Source())
+        if not self._admit_stream(source, record, captured_at):
+            source.discarded += 1
+            return Ingested("retired_stream", self._sample(source, record, captured_at, capture))
+        previous = source.latest
         highest = source.highest_sequence
         if highest is not None and record.sequence <= highest:
             source.discarded += 1
@@ -67,7 +75,6 @@ class SampleLedger:
                 return Ingested("repeated", self._sample(source, record, captured_at, capture))
         if stamp is not None:
             source.media_timestamp = stamp
-        previous = source.latest
         consistent = previous is None or captured_at >= previous.captured_at
         if previous is not None and previous.record.same_content_as(record) is not True:
             source.continuity += 1
@@ -78,6 +85,23 @@ class SampleLedger:
         source.latest = self._sample(source, record, captured_at, capture, consistent=consistent)
         self._history.append(source.latest)
         return Ingested("accepted" if consistent else "inconsistent_time", source.latest)
+
+    def _admit_stream(self, source: _Source, record: DigestRecord, captured_at: datetime) -> bool:
+        incarnation = (record.stream_id, record.generation)
+        previous = source.latest
+        if incarnation in source.retired or (
+            source.incarnation is not None and record.generation < source.incarnation[1]
+        ):
+            return False
+        if source.incarnation is not None and source.incarnation != incarnation:
+            if previous is not None and captured_at < previous.captured_at:
+                return False
+            source.retired.add(source.incarnation)
+            source.continuity += 1
+            source.highest_sequence = None
+            source.media_timestamp = None
+        source.incarnation = incarnation
+        return True
 
     def _sample(
         self,
@@ -99,6 +123,8 @@ class SampleLedger:
         self.revision += 1
         source.stopped = True
         source.continuity += 1
+        if source.incarnation is not None and source.incarnation[1] > 0:
+            source.retired.add(source.incarnation)
 
     def latest(self, role: DigestRole, subject_id: str) -> ContentSample | None:
         source = self._sources.get((role, subject_id))

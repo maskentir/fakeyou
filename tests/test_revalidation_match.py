@@ -269,3 +269,27 @@ def test_analyzed_record_is_not_changed_by_later_samples() -> None:
     assert (evidence.analyzed, evidence.snapshot) == before
     assert evidence.analyzed is not None
     assert isinstance(evidence.analyzed.record, DigestRecord)
+
+
+def test_restarted_sampler_with_lower_sequence_is_still_a_later_confirmation() -> None:
+    scene = Scene()
+    digest_only(scene, 500, stream_id="share", generation=1, media_timestamp=500_000.0)
+    item = scene.screen_evidence()
+    assert item.analyzed is not None
+    item = replace(item, analyzed=scene.timeline.samples.latest("screen", SCREEN_SOURCE_ID))
+    latest = scene.timeline.samples.latest("screen", SCREEN_SOURCE_ID)
+    assert latest is not None
+    scene.timeline.samples.stop("screen", SCREEN_SOURCE_ID)
+    scene.timeline.confirm(
+        replace(latest.record, generation=2, sequence=1, media_timestamp=1.0),
+        captured_at=START + timedelta(seconds=501),
+        capture=None,
+    )
+
+    validation = scene.revalidate.validate(item)
+
+    assert validation.match == "exact"
+    assert validation.source_changed is True
+    assert validation.confirmation is not None
+    assert item.analyzed is not None
+    assert validation.confirmation.continuity != item.analyzed.continuity

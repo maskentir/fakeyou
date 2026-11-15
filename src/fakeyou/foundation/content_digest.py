@@ -29,6 +29,7 @@ class DigestRecord:
     media_timestamp: float | None
     digest: str | None
     skip_reason: str | None = None
+    generation: int = 0
 
     def comparable_with(self, other: DigestRecord) -> bool:
         return (

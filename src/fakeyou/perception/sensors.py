@@ -79,6 +79,7 @@ class DrainedFrame(DrainPart):
     reason: str
     jpeg_b64: str
     sequence: int | None = None
+    generation: int = 0
 
 
 class DrainedSample(DrainPart):
@@ -94,12 +95,14 @@ class DrainedSample(DrainPart):
     version: int = 0
     digest: str | None = None
     skip_reason: str | None = None
+    generation: int = 0
 
 
 class ActiveSampler(DrainPart):
     stream_id: str
     role: Literal["screen", "camera"]
     last_sample_page_ms: float = 0
+    generation: int = 0
 
 
 class DrainBatch(DrainPart):
@@ -159,7 +162,7 @@ class PerceptionSensors:
         self._audio_outputs: set[tuple[str, str]] = set()
         self._admitted_at: datetime | None = None
         self._sampler_samples: dict[str, float] = {}
-        self._frame_samples: OrderedDict[tuple[str, int], ContentSample] = OrderedDict()
+        self._frame_samples: OrderedDict[tuple[str, int, int], ContentSample] = OrderedDict()
         self._recording_streams: set[str] = set()
         self.samples_seen = 0
         self.samples_irregular = 0
@@ -223,12 +226,16 @@ class PerceptionSensors:
                 media_timestamp=sample.media_timestamp,
                 digest=sample.digest,
                 skip_reason=sample.skip_reason,
+                generation=sample.generation,
             ),
             captured_at=captured_at,
             capture=capture,
         )
         self._recording_streams.add(sample.stream_id)
-        self._frame_samples[sample.stream_id, sample.sequence] = ingested.sample
+        if ingested.outcome in {"accepted", "inconsistent_time"}:
+            self._frame_samples[sample.stream_id, sample.generation, sample.sequence] = (
+                ingested.sample
+            )
         while len(self._frame_samples) > FRAME_SAMPLE_CACHE_SIZE:
             self._frame_samples.popitem(last=False)
         self.samples_seen += 1
@@ -404,6 +411,15 @@ class PerceptionSensors:
                 continue
             if not self._sampling_advanced(sampler):
                 continue
+            if sampler.generation > 0:
+                latest = self.timeline.samples.latest("camera", frame.ref.subject_id)
+                if (
+                    latest is None
+                    or frame.content is None
+                    or latest.record.generation != sampler.generation
+                    or frame.content.record.generation != sampler.generation
+                ):
+                    continue
             self.timeline.camera_frames.touch(assignment.device_id, seen_at=seen)
             if sampler.stream_id not in self._recording_streams:
                 self.timeline.camera_frames.unverified_heartbeat(
@@ -492,8 +508,27 @@ class PerceptionSensors:
         sample = (
             None
             if frame.sequence is None
-            else self._frame_samples.get((frame.stream_id, frame.sequence))
+            else self._frame_samples.get((frame.stream_id, frame.generation, frame.sequence))
         )
+        if frame.generation > 0:
+            latest = self.timeline.samples.latest(
+                frame.role, person.participant_id if frame.role == "camera" else SCREEN_SOURCE_ID
+            )
+            if (
+                sample is None
+                or latest is None
+                or (latest.record.stream_id, latest.record.generation)
+                != (frame.stream_id, frame.generation)
+                or self.timeline.samples.stopped(frame.role, latest.record.subject_id)
+            ):
+                self._journal.record(
+                    "perception_frame_dropped",
+                    source="perception",
+                    reason="retired_stream",
+                    stream_id=frame.stream_id,
+                    generation=frame.generation,
+                )
+                return
         if frame.role == "screen":
             self.timeline.show_screen(keyframe, person, data=data, sample=sample)
         else:

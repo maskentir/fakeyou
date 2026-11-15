@@ -139,3 +139,56 @@ def test_heartbeat_record_carries_no_digest() -> None:
     assert latest is not None
     assert latest.record.same_content_as(sample(1)) is None
     assert latest.capture is None
+
+
+def test_restarted_stream_accepts_reset_sequence_and_media_timestamp() -> None:
+    ledger = SampleLedger()
+    ingest(ledger, sample(500, stream_id="old-stream"), 0.0)
+    ledger.stop("screen", "screen")
+
+    outcome = ingest(ledger, sample(1, stream_id="new-stream", media_timestamp=1.0), 1.0)
+
+    assert outcome == "accepted"
+    latest = ledger.latest("screen", "screen")
+    assert latest is not None
+    assert latest.record.stream_id == "new-stream"
+    assert latest.record.sequence == 1
+    assert latest.record.media_timestamp == 1.0
+    assert latest.continuity > 0
+
+
+def test_late_retired_stream_cannot_replace_the_restarted_stream() -> None:
+    ledger = SampleLedger()
+    ingest(ledger, sample(500, stream_id="old-stream"), 0.0)
+    ledger.stop("screen", "screen")
+    ingest(ledger, sample(1, stream_id="new-stream", media_timestamp=1.0), 1.0)
+
+    outcome = ingest(ledger, sample(501, stream_id="old-stream"), 2.0)
+
+    assert outcome == "retired_stream"
+    latest = ledger.latest("screen", "screen")
+    assert latest is not None
+    assert latest.record.stream_id == "new-stream"
+
+
+def test_same_stream_id_new_sampler_generation_can_reset_counters() -> None:
+    ledger = SampleLedger()
+    ingest(ledger, sample(500, generation=1), 0.0)
+    ledger.stop("screen", "screen")
+
+    assert ingest(ledger, sample(1, generation=2, media_timestamp=1.0), 1.0) == "accepted"
+    assert ingest(ledger, sample(501, generation=1), 2.0) == "retired_stream"
+    assert ingest(ledger, sample(2, generation=2, media_timestamp=2.0), 2.0) == "accepted"
+    latest = ledger.latest("screen", "screen")
+    assert latest is not None
+    assert latest.record.generation == 2
+    assert latest.record.sequence == 2
+
+
+def test_stopped_sampler_cannot_reopen_itself_with_a_late_packet() -> None:
+    ledger = SampleLedger()
+    ingest(ledger, sample(500, generation=1), 0.0)
+    ledger.stop("screen", "screen")
+
+    assert ingest(ledger, sample(501, generation=1), 1.0) == "retired_stream"
+    assert ledger.stopped("screen", "screen")
