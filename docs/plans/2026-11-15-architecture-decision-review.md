@@ -1,6 +1,9 @@
 # Architecture Decision Review — preparation, physical writer, typed visual claims
 
-Status: **REVISION 3 — DIRECTION ACCEPTED CONDITIONALLY, SPIKE NOT AUTHORIZED, NOTHING IMPLEMENTED.**
+Status: **REVISION 3. ADR-2 CLOSED: BOTH W-A2 PLACEMENTS REJECTED FOR V6 (see `2026-11-15-architecture-decision-closure.md`). ADR-1 AND ADR-3: DIRECTION ACCEPTED, NOTHING IMPLEMENTED.**
+
+The ADR-2 section below is kept as written at revision 3 and is superseded by
+the closure where they differ.
 
 This review answers the CHANGES REQUIRED decision on the stack #206–#217. It
 contains three decision records, one state machine and one threat model. It

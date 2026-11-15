@@ -1,6 +1,11 @@
 # Writer spike protocol — libpulse asynchronous stream
 
-Status: **PROTOCOL REVISION 4 — UNDER REVIEW. NOT AUTHORIZED TO RUN. NO TRIAL HAS RUN.**
+Status: **SUPERSEDED. PROTOCOL REVISION 4 WAS APPROVED FOR PREFLIGHT ONLY; THE PREFLIGHT INVALIDATED ITS BASELINE. FULL TRIALS CANCELLED. NO TRIAL HAS RUN.**
+
+See `2026-11-15-architecture-decision-closure.md` and
+`docs/reports/2026-11-15-writer-spike-preflight.md`. The text below is kept as
+written at revision 4, including assumptions since shown wrong; it is not to be
+run.
 
 | Revision | Head | Outcome |
 | --- | --- | --- |
