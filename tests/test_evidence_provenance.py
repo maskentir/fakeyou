@@ -158,6 +158,10 @@ def screen_context(
     *, provider: str | None, capture_clock: RemoteClock | None, monotonic: Stepping
 ) -> PerceptionContext:
     timeline = MeetingTimeline()
+    if capture_clock is not None:
+        timeline.capture_clock = lambda captured_at: capture_clock.map(
+            captured_at.timestamp() * 1000
+        )
     presenter = timeline.participant("device-ayu", "Ayu")
     data = slide_jpeg("Launch Timeline", ["Beta: 17 March 2027"])
     timeline.show_screen(keyframe(data, seconds=0), presenter, data=data)
@@ -170,12 +174,7 @@ def screen_context(
         monotonic=monotonic,
         provider=provider,
     )
-    context = PerceptionContext(timeline, interpreter, max_chars=6000, clock=lambda: START)
-    if capture_clock is not None:
-        context.capture_clock = lambda captured_at: capture_clock.map(
-            captured_at.timestamp() * 1000
-        )
-    return context
+    return PerceptionContext(timeline, interpreter, max_chars=6000, clock=lambda: START)
 
 
 def mapping(now: Stepping, *, capture_monotonic: float, round_trip: float = 0.02) -> RemoteClock:
@@ -379,3 +378,16 @@ async def test_missing_provider_identity_stays_unmeasurable() -> None:
 
 def test_page_clock_fixture_is_a_real_utc_instant() -> None:
     assert datetime.fromtimestamp(PAGE_AT_START / 1000, UTC) == START
+
+
+async def test_later_clock_exchange_never_remaps_an_originally_unmapped_capture() -> None:
+    monotonic = Stepping(99.0)
+    context = screen_context(provider="fake/vision", capture_clock=None, monotonic=monotonic)
+    clock = mapping(monotonic, capture_monotonic=98.0)
+    context.capture_clock = lambda captured_at: clock.map(captured_at.timestamp() * 1000)
+
+    gathered = await MeetingEvidence(context)("When is beta?", ("screen",), "t1")
+
+    [binding] = gathered.provenance
+    assert binding.capture_monotonic is None
+    assert binding.capture_mapping_clock_domain is None

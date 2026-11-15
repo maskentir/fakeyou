@@ -31,7 +31,7 @@ from fakeyou.perception.percepts import (
     ScreenVisit,
     SignalKind,
 )
-from fakeyou.perception.samples import IngestOutcome, SampleLedger
+from fakeyou.perception.samples import Ingested, SampleLedger
 
 KEYFRAME_CACHE_SIZE = 48
 CAMERA_FRAME_CACHE_SIZE = 32
@@ -135,19 +135,13 @@ class KeyframeCache:
 
 
 @dataclass(frozen=True, slots=True)
-class FrameSample:
-    record: DigestRecord
-    capture: MappedInstant | None
-
-
-@dataclass(frozen=True, slots=True)
 class CameraSample:
     data: bytes
     stream_id: str
     captured_at: datetime
     epoch: int
     seen_at: float
-    sample: FrameSample | None = None
+    sample: ContentSample | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,25 +190,23 @@ class CameraFrameStore:
         return stored
 
     def _ingest(self, participant_id: str, sample: CameraSample) -> ContentSample:
-        given = sample.sample
-        record = (
-            given.record
-            if given is not None
-            else encoded_bytes_record(
-                hashlib.sha256(sample.data).hexdigest(),
-                SampleSource("camera", sample.stream_id, participant_id),
-                sequence=self.samples.next_sequence("camera", participant_id),
-                size=(0, 0),
-            )
+        if sample.sample is not None:
+            return sample.sample
+        record = encoded_bytes_record(
+            hashlib.sha256(sample.data).hexdigest(),
+            SampleSource(
+                "camera",
+                sample.stream_id,
+                participant_id,
+                self.samples.page_epoch,
+                self.samples.page_session,
+            ),
+            sequence=self.samples.next_sequence("camera", participant_id),
+            size=(0, 0),
         )
         clock = self.capture_clock
-        capture = (
-            given.capture
-            if given is not None
-            else (clock(sample.captured_at) if clock is not None else None)
-        )
-        self.samples.ingest(record, captured_at=sample.captured_at, capture=capture)
-        return ContentSample(record, sample.captured_at, capture, self.samples.revision)
+        capture = clock(sample.captured_at) if clock is not None else None
+        return self.samples.ingest(record, captured_at=sample.captured_at, capture=capture).sample
 
     def unverified_heartbeat(self, participant_id: str, *, captured_at: datetime) -> None:
         frame = self._frames.get(participant_id)
@@ -233,6 +225,8 @@ class CameraFrameStore:
             media_timestamp=None,
             digest=None,
             skip_reason=HEARTBEAT_WITHOUT_RECORD,
+            page_epoch=self.samples.page_epoch,
+            page_session=self.samples.page_session,
         )
         self.samples.ingest(record, captured_at=captured_at, capture=None)
 
@@ -280,7 +274,8 @@ class MeetingTimeline:
         self.camera_frames = CameraFrameStore()
         self.samples = self.camera_frames.samples
         self._latest_keyframes: dict[str, Keyframe] = {}
-        self._analyzed: OrderedDict[str, ContentSample] = OrderedDict()
+        self._latest_presenters: dict[str, ParticipantRef | None] = {}
+        self._analyzed: OrderedDict[tuple[str, datetime], ContentSample] = OrderedDict()
 
     @property
     def capture_clock(self) -> CaptureClock | None:
@@ -293,39 +288,44 @@ class MeetingTimeline:
     def latest_keyframe(self, segment: ScreenSegment) -> Keyframe:
         return self._latest_keyframes.get(segment.ref, segment.keyframe)
 
+    def latest_presenter(self, segment: ScreenSegment) -> ParticipantRef | None:
+        return self._latest_presenters.get(segment.ref, segment.presenter)
+
     def analyzed_sample(self, ref: SnapshotRef) -> ContentSample | None:
         if ref.source == "screen":
-            return self._analyzed.get(ref.stream_id)
+            return self._analyzed.get((ref.stream_id, ref.captured_at))
         frame = self.camera_frames.get(ref.subject_id)
         if frame is None or frame.ref != ref:
             return None
         return frame.content
 
-    def confirm(self, sample: FrameSample, *, captured_at: datetime) -> IngestOutcome:
-        return self.samples.ingest(sample.record, captured_at=captured_at, capture=sample.capture)
+    def confirm(
+        self, record: DigestRecord, *, captured_at: datetime, capture: MappedInstant | None
+    ) -> Ingested:
+        return self.samples.ingest(record, captured_at=captured_at, capture=capture)
 
-    def _ingest_screen(self, keyframe: Keyframe, sample: FrameSample | None) -> None:
-        record = (
-            sample.record
-            if sample is not None
-            else encoded_bytes_record(
-                keyframe.sha256,
-                SampleSource("screen", "", SCREEN_SOURCE_ID),
-                sequence=self.samples.next_sequence("screen", SCREEN_SOURCE_ID),
-                size=(keyframe.width, keyframe.height),
-            )
-        )
-        clock = self.capture_clock
-        capture = (
-            sample.capture
-            if sample is not None
-            else (clock(keyframe.captured_at) if clock is not None else None)
-        )
-        self.samples.ingest(record, captured_at=keyframe.captured_at, capture=capture)
-        self._analyzed[keyframe.sha256] = ContentSample(
-            record, keyframe.captured_at, capture, self.samples.revision
-        )
-        self._analyzed.move_to_end(keyframe.sha256)
+    def _ingest_screen(self, keyframe: Keyframe, sample: ContentSample | None) -> None:
+        if sample is None:
+            clock = self.capture_clock
+            sample = self.samples.ingest(
+                encoded_bytes_record(
+                    keyframe.sha256,
+                    SampleSource(
+                        "screen",
+                        "",
+                        SCREEN_SOURCE_ID,
+                        self.samples.page_epoch,
+                        self.samples.page_session,
+                    ),
+                    sequence=self.samples.next_sequence("screen", SCREEN_SOURCE_ID),
+                    size=(keyframe.width, keyframe.height),
+                ),
+                captured_at=keyframe.captured_at,
+                capture=clock(keyframe.captured_at) if clock is not None else None,
+            ).sample
+        identity = (keyframe.sha256, keyframe.captured_at)
+        self._analyzed.setdefault(identity, sample)
+        self._analyzed.move_to_end(identity)
         while len(self._analyzed) > ANALYZED_SAMPLE_CACHE_SIZE:
             self._analyzed.popitem(last=False)
 
@@ -367,7 +367,7 @@ class MeetingTimeline:
         presenter: ParticipantRef | None,
         *,
         data: bytes | None = None,
-        sample: FrameSample | None = None,
+        sample: ContentSample | None = None,
     ) -> ScreenShown:
         if data is not None:
             self.keyframes.put(keyframe.sha256, data)
@@ -380,6 +380,7 @@ class MeetingTimeline:
             and compare_screens(current.keyframe, keyframe) != "distinct"
         ):
             self._latest_keyframes[current.ref] = keyframe
+            self._latest_presenters[current.ref] = presenter
             shown = ScreenShown(segment=current, change="same", arrival=keyframe)
             self._emit(shown)
             return shown
@@ -408,6 +409,7 @@ class MeetingTimeline:
         state.screens[segment.ref] = segment
         state.current_ref = segment.ref
         self._latest_keyframes[segment.ref] = keyframe
+        self._latest_presenters[segment.ref] = presenter
         self._journal.record(
             "screen_captured",
             source="perception",

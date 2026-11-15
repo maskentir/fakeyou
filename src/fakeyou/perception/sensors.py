@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.settings import PerceptionSettings
 from fakeyou.foundation.clock_mapping import ClockExchange, MappedInstant, RemoteClock
-from fakeyou.foundation.content_digest import DigestRecord
+from fakeyou.foundation.content_digest import ContentSample, DigestRecord
 from fakeyou.foundation.invariants import PERCEPTION_POLL_TIMEOUT_MULTIPLIER
 from fakeyou.foundation.polling import PollingLoop, PollSchedule
 from fakeyou.foundation.resources import load_bridged_script
@@ -33,7 +33,6 @@ from fakeyou.perception.roster import MeetRoster, RosterChange, StreamAssignment
 from fakeyou.perception.timeline import (
     SCREEN_SOURCE_ID,
     CameraSample,
-    FrameSample,
     MeetingTimeline,
 )
 
@@ -44,6 +43,7 @@ PERCEPTION_ASSIGN_JS = (
     "? window.__fakeyouPerception.assign(assignments) : null"
 )
 PERCEPTION_POLL_SECONDS = 0.5
+SAMPLER_STOPPING_CHANGES = frozenset({"left", "camera_off", "presenting_stopped"})
 FRAME_SAMPLE_CACHE_SIZE = 512
 DRAIN_STATS_EVERY = 30
 BACKLOG_GRACE = timedelta(seconds=2)
@@ -63,6 +63,7 @@ def _utc_now() -> datetime:
 
 class DrainPart(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
+    page_session: str | None = None
 
 
 class DrainedMessage(DrainPart):
@@ -80,6 +81,7 @@ class DrainedFrame(DrainPart):
     reason: str
     jpeg_b64: str
     sequence: int | None = None
+    generation: int = 0
 
 
 class DrainedSample(DrainPart):
@@ -95,12 +97,14 @@ class DrainedSample(DrainPart):
     version: int = 0
     digest: str | None = None
     skip_reason: str | None = None
+    generation: int = 0
 
 
 class ActiveSampler(DrainPart):
     stream_id: str
     role: Literal["screen", "camera"]
     last_sample_page_ms: float = 0
+    generation: int = 0
 
 
 class DrainBatch(DrainPart):
@@ -150,6 +154,8 @@ class PerceptionSensors:
         self._clock = clock
         self._on_camera_invalidate = on_camera_invalidate
         self.epoch = 0
+        self.page_session: str | None = None
+        self._retired_pages: set[str] = set()
         self.rejected_messages = 0
         self.heartbeats = 0
         self.frames_seen = 0
@@ -160,8 +166,12 @@ class PerceptionSensors:
         self._audio_outputs: set[tuple[str, str]] = set()
         self._admitted_at: datetime | None = None
         self._sampler_samples: dict[str, float] = {}
-        self._frame_samples: OrderedDict[tuple[str, int], FrameSample] = OrderedDict()
+        self._frame_samples: OrderedDict[
+            tuple[int, str | None, str, int, int], ContentSample | None
+        ] = OrderedDict()
         self._recording_streams: set[str] = set()
+        self._deferred_frames: list[DrainedFrame] = []
+        self._restart_devices: set[str] = set()
         self.samples_seen = 0
         self.samples_irregular = 0
 
@@ -187,7 +197,56 @@ class PerceptionSensors:
     def capture_instant(self, captured_at: datetime) -> MappedInstant | None:
         return self.page_clock.map(captured_at.timestamp() * 1000)
 
-    async def accept_batch(self, batch: DrainBatch) -> None:
+    def _page_refusal(self, batch: DrainBatch, expected_epoch: int | None) -> str | None:
+        if expected_epoch is not None and expected_epoch != self.epoch:
+            return "page_epoch_changed"
+        session = batch.page_session
+        if session in self._retired_pages:
+            return "page_session_retired"
+        if session == "" or (
+            session is None
+            and (self.page_session is not None or (expected_epoch is not None and self.epoch > 0))
+        ):
+            return "page_session_missing"
+        parts = (*batch.messages, *batch.samples, *batch.frames, *batch.active)
+        if any(item.page_session != session for item in parts):
+            return "page_session_mismatch"
+        if (
+            self.page_session is not None
+            and session != self.page_session
+            and expected_epoch is None
+        ):
+            return "page_transition_unannounced"
+        return None
+
+    def _reject_batch(self, reason: str) -> bool:
+        self._journal.record(
+            "perception_batch_rejected", source="perception", reason=reason, epoch=self.epoch
+        )
+        return False
+
+    async def accept_batch(
+        self,
+        batch: DrainBatch,
+        *,
+        expected_epoch: int | None = None,
+        exchange: ClockExchange | None = None,
+    ) -> bool:
+        refusal = self._page_refusal(batch, expected_epoch)
+        if refusal is not None:
+            return self._reject_batch(refusal)
+        if self.page_session is not None and batch.page_session != self.page_session:
+            self.begin_epoch()
+        if batch.page_session != self.page_session:
+            self.timeline.samples.begin_page(self.epoch, batch.page_session)
+            self.page_session = batch.page_session
+            self._deferred_frames.clear()
+            self._frame_samples.clear()
+            self._recording_streams.clear()
+            self._sampler_samples.clear()
+        epoch = self.epoch
+        if exchange is not None:
+            self.page_clock.observe(exchange)
         self.drained_at = self.monotonic()
         self._observe_peers(tuple(batch.peers))
         for message in batch.messages:
@@ -196,8 +255,14 @@ class PerceptionSensors:
         for sample in batch.samples:
             self._accept_sample(sample)
         self._touch_active(batch.active)
-        for frame in batch.frames:
-            await self._accept_frame(frame)
+        deferred_frames, self._deferred_frames = self._deferred_frames, []
+        retried = len(deferred_frames)
+        frames = (*deferred_frames, *batch.frames)
+        for index, frame in enumerate(frames):
+            if self.epoch != epoch or self.page_session != batch.page_session:
+                return self._reject_batch("page_epoch_changed")
+            await self._accept_frame(frame, retried=index < retried)
+        return self.epoch == epoch and self.page_session == batch.page_session
 
     def _accept_sample(self, sample: DrainedSample) -> None:
         assignment = self.roster.assignment_for(sample.stream_id)
@@ -209,7 +274,8 @@ class PerceptionSensors:
             else self._person(assignment.device_id).participant_id
         )
         captured_at = page_time(sample.page_ms)
-        frame_sample = FrameSample(
+        capture = self.capture_instant(captured_at)
+        ingested = self.timeline.confirm(
             DigestRecord(
                 algorithm=sample.algorithm,
                 version=sample.version,
@@ -223,15 +289,29 @@ class PerceptionSensors:
                 media_timestamp=sample.media_timestamp,
                 digest=sample.digest,
                 skip_reason=sample.skip_reason,
+                generation=sample.generation,
+                page_epoch=self.epoch,
+                page_session=sample.page_session,
             ),
-            self.capture_instant(captured_at),
+            captured_at=captured_at,
+            capture=capture,
         )
         self._recording_streams.add(sample.stream_id)
-        self._frame_samples[sample.stream_id, sample.sequence] = frame_sample
+        sampled = (
+            self.epoch,
+            sample.page_session,
+            sample.stream_id,
+            sample.generation,
+            sample.sequence,
+        )
+        if ingested.outcome in {"accepted", "inconsistent_time"}:
+            self._frame_samples[sampled] = ingested.sample
+        else:
+            self._frame_samples.setdefault(sampled, None)
         while len(self._frame_samples) > FRAME_SAMPLE_CACHE_SIZE:
             self._frame_samples.popitem(last=False)
         self.samples_seen += 1
-        outcome = self.timeline.confirm(frame_sample, captured_at=captured_at)
+        outcome = ingested.outcome
         if outcome != "accepted":
             self.samples_irregular += 1
             self._journal.record(
@@ -366,6 +446,8 @@ class PerceptionSensors:
             presenting = change.kind in {"presenting_started", "presenting_stopped"}
             if presenting or self._settings.signals:
                 self.timeline.add_signal(change.kind, person, at)
+            if change.kind in SAMPLER_STOPPING_CHANGES:
+                self._restart_devices.add(change.device_id)
             if change.kind == "left":
                 self.timeline.camera_frames.drop(change.device_id)
                 self._invalidate_camera(change.device_id)
@@ -374,9 +456,26 @@ class PerceptionSensors:
                 self.timeline.camera_frames.drop(change.device_id)
                 self._invalidate_camera(change.device_id)
 
+    @property
+    def sampler_restarts(self) -> frozenset[str]:
+        return frozenset(self._restart_devices)
+
+    def samplers_restarted(self, device_ids: frozenset[str]) -> None:
+        self._restart_devices -= device_ids
+
     def begin_epoch(self) -> None:
+        if self.page_session is not None:
+            self._retired_pages.add(self.page_session)
+        self._deferred_frames.clear()
+        self._restart_devices.clear()
         self.epoch += 1
+        self.page_session = None
         self.timeline.camera_frames.clear()
+        self.timeline.stop_screen(self._clock())
+        self.timeline.samples.begin_page(self.epoch)
+        self.page_clock = RemoteClock(now=lambda: self.monotonic())
+        self._frame_samples.clear()
+        self._recording_streams.clear()
         self._sampler_samples.clear()
         self._invalidate_camera(None)
         self.roster.begin_epoch()
@@ -403,6 +502,15 @@ class PerceptionSensors:
                 continue
             if not self._sampling_advanced(sampler):
                 continue
+            if sampler.generation > 0:
+                latest = self.timeline.samples.latest("camera", frame.ref.subject_id)
+                if (
+                    latest is None
+                    or frame.content is None
+                    or latest.record.generation != sampler.generation
+                    or frame.content.record.generation != sampler.generation
+                ):
+                    continue
             self.timeline.camera_frames.touch(assignment.device_id, seen_at=seen)
             if sampler.stream_id not in self._recording_streams:
                 self.timeline.camera_frames.unverified_heartbeat(
@@ -448,8 +556,17 @@ class PerceptionSensors:
             )
         )
 
-    async def _accept_frame(self, frame: DrainedFrame) -> None:
+    def _awaits_its_sample(self, frame: DrainedFrame) -> bool:
+        return (
+            frame.generation > 0
+            and frame.sequence is not None
+            and (self.epoch, self.page_session, frame.stream_id, frame.generation, frame.sequence)
+            not in self._frame_samples
+        )
+
+    async def _accept_frame(self, frame: DrainedFrame, *, retried: bool = False) -> None:
         epoch = self.epoch
+        page_session = self.page_session
         assignment = self.roster.assignment_for(frame.stream_id)
         if assignment is None or assignment.role != frame.role:
             self._journal.record(
@@ -461,6 +578,9 @@ class PerceptionSensors:
                     f"{item.role}:{item.stream_id}" for item in self.roster.assignments()
                 ),
             )
+            return
+        if not retried and self._awaits_its_sample(frame):
+            self._deferred_frames.append(frame)
             return
         device_id = assignment.device_id
         revision = self.timeline.camera_frames.current_generation(device_id)
@@ -474,6 +594,7 @@ class PerceptionSensors:
             return
         if (
             self.epoch != epoch
+            or self.page_session != page_session
             or self.timeline.camera_frames.current_generation(device_id) != revision
             or not self._assignment_current(frame, device_id)
         ):
@@ -488,11 +609,27 @@ class PerceptionSensors:
             return
         self.frames_seen += 1
         person = self._person(device_id)
-        sample = (
-            None
-            if frame.sequence is None
-            else self._frame_samples.get((frame.stream_id, frame.sequence))
-        )
+        sampled = (epoch, page_session, frame.stream_id, frame.generation, frame.sequence or 0)
+        sample = None if frame.sequence is None else self._frame_samples.get(sampled)
+        if frame.generation > 0:
+            latest = self.timeline.samples.latest(
+                frame.role, person.participant_id if frame.role == "camera" else SCREEN_SOURCE_ID
+            )
+            if (
+                sample is None
+                or latest is None
+                or latest.record.sampler_identity
+                != (epoch, page_session, frame.stream_id, frame.generation)
+                or self.timeline.samples.stopped(frame.role, latest.record.subject_id)
+            ):
+                self._journal.record(
+                    "perception_frame_dropped",
+                    source="perception",
+                    reason="retired_stream" if sampled in self._frame_samples else "sample_missing",
+                    stream_id=frame.stream_id,
+                    generation=frame.generation,
+                )
+                return
         if frame.role == "screen":
             self.timeline.show_screen(keyframe, person, data=data, sample=sample)
         else:
@@ -558,6 +695,7 @@ class PerceptionDrain(PollingLoop):
         self._sensors = sensors
         self._journal = sinks.journal if sinks is not None else None
         self._assigned: tuple[StreamAssignment, ...] = ()
+        self._assigned_page = (sensors.epoch, sensors.page_session)
         self.batches_rejected = 0
 
     @property
@@ -571,6 +709,7 @@ class PerceptionDrain(PollingLoop):
     async def drain_once(self) -> None:
         self.polls += 1
         sent = self._sensors.monotonic()
+        expected_epoch = self._sensors.epoch
         async with asyncio.timeout(PERCEPTION_POLL_TIMEOUT_MULTIPLIER * self._poll_interval):
             raw = await self._page.evaluate(PERCEPTION_DRAIN_JS)
         received = self._sensors.monotonic()
@@ -585,8 +724,14 @@ class PerceptionDrain(PollingLoop):
                     "perception_batch_rejected", source="perception", rejected=self.batches_rejected
                 )
             return
-        self._sensors.page_clock.observe(ClockExchange(batch.drained_page_ms, sent, received))
-        await self._sensors.accept_batch(batch)
+        accepted = await self._sensors.accept_batch(
+            batch,
+            expected_epoch=expected_epoch,
+            exchange=ClockExchange(batch.drained_page_ms, sent, received),
+        )
+        if not accepted:
+            self.batches_rejected += 1
+            return
         if self._journal is not None and (
             batch.frames or batch.dropped_frames or self.polls % DRAIN_STATS_EVERY == 0
         ):
@@ -608,15 +753,29 @@ class PerceptionDrain(PollingLoop):
 
     async def _push_assignments(self) -> None:
         wanted = tuple(self._sensors.assignments())
-        if wanted == self._assigned:
+        page_identity = (self._sensors.epoch, self._sensors.page_session)
+        restarts = self._sensors.sampler_restarts
+        restarting = any(item.device_id in restarts for item in wanted)
+        unchanged = wanted == self._assigned and page_identity == self._assigned_page
+        if unchanged and not restarting:
+            self._sensors.samplers_restarted(restarts)
             return
-        payload = [
-            {"stream_id": item.stream_id, "role": item.role, "device_id": item.device_id}
-            for item in wanted
+        payloads = [
+            [
+                {"stream_id": item.stream_id, "role": item.role, "device_id": item.device_id}
+                for item in wanted
+                if item.device_id not in stopped
+            ]
+            for stopped in ((restarts, frozenset[str]()) if restarting else (frozenset[str](),))
         ]
         async with asyncio.timeout(PERCEPTION_POLL_TIMEOUT_MULTIPLIER * self._poll_interval):
-            await self._page.evaluate(PERCEPTION_ASSIGN_JS, payload)
+            for payload in payloads:
+                await self._page.evaluate(PERCEPTION_ASSIGN_JS, payload)
+        if page_identity != (self._sensors.epoch, self._sensors.page_session):
+            return
+        self._sensors.samplers_restarted(restarts)
         self._assigned = wanted
+        self._assigned_page = page_identity
         if self._journal is not None:
             self._journal.record(
                 "perception_streams_bound",
