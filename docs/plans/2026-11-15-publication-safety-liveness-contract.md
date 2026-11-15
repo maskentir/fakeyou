@@ -15,8 +15,13 @@ Revision 3 applies the reviews of revision 1 (`e967419`) and revision 2
 claims; exact content is separated from source and subject identity; the boundary
 before the first PCM write has an explicit commit rule. From the second: visual
 speech is render-only, so the model's wording is never published in a visual
-turn; a committed decision is distinguished from audio actually written. The
-sixteen decisions from both reviews are locked in section 12.
+turn; a committed decision is distinguished from audio actually written.
+
+Revision 4 applies the review of revision 3 (`52ff843`): approved Indonesian
+wording for the current patterns; speech synthesis is its own gate and is not
+authorized by this note; the delay between the final evaluation and the first
+successful PCM write is bounded; camera historical statements are bound by H1 to
+H6. The decisions from all three reviews are locked in section 12.
 
 ## 1. What is true on `main` today
 
@@ -53,7 +58,7 @@ These hold in every table below. A row that would break one is wrong.
 | I1 | The capture freshness limit stays 5.0 s, the validation age limit 0.25 s, and the accepted clock uncertainty 0.05 s |
 | I2 | The capture time, snapshot identity, provider attempt, and inference of the analyzed frame are immutable. No later sample overwrites them |
 | I3 | A later sample has its own identity, capture time, and mapping uncertainty. It is evidence of content continuity, never of the claim itself, and never of source or subject identity |
-| I4 | The gate, the commit evaluation, the renderer, and every fallback make no vision or language-model request. Nothing in this contract adds one, including re-reading a frame or re-asking the reply model |
+| I4 | The gate, the commit evaluation, the renderer, and every fallback make no vision or language-model request. Nothing in this contract adds one, including re-reading a frame or re-asking the reply model. Speech synthesis is governed by I13 |
 | I5 | When support for a claim cannot be proven the decision is `unknown`, never `valid` |
 | I6 | `invalid` outranks `unknown`, which outranks `valid`, across the claims of a sentence and the evidence of a claim |
 | I7 | A clip's decision is final at its commit (section 6): the final evaluation and the handoff of the first frame, with no suspension between them. A clip whose committed decision is not `valid` hands nothing to the writer. A committed decision authorizes the attempt; it is not evidence that audio was written. After the commit the gate never retracts or rewrites the decision |
@@ -62,6 +67,9 @@ These hold in every table below. A row that would break one is wrong.
 | I10 | The scope of a sentence is assigned by the runtime from deterministic rules. A scope, class, or support declared by a model is input to be checked, never the result |
 | I11 | In a turn with visual needs, model-written sentence text is never synthesized or published. Everything spoken there is a runtime-rendered pattern or a catalog entry. Model text is published only in a turn with no visual needs |
 | I12 | Local audio is proven only by the playback receipt. A decision, a commit, or a call to the writer is never recorded as spoken |
+| I13 | Whether a statement may be published and whether it can be synthesized are separate gates. A valid decision or a ready pattern does not authorize a synthesis request, and no provider request of any kind, speech included, is authorized by this note |
+| I14 | In a turn with visual needs, no speech path passes model-written sentence text to a synthesizer: not the reply sink, not direct speech, not lookahead or speculative preparation, not a retry, not a cue |
+| I15 | A current claim is published as fresh only when the first successful PCM write is within the validation allowance of the final evaluation, on measured instants. Acceptance by the writer is not output |
 
 ## 3. Vocabulary
 
@@ -249,6 +257,22 @@ In either design no asynchronous wait lies between the final evaluation and the
 handoff. If a wait is unavoidable there, the evaluation is repeated after it. A
 design that cannot show this does not satisfy the contract.
 
+**Temporal bound from evaluation to output.** A synchronous enqueue is not a
+write. A frame accepted at second 100 and written by the executor at second 107
+was valid when accepted and is not fresh when heard. Three instants are measured
+on the local monotonic clock and recorded on the receipt: `evaluated_at` (final
+evaluation), `accepted_at` (writer took the frame), and `first_written_at` (first
+successful PCM write).
+
+| # | Rule |
+| --- | --- |
+| V1 | `first_written_at` minus `evaluated_at` must be at most the validation allowance of 0.25 s (I1), and the confirmation sample used must still be fresh at `first_written_at` |
+| V2 | When V1 would be exceeded, the writer either does not output the frame, or the binding is re-evaluated synchronously immediately before the output and the result of that evaluation is the committed decision |
+| V3 | A frame withheld under V2 yields a receipt with zero local audio and the reason `write_delayed_past_validation`. It is not spoken (I8, I12) |
+| V4 | When a late write could not be prevented and PCM was written, the receipt reports the local audio truthfully and the publication is marked `fresh_at_write_unproven`. Measurement never reports it as a fresh or compliant current claim |
+| V5 | An instant that is missing or not on the gate's clock makes the bound unproven: treated as V4 if audio was written |
+| V6 | A writer that can satisfy neither branch of V2 blocks production activation. This is a finding to be established in the implementation review, not assumed either way here |
+
 A change the sensor has not delivered cannot be seen by the gate. The exposure is
 one confirmation interval plus delivery delay. It is reported after the fact,
 never repaired by rewriting the decision.
@@ -275,6 +299,10 @@ never repaired by rewriting the decision.
 | R18 | Committed valid, the first write fails | committed decision stands; receipt reports the failure with zero local audio; not spoken | `ok` | none |
 | R19 | Committed valid, the clip yields zero bytes | committed decision stands; receipt `dropped_before_audio`; not spoken | `ok` | none |
 | R20 | Writer needs a wait before it can take a frame; a non-exact sample is ingested during that wait | the wait precedes the final evaluation (W2), so the sample is seen: per S7 or S8, no handoff | per S7 or S8 | historical |
+| R21 | Committed valid and accepted; the first write would complete more than 0.25 s after the final evaluation; the writer can withhold | no output; receipt with zero local audio | `write_delayed_past_validation` | historical |
+| R22 | Same delay; the binding is re-evaluated immediately before output and is still valid | valid, with the later evaluation recorded | `ok` | none |
+| R23 | Same delay; re-evaluation finds a non-exact or stale sample | per S5, S7, or S8; no output | per table | historical |
+| R24 | Same delay; the write could not be prevented and PCM was written | committed decision stands; receipt reports the audio; publication marked `fresh_at_write_unproven` | `ok`, not reportable as fresh | none |
 
 ## 7. Contract 3 — Abstention
 
@@ -464,14 +492,19 @@ Historical patterns (approved wording):
 | Entity–status | "The checked frame listed the status of [entity] as [status]." | "Pada gambar yang saya periksa, status [entity] tercantum sebagai [status]." |
 | Item presence | "The checked frame showed [item]." | "Gambar yang saya periksa menampilkan [item]." |
 
-Current patterns. The English entity–attribute–value wording is from the review;
-the others follow it and are proposed here (section 14):
+Current patterns (approved wording):
 
 | Shape | English | Indonesian |
 | --- | --- | --- |
-| Entity–attribute–value | "The currently displayed screen lists [attribute] for [entity] as [value]." | "Layar yang sedang ditampilkan mencantumkan [attribute] untuk [entity] sebagai [value]." |
-| Entity–status | "The currently displayed screen lists the status of [entity] as [status]." | "Layar yang sedang ditampilkan mencantumkan status [entity] sebagai [status]." |
-| Item presence | "The currently displayed screen shows [item]." | "Layar yang sedang ditampilkan menampilkan [item]." |
+| Entity–attribute–value | "The currently displayed screen lists [attribute] for [entity] as [value]." | "Pada layar yang sedang ditampilkan, [attribute] untuk [entity] tercantum sebagai [value]." |
+| Entity–status | "The currently displayed screen lists the status of [entity] as [status]." | "Pada layar yang sedang ditampilkan, status [entity] tercantum sebagai [status]." |
+| Item presence | "The currently displayed screen shows [item]." | "Pada layar yang sedang ditampilkan, terlihat [item]." |
+
+`[entity]` is the object or project, `[attribute]` its attribute, `[value]` the
+value the evidence supports; `[status]` and `[item]` belong to the other two
+shapes. Example: "Pada gambar yang saya periksa, pendapatan untuk Proyek A
+tercantum sebagai Rp1,2 miliar." Every pattern states what the screen or frame
+lists, not an externally verified fact.
 
 The current patterns are for screen claims. A camera claim has no current
 pattern in v1 and is rendered only historically, which matches the consequence
@@ -484,7 +517,7 @@ and is not rendered in any tense.
 | --- | --- |
 | G1 | Each placeholder is filled with one contiguous span of the look's answer, taken from the clause that satisfied L1. Nothing is taken from the model's sentence or from the model's wording of the claim |
 | G2 | A field contains no sentence or clause punctuation and no line break |
-| G3 | A field is at most a fixed length (section 14 proposes the number) |
+| G3 | A field is at most 8 words and at most 80 Unicode code points after NFC normalization. Both limits apply. A field over either limit is rejected whole; it is never truncated |
 | G4 | A field contains no marker from the fixed negation, temporal ("now", "currently", "right now"), or certainty ("definitely", "certainly") lists |
 | G5 | A value field matches the grammar of its type: number, currency, percent, date, time, or quoted string. A status field is the status span of the answer |
 | G6 | Polarity is positive. A negated, conditional, or hedged claim has no pattern in v1 |
@@ -516,14 +549,14 @@ prevented or replaced statement can be traced.
 ## 10. Fallback
 
 Prevention never triggers a vision or language-model request (I4). What may be
-spoken instead:
+spoken instead, when synthesis is available for it (table Y):
 
 | Fallback | When | What is spoken | Binding |
 | --- | --- | --- | --- |
 | none | committed decision `valid` | the rendered current statement | as bound |
 | historical | every condition in H1 to H6 holds | the historical pattern for the claim's shape | new publication ID, scope `historical`, same evidence, link to the prevented publication |
 | abstention | historical is not available | AB1, AB2, or AB3 by its condition | new publication ID, the entry's scope, gather attempt kept |
-| silence | an abstention was already spoken in this turn | nothing | journaled |
+| silence | an abstention was already spoken in this turn, or no authorized synthesis path exists for the fallback | nothing | journaled with the reason |
 
 | # | Condition for a historical statement |
 | --- | --- |
@@ -552,16 +585,25 @@ statement the runtime rendered or for AB2. Model-written text is never bound as
 | F9 | Two statements prevented in one turn, neither eligible for historical | one abstention, then silence |
 | F10 | Two claims, one eligible for historical and one not | the eligible one as a historical statement; one abstention for the rest |
 | F11 | Scene changed to another slide, A is 8 s old, claim supported | historical pattern; it states what the checked frame listed and nothing about now |
-| F12 | Camera claim, supported, any current-state outcome | historical pattern (no current camera pattern in v1) |
+| F12 | Camera claim, supported, any current-state outcome | historical pattern, and only when H1 to H6 all hold, including the 30 s limit from A's capture and never after `subject_changed`; otherwise AB1 |
 | F13 | Historical gather whose stored provenance lacks a mapped capture instant or a look answer | AB1 |
 
-At most one abstention is spoken per turn. A fallback statement is bound, gated,
-synthesized, and receipted like any other statement.
+**Y. Synthesis availability.** A statement being publishable and a statement
+being synthesizable are separate gates (I13). The budget in force is 0 new
+provider requests, US$0, and that includes speech. There is no exception by
+provider type.
 
-A fallback statement needs speech synthesis like any statement. That is a
-request to the speech provider, visible in the journal and the ledger; it is not
-vision or language-model inference. Catalog entries can be synthesized ahead of
-time. Section 14 asks to confirm this reading of I4.
+| # | Situation | Rule |
+| --- | --- | --- |
+| Y1 | This milestone, every test and evaluation | Synthesis uses a fake or a local facility that calls no external provider |
+| Y2 | Production, speech-provider requests explicitly authorized with a budget | A runtime-rendered statement or fallback may be synthesized by the provider. Every request is ledgered, including retries, cancelled requests, and synthesis that was never published |
+| Y3 | Production, no such authorization | A fallback may be spoken only from local audio that already exists and may lawfully be used, or from a local synthesizer that needs no provider request |
+| Y4 | No path under Y2 or Y3 | Fail closed: silence, journaled with `synthesis_unavailable` and the statement that would have been spoken |
+| Y5 | Preparing catalog audio ahead of time | Is itself synthesis. It needs the same authorization and does not create one |
+| Y6 | A pattern or catalog text is ready | Says nothing about whether it can be synthesized. Dynamic historical statements are not assumed available |
+
+At most one abstention is spoken per turn. A fallback statement is bound, gated,
+synthesized under table Y, and receipted like any other statement.
 
 ## 11. Negative controls
 
@@ -709,9 +751,31 @@ Preserved behavior
 - NC-105: A's snapshot, capture instant, digest record, and provider attempt on the binding are byte-equal before and after any number of confirmation samples (I2).
 - NC-106: a turn with no visual needs publishes the model's text exactly as today (M7).
 
+Writer delay
+
+- NC-107: valid at enqueue, first write delayed beyond the 0.25 s allowance, writer can withhold. No PCM; receipt reason `write_delayed_past_validation`; not counted (R21, V3).
+- NC-108: same delay, re-evaluated immediately before output and still valid. PCM written; both evaluations recorded (R22).
+- NC-109: same delay, scene changed during the delay. No PCM (R23).
+- NC-110: same delay, write could not be prevented. Receipt reports the audio; publication marked `fresh_at_write_unproven`; measurement does not report a fresh or compliant current claim (R24, V4).
+- NC-111: `accepted_at` or `first_written_at` missing or on another clock. Bound unproven; as NC-110 (V5).
+- NC-112: `accepted_at` alone, with no successful write, is never recorded as local audio (I12).
+
+Synthesis availability
+
+- NC-113: fallback is publishable, no authorized synthesis path. Silence with `synthesis_unavailable`; the journal holds the statement that would have been spoken (Y4).
+- NC-114: across every test of this milestone the only synthesizer is a fake; a real speech-provider client is never constructed (Y1).
+- NC-115: with provider synthesis authorized in a test double, every request appears in the ledger: first attempt, retry, cancelled request, and synthesis that was never published (Y2).
+- NC-116: catalog audio is not prepared ahead of time unless synthesis is authorized (Y5).
+- NC-117: a dynamic historical statement with only pre-existing catalog audio available. The historical statement is not spoken; silence or a catalog entry that has audio (Y3, Y6).
+
+Model text never reaches a synthesizer
+
+- NC-118: in a visual turn, across the reply sink, direct speech, lookahead and speculative preparation, retries, and cues, the synthesizer fake receives only pattern output and catalog entries (I14). NC-67 is the same assertion on the renderer path; this one covers every path.
+- NC-119: a model sentence prepared speculatively before the turn was known to have visual needs is discarded and its prepared audio is never written (I14).
+
 ## 12. Locked decisions
 
-From the reviews of revisions 1 and 2.
+From the reviews of revisions 1, 2, and 3.
 
 | # | Topic | Decision |
 | --- | --- | --- |
@@ -731,6 +795,13 @@ From the reviews of revisions 1 and 2.
 | 14 | Renderer patterns | Three claim shapes with the historical wording v1 in section 9. No raw model sentence fallback |
 | 15 | Matcher evaluation | Required offline, from existing cassettes read-only, before activation, with no new provider call (section 13) |
 | 16 | CPU budget for hashing | Numerically open. D6 fails closed. The number is set after a real measurement that needs its own authorization |
+| 17 | Placeholder order | `[attribute]` for `[entity]` as `[value]`, in both languages; `[status]` and `[item]` only in their own shapes |
+| 18 | Current patterns | Three English patterns and the Indonesian wording in section 9 |
+| 19 | Camera claims | No current pattern in v1; historical only, and only under H1 to H6 |
+| 20 | Field length | 8 words and 80 Unicode code points after NFC, both; reject, never truncate |
+| 21 | Speech synthesis | Not authorized automatically. Table Y: fake or local in this milestone; provider synthesis in production only with explicit authorization and full ledgering; otherwise local audio or silence |
+| 22 | Writer design | W1 or W2, chosen at implementation review, subject to the temporal bound V1 to V6 |
+| 23 | Model text and synthesizers | No model-written sentence of a visual turn reaches any synthesizer on any speech path (I14) |
 
 Commit versus write, also locked: a committed decision authorizes an attempt;
 local audio is proven only by the playback receipt; post-commit samples are
@@ -754,30 +825,19 @@ ledger, or fixture is modified. No provider call.
 | Abstention rate | Reported separately for missing evidence, ambiguous relation, and unsupported shape |
 | Language | English and Indonesian measured and reported separately |
 
-## 14. Points to confirm
+## 14. What is still open
 
-These came up while applying the review. None of them changes a locked decision;
-the tables use the stated default.
+Nothing in this list is a contract decision left unmade. Each is a fact to be
+established later under its own authorization.
 
-1. **Placeholders in the historical patterns.** The review's wording reached this
-   note without placeholder names ("The checked frame listed  for  as ."). They
-   are filled here as `[attribute]`, `[entity]`, `[value]`, `[status]`, and
-   `[item]`, following the review's own current example ("lists revenue for
-   Project A as $1.2M"). Please confirm the order, in both languages.
-2. **Current patterns.** Only the English entity–attribute–value wording was
-   given. The other two shapes and all Indonesian current wording in section 9
-   are proposed and need approval.
-3. **Camera claims have no current pattern in v1.** Default: historical only.
-4. **Field length limit (G3).** Proposed: 8 words and 80 characters per field.
-5. **Speech synthesis for fallback statements.** A fallback needs synthesis, which
-   is a request to the speech provider. Default reading: I4 forbids vision and
-   language-model requests, and ordinary synthesis of runtime text is allowed and
-   ledgered. If synthesis must not be added either, fallback is limited to
-   catalog entries synthesized ahead of time.
-6. **Which writer design.** W1 needs a change to the writer protocol; W2 needs
-   the engine to separate the writer's wait from the handoff. Default: decide in
-   the implementation PR for the commit, with NC-46 and NC-51 as the acceptance
-   tests either way.
+1. **CPU budget for hashing (D6).** Needs a real-page measurement.
+2. **Digest stability on a real Meet page.** Activation prerequisite.
+3. **Writer design, W1 or W2, and whether the writer can satisfy V2.** Decided in
+   the implementation review. If it cannot, activation is blocked (V6).
+4. **Speech-provider authorization for production fallback (Y2).** Not requested
+   here.
+5. **Renderer coverage.** Three shapes, positive polarity only. How much correct
+   speech this silences is reported by the offline evaluation in section 13.
 
 ## 15. Not in this note
 
