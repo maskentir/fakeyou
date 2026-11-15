@@ -178,6 +178,7 @@ class ScenarioAudio(FakeReplyAudio):
             return
         line = SpokenLine(text, interrupted=cut is not None and len(self.turn) == cut)
         self._record.add_twin_speech(text, interrupted=line.interrupted)
+        self.voiced(text, interrupted=line.interrupted)
         self.turn.append(line)
         gate = self.gate
         if gate is not None:

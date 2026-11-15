@@ -60,10 +60,10 @@ before its first PCM write. It re-derives the fact from the latest session state
 | revision or sequence older than the binding | unknown, `state_revision_regressed` |
 
 Invalid and unknown both prevent the clip. Playback does not rewrite or re-answer
-the sentence. Playback marks the prepared clip as prevented, and `answer_state`
-notes a state answer as spoken only when it was emitted, so a prevented answer
-does not advance the actor's spoken-sentence count, quiet-floor activity, or the
-spoken observer. A `state` binding with no gate configured is unresolved and is
+the sentence. A prevented answer does not advance the actor's spoken-sentence
+count, quiet-floor activity, or the spoken observer; since
+`2026-11-15-playback-outcome-accounting.md` that follows from the playback
+receipt, not from a check in `answer_state`. A `state` binding with no gate configured is unresolved and is
 prevented.
 
 ## Abstention

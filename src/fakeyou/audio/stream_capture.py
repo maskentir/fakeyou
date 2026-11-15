@@ -42,7 +42,13 @@ from fakeyou.observability.faults import (
 )
 from fakeyou.observability.journal import Journal
 from fakeyou.persistence.audio_persist import SlotAudioWriter
-from fakeyou.speech.contract import PreparedSpeech, PublicationSpeaker, speak_no_visual
+from fakeyou.speech.contract import (
+    PreparedSpeech,
+    PublicationSpeaker,
+    ReceiptObserver,
+    ReceiptSource,
+    speak_no_visual,
+)
 
 CAPTURE_DRAIN_JS = (
     "() => { const capture = window.__fakeyouStreamCapture;"
@@ -680,6 +686,11 @@ class StreamFleetSession:
         if session is None:
             session = self._voice()
         await session.speak_prepared(prepared)
+
+    def observe_receipts(self, observer: ReceiptObserver) -> None:
+        for session in self._sessions:
+            if isinstance(session, ReceiptSource):
+                session.observe_receipts(observer)
 
     @property
     def publication_context(self) -> PublicationContext | None:
