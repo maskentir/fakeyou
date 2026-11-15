@@ -338,7 +338,7 @@ is therefore `unproven` in every valid trial, by design of the measurement.
   produced them.
 - A report: each criterion's result; distributions for targets; every confirmed
   violation with its trace; every unproven trial with the reason; the C7 class
-  counts; whether PF3 and PF4 were established; the latency difference between
+  counts; whether PF3, PF4a and PF4b were established; the latency difference between
   arms; and the design argument, or the statement that none was found.
 
 ## What this spike cannot establish
