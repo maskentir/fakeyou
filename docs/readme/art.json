@@ -1,0 +1,266 @@
+{
+  "repository": "maskentir/fakeyou",
+  "palette": {
+    "red": "#EE2D27",
+    "ink": "#111111",
+    "cream": "#F6EEDF",
+    "lime": "#D7F043",
+    "paper": "#FFFBF2",
+    "shade": "#E8DCC6"
+  },
+  "hero": {
+    "eyebrow": "OPEN SOURCE · SELF-HOSTED · APACHE-2.0",
+    "headline": [
+      "AN AI TWIN FOR",
+      "GOOGLE MEET."
+    ],
+    "lines": [
+      "Listens, speaks when it is addressed,",
+      "and remembers what your team decided."
+    ],
+    "sticker": [
+      "NOW IN",
+      "YOUR",
+      "MEETING"
+    ],
+    "bubble": [
+      "Noted. I'll keep",
+      "the quote too."
+    ],
+    "participants": [
+      "RINA",
+      "BUDI",
+      "SARI"
+    ],
+    "twin": "FAKEYOU",
+    "memory": "MEMORY",
+    "star": [
+      "★ STAR",
+      "maskentir/fakeyou"
+    ],
+    "ticker": [
+      "JOIN",
+      "LISTEN",
+      "JUDGE",
+      "SPEAK",
+      "REMEMBER",
+      "DEBRIEF",
+      "RECORD THE DECISION",
+      "FORGET ON REQUEST"
+    ]
+  },
+  "why": {
+    "stamp": "02",
+    "title": "WHY IT EXISTS",
+    "panels": [
+      {
+        "caption": "TUESDAY",
+        "line": "WE DECIDED.",
+        "art": "decided"
+      },
+      {
+        "caption": "THURSDAY",
+        "line": "WHO SAID THAT?",
+        "art": "question"
+      },
+      {
+        "caption": "NEXT SPRINT",
+        "line": "WE DECIDED IT AGAIN.",
+        "art": "conflict"
+      }
+    ],
+    "footer": "DECISIONS SHOULD OUTLIVE THE MEETING."
+  },
+  "capabilities": {
+    "stamp": "03",
+    "title": "WHAT IT DOES",
+    "cards": [
+      {
+        "title": "ATTENDS",
+        "line": "Joins Google Meet as a named guest",
+        "art": "door",
+        "fill": "paper"
+      },
+      {
+        "title": "LISTENS",
+        "line": "Live transcript with speaker turns",
+        "art": "wave",
+        "fill": "lime"
+      },
+      {
+        "title": "JUDGES",
+        "line": "Answers only when it is addressed",
+        "art": "judge",
+        "fill": "ink"
+      },
+      {
+        "title": "SPEAKS",
+        "line": "Streamed voice you can interrupt",
+        "art": "speaker",
+        "fill": "red"
+      },
+      {
+        "title": "REMEMBERS",
+        "line": "Memory graph per owner and twin",
+        "art": "graph",
+        "fill": "red"
+      },
+      {
+        "title": "DEBRIEFS",
+        "line": "Reports that cite their sources",
+        "art": "report",
+        "fill": "paper"
+      },
+      {
+        "title": "RECORDS",
+        "line": "Decision claims, never approvals",
+        "art": "stamp",
+        "fill": "lime"
+      },
+      {
+        "title": "FORGETS",
+        "line": "Erases a meeting on request",
+        "art": "eraser",
+        "fill": "ink"
+      }
+    ]
+  },
+  "lifecycle": {
+    "stamp": "FLOW",
+    "title": "ONE MEETING, START TO MEMORY",
+    "live": [
+      "JOIN",
+      "LISTEN",
+      "JUDGE",
+      "SPEAK"
+    ],
+    "after": [
+      "RECORD",
+      "INGEST",
+      "DEBRIEF",
+      "DECISIONS"
+    ],
+    "live_label": "DURING THE CALL · worker-sessions",
+    "after_label": "AFTER THE CALL · background workers",
+    "loop": "RECALLED IN THE NEXT MEETING"
+  },
+  "quickstart": {
+    "stamp": "05",
+    "title": "RUN IT YOURSELF",
+    "needs": [
+      "DOCKER",
+      "UV",
+      "NODE 22+",
+      "PYTHON 3.12"
+    ]
+  },
+  "depth": {
+    "stamp": "06",
+    "title": "UNDER THE HOOD",
+    "receipts": [
+      {
+        "head": "LAYERS ARE LAW",
+        "body": [
+          "import-linter fails the build",
+          "when a package reaches up"
+        ]
+      },
+      {
+        "head": "NO GUESSED CONFIG",
+        "body": [
+          "one strict settings schema;",
+          "an unknown key is an error"
+        ]
+      },
+      {
+        "head": "REPLAYED MEETINGS",
+        "body": [
+          "CI replays recorded meetings",
+          "without secrets or network"
+        ]
+      },
+      {
+        "head": "QUOTES OR NOTHING",
+        "body": [
+          "a claim whose quote is missing",
+          "from its source is never served"
+        ]
+      },
+      {
+        "head": "CLAIM ≠ APPROVAL",
+        "body": [
+          "meeting claims never change",
+          "what the owner approved"
+        ]
+      },
+      {
+        "head": "LOCKED, NOT LOST",
+        "body": [
+          "one record lock serializes",
+          "forget, debrief and imports"
+        ]
+      }
+    ]
+  },
+  "direction": {
+    "stamp": "07",
+    "title": "WHERE IT'S GOING",
+    "lanes": [
+      {
+        "head": "SHIPPED",
+        "notes": [
+          "Decision register",
+          "Curated decision lineage",
+          "Owner model approvals",
+          "Forget and retention"
+        ]
+      },
+      {
+        "head": "EVALUATING",
+        "notes": [
+          "Model-classified lineage",
+          "Offline benchmark first",
+          "No provider calls yet"
+        ]
+      },
+      {
+        "head": "AMBITION",
+        "notes": [
+          "Decision intelligence",
+          "Engineering chief of staff",
+          "Controlled participation"
+        ]
+      }
+    ]
+  },
+  "outro": {
+    "stamp": "08",
+    "title": [
+      "BUILD IT",
+      "WITH US"
+    ],
+    "line": "Issues, ideas and focused pull requests welcome."
+  },
+  "buttons": [
+    {
+      "file": "cta-star",
+      "label": "★ STAR",
+      "fill": "lime"
+    },
+    {
+      "file": "cta-quickstart",
+      "label": "QUICKSTART",
+      "fill": "red"
+    },
+    {
+      "file": "cta-architecture",
+      "label": "ARCHITECTURE",
+      "fill": "paper"
+    },
+    {
+      "file": "cta-contribute",
+      "label": "CONTRIBUTE",
+      "fill": "ink"
+    }
+  ]
+}

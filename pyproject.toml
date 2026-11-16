@@ -162,6 +162,8 @@ raises-require-match-for = [
 # M1 measurement fixtures: the scripted observations name every clock, scope and
 # uncertainty field the measurement contract defines.
 "evals/test_publication_measurement_eval.py" = ["PLR0913"]
+# README artwork generator: SVG path data and markup stay on one line each.
+"docs/readme/generate.py" = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "evals"]
