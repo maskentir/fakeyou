@@ -5,10 +5,12 @@ from typing import get_args
 
 import pytest
 
+import fakeyou.debrief.lineage as lineage_module
 from evals._decision_lineage import (
     BASELINES,
     GATE,
     LABELS,
+    RELATIONSHIPS,
     Category,
     LabeledPair,
     Language,
@@ -17,14 +19,18 @@ from evals._decision_lineage import (
     PredictionSet,
     ResolvedPair,
     SidedEvidence,
+    candidate_retrieval,
     constant_predictions,
     gate_failures,
     lexical_predictions,
     load_dataset,
     main,
+    oracle_labels_citing_everything,
+    oracle_labels_with_wrong_evidence,
     oracle_predictions,
     resolve_pairs,
     score,
+    selects_evidence,
 )
 
 
@@ -41,6 +47,11 @@ def pairs(dataset: LineageDataset) -> tuple[ResolvedPair, ...]:
 def test_dataset_is_synthetic_curated_and_scoped_to_one_owner_and_twin(
     dataset: LineageDataset,
 ) -> None:
+    assert dataset.benchmark_status == (
+        "synthetic / single-curator / provisional evaluation benchmark"
+    )
+    assert "second annotator" in dataset.provenance
+    assert dataset.label_corrections == ()
     assert dataset.synthetic is True
     assert dataset.label_authority == "curated_evaluation_judgment"
     assert set(dataset.guidelines) == set(LABELS)
@@ -52,7 +63,7 @@ def test_dataset_covers_every_label_language_and_hard_case(dataset: LineageDatas
     languages = Counter(pair.language for pair in dataset.pairs)
     categories = Counter(category for pair in dataset.pairs for category in pair.categories)
 
-    assert 80 <= len(dataset.pairs) <= 120
+    assert 80 <= len(dataset.pairs) <= 130
     assert all(labels[label] >= 15 for label in LABELS), labels
     assert all(languages[language] >= 15 for language in get_args(Language)), languages
     assert set(get_args(Category)) <= set(categories), categories
@@ -148,7 +159,7 @@ def test_the_oracle_scores_perfectly_and_passes_the_gate(
 
     assert gate_failures(result) == []
     assert all(row[gold] == sum(row.values()) for gold, row in result.confusion.items())
-    assert result.evidence_correctness == 1.0
+    assert result.evidence_validity == 1.0
     assert result.missing == 0
 
 
@@ -212,7 +223,7 @@ def test_a_missing_prediction_counts_as_abstention(pairs: tuple[ResolvedPair, ..
     assert result.confusion["potential_contradiction"]["potential_contradiction"] == 1
     assert result.classes["potential_contradiction"].precision == 1.0
     assert result.abstention_recall == 1.0
-    assert result.evidence_correctness == 1.0
+    assert result.evidence_validity == 1.0
 
 
 def test_evidence_from_the_wrong_side_or_an_empty_side_is_incorrect(
@@ -224,8 +235,8 @@ def test_evidence_from_the_wrong_side_or_an_empty_side_is_incorrect(
 
     for evidence in (swapped, SidedEvidence(first=gold.first, second=())):
         result = score(_single(resolved.pair.id, "related_discussion", evidence), pairs)
-        assert result.evidence_correctness == 0.0
-        assert "evidence correctness 0.000 < 1.0" in gate_failures(result)
+        assert result.evidence_validity == 0.0
+        assert "evidence validity 0.000 < 1.0" in gate_failures(result)
 
 
 def test_unknown_and_repeated_predictions_are_refused(pairs: tuple[ResolvedPair, ...]) -> None:
@@ -257,9 +268,9 @@ def test_the_runner_scores_a_predictions_file_and_reports_gate_failures(
     perfect = tmp_path / "oracle.json"
     perfect.write_text(oracle_predictions(pairs).model_dump_json(), encoding="utf-8")
 
-    assert main(["--predictions", str(perfect)]) == 0
+    assert main(["score", "--predictions", str(perfect)]) == 0
     passed = json.loads(capsys.readouterr().out)
-    assert main(["--baseline", "lexical"]) == 1
+    assert main(["score", "--baseline", "lexical"]) == 1
     failed = json.loads(capsys.readouterr().out)
 
     assert passed["gate_failures"] == []
@@ -267,3 +278,103 @@ def test_the_runner_scores_a_predictions_file_and_reports_gate_failures(
     assert failed["predictor"].startswith("lexical")
     assert failed["gate_failures"]
     assert set(failed["confusion"]) == set(LABELS)
+
+
+def test_multi_evidence_pairs_select_a_strict_subset_of_valid_evidence(
+    pairs: tuple[ResolvedPair, ...],
+) -> None:
+    selective = [resolved for resolved in pairs if selects_evidence(resolved)]
+
+    assert len(selective) >= 8
+    for resolved in selective:
+        assert "multi_evidence" in resolved.pair.categories
+        gold = resolved.pair.gold_evidence
+        cited = len(gold.first) + len(gold.second)
+        available = len(resolved.first.valid_entries) + len(resolved.second.valid_entries)
+        assert cited < available, resolved.pair.id
+
+
+def test_right_labels_with_wrong_evidence_fail_the_selection_gate(
+    pairs: tuple[ResolvedPair, ...],
+) -> None:
+    result = score(oracle_labels_with_wrong_evidence(pairs), pairs)
+    failures = gate_failures(result)
+
+    assert result.evidence_validity == 1.0
+    assert result.evidence_selection_sufficiency == 0.0
+    assert result.evidence_selection_precision == 0.5
+    assert all(result.classes[label].recall == 1.0 for label in LABELS)
+    assert any(failure.startswith("evidence selection sufficiency") for failure in failures)
+
+
+def test_citing_every_valid_entry_fails_the_selection_precision_gate(
+    pairs: tuple[ResolvedPair, ...],
+) -> None:
+    result = score(oracle_labels_citing_everything(pairs), pairs)
+    failures = gate_failures(result)
+
+    assert result.evidence_validity == 1.0
+    assert result.evidence_selection_sufficiency == 1.0
+    assert result.evidence_selection_precision is not None
+    assert result.evidence_selection_precision < GATE.minimum_selection_precision
+    assert [failure.split(" ")[:3] for failure in failures] == [
+        ["evidence", "selection", "precision"]
+    ]
+
+
+def test_selection_is_scored_only_where_a_choice_exists(pairs: tuple[ResolvedPair, ...]) -> None:
+    result = score(oracle_predictions(pairs), pairs)
+
+    assert result.selection_pairs == sum(selects_evidence(resolved) for resolved in pairs)
+    assert result.evidence_selection_sufficiency == 1.0
+    assert result.evidence_selection_precision == 1.0
+
+
+def test_candidate_retrieval_stays_inside_the_dm2a_window_and_never_reads_labels(
+    dataset: LineageDataset, pairs: tuple[ResolvedPair, ...]
+) -> None:
+    result = candidate_retrieval(dataset, pairs)
+    relabelled = [
+        ResolvedPair(
+            resolved.pair.model_copy(update={"rationale": "x" * 40}),
+            resolved.first,
+            resolved.second,
+        )
+        for resolved in pairs
+    ]
+
+    assert result.positive_pairs == sum(resolved.pair.label in RELATIONSHIPS for resolved in pairs)
+    assert result.excluded["not_strictly_earlier"] == tuple(
+        resolved.pair.id
+        for resolved in pairs
+        if resolved.pair.label in RELATIONSHIPS and resolved.pair.temporal_order == "equal"
+    )
+    assert result.eligible_pairs == result.positive_pairs - sum(
+        len(ids) for ids in result.excluded.values()
+    )
+    assert (result.eligible_pairs, result.hits[5], result.hits[10]) == (83, 75, 81)
+    assert result.misses[10] == ("pair-036", "pair-112")
+    assert candidate_retrieval(dataset, relabelled) == result
+
+
+def test_the_window_bound_excludes_pairs_beyond_it(
+    dataset: LineageDataset, pairs: tuple[ResolvedPair, ...], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(lineage_module, "WINDOW_MEETINGS", 1)
+
+    result = candidate_retrieval(dataset, pairs)
+
+    assert result.excluded["outside_window"]
+    assert result.eligible_pairs < 83
+
+
+def test_the_retrieval_command_reports_recall_and_exclusions(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["retrieval"]) == 0
+    report = json.loads(capsys.readouterr().out)
+
+    assert report["benchmark_status"].startswith("synthetic / single-curator")
+    assert report["eligible_pairs"] == 83
+    assert set(report["recall"]) == {"at_5", "at_10"}
+    assert report["excluded"]["not_strictly_earlier"]
