@@ -1,9 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 120" width="1200" height="120" role="img" aria-label="HOW IT THINKS">
-  <title>HOW IT THINKS</title>
-  <style>.d{font-family:'Arial Black', Impact, system-ui, sans-serif;font-weight:900}.m{font-family:'Courier New', monospace;font-weight:700}</style>
-  <rect width="1200" height="120" fill="#f6eedf"/>
-  <rect x="34" y="26" width="226" height="30" fill="#111"/>
-  <text x="50" y="47" font-size="18" fill="#f6eedf" class="m">04 / HOW IT THINKS</text>
-  <text x="36" y="95" font-size="64" fill="#111" class="d">SYSTEM <tspan fill="#ee2d27">SHAPE</tspan></text>
-  <g transform="translate(918 28)" fill="none" stroke="#111" stroke-width="5"><rect x="0" y="18" width="76" height="44" fill="#d7f043"/><rect x="116" y="0" width="92" height="44" fill="#fff"/><rect x="116" y="62" width="92" height="44" fill="#fff"/><path d="M76 40h40M138 44v18M162 44v18"/></g>
-</svg>

@@ -1,72 +1,66 @@
 <p align="center">
-  <img src="./assets/hero.svg" alt="FAKEYOU — The AI Digital Twin for Engineering Teams" width="100%">
+  <img src="./assets/banner.svg" alt="Fakeyou: the AI digital twin for engineering teams" width="100%">
 </p>
 
 <p align="center">
-  <a href="https://github.com/maskentir/fakeyou/stargazers"><img src="https://img.shields.io/github/stars/maskentir/fakeyou?style=for-the-badge&labelColor=111111&color=d7f043" alt="GitHub stars"></a>
-  <a href="https://github.com/maskentir/fakeyou/network/members"><img src="https://img.shields.io/github/forks/maskentir/fakeyou?style=for-the-badge&labelColor=111111&color=f6eedf&logoColor=111111" alt="GitHub forks"></a>
-  <a href="#license"><img src="https://img.shields.io/badge/license-Apache--2.0-ee2d27?style=for-the-badge&labelColor=111111" alt="License: Apache-2.0"></a>
-  <img src="https://img.shields.io/badge/status-active-111111?style=for-the-badge&labelColor=111111&color=111111" alt="Status active">
+  <a href="https://github.com/maskentir/fakeyou/actions/workflows/check.yml"><img src="https://github.com/maskentir/fakeyou/actions/workflows/check.yml/badge.svg?branch=main" alt="Foundation checks"></a>
+  <a href="https://github.com/maskentir/fakeyou/actions/workflows/simulator.yml"><img src="https://github.com/maskentir/fakeyou/actions/workflows/simulator.yml/badge.svg?branch=main" alt="Meeting simulator"></a>
+  <a href="#license"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License: Apache-2.0"></a>
+  <img src="https://img.shields.io/badge/python-3.12-blue" alt="Python 3.12">
 </p>
 
 <p align="center">
-  <strong>Fakeyou</strong> is a self-hosted AI digital twin for engineering teams.
-  <br>
-  It joins meetings, listens, remembers, and speaks — turning conversation into reusable engineering memory.
+  <a href="#quickstart">Quickstart</a> ·
+  <a href="#architecture">Architecture</a> ·
+  <a href="#api">API</a> ·
+  <a href="#cli">CLI</a> ·
+  <a href="docs/configuration.md">Configuration</a> ·
+  <a href="#contributing">Contributing</a>
 </p>
 
----
+Fakeyou is a self-hosted AI digital twin for engineering teams. It joins a Google
+Meet call as a named participant, transcribes every speaker in real time, answers
+when it is addressed and stays quiet when it is not. After the meeting it turns what
+it heard into a memory graph and an evidence-backed decision register that the next
+meeting can draw on.
 
-<p align="center">
-  <img src="./assets/section-why.svg" alt="Why Fakeyou" width="100%">
-</p>
+Fakeyou runs on your own infrastructure and is licensed under Apache-2.0. It calls
+only the speech and model providers you configure.
 
-Most meeting AI tools stop at summaries.
+> [!NOTE]
+> Fakeyou is under active development. It supports Google Meet only. See
+> [Project status](#project-status) for what is measured and what is not.
 
-**Fakeyou is aiming at something more useful for engineering teams:**
+## Why Fakeyou
 
-- **Decision memory** — capture what was decided, not just what was said.
-- **Evidence-aware reasoning** — keep provenance, traces, and context.
-- **Longer-lived usefulness** — make meeting knowledge available later.
-- **Open-source control** — self-host, inspect, and evolve the system yourself.
+Most meeting tools stop at transcripts and summaries. Transcription libraries read
+what was said but never attend the call or decide when to speak. Note-taking tools
+hold knowledge but were never in the room, so every answer is reconstructed from
+someone else's summary.
 
-If you're exploring how AI should fit into engineering workflows, Fakeyou is a bet on this idea:
+Fakeyou starts from the room. The twin is a participant with a persona, a memory of
+earlier meetings and a judge that decides whether a line is meant for it. Recall,
+debriefs and the decision register all come from having been there, and every claim
+keeps a path back to the words that support it.
 
-> **AI should help teams remember better, reason better, and make better decisions — not just generate prettier notes.**
+## Features
 
----
-
-<p align="center">
-  <img src="./assets/section-capabilities.svg" alt="Core capabilities" width="100%">
-</p>
-
-## What it does
-
-- 🎧 **Listens to meetings** through video, audio, and contextual signals.
-- 🧠 **Builds memory** from events, evidence, and conversation artifacts.
-- 🧾 **Keeps evidence paths** so outputs can be grounded, audited, and improved.
-- 🗣️ **Speaks back** as an AI meeting participant or assistant.
-- ⚙️ **Runs self-hosted** so teams can control infrastructure and product direction.
-
-### Core capability map
-
-| Capability | What it means |
+| Capability | What it does |
 | --- | --- |
-| Meeting participation | Observe and interact during live sessions |
-| Decision memory | Turn conversation into retrievable team memory |
-| Evidence pipeline | Keep context, provenance, and classification signals |
-| Engineering workflows | Support reasoning around technical decisions |
-| Open-source extensibility | Easy to inspect, modify, and extend |
-
----
-
-<p align="center">
-  <img src="./assets/section-quickstart.svg" alt="Getting started" width="100%">
-</p>
+| **Attends** | Joins Google Meet headful through CloakBrowser as a named guest, raises and lowers its hand, and posts to chat |
+| **Listens** | Transcribes with speaker diarization and removes its own playback from the transcript |
+| **Decides** | A turn judge reads every final line against the persona, so the twin answers when addressed and stays quiet otherwise |
+| **Speaks** | Streams speech sentence by sentence; barge-in interrupts it cleanly |
+| **Remembers** | Builds a Graphiti memory graph per owner and twin from each meeting record |
+| **Recalls** | Fetches evidence from memory before the reply model is called |
+| **Reports** | Writes source-backed debriefs in background workers, outside the call |
+| **Tracks decisions** | Lists decision claims across meetings with their quotes, and links related, contradicting or superseding claims through curated lineage. Meeting claims are never treated as owner approvals |
+| **Forgets** | Erases a meeting and everything derived from it, or only the derived memory |
 
 ## Quickstart
 
-Requires Docker, `uv`, Node 22+, and Python 3.12.
+Requires Docker, [`uv`](https://docs.astral.sh/uv/), Node.js 22 or newer, and
+Python 3.12.
 
 ```sh
 git clone https://github.com/maskentir/fakeyou.git && cd fakeyou
@@ -88,7 +82,7 @@ Start the API and one worker per role:
 docker compose up -d api worker-sessions worker-ingestion worker-debrief worker-reembed
 ```
 
-Send the twin into a meeting:
+Register a meeting and send the twin in:
 
 ```sh
 export API_TOKEN=$(grep FAKEYOU_API__OWNER_TOKEN .env | cut -d= -f2)
@@ -107,7 +101,7 @@ curl -X POST http://127.0.0.1:8000/v1/sessions/standup-1/join \
   -H "Authorization: Bearer $API_TOKEN" -H 'content-type: application/json' -d '{}'
 ```
 
-The twin joins the call. Watch it work:
+Follow the session, then read its report:
 
 ```sh
 curl -N http://127.0.0.1:8000/v1/sessions/standup-1/events \
@@ -117,77 +111,40 @@ curl http://127.0.0.1:8000/v1/sessions/standup-1/report \
   -H "Authorization: Bearer $API_TOKEN"
 ```
 
-Stop it whenever you like:
+Stop the twin at any time:
 
 ```sh
 curl -X POST http://127.0.0.1:8000/v1/sessions/standup-1/stop \
   -H "Authorization: Bearer $API_TOKEN" -H 'content-type: application/json' -d '{}'
 ```
 
----
+## Architecture
 
 <p align="center">
-  <img src="./assets/section-architecture.svg" alt="System shape" width="100%">
+  <img src="./assets/architecture.svg" alt="Fakeyou architecture: the operator calls the api, which hands work to four worker roles over Redis streams; the workers share PostgreSQL, Neo4j with Graphiti, the meeting records, RustFS and an embeddings service" width="100%">
 </p>
 
-## System shape
-
-<p align="center">
-  <img src="./assets/architecture.svg" alt="Fakeyou architecture diagram" width="100%">
-</p>
-
-At a high level, Fakeyou can be understood as a loop:
-
-1. **Meeting inputs arrive** — video, audio, chat, metadata.
-2. **Evidence engine processes signals** — listening, visual analysis, classification, sufficiency checks, provenance.
-3. **Memory layer stores durable knowledge** — decisions, context, historical traces, meeting artifacts.
-4. **Assistant responds** — answering, summarizing, participating, or guiding next actions.
-
-This is why Fakeyou is not just “meeting notes with AI.”
-It is closer to an **AI engineering memory system**.
-
-### Services
-
-One gateway, four worker roles, three datastores. Every role is its own process
-with its own resource budget, so a wedged debrief cannot take the meeting with it.
-
-```
-                    ┌─────────────────────────────┐
-   HTTP (token) ───▶│             api              │
-                    └──────────────┬──────────────┘
-                                   │ Redis streams
-        ┌──────────────────┬───────┴────────┬──────────────────┐
-        ▼                  ▼                ▼                  ▼
- worker-sessions     worker-ingestion   worker-debrief    worker-reembed
- (Chromium,          (Graphiti          (LLM report,      (embedding
-  PulseAudio,         extraction,        source-backed)     refresh)
-  turn graph,         diarization)
-  streamed TTS)
-        │                  │                │                  │
-        └──────────────────┴────────┬───────┴──────────────────┘
-                                  ▼
-                    postgres · neo4j · redis
-```
-
-The layer order is enforced, not documented: `import-linter` fails the build if any
-package reaches above its neighbour. `api` may not import `cli`; `cli` is a thin
-HTTP client over the API and holds no meeting logic of its own.
+Fakeyou is one API gateway and four worker roles. Each role is a separate process
+with its own resource budget, so a slow debrief cannot affect a live meeting, and
+each service restarts on its own (`restart: unless-stopped`).
 
 | Role | Owns | Scales by |
 | --- | --- | --- |
-| `worker-sessions` | One meeting at a time: browser, audio, turn graph | Adding replicas, one meeting each |
-| `worker-ingestion` | Meeting record → memory graph episodes | Adding replicas |
-| `worker-debrief` | Meeting record → source-backed report | Adding replicas |
+| `worker-sessions` | One meeting at a time: browser, audio, turn judge, replies | Adding replicas, one meeting each |
+| `worker-ingestion` | Meeting record to memory graph episodes | Adding replicas |
+| `worker-debrief` | Meeting record to source-backed debrief | Adding replicas |
 | `worker-reembed` | Memory graph embedding refresh | Adding replicas |
 
-Each service restarts on its own (`restart: unless-stopped`), so a provider
-overload that reconnects a meeting five times does not need an operator.
-
----
+The package layering is enforced by `import-linter`, which fails the build if a
+package imports one above it. The CLI is a thin HTTP client over the API and holds no
+meeting logic of its own.
 
 ## API
 
-All routes are token-authenticated: `Authorization: Bearer <token>`, owner or admin.
+All routes are token-authenticated with `Authorization: Bearer <token>`, using the
+owner or the admin token. The running API serves interactive documentation at
+`http://127.0.0.1:8000/docs`. The behaviour behind the decision, lineage and owner
+model routes is described in [docs/api.md](docs/api.md).
 
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
@@ -199,10 +156,10 @@ All routes are token-authenticated: `Authorization: Bearer <token>`, owner or ad
 | `GET` | `/v1/sessions/{id}/report` | Session report |
 | `POST` | `/v1/sessions/{id}/ingestions` | Queue memory ingestion |
 | `GET` | `/v1/sessions/{id}/ingestion` | The meeting's latest ingestion outcome |
-| `GET` | `/v1/jobs/{id}` | One ingestion job's outcome, `pending` until that job settles |
+| `GET` | `/v1/jobs/{id}` | One ingestion job's outcome, `pending` until it settles |
 | `POST` | `/v1/sessions/{id}/debriefs` | Queue a debrief |
 | `GET` | `/v1/sessions/{id}/debrief` | Debrief status and report |
-| `GET` | `/v1/decisions` | Decision register across meetings, with quotes; meeting claims, never approvals |
+| `GET` | `/v1/decisions` | Decision register across meetings, with quotes |
 | `GET` | `/v1/decisions/{record}/lineage` | One record's compared relationships, with both evidence trails |
 | `PUT` | `/v1/decisions/lineage/{id}` | Publish a curated `decision_lineage/v1` document for one meeting |
 | `POST` | `/v1/twins/{id}/reembeddings` | Queue an embedding refresh |
@@ -210,120 +167,20 @@ All routes are token-authenticated: `Authorization: Bearer <token>`, owner or ad
 | `POST` | `/v1/twins/{id}/owner-model` | Add an item |
 | `POST` | `/v1/twins/{id}/owner-model/imports` | Import persona facts and preferences once |
 | `POST` | `/v1/twins/{id}/owner-model/items/{item}/revisions` | Revise an item |
-| `POST` | `/v1/twins/{id}/owner-model/items/{item}/retire` | Retire an item, history kept |
-| `DELETE` | `/v1/twins/{id}/owner-model/items/{item}` | Forget an item, content erased |
+| `POST` | `/v1/twins/{id}/owner-model/items/{item}/retire` | Retire an item, keeping its history |
+| `DELETE` | `/v1/twins/{id}/owner-model/items/{item}` | Forget an item and erase its content |
 | `GET` | `/v1/twins/{id}/owner-model/items/{item}` | Revision history |
 | `GET` | `/v1/twins/{id}/owner-model/proposals` | Learned items awaiting a decision |
 | `POST` | `/v1/twins/{id}/owner-model/proposals/{revision}/approve` | Approve, or `/reject` |
 | `POST` | `/v1/sessions/{id}/forget` | Erase a meeting; `keep_record: true` erases derived memory only |
 | `POST` | `/v1/admin/memory-init` | Create Graphiti indexes |
-| `GET` | `/v1/admin/check` | Effective configuration, masked |
-
-Interactive docs: `http://127.0.0.1:8000/docs`.
-
-The decision register lists what meeting debriefs recorded: decision claims,
-proposals, owner-decision requests, action items and open questions, each with
-its meeting, its quotes and the transcript entries they come from. Filter with
-`meeting_id`, `twin_id`, `kind` and `status`, and page with `limit` and
-`cursor`. Every record is a meeting claim, `owner_approved: false`, whatever it
-says about the owner; approvals live only in the owner model. `attribution` is
-`recorded_label` when the meeting record names a speaker (a caption name, a
-device, a voice match) and `unattributed` when it does not; a recorded label is
-not a verified identity. Two items are separate records when anything in them
-differs, quotes, assignee or due text included; only an exact repeat collapses.
-`meetings` lists every meeting in scope with its debrief status, so a missing or
-stale debrief never reads as a meeting without decisions. A `next_cursor` holds
-only for the same filters and the same register: another filter is refused with
-`cursor_query_mismatch`, a changed debrief or a forgotten meeting with
-`cursor_stale`; start again without a cursor.
-Forgetting with `keep_record: true` erases the meeting from derived memory, the
-graph, and keeps its record and debrief, so it stays in the register;
-`keep_record: false` erases it from the register too.
-
-Decision lineage records how two register records from different meetings of
-the same owner and twin were compared: `related_discussion`,
-`potential_contradiction`, `potential_supersession` or
-`no_established_relationship`. Every comparison is a derived candidate,
-`authority: derived_candidate`, `review_status: unreviewed`,
-`owner_approved: false`; it never approves, resolves or retires either claim,
-and both stay in the register unchanged. `no_established_relationship` means
-the recorded comparison found none, not that none exists; a pair nobody
-compared counts as `not_compared`. The only source today is a curated
-document (`method: manual_curated`) published with
-`fakeyou decisions import-lineage --file PATH`; it names the later meeting, and
-each comparison names an earlier and a later record. The import is refused,
-and nothing is written, when a record is unknown or belongs to another owner,
-when the two records share a meeting or a twin differs, when a pair repeats or
-carries two labels, or when the meetings' `created_at` times do not put the
-earlier one strictly first; meeting ids never decide the order. The earlier
-record must sit inside the comparison window: the 20 most recent meetings of
-the same twin created strictly before the later one with an available debrief,
-newest first, then their records in that order up to 200. The document is
-validated, bound to a fingerprint of each record's item, quotes, source entries
-and meeting time, and written atomically as `decision-lineage.json` beside the
-later meeting's debrief. Validation and publication run while holding the
-meeting's record lock (`purpose: lineage`), the same lock forget holds: an
-import during a forget, a debrief or another import is refused with
-`decision_lineage.locked` (409) and writes nothing; a forget during an import is
-refused the same way and can be repeated; an import whose meeting was forgotten
-first finds no meeting (404) or no usable debrief (`lineage_source_unavailable`)
-and never recreates its folder. Each published file has a `revision`, the
-first 32 hex characters of the SHA-256 of its bytes, returned by the import and
-shown per meeting as `lineage_revision`. Importing the same comparisons again,
-in any order, returns `outcome: unchanged` and leaves the file and its
-`imported_at` alone. A different document is refused with
-`decision_lineage.exists` (409) unless it carries `replaces` set to the current
-revision, which yields `outcome: replaced`; any other `replaces` is refused with
-`decision_lineage.revision_stale` (409), so of two replacements made from the
-same revision only the first lands. An unreadable file has a revision too and is
-replaced the same way. A failed write leaves the previous file in place.
-`fakeyou decisions lineage RECORD_ID` shows both incoming comparisons (from
-earlier meetings) and outgoing ones (to later meetings) with the other record's
-full evidence. A comparison whose record was forgotten, changed or left without
-an available debrief counts as `unresolved`; one whose record kept its text but
-changed its sources or meeting time counts as `invalidated`. Neither is moved to
-a similar record. A malformed or altered `decision-lineage.json` serves nothing
-and reads as `invalid` in `meetings`. An unknown, forgotten or other owner's
-record id answers the same 404. Forgetting the later meeting erases its lineage
-with its record.
-
-The owner model is what the twin may stand behind on the owner's behalf:
-positions, preferences, decision rules, style examples, and facts. Owner notes
-are owner model facts: a `fact` item with an optional `valid_at`, the moment it
-became true. Every change is an append-only revision in PostgreSQL, so earlier
-versions stay readable.
-Items the owner writes are active at once and bump the model version; items
-learned from a debrief arrive as proposals and change nothing until approved.
-`owner_only` items are for the owner's eyes and never spoken in a room.
-Retiring an item takes it out of the model and keeps its history; forgetting
-erases the content of every revision and leaves only a contentless marker, so
-model versions never repeat.
-The persona holds only who the twin is and how it speaks: `display_name`,
-`owner_name`, `role`, `language`, `speaking_style`, `vocabulary`, `ai_disclosure`,
-and `allowed_tools`. People in a meeting call the twin by the owner's name, so a
-line that opens with `owner_name` ("Rani, can we…", "Hi Rani, …") addresses the
-twin just like one naming `display_name` anywhere; a mention elsewhere in the
-line ("ask Rani later") does not. What the twin knows about the owner lives in the owner model, so
-a persona that still carries `verified_facts` or `goals` is refused with
-`persona.knowledge_moved`. `fakeyou owner-model import --persona PATH` moves them
-once: each `verified_facts` line becomes a `fact` and each `goals` line a
-`preference`, word for word, approved with source `import`; a statement the model
-already holds with the same kind is skipped, so running it again adds nothing.
-Turn an imported fact that is really a rule into a `decision_rule` with
-`owner-model revise`, then delete both keys from the persona file.
-`fakeyou brief` drafts from the `room_speakable` items too.
-Each session freezes the model version it starts with: the twin answers from
-the `room_speakable` items, cites them as `om-<item>`, and a `brief_only`
-meeting uses none of them. Forgetting an item does not reach sessions that
-already froze it: their records keep what they ran with until the meeting
-itself is forgotten with `memory-forget --meeting-id`.
-
----
+| `GET` | `/v1/admin/check` | Effective configuration, with secrets masked |
 
 ## CLI
 
-Every command below is a thin client over the same API — it needs
-`FAKEYOU_API_TOKEN` and, for operator routes, the admin token.
+The `fakeyou` command is a client of the same API. It reads the owner token from
+`FAKEYOU_API_TOKEN` and, for operator routes, the admin token from
+`FAKEYOU_API_ADMIN_TOKEN`.
 
 ```sh
 export FAKEYOU_API_TOKEN=$(grep FAKEYOU_API__OWNER_TOKEN .env | cut -d= -f2)
@@ -360,18 +217,16 @@ fakeyou db status
 fakeyou storage init
 ```
 
-Host-local commands, deliberately not API routes: `db upgrade`, `storage init`,
-the `purge-expired` retention sweeps, `diarize show`, `calibrate`, and `voiceprint`,
-because they touch the migration path, the operator filesystem, or a local ONNX
-model.
-
----
+Some commands run on the host and are deliberately not API routes, because they
+touch the migration path, the operator's filesystem or a local ONNX model:
+`db upgrade`, `storage init`, the `purge-expired` retention sweeps, `diarize show`,
+`calibrate` and `voiceprint`.
 
 ## Configuration
 
-Every setting is an environment variable under the `FAKEYOU_` prefix with `__`
-nesting, declared in one schema and validated strictly — an unknown key is a hard
-error rather than a silent no-op. Copy `.env.example` and fill it in.
+Every setting is an environment variable with the `FAKEYOU_` prefix and `__` for
+nesting, declared in one schema and validated strictly: an unknown key is an error,
+not a silent no-op. Copy `.env.example` to `.env` and fill it in.
 
 ```sh
 FAKEYOU_IDENTITY__OWNER_ID=hard_owner
@@ -383,196 +238,73 @@ FAKEYOU_DATABASE__URL=postgresql://fakeyou:...@postgres:5432/fakeyou
 FAKEYOU_MEMORY__STORE__PASSWORD=...
 ```
 
-The twin's replies use up to three model roles, each its own `FAKEYOU_<ROLE>__*` block:
+Model roles, the turn judge and critic, speech fallback, speculative replies,
+reasoning effort and meeting admission are described in
+[docs/configuration.md](docs/configuration.md).
 
-| Role | Used for |
-| --- | --- |
-| `reply` | Small, fast model: every model call, unless a role below takes it |
-| `reply_strong` | Large model for the call that composes an answer from evidence: a memory recall, a closer look at the screen or a camera, a meeting view the twin asked for itself, or memory prefetched for this turn that found facts. The view attached to every call does not count. Leave it empty to answer every turn with `reply` |
-| `reply_fallback` | A turn whose model call failed |
-| `turn_judge.model` | Deciding, for every line, whether it is meant for the twin and whether the twin answers. Leave it empty to judge with `reply` |
-
-The turn judge reads the recent conversation from the meeting record, the twin's own
-lines included, and starts judging on the live transcript while the speaker is still
-talking. When it cannot answer in time the twin replies only to a line that names it.
-
-A critic reads every contribution nobody asked for and every opinion or proposal in an
-answer, and asks whether the owner would say it, whether it is worth interrupting for,
-whether a guess is spoken as a guess, whether it rests on the sources it cites, whether it
-adds anything and whether it is on topic. It runs on the `turn_judge.model` role and
-waits for its verdict before the words are spoken, so a plain factual answer pays
-nothing for it. Its confidence floor is `FAKEYOU_PERCEPTION__ATTENTION__CRITIC_CONFIDENCE`.
-
-The twin's voice can have a fallback too: `FAKEYOU_TTS_FALLBACK__*` takes the same keys as
-`FAKEYOU_TTS__*`. A sentence the main provider fails before any audio is spoken by the
-fallback instead. When the main provider runs out of credit or rejects the key, the rest of
-the session speaks through the fallback; any other fault is tried on the main provider again
-at the next sentence. Leave it empty to have no fallback.
-
-The answer to a line that names the twin starts as soon as the final transcript
-arrives, while the turn judge is still deciding (`FAKEYOU_CONVERSATION__SPECULATIVE_REPLIES`,
-on by default). Nothing is spoken and no reply effect (louder, shorter, language) applies
-until the judge admits the turn; a turn the judge silences, or plans differently (a look at
-the screen or a camera, a Meet action, a chat reply, leaving, an owner claim), drops the
-draft and answers as before. Set it to `false` to start every answer after the judge.
-
-When `reply_strong` is set, the response budget
-(`FAKEYOU_CONVERSATION__RESPONSE_TIMEOUT_SECONDS`) is checked against it instead of
-`reply`.
-
-A Google role (`provider=google`) thinks at `REASONING_EFFORT=minimal` unless you set
-another level. Some Gemini models reject `minimal` (for example `gemini-3.8-flash`, whose
-lowest level is `low`), so set `FAKEYOU_<ROLE>__REASONING_EFFORT=low` for them. A
-worker checks the models of its role when it starts — `sessions`: reply, strong,
-fallback and turn judge; `debrief`: debrief and fallback — and refuses to start on a
-level its model does not support, instead of failing every meeting later.
-
-The persona's `ai_disclosure` sets when the twin says it is an AI: `when_asked`
-(the default) or `upfront`, the first time it speaks. Either way it answers
-honestly when asked and never claims to be human; no value lets it deny being an
-AI.
-
-The twin knocks on a meeting once. `FAKEYOU_MEETING__LOBBY_TIMEOUT_SECONDS` is the whole
-wait for admission, and a lobby that runs out ends the session as `lobby_timeout_reached`
-instead of knocking again. `FAKEYOU_MEETING__JOIN_MAX_ATTEMPTS` and the
-`FAKEYOU_MEETING__JOIN_RETRY_*` backoff only cover failures before the knock: opening the
-page, typing the name, finding the join button.
-
----
-
-## Quality gates
-
-The build is the test suite. Nothing merges without it.
+## Development
 
 ```sh
-uv run --no-sync pytest tests/ evals/ -q     # 9471 passing
-uv run --no-sync mypy                        # strict, 535 files
+uv run --no-sync pytest
+uv run --no-sync mypy
 uv run --no-sync ruff check . && uv run --no-sync ruff format --check .
-uv run --no-sync lint-imports                 # layer contracts
-uv run --no-sync deptry .                    # dependency sanity
+uv run --no-sync lint-imports
+uv run --no-sync deptry .
 ```
 
-The meeting simulator runs the whole worker — browser, PulseAudio, speech to text, the
-judge, the reply model, text to speech — against a fake Meet page instead of a live
-meeting. It plays each participant through the same boundaries a real call uses, then
-checks the twin's journal. It needs the audio test image and the API keys in `.env`:
+CI runs these gates and a replay of the meeting simulator on every pull request.
+The simulator, the real-service suites and the live evals are described in
+[docs/development.md](docs/development.md).
 
-```sh
-docker build -f docker/audio/Dockerfile --target test -t fakeyou-test:local .
-docker run --rm -v "$PWD/tests:/workspace/tests:ro" -v "$PWD/evals:/workspace/evals:ro" \
-  -v "$PWD/src:/workspace/src:ro" -v "$PWD/conftest.py:/workspace/conftest.py:ro" \
-  -v "$PWD/pyproject.toml:/workspace/pyproject.toml:ro" -v "$PWD/.env:/workspace/.env:ro" \
-  fakeyou-test:local uv run --no-sync pytest -m simulator evals/test_meeting_simulator_eval.py
-```
+## Project status
 
-`SIMULATOR_PROVIDERS` picks where the providers come from. `live` (the default) calls
-the real ones. `replay` needs no `.env` and no network: it rebuilds the settings from
-the recorded snapshot, answers every Gemini call and replays what Muse heard for each
-clip from the cassettes in `evals/fixtures/simulator/cassettes/`, and speaks through a
-synthetic Cartesia. A request with no close enough cassette entry fails the scenario
-instead of passing silently. CI runs `replay` on every pull request. `record` relays
-Gemini and Muse to the real services and rewrites the cassettes and the settings
-snapshot; record after changing a prompt, a setting or a scenario, with the cassette
-folder mounted writable:
-
-```sh
-docker run --rm -e SIMULATOR_PROVIDERS=record \
-  -v "$PWD/evals/fixtures/simulator/cassettes:/workspace/evals/fixtures/simulator/cassettes" \
-  ...same mounts as above... fakeyou-test:local uv run --no-sync pytest -m simulator evals/test_meeting_simulator_eval.py
-```
-
-Meta-tests enforce the conventions mechanically rather than by review: no comments
-or docstrings in source, no Indonesian in source files, every test file named after
-the module it covers, every error code constructed somewhere, `print` confined to
-the output module, and no bare integer exit codes.
-
-Live evals that grade replies with a judge model need their own judge: set
-`EVAL_JUDGE_API_KEY`, `EVAL_JUDGE_PROVIDER` (`openai` or `gemini`), and optionally
-`EVAL_JUDGE_MODEL` and `EVAL_JUDGE_BASE_URL` for an OpenAI-compatible endpoint. The judge
-never borrows the reply model's key, and the persona eval fails when the judge is the
-reply model it is grading.
-
----
-
-## Verified live
+**Production path:** join, listen, decide, speak, barge-in, stop, recall across
+meetings, owner model, forget, ingestion, debrief, re-embedding, and the decision
+register with curated lineage.
 
 Measured against real Google Meet sessions, not fixtures:
 
 | Measurement | Result |
 | --- | --- |
-| Join to admitted | 28–49 s, audio ready at admission |
-| Turn latency, first audio out | p50 **0.87 s**, p95 **2.46 s** (target ≤3 / ≤6) |
-| Meeting stayed up | 2 h 16 m, 4 STT reconnects recovered, 0 synthesis failures |
-| Cross-meeting recall | Fact spoken in one meeting returned intact in the next, with episode id and source label |
+| Join to admitted | 28–49 s, with audio ready at admission |
+| Turn latency, first audio out | p50 0.87 s, p95 2.46 s (target ≤ 3 s / ≤ 6 s) |
+| Longest meeting | 2 h 16 m, 4 speech-to-text reconnects recovered, 0 synthesis failures |
+| Cross-meeting recall | A fact spoken in one meeting returned intact in the next, with its episode id and source label |
 | Operator stop | `leaving` in 2 s, `ended` with `stopped_by_owner` in 6 s |
 
----
+**Known limits:**
 
-## Status
-
-Honest state of the tree, never aspirational:
-
-**Production path.** Join, hear, decide, speak, barge-in, stop, recall across
-meetings, owner model, forget, ingestion, debrief, reembed.
-
-**Known limits.**
-- Operator-driven stop is the only tested end-of-session path; duration and
-  host-removal endings are exercised but not measured against criteria.
-- The participation decider and per-stream capture are off by default. They are
-  wired and tested; they are not enabled in the reference deployment.
 - Google Meet only. Teams and Zoom are not implemented.
+- An operator stop is the only end-of-session path measured against criteria;
+  duration and host-removal endings are exercised but not measured.
+- The participation decider and per-stream capture are wired and tested but off in
+  the reference deployment.
 - A Meet server-side overload ends the session instead of reconnecting
-  indefinitely. It is classified, logged, and recoverable by restarting the
-  session, but it is not self-healing yet.
+  indefinitely. It is classified, logged and recoverable by restarting the session.
 
----
+## Roadmap
 
-<p align="center">
-  <img src="./assets/section-roadmap.svg" alt="Roadmap energy" width="100%">
-</p>
+Fakeyou is growing from a meeting participant into an engineering chief of staff:
+a trustworthy history of what teams decided and why.
 
-## Current direction
-
-The strongest product direction for Fakeyou looks like this:
-
-1. **AI Engineering Chief of Staff**
-   - organizational decision memory
-   - decision intelligence
-2. **Engineering decision guardian**
-   - keep decisions visible, reviewable, and grounded
-3. **Controlled AI meeting participation**
-   - active participation with clear product boundaries
-
-## Roadmap ideas
-
-- [ ] Stronger memory retrieval and decision trace UX
-- [ ] Cleaner evidence contracts and provenance surfaces
-- [ ] Better meeting-to-memory pipelines
-- [ ] Safer AI participation boundaries
-- [ ] More contributor-friendly local setup and docs
-
----
+- **Decision memory:** evidence-backed decision claims across meetings, kept
+  separate from what the owner has approved.
+- **Decision lineage:** relationships between decisions over time. Classification
+  by a model is being evaluated offline against a curated benchmark before it is
+  enabled.
+- **Controlled participation:** clear boundaries for when the twin may speak for
+  its owner.
 
 ## Contributing
 
-Contributions, design feedback, architecture discussion, and idea reviews are welcome.
+Issues and pull requests are welcome. Please open an issue to discuss a larger
+change before starting on it.
 
-- **Source code:** [maskentir/fakeyou](https://github.com/maskentir/fakeyou)
-- **Issues:** [Open issues](https://github.com/maskentir/fakeyou/issues)
-
-If you want to contribute:
-
-1. Open an issue
-2. Explain the problem or proposal clearly
-3. Link relevant code / context
-4. Submit a focused PR that follows `.github/pull_request_template.md`
+1. Use the issue templates for bug reports, feature requests and live session reports.
+2. Keep each pull request focused, and fill in
+   [the pull request template](.github/pull_request_template.md).
+3. Make sure the [development gates](#development) pass before asking for review.
 
 ## License
 
-Apache-2.0.
-
----
-
-<p align="center">
-  <strong>Built in public. Designed for teams that want better engineering memory.</strong>
-</p>
+Fakeyou is licensed under the Apache License 2.0.

@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" width="1200" height="300" role="img" aria-labelledby="title desc">
+  <title id="title">Fakeyou</title>
+  <desc id="desc">Fakeyou, the self-hosted AI digital twin for engineering teams. It joins Google Meet, listens, remembers and speaks.</desc>
+  <defs>
+    <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1.2" fill="#ffffff" opacity="0.07"/>
+    </pattern>
+  </defs>
+  <rect width="1200" height="300" rx="20" fill="#0f1115"/>
+  <rect width="1200" height="300" rx="20" fill="url(#grid)"/>
+  <rect x="0" y="0" width="8" height="300" rx="4" fill="#d7f043"/>
+
+  <g font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+    <text x="64" y="84" fill="#d7f043" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15" font-weight="600" letter-spacing="2">OPEN SOURCE · SELF-HOSTED</text>
+    <text x="62" y="164" fill="#ffffff" font-size="76" font-weight="800" letter-spacing="-2">Fakeyou</text>
+    <text x="64" y="212" fill="#e6e8eb" font-size="26" font-weight="500">The AI digital twin for engineering teams</text>
+    <text x="64" y="250" fill="#9aa1ab" font-size="17">Joins Google Meet · Listens · Remembers · Speaks</text>
+  </g>
+
+  <g transform="translate(772 46)">
+    <rect width="372" height="208" rx="14" fill="#171a21" stroke="#2b303b" stroke-width="2"/>
+    <circle cx="22" cy="22" r="5" fill="#ee2d27"/>
+    <circle cx="40" cy="22" r="5" fill="#3a404c"/>
+    <circle cx="58" cy="22" r="5" fill="#3a404c"/>
+    <text x="352" y="27" text-anchor="end" fill="#ee2d27" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="700">● REC</text>
+
+    <g font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13">
+      <rect x="16" y="44" width="164" height="70" rx="10" fill="#1f232c"/>
+      <circle cx="44" cy="79" r="14" fill="#3a404c"/>
+      <text x="68" y="84" fill="#c9ced6">Rina</text>
+
+      <rect x="192" y="44" width="164" height="70" rx="10" fill="#1f232c"/>
+      <circle cx="220" cy="79" r="14" fill="#3a404c"/>
+      <text x="244" y="84" fill="#c9ced6">Budi</text>
+
+      <rect x="16" y="124" width="164" height="70" rx="10" fill="#1f232c"/>
+      <circle cx="44" cy="159" r="14" fill="#3a404c"/>
+      <text x="68" y="164" fill="#c9ced6">Sari</text>
+
+      <rect x="192" y="124" width="164" height="70" rx="10" fill="#1f232c" stroke="#d7f043" stroke-width="2"/>
+      <circle cx="220" cy="159" r="14" fill="#d7f043"/>
+      <circle cx="215" cy="156" r="2.4" fill="#0f1115"/>
+      <circle cx="225" cy="156" r="2.4" fill="#0f1115"/>
+      <rect x="213" y="163" width="14" height="3" rx="1.5" fill="#0f1115"/>
+      <text x="244" y="152" fill="#ffffff" font-weight="700">Fakeyou</text>
+      <g fill="#d7f043">
+        <rect x="244" y="162" width="4" height="10" rx="2"/>
+        <rect x="252" y="158" width="4" height="18" rx="2"/>
+        <rect x="260" y="164" width="4" height="6" rx="2"/>
+        <rect x="268" y="156" width="4" height="22" rx="2"/>
+        <rect x="276" y="161" width="4" height="12" rx="2"/>
+        <rect x="284" y="165" width="4" height="4" rx="2"/>
+      </g>
+    </g>
+  </g>
+</svg>

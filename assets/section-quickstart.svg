@@ -1,9 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 120" width="1200" height="120" role="img" aria-label="GETTING STARTED">
-  <title>GETTING STARTED</title>
-  <style>.d{font-family:'Arial Black', Impact, system-ui, sans-serif;font-weight:900}.m{font-family:'Courier New', monospace;font-weight:700}</style>
-  <rect width="1200" height="120" fill="#ee2d27"/>
-  <path d="M0 80L360 0h280L190 120H0z" fill="#d7f043" opacity=".2"/>
-  <rect x="34" y="26" width="240" height="30" fill="#111"/>
-  <text x="50" y="47" font-size="18" fill="#f6eedf" class="m">03 / GETTING STARTED</text>
-  <text x="36" y="95" font-size="64" fill="#f6eedf" class="d">RUN IT <tspan fill="#d7f043">YOURSELF</tspan></text>
-</svg>

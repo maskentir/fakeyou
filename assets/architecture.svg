@@ -1,69 +1,102 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 520" width="1200" height="520" role="img" aria-label="Fakeyou architecture">
-  <title>Fakeyou architecture overview</title>
-  <style>
-    .d{font-family:'Arial Black', Impact, system-ui, sans-serif;font-weight:900}
-    .m{font-family:'Courier New', monospace;font-weight:700}
-    .label{font-family:Arial,Helvetica,sans-serif;font-weight:700}
-    .dash{stroke-dasharray:8 8;animation:dash 10s linear infinite}
-    .glow{animation:glow 2s ease-in-out infinite}
-    @keyframes dash{to{stroke-dashoffset:-64}}
-    @keyframes glow{50%{opacity:.45}}
-    @media (prefers-reduced-motion: reduce){.dash,.glow{animation:none}}
-  </style>
-  <rect width="1200" height="520" fill="#f6eedf"/>
-  <rect x="20" y="20" width="1160" height="480" fill="#fff8ee" stroke="#111" stroke-width="6"/>
-  <text x="44" y="68" font-size="26" fill="#111" class="m">FAKEYOU / SYSTEM SHAPE</text>
-  <text x="44" y="104" font-size="18" fill="#ee2d27" class="label">conversation → evidence → memory → response</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 600" width="1200" height="600" role="img" aria-labelledby="title desc">
+  <title id="title">Fakeyou architecture</title>
+  <desc id="desc">An operator calls the token-authenticated API. The API hands work to four worker roles over Redis streams: worker-sessions attends Google Meet through a browser and audio stack, worker-ingestion builds the memory graph, worker-debrief writes debriefs and the decision register, and worker-reembed refreshes embeddings. They share PostgreSQL, Neo4j with Graphiti, the meeting record directory, RustFS object storage and an embeddings service.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#57606a"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="600" rx="16" fill="#ffffff" stroke="#d0d7de" stroke-width="2"/>
 
-  <g transform="translate(54 148)">
-    <rect x="0" y="0" width="214" height="104" rx="18" fill="#ee2d27" stroke="#111" stroke-width="5"/>
-    <text x="24" y="44" font-size="28" fill="#f6eedf" class="d">MEETING</text>
-    <text x="24" y="76" font-size="28" fill="#f6eedf" class="d">INPUTS</text>
-    <text x="24" y="97" font-size="15" fill="#111" class="label">video / audio / chat / metadata</text>
+  <g font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+    <text x="40" y="52" fill="#1f2328" font-size="22" font-weight="700">Architecture</text>
+    <text x="40" y="78" fill="#57606a" font-size="15">One API gateway, four worker roles, shared stores. Each role runs as its own process with its own resource budget.</text>
   </g>
 
-  <g transform="translate(318 106)">
-    <rect x="0" y="0" width="252" height="188" rx="20" fill="#111" stroke="#111" stroke-width="5"/>
-    <text x="26" y="42" font-size="30" fill="#d7f043" class="d">EVIDENCE</text>
-    <text x="26" y="72" font-size="30" fill="#f6eedf" class="d">ENGINE</text>
-    <rect x="26" y="94" width="198" height="28" rx="12" fill="#f6eedf"/>
-    <text x="38" y="113" font-size="14" fill="#111" class="m">LISTENING / VISUAL / CONTEXT</text>
-    <rect x="26" y="132" width="198" height="28" rx="12" fill="#f6eedf"/>
-    <text x="38" y="151" font-size="14" fill="#111" class="m">CLASSIFICATION / SUFFICIENCY</text>
-    <rect x="26" y="170" width="198" height="28" rx="12" fill="#f6eedf"/>
-    <text x="38" y="189" font-size="14" fill="#111" class="m">REPORT CONTRACT / PROVENANCE</text>
+  <g font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" fill="#57606a">
+    <rect x="55" y="112" width="250" height="72" rx="10" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+    <text x="180" y="143" text-anchor="middle" fill="#1f2328" font-size="17" font-weight="700">Operator</text>
+    <text x="180" y="165" text-anchor="middle">fakeyou CLI · any HTTP client</text>
+
+    <rect x="425" y="112" width="290" height="72" rx="10" fill="#f8fbe6" stroke="#9db10f" stroke-width="2"/>
+    <text x="570" y="143" text-anchor="middle" fill="#1f2328" font-size="17" font-weight="700" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">api</text>
+    <text x="570" y="165" text-anchor="middle">REST + event stream · owner/admin tokens</text>
+
+    <rect x="895" y="112" width="250" height="72" rx="10" fill="#fff1f0" stroke="#ee2d27" stroke-width="2"/>
+    <text x="1020" y="143" text-anchor="middle" fill="#1f2328" font-size="17" font-weight="700">Google Meet</text>
+    <text x="1020" y="165" text-anchor="middle">joined as a named guest</text>
   </g>
 
-  <g transform="translate(624 92)">
-    <rect x="0" y="0" width="238" height="216" rx="20" fill="#d7f043" stroke="#111" stroke-width="5"/>
-    <text x="22" y="44" font-size="28" fill="#111" class="d">MEMORY</text>
-    <text x="22" y="76" font-size="28" fill="#111" class="d">& DECISIONS</text>
-    <text x="22" y="116" font-size="18" fill="#111" class="label">• meeting history</text>
-    <text x="22" y="146" font-size="18" fill="#111" class="label">• decisions & outcomes</text>
-    <text x="22" y="176" font-size="18" fill="#111" class="label">• evidence traces</text>
-    <text x="22" y="206" font-size="18" fill="#111" class="label">• context for later answers</text>
+  <g stroke="#57606a" stroke-width="2" fill="none">
+    <line x1="305" y1="148" x2="421" y2="148" marker-end="url(#arrow)"/>
+    <line x1="570" y1="184" x2="570" y2="226" marker-end="url(#arrow)"/>
+    <line x1="1020" y1="188" x2="1020" y2="314" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+    <path d="M 860 252 H 940 V 314" marker-end="url(#arrow)"/>
+    <line x1="180" y1="276" x2="180" y2="314" marker-end="url(#arrow)"/>
+    <line x1="460" y1="276" x2="460" y2="314" marker-end="url(#arrow)"/>
+    <line x1="740" y1="276" x2="740" y2="314" marker-end="url(#arrow)"/>
+  </g>
+  <g font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" fill="#57606a">
+    <text x="363" y="140" text-anchor="middle">HTTPS</text>
+    <text x="1030" y="256">browser · audio</text>
   </g>
 
-  <g transform="translate(910 148)">
-    <rect x="0" y="0" width="226" height="104" rx="18" fill="#111" stroke="#111" stroke-width="5"/>
-    <text x="24" y="42" font-size="26" fill="#d7f043" class="d">ASSISTANT</text>
-    <text x="24" y="72" font-size="26" fill="#f6eedf" class="d">RESPONSE</text>
-    <text x="24" y="93" font-size="15" fill="#f6eedf" class="label">answer / summary / next action</text>
+  <g font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+    <rect x="55" y="230" width="805" height="46" rx="10" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+    <text x="457" y="259" text-anchor="middle" fill="#1f2328" font-size="15" font-weight="600">Redis streams · jobs and live session commands</text>
   </g>
 
-  <path d="M268 200H318" stroke="#111" stroke-width="8" stroke-linecap="round" class="dash" fill="none"/>
-  <path d="M570 200H624" stroke="#111" stroke-width="8" stroke-linecap="round" class="dash" fill="none"/>
-  <path d="M862 200H910" stroke="#111" stroke-width="8" stroke-linecap="round" class="dash" fill="none"/>
-  <polygon points="309,200 289,188 289,212" fill="#111"/>
-  <polygon points="615,200 595,188 595,212" fill="#111"/>
-  <polygon points="901,200 881,188 881,212" fill="#111"/>
+  <g font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" fill="#57606a">
+    <rect x="55" y="318" width="250" height="88" rx="10" fill="#ffffff" stroke="#8c959f" stroke-width="1.5"/>
+    <text x="180" y="348" text-anchor="middle" fill="#1f2328" font-size="15" font-weight="700" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">worker-ingestion</text>
+    <text x="180" y="372" text-anchor="middle">meeting record →</text>
+    <text x="180" y="390" text-anchor="middle">memory graph episodes</text>
 
-  <g transform="translate(298 342)">
-    <rect x="0" y="0" width="564" height="108" rx="16" fill="#fff" stroke="#111" stroke-width="5"/>
-    <text x="24" y="34" font-size="22" fill="#ee2d27" class="d">GUIDING IDEA</text>
-    <text x="24" y="64" font-size="20" fill="#111" class="label">Turn conversation into durable engineering memory,</text>
-    <text x="24" y="92" font-size="20" fill="#111" class="label">so AI becomes useful beyond the current meeting.</text>
-    <circle cx="520" cy="54" r="24" fill="#d7f043" stroke="#111" stroke-width="5" class="glow"/>
-    <text x="508" y="63" font-size="24" fill="#111" class="d">✳</text>
+    <rect x="335" y="318" width="250" height="88" rx="10" fill="#ffffff" stroke="#8c959f" stroke-width="1.5"/>
+    <text x="460" y="348" text-anchor="middle" fill="#1f2328" font-size="15" font-weight="700" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">worker-debrief</text>
+    <text x="460" y="372" text-anchor="middle">source-backed debriefs,</text>
+    <text x="460" y="390" text-anchor="middle">decision register input</text>
+
+    <rect x="615" y="318" width="250" height="88" rx="10" fill="#ffffff" stroke="#8c959f" stroke-width="1.5"/>
+    <text x="740" y="348" text-anchor="middle" fill="#1f2328" font-size="15" font-weight="700" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">worker-reembed</text>
+    <text x="740" y="372" text-anchor="middle">memory graph</text>
+    <text x="740" y="390" text-anchor="middle">embedding refresh</text>
+
+    <rect x="895" y="318" width="250" height="88" rx="10" fill="#ffffff" stroke="#ee2d27" stroke-width="2"/>
+    <text x="1020" y="348" text-anchor="middle" fill="#1f2328" font-size="15" font-weight="700" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">worker-sessions</text>
+    <text x="1020" y="372" text-anchor="middle">one meeting at a time: speech,</text>
+    <text x="1020" y="390" text-anchor="middle">turn judge, replies, voice</text>
+  </g>
+
+  <g font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+    <line x1="55" y1="440" x2="1145" y2="440" stroke="#d0d7de" stroke-width="1.5" stroke-dasharray="6 6"/>
+    <text x="600" y="432" text-anchor="middle" fill="#57606a" font-size="13">shared stores, read and written by the api and the workers</text>
+  </g>
+
+  <g font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" fill="#57606a">
+    <rect x="55" y="460" width="200" height="96" rx="10" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+    <text x="155" y="490" text-anchor="middle" fill="#1f2328" font-size="15" font-weight="700">PostgreSQL</text>
+    <text x="155" y="513" text-anchor="middle">session status, jobs,</text>
+    <text x="155" y="531" text-anchor="middle">owner model</text>
+
+    <rect x="277" y="460" width="200" height="96" rx="10" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+    <text x="377" y="490" text-anchor="middle" fill="#1f2328" font-size="15" font-weight="700">Neo4j + Graphiti</text>
+    <text x="377" y="513" text-anchor="middle">memory graph per</text>
+    <text x="377" y="531" text-anchor="middle">owner and twin</text>
+
+    <rect x="499" y="460" width="200" height="96" rx="10" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+    <text x="599" y="490" text-anchor="middle" fill="#1f2328" font-size="15" font-weight="700">Meeting records</text>
+    <text x="599" y="513" text-anchor="middle">transcript record, debrief,</text>
+    <text x="599" y="531" text-anchor="middle">decision lineage files</text>
+
+    <rect x="721" y="460" width="200" height="96" rx="10" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+    <text x="821" y="490" text-anchor="middle" fill="#1f2328" font-size="15" font-weight="700">RustFS</text>
+    <text x="821" y="513" text-anchor="middle">S3-compatible storage</text>
+    <text x="821" y="531" text-anchor="middle">for audio segments</text>
+
+    <rect x="943" y="460" width="202" height="96" rx="10" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+    <text x="1044" y="490" text-anchor="middle" fill="#1f2328" font-size="15" font-weight="700">Embeddings</text>
+    <text x="1044" y="513" text-anchor="middle">local text-embeddings</text>
+    <text x="1044" y="531" text-anchor="middle">inference service</text>
   </g>
 </svg>
