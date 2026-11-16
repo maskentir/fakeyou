@@ -8,7 +8,9 @@ from fakeyou.session.world import SessionState, presenter_device
 StateQuestion = Literal[
     "attendance", "participant_count", "presenter", "screen_title", "own_action_status"
 ]
-Namespace = Literal["meeting_live", "conversation", "brief", "memory", "own_action", "owner_model"]
+Namespace = Literal[
+    "meeting_live", "conversation", "brief", "memory", "own_action", "owner_model", "screen"
+]
 Modality = Literal[
     "directly_observed",
     "protocol_reported",

@@ -36,6 +36,7 @@ CITED_NAMESPACES: Mapping[ClaimBasis, Namespace] = {
     "owner_model": "owner_model",
     "memory": "memory",
     "brief": "brief",
+    "screen": "screen",
 }
 SOURCED_BASES: frozenset[ClaimBasis] = frozenset({"owner_model", "memory", "brief", "screen"})
 OWNER_STANCES: frozenset[EntryKind] = frozenset({"position", "preference", "decision_rule"})
