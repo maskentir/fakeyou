@@ -18,6 +18,7 @@ from fakeyou.cli.chat import chat_via_api
 from fakeyou.cli.client import ApiFailure, api_failure, client_settings_from_env
 from fakeyou.cli.db import db_stamp, db_status, db_upgrade
 from fakeyou.cli.debrief import debrief_meeting
+from fakeyou.cli.decisions import import_decision_lineage, show_decision_lineage
 from fakeyou.cli.diagnostics import check_api, show_browser_tools, show_session_report
 from fakeyou.cli.diarize import diarize_show
 from fakeyou.cli.memory import (
@@ -177,6 +178,13 @@ owner_model_app = typer.Typer(
     pretty_exceptions_enable=False,
     rich_markup_mode=None,
 )
+decisions_app = typer.Typer(
+    help="Import and read curated relationships between recorded decision claims",
+    add_completion=False,
+    no_args_is_help=False,
+    pretty_exceptions_enable=False,
+    rich_markup_mode=None,
+)
 diarize_app = typer.Typer(
     help="Run offline speaker correction for one meeting",
     add_completion=False,
@@ -193,6 +201,7 @@ app.add_typer(audio_app, name="audio")
 app.add_typer(perception_app, name="perception")
 app.add_typer(diarize_app, name="diarize")
 app.add_typer(owner_model_app, name="owner-model")
+app.add_typer(decisions_app, name="decisions")
 
 
 @app.command("check", help="Inspect installed packages and credential presence")
@@ -887,3 +896,25 @@ def owner_model_import_command(
     twin_id: _TwinOption = None,
 ) -> None:
     asyncio.run(import_persona_knowledge(client_settings_from_env(), persona_path, twin_id=twin_id))
+
+
+@decisions_app.command(
+    "import-lineage",
+    help="Publish a curated decision_lineage/v1 document for one meeting; claims stay unreviewed",
+)
+@_guard_interrupts
+def decisions_import_lineage_command(
+    *,
+    document_path: Annotated[Path, typer.Option("--file")],
+) -> None:
+    asyncio.run(import_decision_lineage(client_settings_from_env(), document_path))
+
+
+@decisions_app.command("lineage", help="Show one decision record's compared relationships")
+@_guard_interrupts
+def decisions_lineage_command(
+    record_id: Annotated[str, typer.Argument()],
+    *,
+    cursor: Annotated[str | None, typer.Option("--cursor")] = None,
+) -> None:
+    asyncio.run(show_decision_lineage(client_settings_from_env(), record_id, cursor=cursor))

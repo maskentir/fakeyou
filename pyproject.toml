@@ -225,6 +225,24 @@ forbidden_modules = ["fakeyou.conversation"]
 allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
+name = "decision lineage imports no model provider itself"
+type = "forbidden"
+source_modules = ["fakeyou.debrief.lineage"]
+forbidden_modules = [
+    "langchain",
+    "langchain_core",
+    "langgraph",
+    "graphiti_core",
+    "openai",
+    "google",
+    "httpx",
+    "httpx2",
+    "fakeyou.memory",
+    "fakeyou.db",
+]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
 name = "catalog never imports cli or db"
 type = "forbidden"
 source_modules = ["fakeyou.catalog"]
@@ -251,6 +269,7 @@ modules = [
     "fakeyou.cli.chat",
     "fakeyou.cli.db",
     "fakeyou.cli.debrief",
+    "fakeyou.cli.decisions",
     "fakeyou.cli.diagnostics",
     "fakeyou.cli.diarize",
     "fakeyou.cli.memory",

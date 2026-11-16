@@ -78,6 +78,9 @@ class ErrorCode(StrEnum):
     MEMORY_FORGET_SESSION_LIVE = "memory.forget_session_live"
     OWNER_MODEL_ITEM_UNKNOWN = "owner_model.item_unknown"
     OWNER_MODEL_ITEM_RETIRED = "owner_model.item_retired"
+    DECISION_LINEAGE_LOCKED = "decision_lineage.locked"
+    DECISION_LINEAGE_EXISTS = "decision_lineage.exists"
+    DECISION_LINEAGE_REVISION_STALE = "decision_lineage.revision_stale"
     OWNER_MODEL_ITEM_FORGOTTEN = "owner_model.item_forgotten"
     OWNER_MODEL_VALID_AT_INVALID = "owner_model.valid_at_invalid"
     OWNER_MODEL_VALID_AT_FUTURE = "owner_model.valid_at_future"
@@ -425,6 +428,20 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
     ),
     ErrorCode.OWNER_MODEL_ITEM_UNKNOWN: ErrorSpec(
         "owner model item {item_id} does not exist for this twin", ExitCode.INPUT_REJECTED
+    ),
+    ErrorCode.DECISION_LINEAGE_LOCKED: ErrorSpec(
+        "meeting {meeting_id} is locked by another operation; nothing was published, "
+        "retry once it finishes"
+    ),
+    ErrorCode.DECISION_LINEAGE_EXISTS: ErrorSpec(
+        "meeting {meeting_id} already has decision lineage revision {revision}; "
+        "set replaces to that revision to replace it",
+        ExitCode.INPUT_REJECTED,
+    ),
+    ErrorCode.DECISION_LINEAGE_REVISION_STALE: ErrorSpec(
+        "decision lineage of meeting {meeting_id} is at revision {revision}, not {expected}; "
+        "read it again before replacing it",
+        ExitCode.INPUT_REJECTED,
     ),
     ErrorCode.OWNER_MODEL_ITEM_RETIRED: ErrorSpec(
         "owner model item {item_id} is retired; add a new item instead", ExitCode.INPUT_REJECTED

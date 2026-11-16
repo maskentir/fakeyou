@@ -150,6 +150,8 @@ All routes are token-authenticated: `Authorization: Bearer <token>`, owner or ad
 | `POST` | `/v1/sessions/{id}/debriefs` | Queue a debrief |
 | `GET` | `/v1/sessions/{id}/debrief` | Debrief status and report |
 | `GET` | `/v1/decisions` | Decision register across meetings, with quotes; meeting claims, never approvals |
+| `GET` | `/v1/decisions/{record}/lineage` | One record's compared relationships, with both evidence trails |
+| `PUT` | `/v1/decisions/lineage/{id}` | Publish a curated `decision_lineage/v1` document for one meeting |
 | `POST` | `/v1/twins/{id}/reembeddings` | Queue an embedding refresh |
 | `GET` | `/v1/twins/{id}/owner-model` | Active owner model, or `?version=` |
 | `POST` | `/v1/twins/{id}/owner-model` | Add an item |
@@ -184,6 +186,53 @@ only for the same filters and the same register: another filter is refused with
 Forgetting with `keep_record: true` erases the meeting from derived memory, the
 graph, and keeps its record and debrief, so it stays in the register;
 `keep_record: false` erases it from the register too.
+
+Decision lineage records how two register records from different meetings of
+the same owner and twin were compared: `related_discussion`,
+`potential_contradiction`, `potential_supersession` or
+`no_established_relationship`. Every comparison is a derived candidate,
+`authority: derived_candidate`, `review_status: unreviewed`,
+`owner_approved: false`; it never approves, resolves or retires either claim,
+and both stay in the register unchanged. `no_established_relationship` means
+the recorded comparison found none, not that none exists; a pair nobody
+compared counts as `not_compared`. The only source today is a curated
+document (`method: manual_curated`) published with
+`fakeyou decisions import-lineage --file PATH`; it names the later meeting, and
+each comparison names an earlier and a later record. The import is refused,
+and nothing is written, when a record is unknown or belongs to another owner,
+when the two records share a meeting or a twin differs, when a pair repeats or
+carries two labels, or when the meetings' `created_at` times do not put the
+earlier one strictly first; meeting ids never decide the order. The earlier
+record must sit inside the comparison window: the 20 most recent meetings of
+the same twin created strictly before the later one with an available debrief,
+newest first, then their records in that order up to 200. The document is
+validated, bound to a fingerprint of each record's item, quotes, source entries
+and meeting time, and written atomically as `decision-lineage.json` beside the
+later meeting's debrief. Validation and publication run while holding the
+meeting's record lock (`purpose: lineage`), the same lock forget holds: an
+import during a forget, a debrief or another import is refused with
+`decision_lineage.locked` (409) and writes nothing; a forget during an import is
+refused the same way and can be repeated; an import whose meeting was forgotten
+first finds no meeting (404) or no usable debrief (`lineage_source_unavailable`)
+and never recreates its folder. Each published file has a `revision`, the
+first 32 hex characters of the SHA-256 of its bytes, returned by the import and
+shown per meeting as `lineage_revision`. Importing the same comparisons again,
+in any order, returns `outcome: unchanged` and leaves the file and its
+`imported_at` alone. A different document is refused with
+`decision_lineage.exists` (409) unless it carries `replaces` set to the current
+revision, which yields `outcome: replaced`; any other `replaces` is refused with
+`decision_lineage.revision_stale` (409), so of two replacements made from the
+same revision only the first lands. An unreadable file has a revision too and is
+replaced the same way. A failed write leaves the previous file in place.
+`fakeyou decisions lineage RECORD_ID` shows both incoming comparisons (from
+earlier meetings) and outgoing ones (to later meetings) with the other record's
+full evidence. A comparison whose record was forgotten, changed or left without
+an available debrief counts as `unresolved`; one whose record kept its text but
+changed its sources or meeting time counts as `invalidated`. Neither is moved to
+a similar record. A malformed or altered `decision-lineage.json` serves nothing
+and reads as `invalid` in `meetings`. An unknown, forgotten or other owner's
+record id answers the same 404. Forgetting the later meeting erases its lineage
+with its record.
 
 The owner model is what the twin may stand behind on the owner's behalf:
 positions, preferences, decision rules, style examples, and facts. Owner notes
@@ -242,6 +291,8 @@ fakeyou owner-model retire ITEM_ID --persona .runtime/audio/persona.json
 fakeyou owner-model forget ITEM_ID --persona .runtime/audio/persona.json
 fakeyou owner-model show --persona .runtime/audio/persona.json
 fakeyou owner-model proposals --persona .runtime/audio/persona.json
+fakeyou decisions import-lineage --file lineage.json
+fakeyou decisions lineage RECORD_ID
 fakeyou worker start https://meet.google.com/abc-defg-hij --meeting-id standup-1 --audio
 fakeyou worker status standup-1
 fakeyou worker stop standup-1

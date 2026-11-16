@@ -16,6 +16,7 @@ CORRECTION_LABELS_FILE_NAME = "correction_labels.json"
 REPORT_FILE_NAME = "debrief.json"
 MARKDOWN_FILE_NAME = "debrief.md"
 ATTEMPT_FILE_NAME = "debrief-attempt.json"
+LINEAGE_FILE_NAME = "decision-lineage.json"
 SLOTS_FILE_NAME = "slots.json"
 ANCHORS_FILE_NAME = "anchors.jsonl"
 AUDIO_DIR_NAME = "audio"
@@ -87,6 +88,10 @@ class MeetingDir:
     @property
     def debrief_md(self) -> Path:
         return self.dir / MARKDOWN_FILE_NAME
+
+    @property
+    def decision_lineage(self) -> Path:
+        return self.dir / LINEAGE_FILE_NAME
 
     @property
     def debrief_attempt(self) -> Path:
