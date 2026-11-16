@@ -844,7 +844,7 @@ async def test_forget_while_an_import_holds_the_meeting_keeps_everything(
             f"/v1/sessions/{SECOND}/forget", json={"keep_record": False}
         )
 
-    assert refused_forget.status_code == 500
+    assert refused_forget.status_code == 409
     assert refused_forget.json()["error"]["code"] == "record.locked"
     assert sidecar(api, SECOND).read_bytes() == stored
     assert record_of(api, SECOND).exists()
