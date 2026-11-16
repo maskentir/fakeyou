@@ -11,6 +11,7 @@ CONFLICT_CODES: frozenset[str] = frozenset(
         str(ErrorCode.OWNER_MODEL_ITEM_RETIRED),
         str(ErrorCode.OWNER_MODEL_ITEM_FORGOTTEN),
         str(ErrorCode.OWNER_MODEL_NOT_PROPOSED),
+        str(ErrorCode.RECORD_LOCKED),
         str(ErrorCode.DECISION_LINEAGE_LOCKED),
         str(ErrorCode.DECISION_LINEAGE_EXISTS),
         str(ErrorCode.DECISION_LINEAGE_REVISION_STALE),

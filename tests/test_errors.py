@@ -1,11 +1,14 @@
 import re
 import string
+from pathlib import Path
 from typing import override
 
 import pytest
 
+from fakeyou.api.errors import http_status_for
 from fakeyou.catalog.errors import CATALOG, ErrorCode, FakeYouError
 from fakeyou.catalog.exit_codes import ExitCode
+from fakeyou.persistence.ingestion_status import RecordLockError, record_lock
 
 
 class Placeholder:
@@ -222,3 +225,30 @@ def test_exit_code_classification_is_deliberate() -> None:
         ErrorCode.CALIBRATE_THETA_OUTSIDE_VALLEY,
     }
     assert CATALOG[ErrorCode.INTERNAL_FAILURE].exit_code is ExitCode.FAILURE
+
+
+@pytest.mark.parametrize(
+    ("code", "status"),
+    [
+        (ErrorCode.RECORD_LOCKED, 409),
+        (ErrorCode.DECISION_LINEAGE_LOCKED, 409),
+        (ErrorCode.RECORD_LOCK_CORRUPT, 500),
+        (ErrorCode.LEASE_LOST, 500),
+        (ErrorCode.LEASE_LOCKED, 500),
+        (ErrorCode.INTERNAL_FAILURE, 500),
+    ],
+)
+def test_only_ordinary_lock_contention_answers_conflict(code: ErrorCode, status: int) -> None:
+    assert http_status_for(_error(code)) == status
+
+
+def test_held_record_lock_reaches_the_api_as_conflict_with_its_code(tmp_path: Path) -> None:
+    record = tmp_path / "meeting" / "record.jsonl"
+
+    with record_lock(record, purpose="forget"):
+        with pytest.raises(RecordLockError, match="meeting record is locked") as contended:
+            with record_lock(record, purpose="lineage"):
+                pytest.fail("a held record lock must not be granted twice")
+
+    assert contended.value.code is ErrorCode.RECORD_LOCKED
+    assert http_status_for(contended.value) == 409
