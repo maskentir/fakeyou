@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 222 56" width="222" height="56" role="img" aria-labelledby="t d"><title id="t">ARCHITECTURE button</title><desc id="d">ARCHITECTURE button</desc><style>
+.in,.pop,.slide,.wob{transform-box:fill-box;transform-origin:center}
+.in{animation:in .75s cubic-bezier(.2,1.45,.35,1) both}
+@keyframes in{from{transform:translateY(-36px) rotate(-7deg)}}
+.pop{animation:pop .6s cubic-bezier(.2,1.6,.4,1) both}
+@keyframes pop{from{transform:scale(.82) rotate(-5deg)}}
+.slide{animation:slide .7s cubic-bezier(.2,1.2,.4,1) both}
+@keyframes slide{from{transform:translateX(-36px)}}
+.wob{animation:wob 3.4s ease-in-out infinite alternate}
+@keyframes wob{from{transform:rotate(-3deg)}to{transform:rotate(3deg)}}
+.pulse{transform-box:fill-box;transform-origin:50% 100%;animation:pulse 1.3s ease-in-out infinite alternate}
+@keyframes pulse{from{transform:scaleY(.45)}}
+.marquee{animation:marquee 46s linear infinite}
+@keyframes marquee{to{transform:translateX(var(--shift))}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important}}
+</style><defs><clipPath id="frame"><rect width="222" height="56" rx="14"/></clipPath></defs><g clip-path="url(#frame)"><rect x="6" y="6" width="210" height="46" fill="#111111" rx="6"/><rect x="2" y="2" width="208" height="44" fill="#FFFBF2" stroke="#111111" stroke-width="4" rx="6" id="button"/><text x="107" y="32" font-family="'Arial Black','Arial Bold',Gadget,Impact,'Helvetica Neue',Arial,sans-serif" font-size="19" font-weight="900" fill="#111111" text-anchor="middle" data-in="button">ARCHITECTURE</text></g></svg>
