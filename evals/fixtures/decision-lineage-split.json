@@ -1,0 +1,265 @@
+{
+  "version": 1,
+  "benchmark": "decision-lineage-pairs.json",
+  "unit": "topic",
+  "rationale": "Pairs reuse claims, and a claim's paraphrases and follow-ups stay inside its engineering topic. Every claim belongs to exactly one topic, every topic to exactly one partition, and a pair belongs to the partition of its two claims. A pair whose claims fall in different partitions is quarantined and scored in neither. Meetings are not the unit: a lineage pair always spans two meetings, so a meeting split would quarantine most pairs.",
+  "partitions": {
+    "development": "Prompt and threshold iteration, the pilot run, and error analysis.",
+    "frozen_evaluation": "Scored once per approved classifier version. Never used to tune prompts, thresholds or labels.",
+    "real_world_validation": "Reserved for consented real meeting records labelled by two humans. Empty: no real data exists yet."
+  },
+  "topics": {
+    "analytics-warehouse": {
+      "partition": "development",
+      "claims": [
+        "pg_analytics1",
+        "pg_analytics2"
+      ]
+    },
+    "api-deprecation": {
+      "partition": "development",
+      "claims": [
+        "api1",
+        "api2",
+        "api3"
+      ]
+    },
+    "billing-database": {
+      "partition": "development",
+      "claims": [
+        "db1",
+        "db2",
+        "db3",
+        "db4",
+        "db5",
+        "db6",
+        "dfx1",
+        "mx_db",
+        "mx_follow1"
+      ]
+    },
+    "billing-logs": {
+      "partition": "development",
+      "claims": [
+        "logs1",
+        "logs2",
+        "logs3",
+        "s3cost1"
+      ]
+    },
+    "build-servers": {
+      "partition": "development",
+      "claims": [
+        "arm1",
+        "arm2",
+        "deadline2",
+        "vague1",
+        "vague4"
+      ]
+    },
+    "caching": {
+      "partition": "development",
+      "claims": [
+        "cache1",
+        "cache2",
+        "cache3",
+        "pricing1"
+      ]
+    },
+    "ci-runners": {
+      "partition": "development",
+      "claims": [
+        "k8s1"
+      ]
+    },
+    "cloud-budget": {
+      "partition": "frozen_evaluation",
+      "claims": [
+        "budget_cloud1",
+        "budget_cloud2"
+      ]
+    },
+    "code-review": {
+      "partition": "frozen_evaluation",
+      "claims": [
+        "review1",
+        "review2",
+        "reviewneg"
+      ]
+    },
+    "deploy-freeze": {
+      "partition": "development",
+      "claims": [
+        "freeze_deploy1"
+      ]
+    },
+    "feature-flags": {
+      "partition": "development",
+      "claims": [
+        "flags1",
+        "flags2"
+      ]
+    },
+    "hiring": {
+      "partition": "development",
+      "claims": [
+        "hire1",
+        "hire2",
+        "hire3"
+      ]
+    },
+    "kafka-budget": {
+      "partition": "frozen_evaluation",
+      "claims": [
+        "inj2",
+        "kafka1",
+        "kafka2",
+        "kafka3",
+        "kafka4",
+        "kafka5",
+        "kafka6",
+        "vague3"
+      ]
+    },
+    "log-retention": {
+      "partition": "frozen_evaluation",
+      "claims": [
+        "inj3",
+        "ret1",
+        "ret2",
+        "ret3"
+      ]
+    },
+    "metrics-stack": {
+      "partition": "development",
+      "claims": [
+        "obs1",
+        "obs2",
+        "obs3",
+        "prom_ret1"
+      ]
+    },
+    "on-call-rotation": {
+      "partition": "frozen_evaluation",
+      "claims": [
+        "oncall1",
+        "oncall2",
+        "oncall3",
+        "oncall4",
+        "oncall5"
+      ]
+    },
+    "onboarding": {
+      "partition": "frozen_evaluation",
+      "claims": [
+        "onboard1",
+        "onboard2",
+        "vague_id"
+      ]
+    },
+    "paging": {
+      "partition": "development",
+      "claims": [
+        "inj4",
+        "pager1",
+        "pager2"
+      ]
+    },
+    "payments-sla": {
+      "partition": "development",
+      "claims": [
+        "sla1",
+        "sla2",
+        "sla3",
+        "slaneg"
+      ]
+    },
+    "postmortems": {
+      "partition": "frozen_evaluation",
+      "claims": [
+        "ins1",
+        "ins2"
+      ]
+    },
+    "queue-and-backups": {
+      "partition": "frozen_evaluation",
+      "claims": [
+        "backupneg",
+        "dbid1",
+        "dbid2",
+        "mx_queue",
+        "queue1",
+        "queue2",
+        "queue3"
+      ]
+    },
+    "release-v2": {
+      "partition": "frozen_evaluation",
+      "claims": [
+        "dfx2",
+        "dfx3",
+        "mx_follow2",
+        "mx_rel",
+        "qa1",
+        "rel1",
+        "rel2",
+        "rel3",
+        "rel4",
+        "rel5"
+      ]
+    },
+    "rollback-plan": {
+      "partition": "development",
+      "claims": [
+        "rollback1",
+        "rollback2",
+        "rollbackq1",
+        "rollbackq2",
+        "vague2"
+      ]
+    },
+    "schema-freeze": {
+      "partition": "development",
+      "claims": [
+        "freeze2",
+        "freezeapi1"
+      ]
+    },
+    "security-deadlines": {
+      "partition": "frozen_evaluation",
+      "claims": [
+        "laptop1",
+        "laptop2",
+        "mx_sec",
+        "sec1",
+        "sec2",
+        "sec3"
+      ]
+    },
+    "service-protocol": {
+      "partition": "development",
+      "claims": [
+        "grpc0",
+        "grpc2",
+        "grpc3",
+        "rest1"
+      ]
+    },
+    "static-assets": {
+      "partition": "frozen_evaluation",
+      "claims": [
+        "cdn1",
+        "cdn2",
+        "cdnneg",
+        "inj1"
+      ]
+    },
+    "weekly-sync": {
+      "partition": "frozen_evaluation",
+      "claims": [
+        "tz1",
+        "tz2"
+      ]
+    }
+  }
+}

@@ -24,13 +24,16 @@ from evals._decision_lineage import (
     gate_failures,
     lexical_predictions,
     load_dataset,
+    load_split,
     main,
     oracle_labels_citing_everything,
     oracle_labels_with_wrong_evidence,
     oracle_predictions,
+    partition_pairs,
     resolve_pairs,
     score,
     selects_evidence,
+    wilson_interval,
 )
 
 
@@ -378,3 +381,61 @@ def test_the_retrieval_command_reports_recall_and_exclusions(
     assert report["eligible_pairs"] == 83
     assert set(report["recall"]) == {"at_5", "at_10"}
     assert report["excluded"]["not_strictly_earlier"]
+
+
+def test_every_claim_belongs_to_exactly_one_topic(dataset: LineageDataset) -> None:
+    owners = load_split().claim_partitions()
+    claims = {item.key for meeting in dataset.meetings for item in meeting.items}
+
+    assert set(owners) == claims
+
+
+def test_partitions_share_no_claim(pairs: tuple[ResolvedPair, ...]) -> None:
+    groups = partition_pairs(load_split(), pairs)
+    claims = {
+        name: {key for resolved in members for key in (resolved.pair.first, resolved.pair.second)}
+        for name, members in groups.items()
+        if name != "quarantined"
+    }
+
+    assert not claims["development"] & claims["frozen_evaluation"]
+    assert sum(len(members) for members in groups.values()) == len(pairs)
+
+
+def test_the_split_is_balanced_and_quarantines_only_cross_topic_pairs(
+    pairs: tuple[ResolvedPair, ...],
+) -> None:
+    groups = partition_pairs(load_split(), pairs)
+
+    assert {name: len(members) for name, members in groups.items()} == {
+        "development": 64,
+        "frozen_evaluation": 64,
+        "quarantined": 2,
+    }
+    assert [resolved.pair.id for resolved in groups["quarantined"]] == ["pair-021", "pair-089"]
+    for name in ("development", "frozen_evaluation"):
+        labels = Counter(resolved.pair.label for resolved in groups[name])
+        assert all(labels[label] >= 9 for label in LABELS), (name, labels)
+
+
+def test_scoring_one_partition_ignores_predictions_for_the_other(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["score", "--baseline", "oracle", "--partition", "frozen_evaluation"]) == 0
+    report = json.loads(capsys.readouterr().out)
+
+    assert report["partition"] == "frozen_evaluation"
+    assert report["total"] == 64
+    assert report["missing"] == 0
+    assert report["classes"]["potential_supersession"]["recall_95ci"][0] < 0.8
+    assert set(report["by_language"]) == {"en", "id", "mixed"}
+
+
+def test_wilson_intervals_widen_on_small_samples() -> None:
+    small = wilson_interval(9, 10)
+    large = wilson_interval(90, 100)
+
+    assert small is not None
+    assert large is not None
+    assert small[1] - small[0] > large[1] - large[0]
+    assert wilson_interval(0, 0) is None

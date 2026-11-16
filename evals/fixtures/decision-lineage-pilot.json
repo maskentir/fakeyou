@@ -1,0 +1,28 @@
+{
+  "provider": "google",
+  "model": "gemini-3.8-flash",
+  "reasoning_effort": "low",
+  "partition": "development",
+  "pairs": [
+    "pair-002", "pair-067", "pair-012", "pair-129",
+    "pair-001", "pair-051", "pair-053", "pair-097",
+    "pair-029", "pair-099", "pair-062", "pair-008",
+    "pair-010", "pair-013", "pair-100", "pair-034",
+    "pair-052", "pair-060", "pair-065", "pair-064",
+    "pair-120", "pair-091", "pair-079"
+  ],
+  "pricing": {
+    "input_per_million_usd": 0.75,
+    "output_per_million_usd": 3.75,
+    "source": "https://aistudio.google.com/docs/pricing (Gemini 3.8 Flash, Standard, paid tier)",
+    "retrieved": "2026-11-17",
+    "valid_until": "2026-12-31"
+  },
+  "caps": {
+    "max_calls": 24,
+    "max_input_tokens": 120000,
+    "max_output_tokens": 100000,
+    "max_output_tokens_per_call": 4096,
+    "max_spend_usd": 1.0
+  }
+}

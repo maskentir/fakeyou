@@ -6,7 +6,7 @@ from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, StringConstraints
 
@@ -15,6 +15,7 @@ from evals._decision_lineage import (
     LABELS,
     FixtureItem,
     Label,
+    LabelCorrection,
     LineageDataset,
     PairSide,
     ResolvedPair,
@@ -23,6 +24,7 @@ from evals._decision_lineage import (
     resolve_pairs,
 )
 
+EXAMPLES = Path(__file__).parent / "fixtures" / "decision-lineage-annotation-examples.json"
 INSTRUCTIONS = (
     "Label every pair on your own, without the benchmark fixture, its labels or its rationale. "
     "Each pair shows two meeting claims with their meeting time, quotes and the source entry "
@@ -64,6 +66,34 @@ class BlindPair(BaseModel):
     second: BlindClaim
 
 
+class ExampleClaim(BaseModel):
+    model_config = _STRICT
+
+    meeting_time: str
+    text: _Text
+
+
+class WorkedExample(BaseModel):
+    model_config = _STRICT
+
+    first: ExampleClaim
+    second: ExampleClaim
+    label: Label
+    why: Annotated[str, StringConstraints(min_length=40)]
+
+
+class WorkedExamples(BaseModel):
+    model_config = _STRICT
+
+    version: Literal[1]
+    note: _Text
+    examples: tuple[WorkedExample, ...]
+
+
+def load_examples(path: Path = EXAMPLES) -> WorkedExamples:
+    return WorkedExamples.model_validate_json(path.read_text(encoding="utf-8"))
+
+
 class BlindPackage(BaseModel):
     model_config = _STRICT
 
@@ -71,6 +101,7 @@ class BlindPackage(BaseModel):
     instructions: str
     guidelines: dict[Label, str]
     labels: tuple[Label, ...]
+    worked_examples: tuple[WorkedExample, ...]
     pairs: tuple[BlindPair, ...]
 
 
@@ -147,6 +178,7 @@ def blind_package(
         instructions=INSTRUCTIONS,
         guidelines=dataset.guidelines,
         labels=LABELS,
+        worked_examples=load_examples().examples,
         pairs=tuple(
             BlindPair(
                 blind_id=identifier,
@@ -197,6 +229,14 @@ class AgreementReport:
             "per_label_agreement": dict(self.per_label_agreement),
             "confusion": {gold: dict(row) for gold, row in self.confusion.items()},
             "disagreements": len(self.disagreements),
+            "disagreement_types": dict(
+                sorted(
+                    Counter(
+                        f"{item.curator_label} -> {item.second_label}"
+                        for item in self.disagreements
+                    ).items()
+                )
+            ),
         }
 
 
@@ -247,6 +287,71 @@ def agreement(
     )
 
 
+def package_leaks(dataset: LineageDataset, package: BlindPackage, key: BlindKey) -> list[str]:
+    exported = package.model_dump_json()
+    leaks = [f"pair id {pair.id}" for pair in dataset.pairs if pair.id in exported]
+    leaks += [
+        f"rationale of {pair.id}" for pair in dataset.pairs if pair.rationale[:60] in exported
+    ]
+    leaks += [
+        f"claim key {item.key}"
+        for meeting in dataset.meetings
+        for item in meeting.items
+        if f'"{item.key}"' in exported
+    ]
+    leaks += [
+        f"meeting id {meeting.meeting_id}"
+        for meeting in dataset.meetings
+        if meeting.meeting_id in exported
+    ]
+    leaks += [
+        f'field "{name}"'
+        for name in ("categories", "gold_evidence", "temporal_order", "defect", "rationale")
+        if f'"{name}"' in exported
+    ]
+    leaks += ["coordinator salt"] if key.salt in exported else []
+    texts = {
+        value
+        for meeting in dataset.meetings
+        for value in (
+            *(item.text for item in meeting.items),
+            *(source.text for source in meeting.sources),
+        )
+    }
+    leaks += [
+        f"worked example reuses benchmark text: {claim.text[:40]}"
+        for example in package.worked_examples
+        for claim in (example.first, example.second)
+        if claim.text in texts
+    ]
+    return leaks
+
+
+class Adjudication(BaseModel):
+    model_config = _STRICT
+
+    annotator: _Text
+    disagreements: tuple[Disagreement, ...]
+
+
+def proposed_corrections(adjudication: Adjudication) -> list[LabelCorrection]:
+    pending = [
+        item.pair_id for item in adjudication.disagreements if item.adjudicated_label is None
+    ]
+    if pending:
+        raise ValueError(f"{len(pending)} disagreements are not adjudicated yet")
+    return [
+        LabelCorrection(
+            pair_id=item.pair_id,
+            previous_label=item.curator_label,
+            corrected_label=item.adjudicated_label,
+            reason=item.adjudication_note,
+        )
+        for item in adjudication.disagreements
+        if item.adjudicated_label is not None and item.adjudicated_label != item.curator_label
+    ]
+
+
 def _write(path: Path, document: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -255,6 +360,12 @@ def _write(path: Path, document: object) -> None:
 def _export_command(arguments: argparse.Namespace) -> int:
     dataset = load_dataset(arguments.dataset)
     package, key = blind_package(dataset, resolve_pairs(dataset), arguments.salt)
+    leaks = package_leaks(dataset, package, key)
+    if leaks:
+        sys.stdout.write(
+            json.dumps({"refused": "package leaks curation", "leaks": leaks}, indent=2) + "\n"
+        )
+        return 1
     out: Path = arguments.out
     _write(out / "annotator" / "annotation-pairs.json", package.model_dump(mode="json"))
     _write(out / "annotator" / "annotation-template.json", annotation_template(package))
@@ -281,6 +392,48 @@ def _agreement_command(arguments: argparse.Namespace) -> int:
     return 0
 
 
+def _verify_command(arguments: argparse.Namespace) -> int:
+    dataset = load_dataset(arguments.dataset)
+    folder: Path = arguments.package
+    package = BlindPackage.model_validate_json(
+        (folder / "annotator" / "annotation-pairs.json").read_text(encoding="utf-8")
+    )
+    key = BlindKey.model_validate_json(
+        (folder / "coordinator" / "blind-key.json").read_text(encoding="utf-8")
+    )
+    leaks = package_leaks(dataset, package, key)
+    annotator_files = sorted(path.name for path in (folder / "annotator").iterdir())
+    report = {
+        "pairs": len(package.pairs),
+        "worked_examples": len(package.worked_examples),
+        "annotator_files": annotator_files,
+        "coordinator_key_in_annotator_folder": "blind-key.json" in annotator_files,
+        "leaks": leaks,
+    }
+    sys.stdout.write(json.dumps(report, indent=2, sort_keys=True) + "\n")
+    return 1 if leaks or report["coordinator_key_in_annotator_folder"] else 0
+
+
+def _corrections_command(arguments: argparse.Namespace) -> int:
+    adjudication = Adjudication.model_validate_json(
+        arguments.adjudication.read_text(encoding="utf-8")
+    )
+    corrections = proposed_corrections(adjudication)
+    sys.stdout.write(
+        json.dumps(
+            {
+                "applies_automatically": False,
+                "proposed_label_corrections": [
+                    item.model_dump(mode="json") for item in corrections
+                ],
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m evals._lineage_annotation",
@@ -297,6 +450,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     compare.add_argument("--key", type=Path, required=True)
     compare.add_argument("--adjudication", type=Path, required=True)
     compare.set_defaults(run=_agreement_command)
+    verify = commands.add_parser("verify", help="Check an exported package for leaked curation")
+    verify.add_argument("--package", type=Path, required=True)
+    verify.set_defaults(run=_verify_command)
+    corrections = commands.add_parser(
+        "corrections", help="Propose label corrections from a finished adjudication; edits nothing"
+    )
+    corrections.add_argument("--adjudication", type=Path, required=True)
+    corrections.set_defaults(run=_corrections_command)
     arguments = parser.parse_args(argv)
     run: Callable[[argparse.Namespace], int] = arguments.run
     return run(arguments)
