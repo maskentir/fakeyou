@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 120" width="1200" height="120" role="img" aria-label="WHAT IT DOES">
+  <title>WHAT IT DOES</title>
+  <style>.d{font-family:'Arial Black', Impact, system-ui, sans-serif;font-weight:900}.m{font-family:'Courier New', monospace;font-weight:700}.blink{animation:blink 1s steps(1) infinite}@keyframes blink{50%{opacity:0}}@media (prefers-reduced-motion: reduce){.blink{animation:none}}</style>
+  <rect width="1200" height="120" fill="#111"/>
+  <rect x="0" y="0" width="1200" height="120" fill="#ee2d27" opacity=".2"/>
+  <rect x="34" y="26" width="213" height="30" fill="#f6eedf"/>
+  <text x="50" y="47" font-size="18" fill="#111" class="m">02 / WHAT IT DOES</text>
+  <text x="36" y="95" font-size="64" fill="#f6eedf" class="d">CORE <tspan fill="#d7f043">CAPABILITIES</tspan></text>
+  <text x="1028" y="78" font-size="36" fill="#d7f043" class="d blink">● LIVE</text>
+</svg>
