@@ -13,6 +13,12 @@
     "/v1/decisions": [
       "get"
     ],
+    "/v1/decisions/lineage/{meeting_id}": [
+      "put"
+    ],
+    "/v1/decisions/{record_id}/lineage": [
+      "get"
+    ],
     "/v1/health": [
       "get"
     ],
@@ -94,10 +100,12 @@
     "BriefItem",
     "ChatTurn",
     "ChatTurnView",
+    "CuratedComparison",
     "DebriefQueued",
     "DebriefSubmit",
     "DebriefView",
     "DecisionEvidenceView",
+    "DecisionLineageView",
     "DecisionRecordView",
     "DecisionRegisterView",
     "ForgetMeeting",
@@ -107,6 +115,11 @@
     "IngestionSubmit",
     "IngestionView",
     "JobView",
+    "LineageAccountingView",
+    "LineageComparisonView",
+    "LineageImport",
+    "LineageImported",
+    "LineageMeetingView",
     "MeetingCoverageView",
     "MemoryInitView",
     "OwnerModelImportBody",

@@ -166,6 +166,15 @@ class ApiClient:
         path = f"/v1/twins/{twin_id}/owner-model/proposals/{revision_id}/{decision}"
         return await self._json("POST", path)
 
+    async def import_decision_lineage(
+        self, meeting_id: str, document: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        return await self._json("PUT", f"/v1/decisions/lineage/{meeting_id}", json=document)
+
+    async def decision_lineage(self, record_id: str, *, cursor: str | None) -> dict[str, Any]:
+        params = {"cursor": cursor} if cursor is not None else {}
+        return await self._json("GET", f"/v1/decisions/{record_id}/lineage", params=params)
+
     async def get_job(self, job_id: str) -> dict[str, Any]:
         return await self._json("GET", f"/v1/jobs/{job_id}")
 

@@ -124,6 +124,15 @@ class ApiHarness:
     ) -> httpx2.Response:
         return await self.client.post(path, json=json, headers=self._headers(principal, headers))
 
+    async def put(
+        self,
+        path: str,
+        *,
+        principal: str | None = "owner",
+        json: object = None,
+    ) -> httpx2.Response:
+        return await self.client.put(path, json=json, headers=self._headers(principal, None))
+
     async def create_terminal_session(
         self,
         *,

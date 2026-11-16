@@ -7,7 +7,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -68,10 +68,23 @@ class DecisionRecord:
     due_text: str | None
     evidence: tuple[RegisterEvidence, ...]
     generated_at: datetime
+    source_fingerprint: str
 
     @property
     def position(self) -> RegisterPosition:
         return (self.scope.created_at, self.scope.meeting_id, self.index)
+
+    @property
+    def page_key(self) -> str:
+        return self.record_id
+
+
+class Paged(Protocol):
+    @property
+    def position(self) -> RegisterPosition: ...
+
+    @property
+    def page_key(self) -> str: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,7 +112,7 @@ class RegisterQuery:
         return self.kind in {None, record.kind} and self.status in {None, record.status}
 
     def fingerprint(self, owner_id: str) -> str:
-        return _digest([owner_id, self.meeting_id, self.twin_id, self.kind, self.status])
+        return short_digest([owner_id, self.meeting_id, self.twin_id, self.kind, self.status])
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,18 +122,35 @@ class DecisionRegister:
 
 
 @dataclass(frozen=True, slots=True)
-class RegisterPage:
-    records: tuple[DecisionRecord, ...]
+class RegisterPage[T: Paged]:
+    records: tuple[T, ...]
     next_cursor: str | None
 
 
-def _digest(value: object) -> str:
+def short_digest(value: object) -> str:
     encoded = json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()[:32]
 
 
 def _record_id(scope: MeetingScope, item: DebriefItem) -> str:
-    return _digest([scope.owner_id, scope.twin_id, scope.meeting_id, item.model_dump(mode="json")])
+    return short_digest(
+        [scope.owner_id, scope.twin_id, scope.meeting_id, item.model_dump(mode="json")]
+    )
+
+
+def _source_fingerprint(
+    record_id: str, scope: MeetingScope, item: DebriefItem, sources: dict[str, EvidenceSource]
+) -> str:
+    return short_digest(
+        [
+            record_id,
+            scope.created_at,
+            [
+                sources[ref.entry_id].model_dump(mode="json") | {"quote": ref.quote}
+                for ref in item.evidence
+            ],
+        ]
+    )
 
 
 def _evidence(
@@ -156,8 +186,9 @@ def records_from_report(scope: MeetingScope, report: DebriefReport) -> tuple[Dec
     sources = {source.id: source for source in report.evidence_sources}
     records: dict[str, DecisionRecord] = {}
     for index, item in enumerate(report.items):
+        record_id = _record_id(scope, item)
         record = DecisionRecord(
-            record_id=_record_id(scope, item),
+            record_id=record_id,
             scope=scope,
             index=index,
             kind=item.kind,
@@ -167,6 +198,7 @@ def records_from_report(scope: MeetingScope, report: DebriefReport) -> tuple[Dec
             due_text=item.due_text,
             evidence=_evidence(item, sources),
             generated_at=report.generated_at,
+            source_fingerprint=_source_fingerprint(record_id, scope, item, sources),
         )
         records.setdefault(record.record_id, record)
     return tuple(records.values())
@@ -221,13 +253,13 @@ class RegisterCursor(BaseModel):
             raise FakeYouError(ErrorCode.INPUT_INVALID, reason="cursor_invalid") from None
 
 
-def results_fingerprint(records: Sequence[DecisionRecord]) -> str:
-    return _digest([record.record_id for record in records])
+def results_fingerprint(records: Sequence[Paged]) -> str:
+    return short_digest([record.page_key for record in records])
 
 
-def register_page(
-    records: Sequence[DecisionRecord], *, cursor: str | None, limit: int, query: str
-) -> RegisterPage:
+def register_page[T: Paged](
+    records: Sequence[T], *, cursor: str | None, limit: int, query: str
+) -> RegisterPage[T]:
     results = results_fingerprint(records)
     after: RegisterPosition | None = None
     if cursor is not None:
