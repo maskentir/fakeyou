@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 from graphiti_core import Graphiti
 from graphiti_core.edges import EntityEdge
+from graphiti_core.embedder.client import EMBEDDING_DIM
 from graphiti_core.nodes import EntityNode, EpisodeType, EpisodicNode
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
@@ -185,7 +186,7 @@ async def test_real_correction_invalidates_original_edges(
 async def test_embedding_dim_mismatch_is_rejected_before_connecting() -> None:
     settings = memory_settings()
     config = settings.model_copy(
-        update={"embedder": settings.embedder.model_copy(update={"dim": 1024})}
+        update={"embedder": settings.embedder.model_copy(update={"dim": EMBEDDING_DIM + 1})}
     )
 
     with pytest.raises(

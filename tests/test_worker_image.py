@@ -1,3 +1,4 @@
+import os
 import shutil
 import subprocess
 import time
@@ -8,10 +9,18 @@ import pytest
 
 from fakeyou.foundation.taxonomy import MeetingPhase
 
+COMPOSE_INTERPOLATION = {
+    "POSTGRES_PASSWORD": "compose-run-dummy",
+    "FAKEYOU_MEMORY__STORE__PASSWORD": "compose-run-dummy",
+}
 GRACEFUL_CHILD = (
     'trap "sleep 2; echo graceful-done; exit 0" TERM; echo child-started; '
     "while :; do sleep 0.2; done"
 )
+
+
+def _compose_environment() -> dict[str, str]:
+    return {**COMPOSE_INTERPOLATION, **os.environ}
 
 
 def _require_worker_image() -> None:
@@ -48,6 +57,7 @@ def test_worker_image_ships_page_script_assets() -> None:
         ],
         capture_output=True,
         text=True,
+        env=_compose_environment(),
     )
     assert "page-assets-ok" in probe.stdout, probe.stdout + probe.stderr
 
@@ -62,6 +72,7 @@ def test_worker_image_waits_for_graceful_shutdown_after_sigint() -> None:
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        env=_compose_environment(),
     )
     output: list[str] = []
     try:
@@ -108,6 +119,7 @@ def test_worker_image_installs_the_postgres_checkpointer() -> None:
         ],
         capture_output=True,
         text=True,
+        env=_compose_environment(),
     )
     assert "pg-checkpointer-ok" in probe.stdout, probe.stdout + probe.stderr
 
@@ -134,6 +146,7 @@ def test_worker_image_ships_the_parec_capture() -> None:
         ],
         capture_output=True,
         text=True,
+        env=_compose_environment(),
     )
     assert "parec-capture-ok" in probe.stdout, probe.stdout + probe.stderr
 
