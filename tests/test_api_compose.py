@@ -198,3 +198,16 @@ def test_api_reaches_neo4j_and_the_embedder_by_service_name(compose: dict[str, A
 
 def test_api_waits_for_neo4j_before_accepting_traffic(compose: dict[str, Any]) -> None:
     assert "neo4j" in compose["services"]["api"]["depends_on"]
+
+
+def test_harness_builds_the_worker_image_the_container_suite_runs(
+    compose: dict[str, Any],
+) -> None:
+    workflow = (ROOT / ".github" / "workflows" / "container.yml").read_text(encoding="utf-8")
+    built = re.findall(r"docker compose(?: --profile \S+)* build (\S+)", workflow)
+
+    assert built == ["worker-sessions"]
+    service = compose["services"]["worker-sessions"]
+    assert service["image"] == "fakeyou-meeting-worker:local"
+    assert service["build"]["dockerfile"] == "docker/audio/Dockerfile"
+    assert service["build"]["target"] == "runtime"

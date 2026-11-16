@@ -32,6 +32,6 @@ jobs:
       - name: Provide a harness env file for Compose
         run: cp .env.example .env
       - name: Build the meeting worker image
-        run: docker compose --profile audio build meeting-worker
+        run: docker compose build worker-sessions
       - name: Run the real-service suites
         run: uv run --no-sync pytest -m "container or postgres" -q
