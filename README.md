@@ -149,6 +149,7 @@ All routes are token-authenticated: `Authorization: Bearer <token>`, owner or ad
 | `GET` | `/v1/jobs/{id}` | One ingestion job's outcome, `pending` until that job settles |
 | `POST` | `/v1/sessions/{id}/debriefs` | Queue a debrief |
 | `GET` | `/v1/sessions/{id}/debrief` | Debrief status and report |
+| `GET` | `/v1/decisions` | Decision register across meetings, with quotes; meeting claims, never approvals |
 | `POST` | `/v1/twins/{id}/reembeddings` | Queue an embedding refresh |
 | `GET` | `/v1/twins/{id}/owner-model` | Active owner model, or `?version=` |
 | `POST` | `/v1/twins/{id}/owner-model` | Add an item |
@@ -159,11 +160,30 @@ All routes are token-authenticated: `Authorization: Bearer <token>`, owner or ad
 | `GET` | `/v1/twins/{id}/owner-model/items/{item}` | Revision history |
 | `GET` | `/v1/twins/{id}/owner-model/proposals` | Learned items awaiting a decision |
 | `POST` | `/v1/twins/{id}/owner-model/proposals/{revision}/approve` | Approve, or `/reject` |
-| `POST` | `/v1/sessions/{id}/forget` | Erase a meeting from memory |
+| `POST` | `/v1/sessions/{id}/forget` | Erase a meeting; `keep_record: true` erases derived memory only |
 | `POST` | `/v1/admin/memory-init` | Create Graphiti indexes |
 | `GET` | `/v1/admin/check` | Effective configuration, masked |
 
 Interactive docs: `http://127.0.0.1:8000/docs`.
+
+The decision register lists what meeting debriefs recorded: decision claims,
+proposals, owner-decision requests, action items and open questions, each with
+its meeting, its quotes and the transcript entries they come from. Filter with
+`meeting_id`, `twin_id`, `kind` and `status`, and page with `limit` and
+`cursor`. Every record is a meeting claim, `owner_approved: false`, whatever it
+says about the owner; approvals live only in the owner model. `attribution` is
+`recorded_label` when the meeting record names a speaker (a caption name, a
+device, a voice match) and `unattributed` when it does not; a recorded label is
+not a verified identity. Two items are separate records when anything in them
+differs, quotes, assignee or due text included; only an exact repeat collapses.
+`meetings` lists every meeting in scope with its debrief status, so a missing or
+stale debrief never reads as a meeting without decisions. A `next_cursor` holds
+only for the same filters and the same register: another filter is refused with
+`cursor_query_mismatch`, a changed debrief or a forgotten meeting with
+`cursor_stale`; start again without a cursor.
+Forgetting with `keep_record: true` erases the meeting from derived memory, the
+graph, and keeps its record and debrief, so it stays in the register;
+`keep_record: false` erases it from the register too.
 
 The owner model is what the twin may stand behind on the owner's behalf:
 positions, preferences, decision rules, style examples, and facts. Owner notes

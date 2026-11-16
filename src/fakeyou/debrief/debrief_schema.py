@@ -23,6 +23,9 @@ def _absent_as_none(value: object) -> object:
 
 
 ClaimText = Annotated[str | None, BeforeValidator(_absent_as_none)]
+ItemKind = Literal["decision_claim", "proposal", "action_item", "open_question", "owner_decision"]
+ItemStatus = Literal["stated", "proposed", "needs_owner", "uncertain"]
+SourceKind = Literal["participant", "twin", "screen", "chat"]
 
 
 class EvidenceRef(BaseModel):
@@ -35,9 +38,9 @@ class EvidenceRef(BaseModel):
 class DebriefItem(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
-    kind: Literal["decision_claim", "proposal", "action_item", "open_question", "owner_decision"]
+    kind: ItemKind
     text: Annotated[str, StringConstraints(min_length=1, max_length=1000)]
-    status: Literal["stated", "proposed", "needs_owner", "uncertain"]
+    status: ItemStatus
     evidence: Annotated[tuple[EvidenceRef, ...], Field(min_length=1, max_length=10)]
     assignee_claim: ClaimText = None
     due_text: ClaimText = None
@@ -95,7 +98,7 @@ class EvidenceSource(BaseModel):
 
     id: Annotated[str, StringConstraints(min_length=1)]
     text: str
-    kind: Literal["participant", "twin", "screen", "chat"]
+    kind: SourceKind
     participant_id: str
     at: AwareDatetime
 

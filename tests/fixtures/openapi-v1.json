@@ -10,6 +10,9 @@
     "/v1/admin/memory-init": [
       "post"
     ],
+    "/v1/decisions": [
+      "get"
+    ],
     "/v1/health": [
       "get"
     ],
@@ -94,6 +97,9 @@
     "DebriefQueued",
     "DebriefSubmit",
     "DebriefView",
+    "DecisionEvidenceView",
+    "DecisionRecordView",
+    "DecisionRegisterView",
     "ForgetMeeting",
     "ForgetStageView",
     "ForgetView",
@@ -101,6 +107,7 @@
     "IngestionSubmit",
     "IngestionView",
     "JobView",
+    "MeetingCoverageView",
     "MemoryInitView",
     "OwnerModelImportBody",
     "OwnerModelImportView",

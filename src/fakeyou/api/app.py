@@ -12,6 +12,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from fakeyou.api.admin import router as admin_router
 from fakeyou.api.auth import Principal, TokenStore, require_admin, require_owner
 from fakeyou.api.debrief import router as debrief_router
+from fakeyou.api.decisions import router as decisions_router
 from fakeyou.api.errors import error_response, http_status_for
 from fakeyou.api.events import router as events_router
 from fakeyou.api.memory import router as memory_router
@@ -132,6 +133,7 @@ def create_app(settings: Settings, deps: ApiDeps | None = None) -> FastAPI:
     app.include_router(events_router)
     app.include_router(memory_router)
     app.include_router(debrief_router)
+    app.include_router(decisions_router)
     app.include_router(admin_router)
     app.include_router(owner_model_router)
 
