@@ -208,7 +208,22 @@ the same twin created strictly before the later one with an available debrief,
 newest first, then their records in that order up to 200. The document is
 validated, bound to a fingerprint of each record's item, quotes, source entries
 and meeting time, and written atomically as `decision-lineage.json` beside the
-later meeting's debrief, replacing that meeting's earlier import.
+later meeting's debrief. Validation and publication run while holding the
+meeting's record lock (`purpose: lineage`), the same lock forget holds: an
+import during a forget, a debrief or another import is refused with
+`decision_lineage.locked` (409) and writes nothing; a forget during an import is
+refused the same way and can be repeated; an import whose meeting was forgotten
+first finds no meeting (404) or no usable debrief (`lineage_source_unavailable`)
+and never recreates its folder. Each published file has a `revision`, the
+first 32 hex characters of the SHA-256 of its bytes, returned by the import and
+shown per meeting as `lineage_revision`. Importing the same comparisons again,
+in any order, returns `outcome: unchanged` and leaves the file and its
+`imported_at` alone. A different document is refused with
+`decision_lineage.exists` (409) unless it carries `replaces` set to the current
+revision, which yields `outcome: replaced`; any other `replaces` is refused with
+`decision_lineage.revision_stale` (409), so of two replacements made from the
+same revision only the first lands. An unreadable file has a revision too and is
+replaced the same way. A failed write leaves the previous file in place.
 `fakeyou decisions lineage RECORD_ID` shows both incoming comparisons (from
 earlier meetings) and outgoing ones (to later meetings) with the other record's
 full evidence. A comparison whose record was forgotten, changed or left without

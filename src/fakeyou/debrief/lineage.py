@@ -1,3 +1,4 @@
+import hashlib
 from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ from fakeyou.debrief.register import (
     DebriefAvailability,
     DecisionRecord,
     DecisionRegister,
+    MeetingCoverage,
     MeetingScope,
     RegisterPosition,
     RegisterQuery,
@@ -28,6 +30,7 @@ from fakeyou.debrief.register import (
     short_digest,
 )
 from fakeyou.persistence.files import write_atomically
+from fakeyou.persistence.ingestion_status import RecordLockError, record_lock
 from fakeyou.persistence.layout import MeetingDir
 
 LINEAGE_SCHEMA_VERSION = "decision_lineage/v1"
@@ -45,6 +48,7 @@ LineageMethod = Literal["manual_curated"]
 LineageAvailability = Literal["available", "missing", "invalid"]
 Direction = Literal["incoming", "outgoing"]
 ComparisonState = Literal["current", "unresolved", "invalidated"]
+LineageOutcome = Literal["created", "unchanged", "replaced"]
 
 _Digest = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{32}$")]
 _Identifier = Annotated[str, StringConstraints(pattern=rf"^{IDENTIFIER_BODY}$", max_length=128)]
@@ -70,6 +74,7 @@ class LineageImport(BaseModel):
     comparisons: Annotated[
         tuple[CuratedComparison, ...], Field(min_length=1, max_length=MAX_COMPARISONS)
     ]
+    replaces: _Digest | None = None
 
 
 class BoundComparison(BaseModel):
@@ -109,6 +114,12 @@ class DecisionLineage(BaseModel):
             raise ValueError("a comparison must span two meetings")
         return self
 
+    def same_comparisons(self, other: "DecisionLineage") -> bool:
+        def ordered(lineage: DecisionLineage) -> list[tuple[str, ...]]:
+            return sorted(tuple(item.model_dump().values()) for item in lineage.comparisons)
+
+        return self.method == other.method and ordered(self) == ordered(other)
+
     def scope_matches(self, scope: MeetingScope) -> bool:
         return (self.owner_id, self.twin_id, self.meeting_id) == (
             scope.owner_id,
@@ -122,6 +133,14 @@ class LineageSource:
     scope: MeetingScope
     availability: LineageAvailability
     lineage: DecisionLineage | None
+    revision: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class LineagePublication:
+    lineage: DecisionLineage
+    revision: str
+    outcome: LineageOutcome
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,6 +182,7 @@ class LineageCoverage:
     scope: MeetingScope
     debrief: DebriefAvailability
     lineage: LineageAvailability
+    lineage_revision: str | None
     source_limitations: tuple[str, ...]
 
 
@@ -293,22 +313,29 @@ def lineage_path(record_path: Path) -> Path:
     return MeetingDir.from_record_path(record_path).decision_lineage
 
 
-def publish_lineage(record_path: Path, lineage: DecisionLineage) -> None:
-    write_atomically(lineage_path(record_path), lineage.model_dump_json().encode("utf-8"))
+def lineage_revision(raw: bytes) -> str:
+    return hashlib.sha256(raw).hexdigest()[:32]
+
+
+def publish_lineage(record_path: Path, lineage: DecisionLineage) -> str:
+    raw = lineage.model_dump_json().encode("utf-8")
+    write_atomically(lineage_path(record_path), raw)
+    return lineage_revision(raw)
 
 
 def read_lineage(scope: MeetingScope, record_path: Path) -> LineageSource:
     try:
         raw = lineage_path(record_path).read_bytes()
     except FileNotFoundError:
-        return LineageSource(scope, "missing", None)
+        return LineageSource(scope, "missing", None, None)
+    revision = lineage_revision(raw)
     try:
         lineage = DecisionLineage.model_validate_json(raw)
     except ValidationError:
-        return LineageSource(scope, "invalid", None)
+        return LineageSource(scope, "invalid", None, revision)
     if not lineage.scope_matches(scope):
-        return LineageSource(scope, "invalid", None)
-    return LineageSource(scope, "available", lineage)
+        return LineageSource(scope, "invalid", None, revision)
+    return LineageSource(scope, "available", lineage, revision)
 
 
 def _relation_id(lineage: DecisionLineage, comparison: BoundComparison) -> str:
@@ -359,6 +386,16 @@ def _resolve(
     return "current", entry
 
 
+def _coverage(coverage: MeetingCoverage, source: LineageSource) -> LineageCoverage:
+    return LineageCoverage(
+        scope=coverage.scope,
+        debrief=coverage.debrief,
+        lineage=source.availability,
+        lineage_revision=source.revision,
+        source_limitations=coverage.source_limitations,
+    )
+
+
 def record_lineage(
     target: DecisionRecord, register: DecisionRegister, sources: Sequence[LineageSource]
 ) -> RecordLineage:
@@ -387,9 +424,7 @@ def record_lineage(
         and record.scope.meeting_id != target.scope.meeting_id
         and record.record_id not in compared
     )
-    lineage_of: dict[str, LineageAvailability] = {
-        source.scope.meeting_id: source.availability for source in sources
-    }
+    lineage_of = {source.scope.meeting_id: source for source in sources}
     return RecordLineage(
         record=target,
         entries=tuple(sorted(entries, key=lambda entry: entry.position)),
@@ -403,11 +438,10 @@ def record_lineage(
             not_compared=not_compared,
         ),
         meetings=tuple(
-            LineageCoverage(
-                scope=coverage.scope,
-                debrief=coverage.debrief,
-                lineage=lineage_of.get(coverage.scope.meeting_id, "missing"),
-                source_limitations=coverage.source_limitations,
+            _coverage(
+                coverage,
+                lineage_of.get(coverage.scope.meeting_id)
+                or LineageSource(coverage.scope, "missing", None, None),
             )
             for coverage in register.meetings
             if same_twin(coverage.scope, target.scope)
@@ -432,6 +466,54 @@ def load_record_lineage(
     return record_lineage(target, register, sources)
 
 
+def _publication_outcome(
+    document: LineageImport, current: LineageSource, *, meeting_id: str
+) -> LineageOutcome:
+    if current.revision is None:
+        if document.replaces is not None:
+            raise FakeYouError(
+                ErrorCode.DECISION_LINEAGE_REVISION_STALE,
+                meeting_id=meeting_id,
+                revision="none",
+                expected=document.replaces,
+            )
+        return "created"
+    if document.replaces is None:
+        raise FakeYouError(
+            ErrorCode.DECISION_LINEAGE_EXISTS, meeting_id=meeting_id, revision=current.revision
+        )
+    if document.replaces != current.revision:
+        raise FakeYouError(
+            ErrorCode.DECISION_LINEAGE_REVISION_STALE,
+            meeting_id=meeting_id,
+            revision=current.revision,
+            expected=document.replaces,
+        )
+    return "replaced"
+
+
+def _import_locked(
+    scopes: Sequence[MeetingScope],
+    record_path_for: Callable[[str], Path],
+    document: LineageImport,
+    *,
+    owner_id: str,
+    imported_at: datetime,
+) -> LineagePublication:
+    register = build_register(scopes, record_path_for, RegisterQuery())
+    lineage = bind_lineage(document, owner_id=owner_id, register=register, imported_at=imported_at)
+    scope = next(item for item in scopes if item.meeting_id == lineage.meeting_id)
+    record_path = record_path_for(lineage.meeting_id)
+    current = read_lineage(scope, record_path)
+    if current.lineage is not None and current.revision is not None:
+        if current.lineage.same_comparisons(lineage):
+            return LineagePublication(current.lineage, current.revision, "unchanged")
+    outcome = _publication_outcome(document, current, meeting_id=lineage.meeting_id)
+    if not MeetingDir.from_record_path(record_path).dir.is_dir():
+        raise FakeYouError(ErrorCode.INPUT_INVALID, reason="lineage_source_unavailable")
+    return LineagePublication(lineage, publish_lineage(record_path, lineage), outcome)
+
+
 def import_lineage(
     scopes: Sequence[MeetingScope],
     record_path_for: Callable[[str], Path],
@@ -439,8 +521,21 @@ def import_lineage(
     *,
     owner_id: str,
     imported_at: datetime,
-) -> DecisionLineage:
-    register = build_register(scopes, record_path_for, RegisterQuery())
-    lineage = bind_lineage(document, owner_id=owner_id, register=register, imported_at=imported_at)
-    publish_lineage(record_path_for(lineage.meeting_id), lineage)
-    return lineage
+) -> LineagePublication:
+    if not any(scope.meeting_id == document.meeting_id for scope in scopes):
+        raise FakeYouError(ErrorCode.API_NOT_FOUND)
+    try:
+        with record_lock(record_path_for(document.meeting_id), purpose="lineage"):
+            return _import_locked(
+                scopes,
+                record_path_for,
+                document,
+                owner_id=owner_id,
+                imported_at=imported_at,
+            )
+    except RecordLockError as error:
+        if error.code is not ErrorCode.RECORD_LOCKED:
+            raise
+        raise FakeYouError(
+            ErrorCode.DECISION_LINEAGE_LOCKED, meeting_id=document.meeting_id
+        ) from None

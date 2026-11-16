@@ -1,5 +1,8 @@
+import dataclasses
 import json
-from collections.abc import AsyncIterator, Callable
+import shutil
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -12,9 +15,16 @@ from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.db.session_status import PhaseUpdate
 from fakeyou.debrief.debrief import read_debrief
-from fakeyou.debrief.lineage import DecisionLineage, lineage_path, publish_lineage
+from fakeyou.debrief.lineage import (
+    DecisionLineage,
+    lineage_path,
+    lineage_revision,
+    publish_lineage,
+)
 from fakeyou.debrief.register import MeetingScope, records_from_report
+from fakeyou.persistence.ingestion_status import record_lock
 from fakeyou.persistence.layout import MeetingDir
+from fakeyou.persistence.lease import LockPurpose
 from tests.test_api_memory import MemoryHarness
 from tests.test_api_sessions import SESSION_PAYLOAD, STATUS_AT
 from tests.test_decisions import FIRST, MEETINGS, OWNER_APPROVAL_CLAIM, SECOND, write_debrief
@@ -186,7 +196,10 @@ async def test_curated_contradiction_is_served_with_both_evidence_trails(
         "method": "manual_curated",
         "imported_at": "2026-10-03T12:00:00Z",
         "comparisons": 1,
+        "revision": lineage_revision(sidecar(api, SECOND).read_bytes()),
+        "outcome": "created",
     }
+    assert later["meetings"][1]["lineage_revision"] == receipt["revision"]
     [incoming] = later["comparisons"]
     [outgoing] = earlier["comparisons"]
     assert later["record"] == views[mysql]
@@ -598,14 +611,26 @@ async def test_refused_import_keeps_the_previous_lineage(api: MemoryHarness) -> 
     assert sidecar(api, SECOND).read_bytes() == stored
 
 
-async def test_reimport_replaces_the_meetings_lineage(api: MemoryHarness) -> None:
+async def test_reimport_with_the_current_revision_replaces_the_lineage(
+    api: MemoryHarness,
+) -> None:
     ids = await seed_two(api)
     mysql = ids[SECOND, MYSQL]
-    await imported(api, curated(SECOND, (ids[FIRST, POSTGRES], mysql, "related_discussion")))
+    first = await imported(
+        api, curated(SECOND, (ids[FIRST, POSTGRES], mysql, "related_discussion"))
+    )
 
-    await imported(api, curated(SECOND, (ids[FIRST, FREEZE], mysql, "potential_supersession")))
+    second = await imported(
+        api,
+        curated(SECOND, (ids[FIRST, FREEZE], mysql, "potential_supersession"))
+        | {"replaces": first["revision"]},
+    )
     body = await lineage(api, mysql)
 
+    assert second["outcome"] == "replaced"
+    assert second["revision"] != first["revision"]
+    assert second["revision"] == lineage_revision(sidecar(api, SECOND).read_bytes())
+    assert body["meetings"][1]["lineage_revision"] == second["revision"]
     assert [item["other"]["text"] for item in body["comparisons"]] == [FREEZE]
 
 
@@ -710,11 +735,15 @@ async def test_lineage_cursor_is_bound_to_its_record_and_result_set(api: MemoryH
     ids = await record_ids(api)
     mysql = ids[SECOND, MYSQL]
     await imported(api, curated(SECOND, (ids[FIRST, POSTGRES], mysql, "potential_contradiction")))
-    await imported(api, curated(THIRD, (mysql, ids[THIRD, MYSQL], "related_discussion")))
+    third = await imported(api, curated(THIRD, (mysql, ids[THIRD, MYSQL], "related_discussion")))
     cursor = (await lineage(api, mysql, "?limit=1"))["next_cursor"]
 
     other = await api.get(f"/v1/decisions/{ids[FIRST, POSTGRES]}/lineage?cursor={cursor}")
-    await imported(api, curated(THIRD, (mysql, ids[THIRD, DIMAS], "related_discussion")))
+    await imported(
+        api,
+        curated(THIRD, (mysql, ids[THIRD, DIMAS], "related_discussion"))
+        | {"replaces": third["revision"]},
+    )
     stale = await api.get(f"/v1/decisions/{mysql}/lineage?cursor={cursor}")
 
     assert other.status_code == stale.status_code == 400
@@ -772,3 +801,197 @@ async def test_failed_write_keeps_the_published_lineage(
 
     assert path.read_bytes() == stored
     assert sorted(item.name for item in path.parent.glob("decision-lineage.json*")) == [path.name]
+
+
+def record_of(api: MemoryHarness, meeting_id: str) -> Path:
+    return MeetingDir(api.settings.paths.record_dir, SessionId(meeting_id)).record
+
+
+async def conflict(api: MemoryHarness, document: dict[str, Any], code: str) -> str:
+    response = await api.put(f"/v1/decisions/lineage/{document['meeting_id']}", json=document)
+    assert response.status_code == 409, response.text
+    error = response.json()["error"]
+    assert error["code"] == code
+    message: str = error["message"]
+    return message
+
+
+async def test_import_while_a_forget_holds_the_meeting_is_refused(api: MemoryHarness) -> None:
+    ids = await seed_two(api)
+    document = curated(SECOND, (ids[FIRST, POSTGRES], ids[SECOND, MYSQL], "related_discussion"))
+
+    with record_lock(record_of(api, SECOND), purpose="forget"):
+        await conflict(api, document, "decision_lineage.locked")
+
+    assert not sidecar(api, SECOND).exists()
+    assert (await imported(api, document))["outcome"] == "created"
+
+
+async def test_forget_while_an_import_holds_the_meeting_keeps_everything(
+    api: MemoryHarness,
+) -> None:
+    ids = await seed_two(api)
+    await imported(
+        api, curated(SECOND, (ids[FIRST, POSTGRES], ids[SECOND, MYSQL], "related_discussion"))
+    )
+    stored = sidecar(api, SECOND).read_bytes()
+    await api.status.record_phase(
+        SECOND, PhaseUpdate("ended", STATUS_AT, terminal_reason="stopped_by_owner")
+    )
+
+    with record_lock(record_of(api, SECOND), purpose="lineage"):
+        refused_forget = await api.post(
+            f"/v1/sessions/{SECOND}/forget", json={"keep_record": False}
+        )
+
+    assert refused_forget.status_code == 500
+    assert refused_forget.json()["error"]["code"] == "record.locked"
+    assert sidecar(api, SECOND).read_bytes() == stored
+    assert record_of(api, SECOND).exists()
+    await forget(api, SECOND, keep_record=False)
+    assert not record_of(api, SECOND).parent.exists()
+
+
+async def test_import_never_recreates_a_meeting_forgotten_before_it_held_the_lock(
+    api: MemoryHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ids = await seed_two(api)
+    meeting_dir = record_of(api, SECOND).parent
+    real_lock = record_lock
+
+    @contextmanager
+    def forgotten_first(record_path: Path, *, purpose: LockPurpose) -> Iterator[str]:
+        shutil.rmtree(meeting_dir)
+        with real_lock(record_path, purpose=purpose) as token:
+            yield token
+
+    monkeypatch.setattr(lineage_module, "record_lock", forgotten_first)
+
+    assert "lineage_source_unavailable" in await refused(
+        api, curated(SECOND, (ids[FIRST, POSTGRES], ids[SECOND, MYSQL], "related_discussion"))
+    )
+    assert not meeting_dir.exists()
+
+
+async def test_import_after_a_completed_forget_finds_no_meeting(api: MemoryHarness) -> None:
+    ids = await seed_two(api)
+    document = curated(SECOND, (ids[FIRST, POSTGRES], ids[SECOND, MYSQL], "related_discussion"))
+    await forget(api, SECOND, keep_record=False)
+
+    response = await api.put(f"/v1/decisions/lineage/{SECOND}", json=document)
+
+    assert response.status_code == 404
+    assert not record_of(api, SECOND).parent.exists()
+
+
+async def test_a_different_import_never_silently_overwrites(api: MemoryHarness) -> None:
+    ids = await seed_two(api)
+    mysql = ids[SECOND, MYSQL]
+    first = await imported(
+        api, curated(SECOND, (ids[FIRST, POSTGRES], mysql, "potential_contradiction"))
+    )
+    stored = sidecar(api, SECOND).read_bytes()
+
+    message = await conflict(
+        api,
+        curated(SECOND, (ids[FIRST, POSTGRES], mysql, "related_discussion")),
+        "decision_lineage.exists",
+    )
+
+    assert first["revision"] in message
+    assert sidecar(api, SECOND).read_bytes() == stored
+
+
+async def test_identical_reimport_is_idempotent(api: MemoryHarness) -> None:
+    ids = await seed_two(api)
+    mysql = ids[SECOND, MYSQL]
+    pairs = (
+        (ids[FIRST, POSTGRES], mysql, "potential_contradiction"),
+        (ids[FIRST, FREEZE], mysql, "no_established_relationship"),
+    )
+    first = await imported(api, curated(SECOND, *pairs))
+    stored = sidecar(api, SECOND).read_bytes()
+    api.app.state.deps = dataclasses.replace(api.app.state.deps, now_iso=lambda: LATEST)
+
+    again = await imported(api, curated(SECOND, *reversed(pairs)))
+    stale_hint = await imported(api, curated(SECOND, *pairs) | {"replaces": "0" * 32})
+
+    assert again == stale_hint == first | {"outcome": "unchanged"}
+    assert sidecar(api, SECOND).read_bytes() == stored
+
+
+async def test_concurrent_replacements_from_one_revision_admit_only_the_first(
+    api: MemoryHarness,
+) -> None:
+    ids = await seed_two(api)
+    mysql = ids[SECOND, MYSQL]
+    base = await imported(api, curated(SECOND, (ids[FIRST, POSTGRES], mysql, "related_discussion")))
+    winner = await imported(
+        api,
+        curated(SECOND, (ids[FIRST, POSTGRES], mysql, "potential_contradiction"))
+        | {"replaces": base["revision"]},
+    )
+    stored = sidecar(api, SECOND).read_bytes()
+
+    message = await conflict(
+        api,
+        curated(SECOND, (ids[FIRST, POSTGRES], mysql, "potential_supersession"))
+        | {"replaces": base["revision"]},
+        "decision_lineage.revision_stale",
+    )
+
+    assert winner["revision"] in message
+    assert sidecar(api, SECOND).read_bytes() == stored
+    [comparison] = (await lineage(api, mysql))["comparisons"]
+    assert comparison["relationship"] == "potential_contradiction"
+
+
+async def test_replacing_a_lineage_that_does_not_exist_is_stale(api: MemoryHarness) -> None:
+    ids = await seed_two(api)
+
+    await conflict(
+        api,
+        curated(SECOND, (ids[FIRST, POSTGRES], ids[SECOND, MYSQL], "related_discussion"))
+        | {"replaces": "a" * 32},
+        "decision_lineage.revision_stale",
+    )
+
+    assert not sidecar(api, SECOND).exists()
+
+
+async def test_an_invalid_sidecar_is_replaced_only_by_its_revision(api: MemoryHarness) -> None:
+    ids = await seed_two(api)
+    mysql = ids[SECOND, MYSQL]
+    sidecar(api, SECOND).write_bytes(b"\x00not json")
+    document = curated(SECOND, (ids[FIRST, POSTGRES], mysql, "related_discussion"))
+    revision = (await lineage(api, mysql))["meetings"][1]["lineage_revision"]
+
+    await conflict(api, document, "decision_lineage.exists")
+    replaced = await imported(api, document | {"replaces": revision})
+
+    assert revision == lineage_revision(b"\x00not json")
+    assert replaced["outcome"] == "replaced"
+
+
+async def test_failed_replacement_keeps_the_sidecar_and_releases_the_lock(
+    api: MemoryHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ids = await seed_two(api)
+    mysql = ids[SECOND, MYSQL]
+    base = await imported(api, curated(SECOND, (ids[FIRST, POSTGRES], mysql, "related_discussion")))
+    stored = sidecar(api, SECOND).read_bytes()
+    replacement = curated(SECOND, (ids[FIRST, FREEZE], mysql, "related_discussion")) | {
+        "replaces": base["revision"]
+    }
+
+    def refuse_replace(*_args: object) -> None:
+        raise OSError("disk full")
+
+    with monkeypatch.context() as patched:
+        patched.setattr("fakeyou.persistence.files.os.replace", refuse_replace)
+        with pytest.raises(OSError, match="disk full"):
+            await api.put(f"/v1/decisions/lineage/{SECOND}", json=replacement)
+
+    assert sidecar(api, SECOND).read_bytes() == stored
+    assert not MeetingDir(api.settings.paths.record_dir, SessionId(SECOND)).lock.exists()
+    assert (await imported(api, replacement))["outcome"] == "replaced"

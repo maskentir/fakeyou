@@ -127,6 +127,8 @@ def test_exit_code_classification_is_deliberate() -> None:
         ErrorCode.CONFIG_UNKNOWN_KEY,
         ErrorCode.CONFIG_PERCEPTION_BASE_URL_REQUIRED,
         ErrorCode.DATABASE_URL_MISSING,
+        ErrorCode.DECISION_LINEAGE_EXISTS,
+        ErrorCode.DECISION_LINEAGE_REVISION_STALE,
         ErrorCode.DATABASE_URL_SCHEME,
         ErrorCode.DEBRIEF_CONTEXT_INVALID,
         ErrorCode.DEBRIEF_CONTEXT_TOO_LARGE,

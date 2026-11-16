@@ -21,6 +21,7 @@ from fakeyou.debrief.lineage import (
     LineageEntry,
     LineageImport,
     LineageMethod,
+    LineageOutcome,
     Relationship,
     import_lineage,
     load_record_lineage,
@@ -213,6 +214,7 @@ class LineageMeetingView(BaseModel):
     meeting_created_at: str
     debrief: DebriefAvailability
     lineage: LineageAvailability
+    lineage_revision: str | None
     source_limitations: tuple[str, ...]
 
     @classmethod
@@ -222,6 +224,7 @@ class LineageMeetingView(BaseModel):
             meeting_created_at=coverage.scope.created_at,
             debrief=coverage.debrief,
             lineage=coverage.lineage,
+            lineage_revision=coverage.lineage_revision,
             source_limitations=coverage.source_limitations,
         )
 
@@ -244,6 +247,8 @@ class LineageImported(BaseModel):
     method: LineageMethod
     imported_at: AwareDatetime
     comparisons: int
+    revision: str
+    outcome: LineageOutcome
 
 
 router = APIRouter(prefix="/v1/decisions", tags=["decisions"])
@@ -345,7 +350,7 @@ async def import_decision_lineage(
     owner_id = _owner_id(principal)
     if document.meeting_id != meeting_id:
         raise FakeYouError(ErrorCode.INPUT_INVALID, reason="lineage_scope_mismatch")
-    lineage = await asyncio.to_thread(
+    publication = await asyncio.to_thread(
         import_lineage,
         await _scopes(store, owner_id),
         _record_paths(request),
@@ -353,10 +358,13 @@ async def import_decision_lineage(
         owner_id=owner_id,
         imported_at=_now(request),
     )
+    lineage = publication.lineage
     return LineageImported(
         meeting_id=lineage.meeting_id,
         twin_id=lineage.twin_id,
         method=lineage.method,
         imported_at=lineage.imported_at,
         comparisons=len(lineage.comparisons),
+        revision=publication.revision,
+        outcome=publication.outcome,
     )

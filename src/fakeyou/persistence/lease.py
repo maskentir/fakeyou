@@ -8,12 +8,12 @@ from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, ExitStack, contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.foundation.timeparse import is_aware, require_iso_datetime
 
-LockPurpose = Literal["meeting", "ingestion", "forget", "debrief", "diarization"]
+LockPurpose = Literal["meeting", "ingestion", "forget", "debrief", "diarization", "lineage"]
 LeaseState = Literal["absent", "live", "stale", "corrupt"]
 
 LOCK_STALE_AFTER_SECONDS = 60.0
@@ -51,7 +51,7 @@ def _parse_owner(raw: bytes) -> dict[str, Any] | None:
     token = data.get("token")
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return None
-    if purpose not in ("meeting", "ingestion", "forget", "debrief", "diarization"):
+    if purpose not in get_args(LockPurpose):
         return None
     if not isinstance(token, str) or not token:
         return None
