@@ -1,7 +1,6 @@
 import asyncio
 import json
 import time
-import uuid
 from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
@@ -30,6 +29,7 @@ from fakeyou.debrief.debrief_sources import (
     load_record_snapshot,
     voice_speaker_labels,
 )
+from fakeyou.debrief.register import is_anonymous_speaker
 from fakeyou.diarization.correction_labels import describe_correction_speakers
 from fakeyou.diarization.diarize_correction import correction_digest
 from fakeyou.observability.journal import Journal, JournalFile, journal_path
@@ -344,16 +344,6 @@ def _outcome(record_path: Path, *, cached: bool) -> DebriefOutcome:
     )
 
 
-def _is_anonymous(participant_id: str) -> bool:
-    if participant_id == "unknown":
-        return True
-    try:
-        parsed = uuid.UUID(participant_id)
-    except ValueError:
-        return False
-    return str(parsed) == participant_id.lower()
-
-
 def _correction_speakers(record_path: Path, sources: Sequence[SourceEntry]) -> list[str]:
     names = describe_correction_speakers(record_path)
     speakers: list[str] = []
@@ -379,7 +369,7 @@ def _source_limitations(
     ]
     if context is None:
         limitations.append("No historical meeting brief is available; objectives are unavailable.")
-    if any(_is_anonymous(entry.participant_id) for entry in snapshot.sources):
+    if any(is_anonymous_speaker(entry.participant_id) for entry in snapshot.sources):
         limitations.append("Unknown participants have not been identified or mapped to the owner.")
     voice_labels = voice_speaker_labels(snapshot.sources)
     if voice_labels:

@@ -149,6 +149,7 @@ All routes are token-authenticated: `Authorization: Bearer <token>`, owner or ad
 | `GET` | `/v1/jobs/{id}` | One ingestion job's outcome, `pending` until that job settles |
 | `POST` | `/v1/sessions/{id}/debriefs` | Queue a debrief |
 | `GET` | `/v1/sessions/{id}/debrief` | Debrief status and report |
+| `GET` | `/v1/decisions` | Decision register across meetings: every debrief item with its quotes, filtered by `meeting_id`, `twin_id`, `kind`, `status`; paged with `limit` and `cursor`. Items are meeting claims, never owner approvals |
 | `POST` | `/v1/twins/{id}/reembeddings` | Queue an embedding refresh |
 | `GET` | `/v1/twins/{id}/owner-model` | Active owner model, or `?version=` |
 | `POST` | `/v1/twins/{id}/owner-model` | Add an item |

@@ -1,0 +1,69 @@
+{
+  "meetings": [
+    {
+      "meeting_id": "arch-review-1",
+      "transcript": [
+        {"id": "e1", "participant_id": "rina", "text": "We decided to move the billing service to Postgres 17 this quarter."},
+        {"id": "e2", "participant_id": "unknown", "text": "I propose we freeze schema changes until the migration is done."},
+        {"id": "e3", "participant_id": "budi", "text": "The owner already approved the extra budget for the migration."},
+        {"id": "e4", "participant_id": "rina", "text": "Who owns the rollback plan?"}
+      ],
+      "items": [
+        {
+          "kind": "decision_claim",
+          "status": "stated",
+          "text": "The billing service moves to Postgres 17 this quarter.",
+          "evidence": [{"entry_id": "transcript:e1", "quote": "move the billing service to Postgres 17"}]
+        },
+        {
+          "kind": "proposal",
+          "status": "proposed",
+          "text": "Freeze schema changes until the migration is done.",
+          "evidence": [{"entry_id": "transcript:e2", "quote": "freeze schema changes until the migration is done"}]
+        },
+        {
+          "kind": "decision_claim",
+          "status": "stated",
+          "text": "The owner approved the extra migration budget.",
+          "evidence": [{"entry_id": "transcript:e3", "quote": "owner already approved the extra budget"}]
+        },
+        {
+          "kind": "open_question",
+          "status": "stated",
+          "text": "Who owns the rollback plan?",
+          "evidence": [{"entry_id": "transcript:e4", "quote": "Who owns the rollback plan?"}]
+        }
+      ]
+    },
+    {
+      "meeting_id": "arch-review-2",
+      "transcript": [
+        {"id": "e1", "participant_id": "budi", "text": "We decided to keep the billing service on MySQL for now."},
+        {"id": "e2", "participant_id": "rina", "text": "Dimas will write the rollback plan by Friday."},
+        {"id": "e3", "participant_id": "unknown", "text": "The owner needs to decide whether we pay for the managed database."}
+      ],
+      "items": [
+        {
+          "kind": "decision_claim",
+          "status": "stated",
+          "text": "The billing service stays on MySQL for now.",
+          "evidence": [{"entry_id": "transcript:e1", "quote": "keep the billing service on MySQL for now"}]
+        },
+        {
+          "kind": "action_item",
+          "status": "stated",
+          "text": "Dimas writes the rollback plan.",
+          "assignee_claim": "Dimas",
+          "due_text": "Friday",
+          "evidence": [{"entry_id": "transcript:e2", "quote": "Dimas will write the rollback plan by Friday"}]
+        },
+        {
+          "kind": "owner_decision",
+          "status": "needs_owner",
+          "text": "Decide whether to pay for the managed database.",
+          "evidence": [{"entry_id": "transcript:e3", "quote": "owner needs to decide whether we pay for the managed database"}]
+        }
+      ]
+    }
+  ]
+}
