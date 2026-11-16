@@ -7,7 +7,9 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.debrief.debrief import debrief_report_status, read_debrief
@@ -22,6 +24,7 @@ from fakeyou.debrief.debrief_schema import (
 )
 
 DebriefAvailability = Literal["available", "stale", "missing", "invalid"]
+Attribution = Literal["recorded_label", "unattributed"]
 RegisterPosition = tuple[str, str, int]
 
 
@@ -49,7 +52,7 @@ class RegisterEvidence:
     quote: str
     source_kind: SourceKind
     participant_id: str
-    speaker_identified: bool
+    attribution: Attribution
     at: datetime
 
 
@@ -95,6 +98,9 @@ class RegisterQuery:
     def selects(self, record: DecisionRecord) -> bool:
         return self.kind in {None, record.kind} and self.status in {None, record.status}
 
+    def fingerprint(self, owner_id: str) -> str:
+        return _digest([owner_id, self.meeting_id, self.twin_id, self.kind, self.status])
+
 
 @dataclass(frozen=True, slots=True)
 class DecisionRegister:
@@ -108,20 +114,13 @@ class RegisterPage:
     next_cursor: str | None
 
 
+def _digest(value: object) -> str:
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:32]
+
+
 def _record_id(scope: MeetingScope, item: DebriefItem) -> str:
-    identity = json.dumps(
-        [
-            scope.owner_id,
-            scope.twin_id,
-            scope.meeting_id,
-            item.kind,
-            item.status,
-            item.text,
-            [ref.entry_id for ref in item.evidence],
-        ],
-        ensure_ascii=False,
-    )
-    return hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
+    return _digest([scope.owner_id, scope.twin_id, scope.meeting_id, item.model_dump(mode="json")])
 
 
 def _evidence(
@@ -138,7 +137,9 @@ def _evidence(
                 quote=ref.quote,
                 source_kind=source.kind,
                 participant_id=source.participant_id,
-                speaker_identified=not is_anonymous_speaker(source.participant_id),
+                attribution="unattributed"
+                if is_anonymous_speaker(source.participant_id)
+                else "recorded_label",
                 at=source.at,
             )
         )
@@ -202,25 +203,43 @@ def build_register(
     return DecisionRegister(tuple(records), tuple(meetings))
 
 
-def _cursor(position: RegisterPosition) -> str:
-    return base64.urlsafe_b64encode(json.dumps(position).encode("utf-8")).decode("ascii")
+class RegisterCursor(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    after: tuple[str, str, int]
+    query: Annotated[str, Field(pattern=r"^[0-9a-f]{32}$")]
+    results: Annotated[str, Field(pattern=r"^[0-9a-f]{32}$")]
+
+    def encode(self) -> str:
+        return base64.urlsafe_b64encode(self.model_dump_json().encode("utf-8")).decode("ascii")
+
+    @classmethod
+    def decode(cls, cursor: str) -> "RegisterCursor":
+        try:
+            return cls.model_validate_json(base64.urlsafe_b64decode(cursor.encode("ascii")))
+        except (binascii.Error, UnicodeError, ValidationError):
+            raise FakeYouError(ErrorCode.INPUT_INVALID, reason="cursor_invalid") from None
 
 
-def _position(cursor: str) -> RegisterPosition:
-    try:
-        created_at, meeting_id, index = json.loads(base64.urlsafe_b64decode(cursor.encode("ascii")))
-    except (binascii.Error, UnicodeError, ValueError, TypeError):
-        raise FakeYouError(ErrorCode.INPUT_INVALID, reason="cursor_invalid") from None
-    if not (isinstance(created_at, str) and isinstance(meeting_id, str) and type(index) is int):
-        raise FakeYouError(ErrorCode.INPUT_INVALID, reason="cursor_invalid")
-    return (created_at, meeting_id, index)
+def results_fingerprint(records: Sequence[DecisionRecord]) -> str:
+    return _digest([record.record_id for record in records])
 
 
 def register_page(
-    records: Sequence[DecisionRecord], *, cursor: str | None, limit: int
+    records: Sequence[DecisionRecord], *, cursor: str | None, limit: int, query: str
 ) -> RegisterPage:
-    after = None if cursor is None else _position(cursor)
+    results = results_fingerprint(records)
+    after: RegisterPosition | None = None
+    if cursor is not None:
+        decoded = RegisterCursor.decode(cursor)
+        if decoded.query != query:
+            raise FakeYouError(ErrorCode.INPUT_INVALID, reason="cursor_query_mismatch")
+        if decoded.results != results:
+            raise FakeYouError(ErrorCode.INPUT_INVALID, reason="cursor_stale")
+        after = decoded.after
     remaining = [record for record in records if after is None or record.position > after]
     page = tuple(remaining[:limit])
-    more = len(remaining) > limit
-    return RegisterPage(page, _cursor(page[-1].position) if more else None)
+    if len(remaining) <= limit:
+        return RegisterPage(page, None)
+    following = RegisterCursor(after=page[-1].position, query=query, results=results)
+    return RegisterPage(page, following.encode())

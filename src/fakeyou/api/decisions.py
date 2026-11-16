@@ -11,6 +11,7 @@ from fakeyou.config.identifiers import IDENTIFIER_BODY, parse_session_id
 from fakeyou.config.settings import Settings
 from fakeyou.debrief.debrief_schema import ItemKind, ItemStatus, SourceKind
 from fakeyou.debrief.register import (
+    Attribution,
     DebriefAvailability,
     DecisionRecord,
     MeetingCoverage,
@@ -49,7 +50,7 @@ class DecisionEvidenceView(BaseModel):
     quote: str
     source_kind: SourceKind
     participant_id: str
-    speaker_identified: bool
+    attribution: Attribution
     at: AwareDatetime
 
     @classmethod
@@ -59,7 +60,7 @@ class DecisionEvidenceView(BaseModel):
             quote=evidence.quote,
             source_kind=evidence.source_kind,
             participant_id=evidence.participant_id,
-            speaker_identified=evidence.speaker_identified,
+            attribution=evidence.attribution,
             at=evidence.at,
         )
 
@@ -168,7 +169,12 @@ async def list_decisions(
         ),
         filters.query(),
     )
-    page = register_page(register.records, cursor=filters.cursor, limit=filters.limit)
+    page = register_page(
+        register.records,
+        cursor=filters.cursor,
+        limit=filters.limit,
+        query=filters.query().fingerprint(principal.owner_id),
+    )
     return DecisionRegisterView(
         records=tuple(DecisionRecordView.of(record) for record in page.records),
         meetings=tuple(MeetingCoverageView.of(coverage) for coverage in register.meetings),

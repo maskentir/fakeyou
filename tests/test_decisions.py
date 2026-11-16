@@ -221,7 +221,7 @@ async def test_unresolved_proposal_is_not_an_accepted_decision(api: MemoryHarnes
     }
 
 
-async def test_unidentified_speaker_is_reported_as_uncertain_attribution(
+async def test_attribution_is_the_recorded_label_never_a_verified_identity(
     api: MemoryHarness,
 ) -> None:
     seed_two_meetings(api)
@@ -230,12 +230,16 @@ async def test_unidentified_speaker_is_reported_as_uncertain_attribution(
     proposal = by_text(body, "Freeze schema changes until the migration is done.")
     action = by_text(body, "Dimas writes the rollback plan.")
 
-    assert [
-        (item["participant_id"], item["speaker_identified"]) for item in proposal["evidence"]
-    ] == [("unknown", False)]
-    assert [
-        (item["participant_id"], item["speaker_identified"]) for item in action["evidence"]
-    ] == [("rina", True)]
+    assert [(item["participant_id"], item["attribution"]) for item in proposal["evidence"]] == [
+        ("unknown", "unattributed")
+    ]
+    assert [(item["participant_id"], item["attribution"]) for item in action["evidence"]] == [
+        ("rina", "recorded_label")
+    ]
+    assert {
+        evidence["attribution"] for record in body["records"] for evidence in record["evidence"]
+    } <= {"recorded_label", "unattributed"}
+    assert "identified" not in json.dumps(body)
     assert (action["assignee_claim"], action["due_text"]) == ("Dimas", "Friday")
     assert body["meetings"][0]["source_limitations"] == ["Unknown attribution."]
 
@@ -453,19 +457,83 @@ async def test_pages_are_stable_complete_and_do_not_overlap(api: MemoryHarness) 
     assert (await register(api, "?limit=7"))["next_cursor"] is None
 
 
-async def test_page_after_a_forgotten_meeting_continues_without_repeating(
+async def rejected_reason(api: MemoryHarness, query: str) -> str:
+    response = await api.get(f"/v1/decisions{query}")
+    assert response.status_code == 400, response.text
+    error = response.json()["error"]
+    assert error["code"] == "input.invalid"
+    reason: str = error["message"]
+    return reason
+
+
+async def test_cursor_from_another_filter_is_refused(api: MemoryHarness) -> None:
+    seed_two_meetings(api)
+    cursor = (await register(api, "?limit=2"))["next_cursor"]
+
+    for query in ("?kind=decision_claim", f"?meeting_id={FIRST}", "?status=stated"):
+        assert "cursor_query_mismatch" in await rejected_reason(
+            api, f"{query}&limit=2&cursor={cursor}"
+        )
+    assert len((await register(api, f"?limit=50&cursor={cursor}"))["records"]) == 5
+
+
+async def test_cursor_after_a_changed_debrief_is_stale(api: MemoryHarness) -> None:
+    seed_two_meetings(api)
+    cursor = (await register(api, "?limit=2"))["next_cursor"]
+
+    write_debrief(api, FIRST, items=MEETINGS[FIRST]["items"][:3])
+
+    assert "cursor_stale" in await rejected_reason(api, f"?limit=2&cursor={cursor}")
+
+
+async def test_cursor_survives_a_debrief_regenerated_with_the_same_items(
     api: MemoryHarness,
 ) -> None:
     seed_two_meetings(api)
+    everything = [item["record_id"] for item in (await register(api))["records"]]
     first = await register(api, "?limit=2")
+
+    write_debrief(api, FIRST)
+    rest = await register(api, f"?limit=50&cursor={first['next_cursor']}")
+
+    assert [item["record_id"] for item in [*first["records"], *rest["records"]]] == everything
+
+
+async def test_cursor_after_a_forgotten_meeting_is_stale(api: MemoryHarness) -> None:
+    seed_two_meetings(api)
+    cursor = (await register(api, "?limit=2"))["next_cursor"]
     await api.status.record_phase(
         FIRST, PhaseUpdate("ended", STATUS_AT, terminal_reason="stopped_by_owner")
     )
     await api.post(f"/v1/sessions/{FIRST}/forget", json={"keep_record": False})
 
-    rest = await register(api, f"?limit=50&cursor={first['next_cursor']}")
+    assert "cursor_stale" in await rejected_reason(api, f"?limit=2&cursor={cursor}")
 
-    assert [item["meeting_id"] for item in rest["records"]] == [SECOND, SECOND, SECOND]
+
+async def test_forget_keeping_the_record_removes_derived_memory_only(
+    api: MemoryHarness,
+) -> None:
+    seed_two_meetings(api)
+    before = await register(api, f"?meeting_id={FIRST}")
+    await api.status.record_phase(
+        FIRST, PhaseUpdate("ended", STATUS_AT, terminal_reason="stopped_by_owner")
+    )
+
+    forgotten = await api.post(f"/v1/sessions/{FIRST}/forget", json={"keep_record": True})
+    after = await register(api, f"?meeting_id={FIRST}")
+
+    assert forgotten.status_code == 200
+    stages = {stage["stage"]: stage["status"] for stage in forgotten.json()["stages"]}
+    assert stages.pop("graph") != "kept"
+    assert stages == {
+        "record": "kept",
+        "journal": "kept",
+        "browser_profile": "kept",
+        "status": "kept",
+    }
+    assert MeetingDir(api.settings.paths.record_dir, SessionId(FIRST)).record.exists()
+    assert after == before
+    assert after["meetings"][0]["debrief"] == "available"
 
 
 @pytest.mark.parametrize(
@@ -482,4 +550,73 @@ async def test_unreadable_query_is_rejected(api: MemoryHarness, query: str) -> N
 
 def test_cursor_that_is_not_a_register_position_is_refused() -> None:
     with pytest.raises(FakeYouError, match="cursor_invalid"):
-        register_page((), cursor="bm90LWpzb24=", limit=10)
+        register_page((), cursor="bm90LWpzb24=", limit=10, query="0" * 32)
+
+
+def same_line_item(**changes: Any) -> dict[str, Any]:
+    return {
+        "kind": "action_item",
+        "status": "stated",
+        "text": "Dimas writes the rollback plan.",
+        "assignee_claim": "Dimas",
+        "due_text": "Friday",
+        "evidence": [
+            {"entry_id": "transcript:e2", "quote": "Dimas will write the rollback plan by Friday"}
+        ],
+    } | changes
+
+
+async def test_items_differing_only_in_quotes_are_separate_records(api: MemoryHarness) -> None:
+    claim = {
+        "kind": "decision_claim",
+        "status": "stated",
+        "text": "The billing service moves to Postgres 17 this quarter.",
+    }
+    whole = claim | {
+        "evidence": [
+            {"entry_id": "transcript:e1", "quote": "move the billing service to Postgres 17"}
+        ]
+    }
+    narrower = claim | {
+        "evidence": [{"entry_id": "transcript:e1", "quote": "Postgres 17 this quarter"}]
+    }
+    seed_meeting(api, FIRST, items=[whole, narrower, whole])
+
+    body = await register(api)
+
+    assert [record["evidence"][0]["quote"] for record in body["records"]] == [
+        "move the billing service to Postgres 17",
+        "Postgres 17 this quarter",
+    ]
+    assert len({record["record_id"] for record in body["records"]}) == 2
+
+
+async def test_items_differing_only_in_assignee_or_due_are_separate_records(
+    api: MemoryHarness,
+) -> None:
+    items = [
+        same_line_item(),
+        same_line_item(due_text=None),
+        same_line_item(assignee_claim=None, due_text=None),
+        same_line_item(),
+    ]
+    seed_meeting(api, SECOND, items=items)
+
+    body = await register(api)
+
+    assert [(item["assignee_claim"], item["due_text"]) for item in body["records"]] == [
+        ("Dimas", "Friday"),
+        ("Dimas", None),
+        (None, None),
+    ]
+    assert len({record["record_id"] for record in body["records"]}) == 3
+
+
+async def test_the_same_item_in_another_meeting_is_another_record(api: MemoryHarness) -> None:
+    seed_meeting(api, SECOND, items=[same_line_item()])
+    seed_meeting(api, "arch-review-3", fixture=SECOND, items=[same_line_item()])
+
+    body = await register(api)
+
+    assert [item["meeting_id"] for item in body["records"]] == [SECOND, "arch-review-3"]
+    assert len({record["record_id"] for record in body["records"]}) == 2
