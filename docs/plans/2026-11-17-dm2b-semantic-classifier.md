@@ -304,7 +304,9 @@ into. It contains no live provider adapter.
     candidate (`invalid_output`)
   - a duplicate candidate
   - a candidate missing from the output (`not_returned`)
-  - evidence that is empty or not the claim's own (`evidence_invalid`)
+  - evidence that is not the claim's own, or missing on either side of a
+    relationship; `no_established_relationship` may cite nothing, or valid ids on
+    both sides (`evidence_invalid`, validator v2 since the pilot #1 postmortem)
   - supersession without a strict time order (`order_unverified`)
   - supersession touching an `owner_decision` (`approval_authority`)
 

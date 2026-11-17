@@ -1,0 +1,66 @@
+{
+  "experiment": "dm2b-pilot-1",
+  "status": "PILOT COMPLETE; CLASSIFIER QUALITY NO-GO",
+  "immutable": "The originals stay read-only under .runtime/lineage-pilot/ on the executing machine. The committed cassette and original report are byte-identical copies; the live report is not committed because it holds a local path.",
+  "execution": {
+    "approval_id": "dm2b-pilot-2026-11-17",
+    "approval_sha256": "ced6938703a27eaaede6fd2740022572f6454131dcb8edc859ca963fa3af1b12",
+    "head": "a1a4b71d7aa91931309ef2c510443f1e936e4661",
+    "plan_sha256": "95c7a0239aee4d5da0156d9d62a16301d5a08607514a3d7254f1c64119743435",
+    "dataset_sha256": "c21028a38e5c1c322c518647bf9a39a1dd9ee76e342956c6756ab295d3edea3a",
+    "split_sha256": "d7842095cb9cec52514ae2d81c24387e2f9b7bf5870070beafd1edeb4728a833",
+    "provider": "google",
+    "model": "gemini-3.8-flash",
+    "service_tier": "standard",
+    "thinking_level": "low",
+    "claimed_at": "2026-11-17T02:05:52.732378+00:00",
+    "finished_at": "2026-11-17T02:07:33.138957+00:00",
+    "receipt_outcome": "completed",
+    "attempts": 21,
+    "failed_attempts": 0,
+    "input_tokens": 28396,
+    "output_tokens": 10402,
+    "thinking_tokens": 274,
+    "accounted_spend_usd": 0.060304,
+    "billing_reconciled": false
+  },
+  "original_gate_failures": [
+    "related_discussion precision 0.8 < 0.85",
+    "potential_supersession precision 0.5714285714285714 < 0.9",
+    "potential_contradiction recall 0.2 < 0.7",
+    "no_established_relationship recall 0.4 < 0.8",
+    "answered coverage 0.778"
+  ],
+  "artifacts": {
+    "cassette": {
+      "original": ".runtime/lineage-pilot/dm2b-pilot-2026-11-17.jsonl",
+      "committed": "cassette.jsonl",
+      "sha256": "4ea14f01a29729ea740ba42e7d8e579a6802d45f967cfd09738d5eed180a276a"
+    },
+    "original_report": {
+      "original": ".runtime/lineage-pilot/dm2b-pilot-2026-11-17.replay.json",
+      "committed": "original-report.json",
+      "sha256": "dde22bed251c36e8651f84c43095702a5e9563732f32699d6d3dbe1457ea47d1"
+    },
+    "live_report": {
+      "original": ".runtime/lineage-pilot/dm2b-pilot-2026-11-17.report.json",
+      "committed": null,
+      "sha256": "c01fd4cff9590c7de3c949b3cab7b4f6b86244d8d133bfd7a9abc560f6130c5f"
+    },
+    "stderr": {
+      "original": ".runtime/lineage-pilot/dm2b-pilot-2026-11-17.stderr",
+      "committed": null,
+      "sha256": "933e35ea6298ffefa3f98d1c1d6fd4babecfbe0bc6cea41b2e2cda247b0abb1a"
+    },
+    "receipt": {
+      "original": ".runtime/lineage-pilot/receipts/dm2b-pilot-2026-11-17.json",
+      "committed": null,
+      "sha256": "364b03a57c5e20a46907d30375138f9f1feb7165e0edeff9d9da22b5724ef2cb"
+    },
+    "approval": {
+      "original": ".runtime/lineage-pilot/approvals/dm2b_pilot_approval_2026-11-17.json",
+      "committed": null,
+      "sha256": "80ae48c60aa51f4ee970380417da793298cd0a54ad7e58cd70ed7b56d61901be"
+    }
+  }
+}

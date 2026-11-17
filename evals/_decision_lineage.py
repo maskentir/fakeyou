@@ -326,13 +326,16 @@ def _indexed(predictions: PredictionSet, pairs: Sequence[ResolvedPair]) -> dict[
     return indexed
 
 
-def evidence_is_valid(resolved: ResolvedPair, evidence: SidedEvidence) -> bool:
-    return (
-        bool(evidence.first)
-        and bool(evidence.second)
-        and set(evidence.first) <= resolved.first.valid_entries
+def evidence_is_valid(resolved: ResolvedPair, prediction: "Prediction") -> bool:
+    evidence = prediction.evidence
+    if not (
+        set(evidence.first) <= resolved.first.valid_entries
         and set(evidence.second) <= resolved.second.valid_entries
-    )
+    ):
+        return False
+    if prediction.label == "no_established_relationship":
+        return bool(evidence.first) == bool(evidence.second)
+    return bool(evidence.first) and bool(evidence.second)
 
 
 def _share(hits: int, total: int) -> float:
@@ -353,7 +356,11 @@ class SelectionScore:
 
 
 def evidence_selection(answered: Sequence[tuple[ResolvedPair, "Prediction"]]) -> SelectionScore:
-    judged = [(resolved, item) for resolved, item in answered if selects_evidence(resolved)]
+    judged = [
+        (resolved, item)
+        for resolved, item in answered
+        if selects_evidence(resolved) and item.label in RELATIONSHIPS
+    ]
     if not judged:
         return SelectionScore(0, None, None)
     sufficient = cited = relevant = 0
@@ -416,8 +423,7 @@ def score(predictions: PredictionSet, pairs: Sequence[ResolvedPair]) -> LineageS
             answerable,
         ),
         evidence_validity=(
-            sum(evidence_is_valid(resolved, item.evidence) for resolved, item in answered)
-            / len(answered)
+            sum(evidence_is_valid(resolved, item) for resolved, item in answered) / len(answered)
             if answered
             else None
         ),
