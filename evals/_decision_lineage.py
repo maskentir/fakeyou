@@ -5,7 +5,7 @@ import math
 import re
 import sys
 from collections import Counter
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Annotated, Literal, get_args
@@ -642,11 +642,19 @@ RetrievalExclusion = Literal["broken_evidence", "not_strictly_earlier", "outside
 RETRIEVAL_DEPTHS = (5, 10)
 
 
-def dataset_register(dataset: LineageDataset) -> DecisionRegister:
+def dataset_register(
+    dataset: LineageDataset, claims: Collection[str] | None = None
+) -> DecisionRegister:
     records: list[DecisionRecord] = []
     meetings: list[MeetingCoverage] = []
     for meeting in sorted(dataset.meetings, key=lambda item: (item.created_at, item.meeting_id)):
-        found = [record for record in meeting_records(dataset, meeting).values() if record]
+        if claims is not None and not any(item.key in claims for item in meeting.items):
+            continue
+        found = [
+            record
+            for key, record in meeting_records(dataset, meeting).items()
+            if record and (claims is None or key in claims)
+        ]
         scope = MeetingScope(
             owner_id=dataset.owner_id,
             twin_id=dataset.twin_id,
@@ -697,8 +705,12 @@ def _exclusion(
     return None
 
 
-def candidate_retrieval(dataset: LineageDataset, pairs: Sequence[ResolvedPair]) -> RetrievalResult:
-    register = dataset_register(dataset)
+def candidate_retrieval(
+    dataset: LineageDataset,
+    pairs: Sequence[ResolvedPair],
+    claims: Collection[str] | None = None,
+) -> RetrievalResult:
+    register = dataset_register(dataset, claims)
     by_id = {record.record_id: record for record in register.records}
     index = LexicalIndex([retrieval_text(record) for record in register.records])
     cached: dict[str, frozenset[str]] = {}
@@ -801,6 +813,12 @@ def partition_pairs(
     return {name: tuple(members) for name, members in groups.items()}
 
 
+def partition_claims(split: LineageSplit, partition: Partition) -> frozenset[str]:
+    return frozenset(
+        claim for claim, owner in split.claim_partitions().items() if owner == partition
+    )
+
+
 def describe(pairs: Sequence[ResolvedPair]) -> dict[str, object]:
     return {
         "pairs": len(pairs),
@@ -901,8 +919,22 @@ def _split_command(arguments: argparse.Namespace) -> int:
 
 def _retrieval_command(arguments: argparse.Namespace) -> int:
     dataset = load_dataset(arguments.dataset)
-    result = candidate_retrieval(dataset, resolve_pairs(dataset))
-    report = {**result.summary(), "benchmark_status": dataset.benchmark_status}
+    pairs = resolve_pairs(dataset)
+    if arguments.partition is None:
+        result = candidate_retrieval(dataset, pairs)
+        pool = "full_corpus_exploratory"
+    else:
+        split = load_split()
+        claims = partition_claims(split, arguments.partition)
+        result = candidate_retrieval(
+            dataset, partition_pairs(split, pairs)[arguments.partition], claims
+        )
+        pool = arguments.partition
+    report = {
+        **result.summary(),
+        "benchmark_status": dataset.benchmark_status,
+        "candidate_pool": pool,
+    }
     sys.stdout.write(json.dumps(report, indent=2, sort_keys=True) + "\n")
     return 0
 
@@ -926,6 +958,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     retrieval = commands.add_parser(
         "retrieval", help="Recall of lexical candidate ranking inside the DM-2a window"
     )
+    retrieval.add_argument("--partition", choices=PARTITIONS)
     retrieval.set_defaults(run=_retrieval_command)
     arguments = parser.parse_args(argv)
     run: Callable[[argparse.Namespace], int] = arguments.run

@@ -6,7 +6,18 @@ from typing import Any
 
 import pytest
 
-from evals._decision_lineage import LineageDataset, ResolvedPair, load_dataset, resolve_pairs
+from evals._decision_lineage import (
+    PARTITIONS,
+    LineageDataset,
+    Partition,
+    ResolvedPair,
+    load_dataset,
+    load_split,
+    meeting_records,
+    partition_claims,
+    partition_pairs,
+    resolve_pairs,
+)
 from evals._lineage_classifier import (
     SYSTEM_PROMPT,
     CassetteEntry,
@@ -18,6 +29,7 @@ from evals._lineage_classifier import (
     end_to_end,
     load_plan,
     main,
+    partition_scope,
     pilot_scope,
     plan_report,
     planned_calls,
@@ -27,6 +39,7 @@ from evals._lineage_classifier import (
 )
 
 Answer = Callable[[PreparedCall], list[dict[str, object]]]
+Scope = tuple[tuple[ResolvedPair, ...], tuple[PreparedCall, ...]]
 
 
 @pytest.fixture(scope="module")
@@ -37,6 +50,21 @@ def dataset() -> LineageDataset:
 @pytest.fixture(scope="module")
 def pairs(dataset: LineageDataset) -> tuple[ResolvedPair, ...]:
     return resolve_pairs(dataset)
+
+
+@pytest.fixture(scope="module")
+def scopes(dataset: LineageDataset) -> dict[Partition, Scope]:
+    return {partition: partition_scope(dataset, partition) for partition in PARTITIONS}
+
+
+@pytest.fixture(scope="module")
+def calls(scopes: dict[Partition, Scope]) -> tuple[PreparedCall, ...]:
+    return tuple(call for _, partition_calls in scopes.values() for call in partition_calls)
+
+
+@pytest.fixture(scope="module")
+def frozen_calls(scopes: dict[Partition, Scope]) -> tuple[PreparedCall, ...]:
+    return scopes["frozen_evaluation"][1]
 
 
 def gold_by_records(pairs: tuple[ResolvedPair, ...]) -> dict[tuple[str, str], ResolvedPair]:
@@ -113,13 +141,96 @@ def first_call_with(calls: tuple[PreparedCall, ...], kind: str) -> PreparedCall:
     )
 
 
-def test_requests_carry_claims_but_no_curation_or_identifiers(
-    dataset: LineageDataset, pairs: tuple[ResolvedPair, ...]
+def claim_keys(dataset: LineageDataset) -> dict[str, str]:
+    return {
+        record.record_id: key
+        for meeting in dataset.meetings
+        for key, record in meeting_records(dataset, meeting).items()
+        if record is not None
+    }
+
+
+def test_every_partition_draws_candidates_only_from_its_own_claims(
+    dataset: LineageDataset, scopes: dict[Partition, Scope]
 ) -> None:
-    calls = planned_calls(dataset, pairs)
+    keys = claim_keys(dataset)
+    split = load_split()
+
+    for partition, (_, partition_calls) in scopes.items():
+        own = partition_claims(split, partition)
+        assert partition_calls
+        for call in partition_calls:
+            assert keys[call.later.record_id] in own
+            assert {keys[record.record_id] for record in call.candidates} <= own
+
+
+def test_frozen_text_never_reaches_a_development_request(
+    dataset: LineageDataset, scopes: dict[Partition, Scope]
+) -> None:
+    frozen = partition_claims(load_split(), "frozen_evaluation")
+    development = " ".join(call.request.model_dump_json() for call in scopes["development"][1])
+    frozen_items = [
+        item for meeting in dataset.meetings for item in meeting.items if item.key in frozen
+    ]
+
+    assert frozen_items
+    for item in frozen_items:
+        assert item.text not in development
+        for evidence in item.evidence:
+            assert evidence.quote not in development
+
+
+def test_rewriting_the_frozen_partition_leaves_development_requests_unchanged(
+    dataset: LineageDataset, scopes: dict[Partition, Scope]
+) -> None:
+    frozen = partition_claims(load_split(), "frozen_evaluation")
+    bait = scopes["development"][1][0].later.text
+    rewritten = dataset.model_copy(
+        update={
+            "meetings": tuple(
+                meeting.model_copy(
+                    update={
+                        "items": tuple(
+                            item.model_copy(update={"text": bait}) if item.key in frozen else item
+                            for item in meeting.items
+                        )
+                    }
+                )
+                for meeting in dataset.meetings
+            )
+        }
+    )
+
+    _, original = scopes["development"]
+    _, after = partition_scope(rewritten, "development")
+    _, frozen_after = partition_scope(rewritten, "frozen_evaluation")
+
+    assert [call.request.digest("m") for call in after] == [
+        call.request.digest("m") for call in original
+    ]
+    assert [call.request.digest("m") for call in frozen_after] != [
+        call.request.digest("m") for call in scopes["frozen_evaluation"][1]
+    ]
+
+
+def test_quarantined_pairs_are_never_evaluation_targets(
+    pairs: tuple[ResolvedPair, ...], scopes: dict[Partition, Scope], dataset: LineageDataset
+) -> None:
+    quarantined = partition_pairs(load_split(), pairs)["quarantined"]
+    targets = {resolved.pair.id for scope_pairs, _ in scopes.values() for resolved in scope_pairs}
+
+    assert {resolved.pair.id for resolved in quarantined} == {"pair-021", "pair-089"}
+    assert not targets & {resolved.pair.id for resolved in quarantined}
+    with pytest.raises(ValueError, match="outside the candidate pool"):
+        planned_calls(dataset, quarantined, partition_claims(load_split(), "development"))
+
+
+def test_requests_carry_claims_but_no_curation_or_identifiers(
+    dataset: LineageDataset, calls: tuple[PreparedCall, ...]
+) -> None:
     serialized = " ".join(call.request.model_dump_json() for call in calls)
 
-    assert calls
+    assert len(calls) == 79
     for pair in dataset.pairs:
         assert pair.id not in serialized
         assert pair.rationale[:60] not in serialized
@@ -135,10 +246,7 @@ def test_requests_carry_claims_but_no_curation_or_identifiers(
         assert f'"{name}"' not in serialized
 
 
-def test_meeting_content_never_enters_the_system_prompt(
-    dataset: LineageDataset, pairs: tuple[ResolvedPair, ...]
-) -> None:
-    calls = planned_calls(dataset, pairs)
+def test_meeting_content_never_enters_the_system_prompt(calls: tuple[PreparedCall, ...]) -> None:
     injected = next(
         call for call in calls if "Ignore earlier decisions" in call.request.model_dump_json()
     )
@@ -150,9 +258,9 @@ def test_meeting_content_never_enters_the_system_prompt(
 
 
 def test_candidates_stay_inside_the_dm2a_window_for_one_owner_and_twin(
-    dataset: LineageDataset, pairs: tuple[ResolvedPair, ...]
+    calls: tuple[PreparedCall, ...],
 ) -> None:
-    for call in planned_calls(dataset, pairs):
+    for call in calls:
         assert 1 <= len(call.candidates) <= 10
         for record in call.candidates:
             assert record.scope.owner_id == call.later.scope.owner_id
@@ -160,10 +268,20 @@ def test_candidates_stay_inside_the_dm2a_window_for_one_owner_and_twin(
             assert record.scope.created_at < call.later.scope.created_at
 
 
+@pytest.mark.parametrize(
+    ("partition", "outcomes"),
+    [
+        ("development", {"correct": 38, "excluded_no_time_order": 3, "missed_by_retrieval": 1}),
+        (
+            "frozen_evaluation",
+            {"correct": 42, "excluded_no_time_order": 1, "missed_by_retrieval": 1},
+        ),
+    ],
+)
 def test_the_oracle_fake_reproduces_the_gold_labels_it_can_reach(
-    dataset: LineageDataset, pairs: tuple[ResolvedPair, ...]
+    scopes: dict[Partition, Scope], partition: Partition, outcomes: dict[str, int]
 ) -> None:
-    calls = planned_calls(dataset, pairs)
+    pairs, calls = scopes[partition]
     provider = FakeProvider(oracle_answer(pairs), list(calls))
 
     result = run_pipeline(
@@ -176,18 +294,14 @@ def test_the_oracle_fake_reproduces_the_gold_labels_it_can_reach(
     assert all(
         prediction.label == gold[pair_id] for pair_id, prediction in result.predictions.items()
     )
-    assert report["outcomes"] == {
-        "correct": 81,
-        "excluded_no_time_order": 4,
-        "missed_by_retrieval": 2,
-    }
-    assert report["end_to_end_recall"] == pytest.approx(81 / 87)
+    assert report["outcomes"] == outcomes
+    assert report["end_to_end_recall"] == pytest.approx(
+        outcomes["correct"] / sum(outcomes.values())
+    )
 
 
-def test_invalid_outputs_fail_closed_to_abstain(
-    dataset: LineageDataset, pairs: tuple[ResolvedPair, ...]
-) -> None:
-    call = planned_calls(dataset, pairs)[0]
+def test_invalid_outputs_fail_closed_to_abstain(calls: tuple[PreparedCall, ...]) -> None:
+    call = calls[0]
     refs = [view.ref for view in call.request.candidates]
     valid_first = call.record_for("c1").evidence[0].entry_id
     valid_later = call.later.evidence[0].entry_id
@@ -226,9 +340,9 @@ def test_invalid_outputs_fail_closed_to_abstain(
 
 
 def test_supersession_needs_time_order_and_never_settles_an_owner_decision(
-    dataset: LineageDataset, pairs: tuple[ResolvedPair, ...]
+    frozen_calls: tuple[PreparedCall, ...],
 ) -> None:
-    call = first_call_with(planned_calls(dataset, pairs), "owner_decision")
+    call = first_call_with(frozen_calls, "owner_decision")
     ref = next(
         view.ref
         for view in call.request.candidates
@@ -248,9 +362,8 @@ def test_supersession_needs_time_order_and_never_settles_an_owner_decision(
 
 
 def test_a_model_that_obeys_injected_text_is_caught_by_the_gate(
-    dataset: LineageDataset, pairs: tuple[ResolvedPair, ...]
+    pairs: tuple[ResolvedPair, ...], calls: tuple[PreparedCall, ...]
 ) -> None:
-    calls = planned_calls(dataset, pairs)
 
     def everything_supersedes(call: PreparedCall) -> list[dict[str, object]]:
         return [
@@ -278,9 +391,8 @@ def test_a_model_that_obeys_injected_text_is_caught_by_the_gate(
 
 
 def test_caps_stop_the_run_before_it_overspends(
-    dataset: LineageDataset, pairs: tuple[ResolvedPair, ...]
+    pairs: tuple[ResolvedPair, ...], calls: tuple[PreparedCall, ...]
 ) -> None:
-    calls = planned_calls(dataset, pairs)
     pricing = load_plan().pricing
     provider = FakeProvider(oracle_answer(pairs), list(calls))
 
@@ -335,7 +447,11 @@ def test_the_pilot_plan_is_bounded_and_priced_from_a_cited_source(
 
     assert plan.partition == "development"
     assert plan.pricing.source.startswith("https://aistudio.google.com/docs/pricing")
-    assert report["within_caps"] is True
+    assert report["within_caps_by_offline_estimate"] is True
+    assert report["budget_basis"].startswith("offline estimate")
+    assert "not a monetary guarantee" in report["budget_basis"]
+    assert report["candidate_pool"] == {"partition": "development", "claims": 56}
+    assert (report["calls"], report["candidates_compared"]) == (21, 204)
     assert report["calls"] <= plan.caps.max_calls
     assert report["worst_case_spend_usd"] <= plan.caps.max_spend_usd / 2
     assert set(report["pilot_labels"]) == {

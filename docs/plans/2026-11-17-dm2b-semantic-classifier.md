@@ -155,6 +155,11 @@ Rerunning the reproducible measurement on the original 120 pairs gives 73
 eligible pairs, 65/73 (0.89) at 5 and 71/73 (0.97) at 10, with the same two
 misses at 10.
 
+These figures rank against the full corpus, so a development claim can be
+ranked against frozen claims, and frozen text shapes the IDF weights. They are
+kept as historical exploratory evidence only. Model requests and evaluation
+use partition-isolated pools (see the leakage-resistant split below).
+
 The same lexical score is useless as a classifier (see the table above), so it
 only narrows the candidate list and never labels.
 
@@ -261,6 +266,24 @@ meetings. The benchmark fixture itself is unchanged.
 Partitions are chosen once and frozen. Prompts and thresholds are tuned on
 development only.
 
+**Isolated candidate pools.** Each partition's requests are built from a
+register holding only that partition's claims, and the lexical IDF statistics
+come from that register too. A development request therefore never contains
+frozen claim text, quotes or records, and rewriting every frozen claim leaves
+every development request byte-identical (a regression test checks both).
+Quarantined pairs are never evaluation targets, and `planned_calls` refuses any
+pair that reaches outside its pool.
+
+`python -m evals._decision_lineage retrieval --partition NAME`:
+
+| Pool | Relationship pairs | Excluded (no strict order) | Eligible | Recall@5 | Recall@10 |
+| --- | --- | --- | --- | --- | --- |
+| development | 42 | 3 (079 to 081) | 39 | 35 / 39 | 38 / 39 (miss: 036) |
+| frozen_evaluation | 44 | 1 (082) | 43 | 38 / 43 | 42 / 43 (miss: 112) |
+| full corpus, historical | 87 | 4 | 83 | 75 / 83 | 81 / 83 |
+
+The quarantined relationship pair (021) is in neither partition.
+
 ## Offline pipeline (no provider)
 
 `evals/_lineage_classifier.py` is the evaluation harness a model would plug
@@ -292,15 +315,19 @@ into. It contains no live provider adapter.
 - **Caps:** `run_pipeline` refuses the next call when it would exceed the call
   cap, the input-token cap, the output-token cap (assuming the per-call output
   maximum) or the spend cap. It records spend, tokens and the reason it stopped.
+  The pre-call check uses an offline estimate (characters / 3), not a provider
+  token count, so these caps are a simulator bound, not a monetary guarantee for
+  a live adapter. A live adapter needs provider token counting before each call
+  and reconciliation from response usage after it.
 - **Reports:** `python -m evals._lineage_classifier replay --cassette FILE`
   reports per-class precision and recall with 95% intervals, by language and by
   category, evidence validity and selection, hard-rule counts, decision reasons,
   spend per evaluated pair, and end-to-end outcomes. The end-to-end outcomes
   separate retrieval misses, pairs excluded by DM-2a eligibility, broken
   evidence, and correct and wrong answers, so recall counts retrieval misses.
-  With an oracle response the pipeline reaches 81 of 87 relationship pairs: 4
-  have no strict time order and 2 are missed by retrieval, matching recall@10 of
-  81/83.
+  With an oracle response and isolated pools, the pipeline reaches 38 of 42
+  development relationship pairs (3 without strict time order, 1 missed by
+  retrieval) and 42 of 44 frozen ones (1 and 1).
 
 ## Proposed pilot (not authorized)
 
@@ -332,15 +359,15 @@ covers thinking.
 | Hard cases | 4 hard negatives, 4 ambiguous, 1 prompt injection |
 | Expected zero-call outcomes | 1 broken evidence (must abstain without a call), 1 equal-timestamp (must be excluded by eligibility) |
 
-These need 21 calls comparing 210 candidates.
+These need 21 calls comparing 204 candidates from the development pool only.
 
 **Budget and caps.** `python -m evals._lineage_classifier plan` prints this from
-the real requests:
+the real requests. All token figures are offline estimates:
 
 | | Value |
 | --- | --- |
 | Calls | 21 (cap 24) |
-| Estimated input tokens | 33,429, at most 1,645 per call (cap 120,000) |
+| Estimated input tokens | 32,538, at most 1,647 per call (cap 120,000) |
 | Output | at most 4,096 tokens per call (cap 100,000 in total) |
 | Worst-case spend | $0.35 at 2026 prices, $0.70 at 2027 prices |
 | Spend cap | $1.00 |
@@ -375,8 +402,8 @@ replays offline.
 | Stage | Calls | Worst case (2026 / 2027 prices) |
 | --- | --- | --- |
 | Full development run | 40 | $0.66 / $1.33 |
-| One frozen evaluation run | 39 | $0.65 / $1.29 |
-| Two stability reruns on frozen | 78 | $1.29 / $2.58 |
+| One frozen evaluation run | 39 | $0.64 / $1.29 |
+| Two stability reruns on frozen | 78 | $1.29 / $2.57 |
 
 The whole programme stays under $3 at 2026 prices and under $6 at 2027 prices.
 The frozen run is scored against the gate above, and its confidence intervals

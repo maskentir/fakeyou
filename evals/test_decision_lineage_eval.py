@@ -15,12 +15,14 @@ from evals._decision_lineage import (
     LabeledPair,
     Language,
     LineageDataset,
+    Partition,
     Prediction,
     PredictionSet,
     ResolvedPair,
     SidedEvidence,
     candidate_retrieval,
     constant_predictions,
+    dataset_register,
     gate_failures,
     lexical_predictions,
     load_dataset,
@@ -29,6 +31,7 @@ from evals._decision_lineage import (
     oracle_labels_citing_everything,
     oracle_labels_with_wrong_evidence,
     oracle_predictions,
+    partition_claims,
     partition_pairs,
     resolve_pairs,
     score,
@@ -379,8 +382,41 @@ def test_the_retrieval_command_reports_recall_and_exclusions(
 
     assert report["benchmark_status"].startswith("synthetic / single-curator")
     assert report["eligible_pairs"] == 83
+    assert report["candidate_pool"] == "full_corpus_exploratory"
     assert set(report["recall"]) == {"at_5", "at_10"}
     assert report["excluded"]["not_strictly_earlier"]
+
+
+@pytest.mark.parametrize(
+    ("partition", "expected"),
+    [
+        ("development", (39, 35, 38, ("pair-036",))),
+        ("frozen_evaluation", (43, 38, 42, ("pair-112",))),
+    ],
+)
+def test_retrieval_inside_one_partition_ranks_only_that_partitions_claims(
+    dataset: LineageDataset,
+    pairs: tuple[ResolvedPair, ...],
+    partition: Partition,
+    expected: tuple[int, int, int, tuple[str, ...]],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    eligible, at_5, at_10, missed = expected
+    split = load_split()
+    claims = partition_claims(split, partition)
+    register = dataset_register(dataset, claims)
+    result = candidate_retrieval(dataset, partition_pairs(split, pairs)[partition], claims)
+
+    assert register.records
+    assert {record.text for record in register.records} <= {
+        item.text for meeting in dataset.meetings for item in meeting.items if item.key in claims
+    }
+    assert (result.eligible_pairs, result.hits[5], result.hits[10]) == (eligible, at_5, at_10)
+    assert result.misses[10] == missed
+    assert main(["retrieval", "--partition", partition]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["candidate_pool"] == partition
+    assert report["eligible_pairs"] == eligible
 
 
 def test_every_claim_belongs_to_exactly_one_topic(dataset: LineageDataset) -> None:

@@ -4,7 +4,7 @@ import json
 import math
 import sys
 from collections import Counter
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Literal, Protocol
@@ -17,6 +17,7 @@ from evals._decision_lineage import (
     Label,
     LexicalIndex,
     LineageDataset,
+    Partition,
     Prediction,
     PredictionSet,
     ResolvedPair,
@@ -25,6 +26,7 @@ from evals._decision_lineage import (
     evaluation_report,
     load_dataset,
     load_split,
+    partition_claims,
     partition_pairs,
     resolve_pairs,
     retrieval_text,
@@ -324,9 +326,16 @@ def _pair_index(pairs: Sequence[ResolvedPair]) -> dict[tuple[str, str], Resolved
 
 
 def planned_calls(
-    dataset: LineageDataset, pairs: Sequence[ResolvedPair]
+    dataset: LineageDataset, pairs: Sequence[ResolvedPair], claims: Collection[str]
 ) -> tuple[PreparedCall, ...]:
-    register = dataset_register(dataset)
+    outside = sorted(
+        resolved.pair.id
+        for resolved in pairs
+        if not {resolved.pair.first, resolved.pair.second} <= set(claims)
+    )
+    if outside:
+        raise ValueError(f"pairs reach outside the candidate pool: {outside}")
+    register = dataset_register(dataset, claims)
     index = LexicalIndex([retrieval_text(record) for record in register.records])
     later = {
         resolved.second.record.record_id: resolved.second.record
@@ -335,6 +344,14 @@ def planned_calls(
     }
     calls = (prepare_call(later[record_id], register, index) for record_id in sorted(later))
     return tuple(call for call in calls if call is not None)
+
+
+def partition_scope(
+    dataset: LineageDataset, partition: Partition
+) -> tuple[tuple[ResolvedPair, ...], tuple[PreparedCall, ...]]:
+    split = load_split()
+    pairs = partition_pairs(split, resolve_pairs(dataset))[partition]
+    return pairs, planned_calls(dataset, pairs, partition_claims(split, partition))
 
 
 def _stop_before(
@@ -350,6 +367,12 @@ def _stop_before(
     if result.spend_usd + worst > caps.max_spend_usd:
         return "spend_cap"
     return None
+
+
+OFFLINE_ESTIMATE = (
+    "offline estimate: input tokens are characters / 3 and output is the per-call cap; "
+    "neither is a provider token count, so these caps are not a monetary guarantee for a live run"
+)
 
 
 def estimate_input_tokens(request: ClassifierRequest) -> int:
@@ -435,13 +458,14 @@ def load_plan(path: Path = PILOT_FIXTURE) -> PilotPlan:
 def pilot_scope(
     dataset: LineageDataset, plan: PilotPlan
 ) -> tuple[tuple[ResolvedPair, ...], tuple[PreparedCall, ...]]:
-    development = partition_pairs(load_split(), resolve_pairs(dataset))[plan.partition]
-    chosen = {pair_id for pair_id in plan.pairs}
+    split = load_split()
+    development = partition_pairs(split, resolve_pairs(dataset))[plan.partition]
+    chosen = set(plan.pairs)
     pairs = tuple(resolved for resolved in development if resolved.pair.id in chosen)
     missing = chosen - {resolved.pair.id for resolved in pairs}
     if missing:
         raise ValueError(f"pilot pairs outside the {plan.partition} partition: {sorted(missing)}")
-    return pairs, planned_calls(dataset, pairs)
+    return pairs, planned_calls(dataset, pairs, partition_claims(split, plan.partition))
 
 
 def plan_report(dataset: LineageDataset, plan: PilotPlan) -> dict[str, object]:
@@ -458,14 +482,19 @@ def plan_report(dataset: LineageDataset, plan: PilotPlan) -> dict[str, object]:
         "pilot_languages": dict(
             sorted(Counter(resolved.pair.language for resolved in pairs).items())
         ),
+        "candidate_pool": {
+            "partition": plan.partition,
+            "claims": len(partition_claims(load_split(), plan.partition)),
+        },
         "calls": len(calls),
         "candidates_compared": sum(len(call.candidates) for call in calls),
+        "budget_basis": OFFLINE_ESTIMATE,
         "estimated_input_tokens": {"total": worst_input, "max_per_call": max(inputs, default=0)},
         "worst_case_output_tokens": worst_output,
         "worst_case_spend_usd": round(spend(plan.pricing, worst_input, worst_output), 4),
         "caps": plan.caps.model_dump(),
         "pricing": plan.pricing.model_dump(),
-        "within_caps": len(calls) <= plan.caps.max_calls
+        "within_caps_by_offline_estimate": len(calls) <= plan.caps.max_calls
         and worst_input <= plan.caps.max_input_tokens
         and worst_output <= plan.caps.max_output_tokens
         and spend(plan.pricing, worst_input, worst_output) <= plan.caps.max_spend_usd,
@@ -484,6 +513,8 @@ def replay_report(
     return {
         **evaluation_report(predictions, pairs, dataset.benchmark_status),
         "pipeline": {
+            "budget_basis": "recorded cassette usage; pre-call cap checks use the "
+            + OFFLINE_ESTIMATE,
             "calls": result.calls,
             "stop": result.stop,
             "input_tokens": result.input_tokens,
