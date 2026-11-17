@@ -318,3 +318,26 @@ def test_the_cli_writes_the_packet_and_key_apart(tmp_path: Path) -> None:
     assert (tmp_path / "packet" / "packet.json").exists()
     assert not (tmp_path / "packet" / "key.json").exists()
     assert (tmp_path / "key" / "key.json").exists()
+
+
+@pytest.mark.parametrize("key_folder", [".", "coordinator", "nested/deeper"])
+def test_a_key_inside_the_package_folder_publishes_nothing(
+    tmp_path: Path, key_folder: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    package = tmp_path / "package"
+
+    code = postmortem.main(
+        ["packet", "--out", str(package), "--key-out", str(package / key_folder)]
+    )
+
+    assert code == 2
+    assert "inside it" in json.loads(capsys.readouterr().out)["refused"]
+    assert not package.exists()
+    assert list(tmp_path.rglob("*.json")) == []
+
+
+def test_a_key_beside_the_package_folder_is_accepted(tmp_path: Path) -> None:
+    assert not postmortem.key_inside_package(tmp_path / "package", tmp_path / "package-key")
+    assert postmortem.key_inside_package(
+        tmp_path / "package", tmp_path / "package" / ".." / "package"
+    )

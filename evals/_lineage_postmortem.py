@@ -720,7 +720,14 @@ def _report_command(
     return run
 
 
+def key_inside_package(package: Path, key: Path) -> bool:
+    return key.resolve().is_relative_to(package.resolve())
+
+
 def _packet_command(arguments: argparse.Namespace) -> int:
+    if key_inside_package(arguments.out, arguments.key_out):
+        _write({"refused": "the coordinator key folder is the package folder or inside it"})
+        return 2
     packet, key = adjudication_packet(load_pilot())
     leaks = packet_leaks(packet, key)
     if leaks:
