@@ -366,11 +366,15 @@ the real requests. All token figures are offline estimates:
 
 | | Value |
 | --- | --- |
-| Calls | 21 (cap 24) |
-| Estimated input tokens | 32,538, at most 1,647 per call (cap 120,000) |
-| Output | at most 4,096 tokens per call (cap 100,000 in total) |
-| Worst-case spend | $0.35 at 2026 prices, $0.70 at 2027 prices |
+| Calls | 21 planned; at most 24 requests including retries |
+| Estimated input tokens | 32,538, at most 1,647 per call (offline estimate) |
+| Input bound (live adapter) | 117,374 for the planned calls, at most 5,884 per call (cap 8,000 per call, 150,000 in total) |
+| Output | at most 4,096 tokens per call including thinking (cap 100,000 in total) |
+| Worst-case spend | $0.47 at 2026 prices for 24 requests at the bound, $0.95 at 2027 prices |
 | Spend cap | $1.00 |
+
+The worst case rose from $0.35 to $0.47 when the live adapter replaced the
+characters / 3 estimate with a byte bound and counted retries.
 
 **Call policy.**
 
@@ -414,6 +418,69 @@ rules (no time-order, approval or broken-evidence violations), keeps the
 relationship false-positive rate under 5%, and reaches per-class lower 95% bounds
 clearly above the lexical baseline justifies collecting real, double-labelled
 data. It does not justify activation on its own.
+
+## Live adapter (disabled)
+
+`evals/_lineage_live.py` is the only code that can call a provider, and it runs
+only with an execution approval.
+
+- **Configuration:** Google `gemini-3.8-flash` through LangChain
+  `init_chat_model(model_provider="google_genai")`, `reasoning_effort=low`
+  (Gemini `thinking_level` LOW), `max_output_tokens` 4,096 sent to the server,
+  `service_tier` standard, 60 s timeout, and SDK retries off (one HTTP attempt).
+  Structured output uses `response_json_schema` with only `type`, `properties`,
+  `required`, `items`, `enum`, `maxItems` and `additionalProperties`; the
+  candidate field is an enum of the presented refs. A test sends a request
+  through the real LangChain and google-genai stack with the HTTP call stubbed
+  and checks every setting and the usage mapping.
+- **Input accounting before each request:** an upper bound of UTF-8 bytes of the
+  system prompt, request and schema plus 256 tokens. A request whose bound
+  exceeds 8,000 tokens, or would cross the input, output, request or spend cap,
+  is refused.
+- **Reconciliation after each response:** LangChain's usage metadata gives
+  input tokens and output tokens; output includes thinking tokens, which are
+  also recorded separately. The worst case is reserved before every attempt and
+  released only when usage is valid. Absent, incomplete or invalid usage
+  (missing or non-integer counts, zero input, thinking above output) stops the
+  run as `usage_unknown`, keeps the reservation and is never retried. Usage above the bound or the
+  per-call output cap stops the run (`usage_over_bound`). A failed attempt is
+  charged at the worst case.
+- **Retries:** one retry for a timeout, connection error, 429 or 5xx; every
+  attempt counts toward the 24-request cap. A 4xx rejection stops the run at
+  once. An invalid structured output is never retried.
+- **Stop rules:** caps, three consecutive provider errors, more than 20% invalid
+  outputs after five calls, unknown usage, usage over the bound, a model
+  mismatch, or a credential found in a record.
+- **Cassette:** one JSONL line per attempt with request digest, model, prompt
+  version, raw response or error kind and status (never the error text), usage,
+  and provenance (provider, model, tier, thinking level, output cap, timeout, SDK
+  versions, git head, plan, dataset and split digests, approval id, time). A line containing the API key is never
+  written. Each line is flushed as written, so an interrupted run keeps every
+  completed attempt; the in-flight attempt is not in the ledger and must be
+  checked against provider billing. `replay --cassette` rescoring skips failure
+  lines.
+- **Approval gate:** `python -m evals._lineage_live run --approval FILE
+  --cassette OUT` refuses unless the approval names the current git head, the
+  SHA-256 of the pilot plan, the benchmark dataset and the split, the provider
+  and model, and every cap, and no tracked file is modified locally. A
+  `--dataset` path whose digest differs is refused, and only a synthetic
+  benchmark is accepted. `preflight` prints the bounds and the three digests
+  offline.
+- **Single use:** after those checks, and before credentials are read, the run
+  claims `.runtime/lineage-pilot/receipts/<approval_id>.json` with an exclusive
+  create, fsynced. A second claim fails whatever the cassette path, parallel
+  threads and processes get exactly one success, and the receipt is never
+  removed: a completed, failed or interrupted run records its outcome and spends
+  the approval. A new run needs a fresh approval with a new `approval_id`.
+
+**Participant approval claims.** The validator turns supersession into
+`approval_authority` only when one side is an `owner_decision` item. A
+participant saying "the owner signed off" in a plain `decision_claim` (pairs 040
+and 044) is not detectable deterministically. A test labels those as
+supersession: they pass the validator and are counted as `approval_resolutions`,
+which fails the gate. Either way a prediction stays an unreviewed derived
+candidate with no owner authority. These pairs are frozen-only, so the pilot
+cannot measure this; the frozen run will.
 
 ## Independent annotation status
 
