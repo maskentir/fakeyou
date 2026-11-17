@@ -5,15 +5,26 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from evals._decision_lineage import LineageDataset, ResolvedPair, load_dataset, resolve_pairs
+from evals._decision_lineage import (
+    FIXTURE,
+    LABELS,
+    LineageDataset,
+    ResolvedPair,
+    load_dataset,
+    resolve_pairs,
+)
 from evals._lineage_annotation import (
+    Adjudication,
     Annotation,
     AnnotationSet,
     BlindKey,
+    Disagreement,
     agreement,
     annotation_template,
     blind_package,
     main,
+    package_leaks,
+    proposed_corrections,
 )
 
 
@@ -203,3 +214,117 @@ def test_export_then_agreement_round_trip_writes_an_adjudication_file(
     assert report["observed_agreement"] == pytest.approx((len(pairs) - 1) / len(pairs))
     assert [item["pair_id"] for item in adjudication["disagreements"]] == [first_pair]
     assert adjudication["disagreements"][0]["adjudicated_label"] is None
+
+
+def test_the_package_teaches_with_examples_that_are_not_scored(
+    dataset: LineageDataset, pairs: tuple[ResolvedPair, ...]
+) -> None:
+    package, key = blind_package(dataset, pairs, "salt-a")
+
+    assert len(package.worked_examples) >= 5
+    assert {example.label for example in package.worked_examples} == set(LABELS)
+    assert package_leaks(dataset, package, key) == []
+
+
+def test_the_leak_check_catches_curation_in_the_package(
+    dataset: LineageDataset, pairs: tuple[ResolvedPair, ...]
+) -> None:
+    package, key = blind_package(dataset, pairs, "salt-a")
+    leaked = package.model_copy(
+        update={"instructions": f"{package.instructions} {dataset.pairs[0].id} {key.salt}"}
+    )
+
+    assert package_leaks(dataset, leaked, key) == [
+        f"pair id {dataset.pairs[0].id}",
+        "coordinator salt",
+    ]
+
+
+def test_verify_accepts_a_clean_export_and_rejects_a_misplaced_key(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    folder = tmp_path / "package"
+    assert main(["export", "--out", str(folder), "--salt", "salt-a"]) == 0
+    assert main(["verify", "--package", str(folder)]) == 0
+    clean = json.loads(capsys.readouterr().out.split("\n", 1)[1])
+    (folder / "annotator" / "blind-key.json").write_text(
+        (folder / "coordinator" / "blind-key.json").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+
+    assert main(["verify", "--package", str(folder)]) == 1
+    assert clean["leaks"] == []
+    assert clean["coordinator_key_in_annotator_folder"] is False
+
+
+def test_corrections_need_a_finished_adjudication_and_a_written_reason() -> None:
+    pending = Adjudication(
+        annotator="second",
+        disagreements=(
+            Disagreement(
+                pair_id="pair-001",
+                blind_id="abc",
+                curator_label="potential_contradiction",
+                second_label="potential_supersession",
+                second_note="",
+            ),
+        ),
+    )
+    agreed = pending.model_copy(
+        update={
+            "disagreements": (
+                pending.disagreements[0].model_copy(
+                    update={"adjudicated_label": "potential_contradiction"}
+                ),
+            )
+        }
+    )
+    unexplained = pending.model_copy(
+        update={
+            "disagreements": (
+                pending.disagreements[0].model_copy(
+                    update={"adjudicated_label": "potential_supersession"}
+                ),
+            )
+        }
+    )
+
+    with pytest.raises(ValueError, match="not adjudicated"):
+        proposed_corrections(pending)
+    assert proposed_corrections(agreed) == []
+    with pytest.raises(ValueError, match="at least 40 characters"):
+        proposed_corrections(unexplained)
+
+
+def test_proposed_corrections_never_touch_the_benchmark(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    before = FIXTURE.read_bytes()
+    adjudication = tmp_path / "adjudication.json"
+    adjudication.write_text(
+        json.dumps(
+            {
+                "annotator": "second",
+                "disagreements": [
+                    {
+                        "pair_id": "pair-001",
+                        "blind_id": "abc",
+                        "curator_label": "potential_contradiction",
+                        "second_label": "potential_supersession",
+                        "second_note": "",
+                        "adjudicated_label": "potential_supersession",
+                        "adjudication_note": (
+                            "The later claim says 'for now', which the panel read as a change."
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert main(["corrections", "--adjudication", str(adjudication)]) == 0
+    report = json.loads(capsys.readouterr().out)
+
+    assert report["applies_automatically"] is False
+    assert report["proposed_label_corrections"][0]["corrected_label"] == "potential_supersession"
+    assert FIXTURE.read_bytes() == before

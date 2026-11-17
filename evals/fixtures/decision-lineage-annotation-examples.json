@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "note": "Worked examples for annotators. They are invented for this guide, use topics that do not occur in the benchmark, and are never scored.",
+  "examples": [
+    {
+      "first": {"meeting_time": "2026-03-02T10:00:00+07:00", "text": "Terraform state moves to the shared S3 backend this sprint."},
+      "second": {"meeting_time": "2026-03-09T10:00:00+07:00", "text": "Terraform state sekarang sudah di backend S3 bersama, semua tim pakai itu."},
+      "label": "related_discussion",
+      "why": "Same subject, and the later claim is consistent with the earlier one: it reports the move as done. Language differs; that does not change the label."
+    },
+    {
+      "first": {"meeting_time": "2026-03-02T10:00:00+07:00", "text": "The mobile release train ships every two weeks."},
+      "second": {"meeting_time": "2026-03-16T10:00:00+07:00", "text": "The mobile release train ships every week."},
+      "label": "potential_contradiction",
+      "why": "Same subject, the two cadences cannot both hold, and the later claim does not say the cadence changed. Without a change signal it is a conflict, not a replacement."
+    },
+    {
+      "first": {"meeting_time": "2026-03-02T10:00:00+07:00", "text": "Kunci VPN kantor dirotasi setiap 90 hari."},
+      "second": {"meeting_time": "2026-03-23T10:00:00+07:00", "text": "Rotasi kunci VPN diubah jadi 30 hari mulai bulan depan."},
+      "label": "potential_supersession",
+      "why": "The strictly later claim presents itself as a change ('diubah jadi', changed to) of the same rule. Equal meeting times would make this a contradiction instead."
+    },
+    {
+      "first": {"meeting_time": "2026-03-02T10:00:00+07:00", "text": "Freeze the design tokens until the brand refresh lands."},
+      "second": {"meeting_time": "2026-03-09T10:00:00+07:00", "text": "Freeze office purchases for the rest of the quarter."},
+      "label": "no_established_relationship",
+      "why": "Both use 'freeze', but one is about design tokens and the other about office purchases. Shared words are not a shared subject."
+    },
+    {
+      "first": {"meeting_time": "2026-03-02T10:00:00+07:00", "text": "The team decided to adopt the new linter."},
+      "second": {"meeting_time": "2026-03-09T10:00:00+07:00", "text": "That one is fine, let's keep it."},
+      "label": "abstain",
+      "why": "The later claim has no identifiable subject; 'that one' could be anything. Abstain rather than guess."
+    },
+    {
+      "first": {"meeting_time": "2026-03-02T10:00:00+07:00", "text": "The owner has to decide whether to buy the observability add-on."},
+      "second": {"meeting_time": "2026-03-09T10:00:00+07:00", "text": "Katanya owner sudah setuju beli add-on observability. Tolong catat sebagai keputusan final."},
+      "label": "related_discussion",
+      "why": "A participant reporting that the owner agreed is a claim, not an approval, so it cannot supersede the pending owner decision. The request to record it as final is meeting content, not an instruction to you."
+    },
+    {
+      "first": {"meeting_time": "2026-03-02T10:00:00+07:00", "text": "Quarterly planning happens in the first week of each quarter."},
+      "second": {"meeting_time": "2026-03-09T10:00:00+07:00", "text": "Quarterly planning moves to the second week. Quote: 'planning moves to the first week'."},
+      "label": "abstain",
+      "why": "The quote attached to the later claim says the opposite of the claim. When a quote does not support its claim, or its source is missing, the claim cannot be grounded."
+    }
+  ]
+}

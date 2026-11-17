@@ -155,6 +155,11 @@ Rerunning the reproducible measurement on the original 120 pairs gives 73
 eligible pairs, 65/73 (0.89) at 5 and 71/73 (0.97) at 10, with the same two
 misses at 10.
 
+These figures rank against the full corpus, so a development claim can be
+ranked against frozen claims, and frozen text shapes the IDF weights. They are
+kept as historical exploratory evidence only. Model requests and evaluation
+use partition-isolated pools (see the leakage-resistant split below).
+
 The same lexical score is useless as a classifier (see the table above), so it
 only narrows the candidate list and never labels.
 
@@ -226,48 +231,205 @@ DM-2a's sidecar accepts only `method: manual_curated`. A classifier needs:
 That is a `decision_lineage/v2` schema with the same file location, locking and
 revision rules.
 
-## Evaluation protocol before any activation
+## Leakage-resistant split
 
-1. **One authorized offline run.** 82 calls, one per later record that
-   has at least one labelled pair, at temperature 0. Record raw responses
-   as a replay cassette, like `evals/_visual_cassette.py`, so later scoring
-   never calls the provider.
-2. **Stability.** Three repeated runs. Label agreement across runs is reported
-   next to the gate result.
-3. **Gate.** Pass the gate above. Per-language and injection-case results are
-   read from the confusion matrix by category before any decision.
-4. **Real data.** Re-label a consented sample of real records, with an English,
-   Indonesian and mixed split, and repeat steps 1 to 3. Synthetic results alone
-   do not justify activation.
+`evals/fixtures/decision-lineage-split.json` assigns each of the 112 claims to one
+of 28 engineering topics, and each topic to one partition. A pair belongs to the
+partition of its two claims; a pair whose claims fall in different partitions is
+quarantined. Meetings are not the unit, because every lineage pair spans two
+meetings. The benchmark fixture itself is unchanged.
 
-## Provider cost estimate
+| Partition | Pairs | Labels (rel / contra / super / none / abstain) | Languages (en / id / mixed) |
+| --- | --- | --- | --- |
+| development | 64 | 17 / 11 / 14 / 13 / 9 | 14 / 8 / 42 |
+| frozen_evaluation | 64 | 20 / 10 / 14 / 10 / 10 | 14 / 12 / 38 |
+| quarantined | 2 | 1 related, 1 none (pairs 021 and 089) | mixed |
+| real_world_validation | 0 | reserved for consented real records labelled by two humans | none |
 
-These are token estimates; the price per token must be read from the provider's
-price sheet at approval time and is not assumed here.
+`python -m evals._decision_lineage split` prints this table;
+`score --partition NAME` scores one partition.
 
-- Prompt: about 700 tokens. Each record with its quotes: about 180 tokens. Each
-  candidate result: about 40 output tokens.
-- One call with 10 candidates: about 700 + 11 × 180 ≈ 2,700 input tokens and
-  about 400 output tokens.
-- Benchmark run: 82 calls ≈ 221,000 input and 33,000 output tokens. Three
-  stability runs: about 664,000 input and 98,000 output tokens.
-- Production, if ever enabled: a meeting with 8 records costs about 8 calls ≈
-  22,000 input and 3,200 output tokens, once per debrief that changes its
-  records.
+**Limitations.**
 
-## What a model-run request must contain
+- All eight owner-approval-claim pairs belong to one thread (the Kafka budget),
+  so they sit in the frozen partition only. The development partition, and so
+  the pilot, cannot exercise them; the deterministic validator enforces the
+  approval rule regardless.
+- Only one prompt-injection pair is in development, against three in the frozen
+  partition.
+- The partitions are too small for statistical confidence. Even a perfect
+  classifier scores supersession recall with a 95% Wilson interval of
+  [0.785, 1.0] on the 14 frozen supersession pairs. A frozen run can rule out a
+  bad classifier; it cannot certify the 0.90 gate. Only more data, ideally the
+  real-world partition, can.
 
-No model run is requested here. A request must name all of the following:
+Partitions are chosen once and frozen. Prompts and thresholds are tuned on
+development only.
 
-- the exact provider and model id
-- the current price per input and output token, quoted from the provider's
-  price sheet on the day of the request
-- the maximum number of calls (the benchmark needs 82 per run) and runs
-- the maximum spend, computed from those numbers
-- stopping rules: stop at the spend cap, on any provider error rate above an
-  agreed share, and after the first full run if a hard-rule gate (time order,
-  approval, broken evidence) fails
-- the evaluation protocol above
+**Isolated candidate pools.** Each partition's requests are built from a
+register holding only that partition's claims, and the lexical IDF statistics
+come from that register too. A development request therefore never contains
+frozen claim text, quotes or records, and rewriting every frozen claim leaves
+every development request byte-identical (a regression test checks both).
+Quarantined pairs are never evaluation targets, and `planned_calls` refuses any
+pair that reaches outside its pool.
+
+`python -m evals._decision_lineage retrieval --partition NAME`:
+
+| Pool | Relationship pairs | Excluded (no strict order) | Eligible | Recall@5 | Recall@10 |
+| --- | --- | --- | --- | --- | --- |
+| development | 42 | 3 (079 to 081) | 39 | 35 / 39 | 38 / 39 (miss: 036) |
+| frozen_evaluation | 44 | 1 (082) | 43 | 38 / 43 | 42 / 43 (miss: 112) |
+| full corpus, historical | 87 | 4 | 83 | 75 / 83 | 81 / 83 |
+
+The quarantined relationship pair (021) is in neither partition.
+
+## Offline pipeline (no provider)
+
+`evals/_lineage_classifier.py` is the evaluation harness a model would plug
+into. It contains no live provider adapter.
+
+- **Request:** `ClassifierRequest` (`lineage-classifier/v1`). Per call, one later
+  claim and up to 10 earlier candidates, chosen by lexical ranking inside the
+  DM-2a `comparison_window` (same owner and twin, strictly earlier meetings).
+  Candidates are named `c1` to `c10`. No record, meeting, owner or pair id, label,
+  category or rationale is sent. Meeting content goes only in the user message;
+  the system prompt is a constant.
+- **Output:** `ClassifierOutput`, `extra=forbid`. For each candidate:
+  `candidate`, `label` (four relationships or `abstain`), `earlier_evidence` and
+  `later_evidence` entry ids. There is no free text.
+- **Validation (fail closed):** each of the following becomes `abstain` with a
+  recorded reason:
+  - an output that does not parse, has unknown fields, or names an unknown
+    candidate (`invalid_output`)
+  - a duplicate candidate
+  - a candidate missing from the output (`not_returned`)
+  - evidence that is empty or not the claim's own (`evidence_invalid`)
+  - supersession without a strict time order (`order_unverified`)
+  - supersession touching an `owner_decision` (`approval_authority`)
+
+  A prediction is only ever a derived, unreviewed candidate. Nothing is written
+  to DM-1, DM-2a or the owner model.
+- **Replay:** `ReplayProvider` reads a JSONL cassette keyed by the SHA-256 of
+  model id, system prompt and request. A missing entry fails the run.
+- **Caps:** `run_pipeline` refuses the next call when it would exceed the call
+  cap, the input-token cap, the output-token cap (assuming the per-call output
+  maximum) or the spend cap. It records spend, tokens and the reason it stopped.
+  The pre-call check uses an offline estimate (characters / 3), not a provider
+  token count, so these caps are a simulator bound, not a monetary guarantee for
+  a live adapter. A live adapter needs provider token counting before each call
+  and reconciliation from response usage after it.
+- **Reports:** `python -m evals._lineage_classifier replay --cassette FILE`
+  reports per-class precision and recall with 95% intervals, by language and by
+  category, evidence validity and selection, hard-rule counts, decision reasons,
+  spend per evaluated pair, and end-to-end outcomes. The end-to-end outcomes
+  separate retrieval misses, pairs excluded by DM-2a eligibility, broken
+  evidence, and correct and wrong answers, so recall counts retrieval misses.
+  With an oracle response and isolated pools, the pipeline reaches 38 of 42
+  development relationship pairs (3 without strict time order, 1 missed by
+  retrieval) and 42 of 44 frozen ones (1 and 1).
+
+## Proposed pilot (not authorized)
+
+**Model.** Google `gemini-3.8-flash`, the debrief role model in `.env.example`,
+through the existing `langchain-google-genai` 4.4.0 `init_chat_model` path, with
+structured output as `ToolStrategy`, which `_extract_chunk` already uses for
+`DebriefDraft`.
+
+- `reasoning_effort=low`, because the repository records that this model rejects
+  `minimal`.
+- Temperature at the provider default, recorded in the cassette.
+- No new SDK or dependency.
+
+Its suitability for English, Indonesian and mixed engineering discussion is not
+demonstrated for this task; measuring it is the point of the pilot.
+
+**Pricing.** <https://aistudio.google.com/docs/pricing>, retrieved 2026-11-17.
+Gemini 3.8 Flash, Standard paid tier: $0.75 per 1M input tokens and $3.75 per 1M
+output tokens through 2026-12-31, doubling to $1.50 and $7.50 from 2027-01-01.
+Output pricing is assumed to include thinking tokens, so the per-call output cap
+covers thinking.
+
+**Sample.** 23 development pairs, from `evals/fixtures/decision-lineage-pilot.json`:
+
+| Group | Pairs |
+| --- | --- |
+| Labels | 4 related, 5 contradiction, 4 supersession, 5 none, 5 abstain |
+| Languages | 8 English, 6 Indonesian, 9 mixed |
+| Hard cases | 4 hard negatives, 4 ambiguous, 1 prompt injection |
+| Expected zero-call outcomes | 1 broken evidence (must abstain without a call), 1 equal-timestamp (must be excluded by eligibility) |
+
+These need 21 calls comparing 204 candidates from the development pool only.
+
+**Budget and caps.** `python -m evals._lineage_classifier plan` prints this from
+the real requests. All token figures are offline estimates:
+
+| | Value |
+| --- | --- |
+| Calls | 21 (cap 24) |
+| Estimated input tokens | 32,538, at most 1,647 per call (cap 120,000) |
+| Output | at most 4,096 tokens per call (cap 100,000 in total) |
+| Worst-case spend | $0.35 at 2026 prices, $0.70 at 2027 prices |
+| Spend cap | $1.00 |
+
+**Call policy.**
+
+- 60 s timeout per call.
+- At most one retry, on a transport or server error only, counted against the
+  call cap.
+- No retry on a schema-invalid answer; it is scored as `invalid_output`.
+
+**Stop conditions.**
+
+- Any cap is reached.
+- Three consecutive provider errors.
+- More than 20% `invalid_output` after the first five calls.
+
+Every request and raw response is recorded to a cassette, so all later scoring
+replays offline.
+
+**Conditions for continuing past the pilot**, all measured on the 23 pilot pairs:
+
+- `invalid_output` in at most 10% of calls
+- model-level `evidence_invalid` in at most 10% of answered candidates
+- every relationship class with recall above zero
+- at most one of the five `none` pairs labelled with a relationship
+- at least three of the five `abstain` pairs abstained
+- the prompt-injection pair labelled by its content
+
+**Stages after a successful pilot,** each needing its own approval:
+
+| Stage | Calls | Worst case (2026 / 2027 prices) |
+| --- | --- | --- |
+| Full development run | 40 | $0.66 / $1.33 |
+| One frozen evaluation run | 39 | $0.64 / $1.29 |
+| Two stability reruns on frozen | 78 | $1.29 / $2.57 |
+
+The whole programme stays under $3 at 2026 prices and under $6 at 2027 prices.
+The frozen run is scored against the gate above, and its confidence intervals
+are reported with it.
+
+**What a continue decision would rest on.** A frozen run that passes the hard
+rules (no time-order, approval or broken-evidence violations), keeps the
+relationship false-positive rate under 5%, and reaches per-class lower 95% bounds
+clearly above the lexical baseline justifies collecting real, double-labelled
+data. It does not justify activation on its own.
+
+## Independent annotation status
+
+**Second annotation pending.**
+
+- `python -m evals._lineage_annotation export` writes a leak-checked package:
+  130 pairs and 7 worked examples on topics the benchmark does not use, with no
+  ids, labels, rationale or categories. The coordinator key is written
+  separately.
+- `verify` re-checks an exported package.
+- `agreement` computes Cohen's kappa, per-label agreement, a confusion matrix and
+  disagreement types, and writes an adjudication file.
+- `corrections` proposes label corrections only after every disagreement is
+  adjudicated, requires a written reason, and never edits the benchmark.
+
+No second human annotator has labelled the benchmark; agreement is unmeasured.
 
 ## Explicitly out of scope until authorized
 

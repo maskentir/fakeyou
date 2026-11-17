@@ -5,7 +5,7 @@ import math
 import re
 import sys
 from collections import Counter
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Annotated, Literal, get_args
@@ -28,6 +28,7 @@ from fakeyou.debrief.register import (
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "decision-lineage-pairs.json"
+SPLIT_FIXTURE = Path(__file__).parent / "fixtures" / "decision-lineage-split.json"
 
 Label = Literal[
     "related_discussion",
@@ -268,6 +269,16 @@ class ClassScore:
         return self.true_positive / self.support if self.support else None
 
 
+def wilson_interval(hits: int, total: int, z: float = 1.96) -> tuple[float, float] | None:
+    if total == 0:
+        return None
+    share = hits / total
+    centre = (share + z * z / (2 * total)) / (1 + z * z / total)
+    spread = z * math.sqrt(share * (1 - share) / total + z * z / (4 * total * total))
+    spread /= 1 + z * z / total
+    return (round(max(0.0, centre - spread), 3), round(min(1.0, centre + spread), 3))
+
+
 @dataclass(frozen=True, slots=True)
 class LineageScore:
     predictor: str
@@ -294,7 +305,9 @@ class LineageScore:
                 "support": score.support,
                 "predicted": score.predicted,
                 "precision": score.precision,
+                "precision_95ci": wilson_interval(score.true_positive, score.predicted),
                 "recall": score.recall,
+                "recall_95ci": wilson_interval(score.true_positive, score.support),
             }
             for label, score in self.classes.items()
         }
@@ -629,11 +642,19 @@ RetrievalExclusion = Literal["broken_evidence", "not_strictly_earlier", "outside
 RETRIEVAL_DEPTHS = (5, 10)
 
 
-def dataset_register(dataset: LineageDataset) -> DecisionRegister:
+def dataset_register(
+    dataset: LineageDataset, claims: Collection[str] | None = None
+) -> DecisionRegister:
     records: list[DecisionRecord] = []
     meetings: list[MeetingCoverage] = []
     for meeting in sorted(dataset.meetings, key=lambda item: (item.created_at, item.meeting_id)):
-        found = [record for record in meeting_records(dataset, meeting).values() if record]
+        if claims is not None and not any(item.key in claims for item in meeting.items):
+            continue
+        found = [
+            record
+            for key, record in meeting_records(dataset, meeting).items()
+            if record and (claims is None or key in claims)
+        ]
         scope = MeetingScope(
             owner_id=dataset.owner_id,
             twin_id=dataset.twin_id,
@@ -684,8 +705,12 @@ def _exclusion(
     return None
 
 
-def candidate_retrieval(dataset: LineageDataset, pairs: Sequence[ResolvedPair]) -> RetrievalResult:
-    register = dataset_register(dataset)
+def candidate_retrieval(
+    dataset: LineageDataset,
+    pairs: Sequence[ResolvedPair],
+    claims: Collection[str] | None = None,
+) -> RetrievalResult:
+    register = dataset_register(dataset, claims)
     by_id = {record.record_id: record for record in register.records}
     index = LexicalIndex([retrieval_text(record) for record in register.records])
     cached: dict[str, frozenset[str]] = {}
@@ -731,29 +756,185 @@ def candidate_retrieval(dataset: LineageDataset, pairs: Sequence[ResolvedPair]) 
     )
 
 
+Partition = Literal["development", "frozen_evaluation"]
+PARTITIONS: tuple[Partition, ...] = get_args(Partition)
+REPORTED_CATEGORIES: tuple[Category, ...] = (
+    "hard_negative",
+    "paraphrase",
+    "owner_approval_claim",
+    "prompt_injection",
+    "ambiguous",
+    "equal_timestamps",
+    "multi_evidence",
+    "altered_evidence",
+    "missing_evidence",
+)
+
+
+class SplitTopic(BaseModel):
+    model_config = _STRICT
+
+    partition: Partition
+    claims: tuple[_Text, ...]
+
+
+class LineageSplit(BaseModel):
+    model_config = _STRICT
+
+    version: Literal[1]
+    benchmark: Literal["decision-lineage-pairs.json"]
+    unit: Literal["topic"]
+    rationale: Annotated[str, StringConstraints(min_length=80)]
+    partitions: dict[Literal["development", "frozen_evaluation", "real_world_validation"], _Text]
+    topics: dict[_Text, SplitTopic]
+
+    def claim_partitions(self) -> dict[str, Partition]:
+        owners: dict[str, Partition] = {}
+        for name, topic in self.topics.items():
+            for claim in topic.claims:
+                if claim in owners:
+                    raise ValueError(f"claim {claim} belongs to more than one topic, last {name}")
+                owners[claim] = topic.partition
+        return owners
+
+
+def load_split(path: Path = SPLIT_FIXTURE) -> LineageSplit:
+    return LineageSplit.model_validate_json(path.read_text(encoding="utf-8"))
+
+
+def partition_pairs(
+    split: LineageSplit, pairs: Sequence[ResolvedPair]
+) -> dict[str, tuple[ResolvedPair, ...]]:
+    owners = split.claim_partitions()
+    groups: dict[str, list[ResolvedPair]] = {name: [] for name in (*PARTITIONS, "quarantined")}
+    for resolved in pairs:
+        first, second = owners[resolved.pair.first], owners[resolved.pair.second]
+        groups[first if first == second else "quarantined"].append(resolved)
+    return {name: tuple(members) for name, members in groups.items()}
+
+
+def partition_claims(split: LineageSplit, partition: Partition) -> frozenset[str]:
+    return frozenset(
+        claim for claim, owner in split.claim_partitions().items() if owner == partition
+    )
+
+
+def describe(pairs: Sequence[ResolvedPair]) -> dict[str, object]:
+    return {
+        "pairs": len(pairs),
+        "labels": dict(sorted(Counter(resolved.pair.label for resolved in pairs).items())),
+        "languages": dict(sorted(Counter(resolved.pair.language for resolved in pairs).items())),
+        "categories": {
+            category: sum(category in resolved.pair.categories for resolved in pairs)
+            for category in REPORTED_CATEGORIES
+        },
+    }
+
+
+def breakdown(
+    predictions: PredictionSet,
+    pairs: Sequence[ResolvedPair],
+    groups: Callable[[LabeledPair], Sequence[str]],
+) -> dict[str, dict[str, object]]:
+    indexed = _indexed(predictions, pairs)
+    tally: dict[str, Counter[str]] = {}
+    for resolved in pairs:
+        prediction = indexed.get(resolved.pair.id)
+        label = prediction.label if prediction is not None else "abstain"
+        for name in groups(resolved.pair):
+            counts = tally.setdefault(name, Counter())
+            counts["pairs"] += 1
+            counts["correct"] += label == resolved.pair.label
+            counts["answered"] += label != "abstain"
+    return {
+        name: {
+            "pairs": counts["pairs"],
+            "label_accuracy": counts["correct"] / counts["pairs"],
+            "label_accuracy_95ci": wilson_interval(counts["correct"], counts["pairs"]),
+            "answered": counts["answered"],
+        }
+        for name, counts in sorted(tally.items())
+    }
+
+
+def scoped(predictions: PredictionSet, pairs: Sequence[ResolvedPair]) -> PredictionSet:
+    known = {resolved.pair.id for resolved in pairs}
+    return predictions.model_copy(
+        update={
+            "predictions": tuple(item for item in predictions.predictions if item.pair_id in known)
+        }
+    )
+
+
+def evaluation_report(
+    predictions: PredictionSet, pairs: Sequence[ResolvedPair], status: str
+) -> dict[str, object]:
+    result = score(predictions, pairs)
+    return {
+        **result.summary(),
+        "benchmark_status": status,
+        "by_language": breakdown(predictions, pairs, lambda pair: (pair.language,)),
+        "by_category": breakdown(
+            predictions,
+            pairs,
+            lambda pair: tuple(
+                category for category in pair.categories if category in REPORTED_CATEGORIES
+            ),
+        ),
+        "gate_failures": gate_failures(result),
+    }
+
+
 def _score_command(arguments: argparse.Namespace) -> int:
     dataset = load_dataset(arguments.dataset)
     pairs = resolve_pairs(dataset)
+    if arguments.partition is not None:
+        pairs = partition_pairs(load_split(), pairs)[arguments.partition]
     predictions = (
         PredictionSet.model_validate_json(arguments.predictions.read_text(encoding="utf-8"))
         if arguments.predictions is not None
         else BASELINES[arguments.baseline](pairs)
     )
-    result = score(predictions, pairs)
-    failures = gate_failures(result)
-    report = {
-        **result.summary(),
-        "benchmark_status": dataset.benchmark_status,
-        "gate_failures": failures,
-    }
+    report = evaluation_report(scoped(predictions, pairs), pairs, dataset.benchmark_status)
+    failures = report["gate_failures"]
+    report["partition"] = arguments.partition or "all"
     sys.stdout.write(json.dumps(report, indent=2, sort_keys=True) + "\n")
     return 1 if failures else 0
 
 
+def _split_command(arguments: argparse.Namespace) -> int:
+    dataset = load_dataset(arguments.dataset)
+    split = load_split()
+    groups = partition_pairs(split, resolve_pairs(dataset))
+    report = {
+        "benchmark_status": dataset.benchmark_status,
+        "unit": split.unit,
+        "partitions": {name: describe(members) for name, members in groups.items()},
+        "quarantined_pairs": [resolved.pair.id for resolved in groups["quarantined"]],
+        "real_world_validation": {"pairs": 0, "purpose": split.partitions["real_world_validation"]},
+    }
+    sys.stdout.write(json.dumps(report, indent=2, sort_keys=True) + "\n")
+    return 0
+
+
 def _retrieval_command(arguments: argparse.Namespace) -> int:
     dataset = load_dataset(arguments.dataset)
-    result = candidate_retrieval(dataset, resolve_pairs(dataset))
-    report = {**result.summary(), "benchmark_status": dataset.benchmark_status}
+    pairs = resolve_pairs(dataset)
+    if arguments.partition is None:
+        result = candidate_retrieval(dataset, pairs)
+        pool = "full_corpus_exploratory"
+    else:
+        split = load_split()
+        claims = partition_claims(split, arguments.partition)
+        result = candidate_retrieval(
+            dataset, partition_pairs(split, pairs)[arguments.partition], claims
+        )
+        pool = arguments.partition
+    report = {
+        **result.summary(),
+        "benchmark_status": dataset.benchmark_status,
+        "candidate_pool": pool,
+    }
     sys.stdout.write(json.dumps(report, indent=2, sort_keys=True) + "\n")
     return 0
 
@@ -769,10 +950,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     source = scoring.add_mutually_exclusive_group(required=True)
     source.add_argument("--predictions", type=Path)
     source.add_argument("--baseline", choices=sorted(BASELINES))
+    scoring.add_argument("--partition", choices=PARTITIONS)
     scoring.set_defaults(run=_score_command)
+    commands.add_parser("split", help="Leakage-resistant partitions of the benchmark").set_defaults(
+        run=_split_command
+    )
     retrieval = commands.add_parser(
         "retrieval", help="Recall of lexical candidate ranking inside the DM-2a window"
     )
+    retrieval.add_argument("--partition", choices=PARTITIONS)
     retrieval.set_defaults(run=_retrieval_command)
     arguments = parser.parse_args(argv)
     run: Callable[[argparse.Namespace], int] = arguments.run
