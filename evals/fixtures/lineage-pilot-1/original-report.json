@@ -1,0 +1,254 @@
+{
+  "abstention_recall": 0.8,
+  "answered_coverage": 0.7777777777777778,
+  "approval_resolutions": 0,
+  "benchmark_status": "synthetic / single-curator / provisional evaluation benchmark",
+  "by_category": {
+    "altered_evidence": {
+      "answered": 0,
+      "label_accuracy": 1.0,
+      "label_accuracy_95ci": [
+        0.207,
+        1.0
+      ],
+      "pairs": 1
+    },
+    "ambiguous": {
+      "answered": 1,
+      "label_accuracy": 0.75,
+      "label_accuracy_95ci": [
+        0.301,
+        0.954
+      ],
+      "pairs": 4
+    },
+    "equal_timestamps": {
+      "answered": 0,
+      "label_accuracy": 0.0,
+      "label_accuracy_95ci": [
+        0.0,
+        0.793
+      ],
+      "pairs": 1
+    },
+    "hard_negative": {
+      "answered": 2,
+      "label_accuracy": 0.4,
+      "label_accuracy_95ci": [
+        0.118,
+        0.769
+      ],
+      "pairs": 5
+    },
+    "multi_evidence": {
+      "answered": 1,
+      "label_accuracy": 1.0,
+      "label_accuracy_95ci": [
+        0.207,
+        1.0
+      ],
+      "pairs": 1
+    },
+    "paraphrase": {
+      "answered": 2,
+      "label_accuracy": 1.0,
+      "label_accuracy_95ci": [
+        0.342,
+        1.0
+      ],
+      "pairs": 2
+    },
+    "prompt_injection": {
+      "answered": 0,
+      "label_accuracy": 0.0,
+      "label_accuracy_95ci": [
+        0.0,
+        0.793
+      ],
+      "pairs": 1
+    }
+  },
+  "by_language": {
+    "en": {
+      "answered": 3,
+      "label_accuracy": 0.375,
+      "label_accuracy_95ci": [
+        0.137,
+        0.694
+      ],
+      "pairs": 8
+    },
+    "id": {
+      "answered": 5,
+      "label_accuracy": 0.8333333333333334,
+      "label_accuracy_95ci": [
+        0.436,
+        0.97
+      ],
+      "pairs": 6
+    },
+    "mixed": {
+      "answered": 7,
+      "label_accuracy": 0.7777777777777778,
+      "label_accuracy_95ci": [
+        0.453,
+        0.937
+      ],
+      "pairs": 9
+    }
+  },
+  "classes": {
+    "abstain": {
+      "precision": 0.5,
+      "precision_95ci": [
+        0.215,
+        0.785
+      ],
+      "predicted": 8,
+      "recall": 0.8,
+      "recall_95ci": [
+        0.376,
+        0.964
+      ],
+      "support": 5
+    },
+    "no_established_relationship": {
+      "precision": 1.0,
+      "precision_95ci": [
+        0.342,
+        1.0
+      ],
+      "predicted": 2,
+      "recall": 0.4,
+      "recall_95ci": [
+        0.118,
+        0.769
+      ],
+      "support": 5
+    },
+    "potential_contradiction": {
+      "precision": 1.0,
+      "precision_95ci": [
+        0.207,
+        1.0
+      ],
+      "predicted": 1,
+      "recall": 0.2,
+      "recall_95ci": [
+        0.036,
+        0.624
+      ],
+      "support": 5
+    },
+    "potential_supersession": {
+      "precision": 0.5714285714285714,
+      "precision_95ci": [
+        0.25,
+        0.842
+      ],
+      "predicted": 7,
+      "recall": 1.0,
+      "recall_95ci": [
+        0.51,
+        1.0
+      ],
+      "support": 4
+    },
+    "related_discussion": {
+      "precision": 0.8,
+      "precision_95ci": [
+        0.376,
+        0.964
+      ],
+      "predicted": 5,
+      "recall": 1.0,
+      "recall_95ci": [
+        0.51,
+        1.0
+      ],
+      "support": 4
+    }
+  },
+  "confusion": {
+    "abstain": {
+      "abstain": 4,
+      "no_established_relationship": 0,
+      "potential_contradiction": 0,
+      "potential_supersession": 0,
+      "related_discussion": 1
+    },
+    "no_established_relationship": {
+      "abstain": 3,
+      "no_established_relationship": 2,
+      "potential_contradiction": 0,
+      "potential_supersession": 0,
+      "related_discussion": 0
+    },
+    "potential_contradiction": {
+      "abstain": 1,
+      "no_established_relationship": 0,
+      "potential_contradiction": 1,
+      "potential_supersession": 3,
+      "related_discussion": 0
+    },
+    "potential_supersession": {
+      "abstain": 0,
+      "no_established_relationship": 0,
+      "potential_contradiction": 0,
+      "potential_supersession": 4,
+      "related_discussion": 0
+    },
+    "related_discussion": {
+      "abstain": 0,
+      "no_established_relationship": 0,
+      "potential_contradiction": 0,
+      "potential_supersession": 0,
+      "related_discussion": 4
+    }
+  },
+  "end_to_end": {
+    "end_to_end_recall": 0.6923076923076923,
+    "outcomes": {
+      "correct": 9,
+      "excluded_no_time_order": 1,
+      "wrong_or_abstained": 3
+    },
+    "relationship_pairs": 13
+  },
+  "evidence_selection_precision": 1.0,
+  "evidence_selection_sufficiency": 1.0,
+  "evidence_validity": 1.0,
+  "gate_failures": [
+    "related_discussion precision 0.8 < 0.85",
+    "potential_supersession precision 0.5714285714285714 < 0.9",
+    "potential_contradiction recall 0.2 < 0.7",
+    "no_established_relationship recall 0.4 < 0.8",
+    "answered coverage 0.778"
+  ],
+  "invalid_evidence_answers": 0,
+  "missing": 6,
+  "pipeline": {
+    "budget_basis": "recorded cassette usage; pre-call cap checks use the offline estimate: input tokens are characters / 3 and output is the per-call cap; neither is a provider token count, so these caps are not a monetary guarantee for a live run",
+    "calls": 21,
+    "decisions": {
+      "evidence_invalid": 75,
+      "model_abstained": 24,
+      "no_established_relationship": 80,
+      "potential_contradiction": 1,
+      "potential_supersession": 13,
+      "related_discussion": 11
+    },
+    "failed_calls": 0,
+    "input_tokens": 28396,
+    "invalid_output_calls": 0,
+    "output_tokens": 10402,
+    "spend_per_evaluated_pair_usd": 0.003547,
+    "spend_usd": 0.060304,
+    "stop": "completed"
+  },
+  "predictor": "gemini-3.8-flash:lineage-classifier/v1",
+  "relationship_false_positive_rate": 0.0,
+  "selection_pairs": 1,
+  "temporal_violations": 0,
+  "total": 23
+}

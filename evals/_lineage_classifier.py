@@ -5,7 +5,7 @@ import math
 import sys
 from collections import Counter
 from collections.abc import Callable, Collection, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Annotated, Literal, Protocol
 
@@ -130,11 +130,16 @@ AbstainReason = Literal[
 ]
 
 
+ValidatorVersion = Literal["v1", "v2"]
+VALIDATOR_VERSION: ValidatorVersion = "v2"
+
+
 @dataclass(frozen=True, slots=True)
 class Decision:
     label: Label
     evidence: SidedEvidence
     reason: AbstainReason | None
+    source: tuple[str, str] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,17 +210,25 @@ def _entries(record: DecisionRecord) -> set[str]:
     return {evidence.entry_id for evidence in record.evidence}
 
 
-def _judge(call: PreparedCall, item: ComparisonOutput) -> Decision:
+def _evidence_acceptable(
+    call: PreparedCall, item: ComparisonOutput, version: ValidatorVersion
+) -> bool:
+    earlier, later = set(item.earlier_evidence), set(item.later_evidence)
+    if not earlier <= _entries(call.record_for(item.candidate)) or not later <= _entries(
+        call.later
+    ):
+        return False
+    if version == "v2" and item.label == "no_established_relationship":
+        return bool(earlier) == bool(later)
+    return bool(earlier) and bool(later)
+
+
+def _judge(call: PreparedCall, item: ComparisonOutput, version: ValidatorVersion) -> Decision:
     earlier = call.record_for(item.candidate)
     evidence = SidedEvidence(first=item.earlier_evidence, second=item.later_evidence)
     if item.label == "abstain":
         return _abstain("model_abstained")
-    if (
-        not item.earlier_evidence
-        or not item.later_evidence
-        or not set(item.earlier_evidence) <= _entries(earlier)
-        or not set(item.later_evidence) <= _entries(call.later)
-    ):
+    if not _evidence_acceptable(call, item, version):
         return _abstain("evidence_invalid")
     if item.label == "potential_supersession":
         if not strictly_earlier(earlier.scope, call.later.scope):
@@ -225,7 +238,7 @@ def _judge(call: PreparedCall, item: ComparisonOutput) -> Decision:
     return Decision(item.label, evidence, None)
 
 
-def validate_output(call: PreparedCall, raw: str) -> dict[str, Decision]:
+def _raw_decisions(call: PreparedCall, raw: str, version: ValidatorVersion) -> dict[str, Decision]:
     refs = [view.ref for view in call.request.candidates]
     try:
         output = ClassifierOutput.model_validate_json(raw)
@@ -237,9 +250,20 @@ def validate_output(call: PreparedCall, raw: str) -> dict[str, Decision]:
     decisions = {ref: _abstain("not_returned") for ref in refs}
     for item in output.comparisons:
         decisions[item.candidate] = (
-            _abstain("duplicate_candidate") if returned[item.candidate] > 1 else _judge(call, item)
+            _abstain("duplicate_candidate")
+            if returned[item.candidate] > 1
+            else _judge(call, item, version)
         )
     return decisions
+
+
+def validate_output(
+    call: PreparedCall, raw: str, version: ValidatorVersion = VALIDATOR_VERSION
+) -> dict[str, Decision]:
+    return {
+        ref: replace(decision, source=(call.record_for(ref).record_id, call.later.record_id))
+        for ref, decision in _raw_decisions(call, raw, version).items()
+    }
 
 
 _Digest = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
@@ -390,6 +414,7 @@ class StopRules(BaseModel):
     consecutive_provider_errors: Annotated[int, Field(ge=1)] = 3
     invalid_output_after_calls: Annotated[int, Field(ge=1)] = 5
     max_invalid_output_rate: Annotated[float, Field(ge=0, le=1)] = 0.2
+    validator: ValidatorVersion = VALIDATOR_VERSION
 
 
 @dataclass
@@ -506,7 +531,7 @@ def run_pipeline(
         result.input_tokens += entry.input_tokens
         result.output_tokens += entry.output_tokens
         result.spend_usd = spend(pricing, result.input_tokens, result.output_tokens)
-        decisions = validate_output(call, entry.response)
+        decisions = validate_output(call, entry.response, rules.validator)
         result.invalid_calls += all(
             decision.reason == "invalid_output" for decision in decisions.values()
         )
@@ -625,11 +650,18 @@ def plan_report(dataset: LineageDataset, plan: PilotPlan) -> dict[str, object]:
 
 
 def replay_report(
-    dataset: LineageDataset, plan: PilotPlan, provider: Provider
+    dataset: LineageDataset,
+    plan: PilotPlan,
+    provider: Provider,
+    version: ValidatorVersion = VALIDATOR_VERSION,
 ) -> dict[str, object]:
     pairs, calls = pilot_scope(dataset, plan)
     result = run_pipeline(
-        calls, pairs, provider, (plan.model, plan.pricing, plan.caps), plan.stop_rules
+        calls,
+        pairs,
+        provider,
+        (plan.model, plan.pricing, plan.caps),
+        plan.stop_rules.model_copy(update={"validator": version}),
     )
     predictions = PredictionSet(
         predictor=f"{plan.model}:{PROMPT_VERSION}", predictions=tuple(result.predictions.values())
