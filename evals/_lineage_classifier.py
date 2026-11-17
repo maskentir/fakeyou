@@ -9,7 +9,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    TypeAdapter,
+    ValidationError,
+)
 
 from evals._decision_lineage import (
     FIXTURE,
@@ -235,15 +242,60 @@ def validate_output(call: PreparedCall, raw: str) -> dict[str, Decision]:
     return decisions
 
 
+_Digest = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+
+
+class Provenance(BaseModel):
+    model_config = _STRICT
+
+    provider: str
+    model: str
+    service_tier: str
+    thinking_level: str
+    max_output_tokens: int
+    timeout_seconds: float
+    langchain_google_genai: str
+    google_genai: str
+    head: str
+    plan_sha256: str
+    recorded_at: str
+
+
 class CassetteEntry(BaseModel):
     model_config = _STRICT
 
-    request_digest: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+    outcome: Literal["response"] = "response"
+    request_digest: _Digest
     model: str
     prompt_version: Literal["lineage-classifier/v1"]
     response: str
     input_tokens: Annotated[int, Field(ge=0)]
     output_tokens: Annotated[int, Field(ge=0)]
+    thinking_tokens: Annotated[int, Field(ge=0)] = 0
+    call: int | None = None
+    attempt: int | None = None
+    provenance: Provenance | None = None
+
+
+class CassetteFailure(BaseModel):
+    model_config = _STRICT
+
+    outcome: Literal["error", "usage_unknown"]
+    request_digest: _Digest
+    model: str
+    prompt_version: Literal["lineage-classifier/v1"]
+    call: int
+    attempt: int
+    error_kind: str | None
+    error_status: int | None
+    error_detail: str | None
+    response: str | None
+    provenance: Provenance
+
+
+_CASSETTE_LINE: TypeAdapter[CassetteEntry | CassetteFailure] = TypeAdapter(
+    Annotated[CassetteEntry | CassetteFailure, Field(discriminator="outcome")]
+)
 
 
 class CassetteMissError(LookupError):
@@ -263,8 +315,9 @@ class ReplayProvider:
         entries: dict[tuple[str, str], CassetteEntry] = {}
         for line in path.read_text(encoding="utf-8").splitlines():
             if line.strip():
-                entry = CassetteEntry.model_validate_json(line)
-                entries[(entry.request_digest, entry.model)] = entry
+                entry = _CASSETTE_LINE.validate_json(line)
+                if isinstance(entry, CassetteEntry):
+                    entries[(entry.request_digest, entry.model)] = entry
         return cls(entries)
 
     def respond(self, request: ClassifierRequest, model: str) -> CassetteEntry:
@@ -303,7 +356,39 @@ def spend(pricing: Pricing, input_tokens: int, output_tokens: int) -> float:
     ) / 1_000_000
 
 
-StopReason = Literal["completed", "call_cap", "input_token_cap", "output_token_cap", "spend_cap"]
+StopReason = Literal[
+    "completed",
+    "call_cap",
+    "input_token_cap",
+    "output_token_cap",
+    "spend_cap",
+    "input_bound_exceeded",
+    "invalid_output_rate",
+    "provider_errors",
+    "provider_rejected",
+    "usage_unknown",
+    "usage_over_bound",
+    "model_mismatch",
+    "secret_in_record",
+]
+
+
+class RunStoppedError(Exception):
+    def __init__(self, reason: StopReason) -> None:
+        super().__init__(reason)
+        self.reason: StopReason = reason
+
+
+class CallFailedError(Exception):
+    pass
+
+
+class StopRules(BaseModel):
+    model_config = _STRICT
+
+    consecutive_provider_errors: Annotated[int, Field(ge=1)] = 3
+    invalid_output_after_calls: Annotated[int, Field(ge=1)] = 5
+    max_invalid_output_rate: Annotated[float, Field(ge=0, le=1)] = 0.2
 
 
 @dataclass
@@ -313,6 +398,8 @@ class PipelineResult:
     input_tokens: int = 0
     output_tokens: int = 0
     spend_usd: float = 0.0
+    failed_calls: int = 0
+    invalid_calls: int = 0
     reasons: Counter[str] = field(default_factory=Counter)
     stop: StopReason = "completed"
 
@@ -380,26 +467,49 @@ def estimate_input_tokens(request: ClassifierRequest) -> int:
     return math.ceil(characters / 3)
 
 
+def _invalid_rate_exceeded(result: PipelineResult, rules: StopRules) -> bool:
+    return (
+        result.calls >= rules.invalid_output_after_calls
+        and result.invalid_calls / result.calls > rules.max_invalid_output_rate
+    )
+
+
 def run_pipeline(
     calls: Sequence[PreparedCall],
     pairs: Sequence[ResolvedPair],
     provider: Provider,
     run: tuple[str, Pricing, RunCaps],
+    rules: StopRules | None = None,
 ) -> PipelineResult:
     model, pricing, caps = run
+    rules = rules or StopRules()
     index = _pair_index(pairs)
     result = PipelineResult()
     for call in calls:
         stop = _stop_before(result, caps, pricing, estimate_input_tokens(call.request))
+        if stop is None and _invalid_rate_exceeded(result, rules):
+            stop = "invalid_output_rate"
         if stop is not None:
             result.stop = stop
             break
-        entry = provider.respond(call.request, model)
+        try:
+            entry = provider.respond(call.request, model)
+        except RunStoppedError as stopped:
+            result.stop = stopped.reason
+            break
+        except CallFailedError:
+            result.failed_calls += 1
+            result.reasons["provider_error"] += len(call.candidates)
+            continue
         result.calls += 1
         result.input_tokens += entry.input_tokens
         result.output_tokens += entry.output_tokens
         result.spend_usd = spend(pricing, result.input_tokens, result.output_tokens)
-        for ref, decision in validate_output(call, entry.response).items():
+        decisions = validate_output(call, entry.response)
+        result.invalid_calls += all(
+            decision.reason == "invalid_output" for decision in decisions.values()
+        )
+        for ref, decision in decisions.items():
             result.reasons[decision.reason or decision.label] += 1
             resolved = index.get((call.record_for(ref).record_id, call.later.record_id))
             if resolved is not None:
@@ -439,16 +549,28 @@ def end_to_end(
     }
 
 
+class LiveSettings(BaseModel):
+    model_config = _STRICT
+
+    service_tier: Literal["standard"]
+    timeout_seconds: Annotated[float, Field(gt=0, le=120)]
+    max_attempts_per_call: Literal[1, 2]
+    max_input_tokens_per_call: Annotated[int, Field(ge=1)]
+    message_overhead_tokens: Annotated[int, Field(ge=0)]
+
+
 class PilotPlan(BaseModel):
     model_config = _STRICT
 
-    provider: str
-    model: str
-    reasoning_effort: str
+    provider: Literal["google"]
+    model: Literal["gemini-3.8-flash"]
+    reasoning_effort: Literal["low"]
     partition: Literal["development"]
     pairs: Annotated[tuple[str, ...], Field(min_length=1)]
     pricing: Pricing
     caps: RunCaps
+    live: LiveSettings
+    stop_rules: StopRules
 
 
 def load_plan(path: Path = PILOT_FIXTURE) -> PilotPlan:
@@ -505,7 +627,9 @@ def replay_report(
     dataset: LineageDataset, plan: PilotPlan, provider: Provider
 ) -> dict[str, object]:
     pairs, calls = pilot_scope(dataset, plan)
-    result = run_pipeline(calls, pairs, provider, (plan.model, plan.pricing, plan.caps))
+    result = run_pipeline(
+        calls, pairs, provider, (plan.model, plan.pricing, plan.caps), plan.stop_rules
+    )
     predictions = PredictionSet(
         predictor=f"{plan.model}:{PROMPT_VERSION}", predictions=tuple(result.predictions.values())
     )
@@ -516,6 +640,8 @@ def replay_report(
             "budget_basis": "recorded cassette usage; pre-call cap checks use the "
             + OFFLINE_ESTIMATE,
             "calls": result.calls,
+            "failed_calls": result.failed_calls,
+            "invalid_output_calls": result.invalid_calls,
             "stop": result.stop,
             "input_tokens": result.input_tokens,
             "output_tokens": result.output_tokens,

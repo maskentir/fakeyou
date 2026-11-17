@@ -20,9 +20,21 @@
   },
   "caps": {
     "max_calls": 24,
-    "max_input_tokens": 120000,
+    "max_input_tokens": 150000,
     "max_output_tokens": 100000,
     "max_output_tokens_per_call": 4096,
     "max_spend_usd": 1.0
+  },
+  "live": {
+    "service_tier": "standard",
+    "timeout_seconds": 60,
+    "max_attempts_per_call": 2,
+    "max_input_tokens_per_call": 8000,
+    "message_overhead_tokens": 256
+  },
+  "stop_rules": {
+    "consecutive_provider_errors": 3,
+    "invalid_output_after_calls": 5,
+    "max_invalid_output_rate": 0.2
   }
 }
