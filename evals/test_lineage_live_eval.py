@@ -1,5 +1,8 @@
 import json
 import socket
+import subprocess
+import sys
+import threading
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -13,6 +16,8 @@ from langchain_core.messages import AIMessage, BaseMessage
 
 import evals._lineage_live as live
 from evals._decision_lineage import (
+    FIXTURE,
+    SPLIT_FIXTURE,
     LineageDataset,
     Prediction,
     PredictionSet,
@@ -39,18 +44,21 @@ from evals._lineage_classifier import (
 )
 from evals._lineage_live import (
     GEMINI_SCHEMA_KEYWORDS,
+    ApprovalSpentError,
     ExecutionApproval,
     GeminiPilotProvider,
+    RunInputs,
     approval_problems,
+    claim_approval,
     create_model,
+    file_digest,
     input_token_bound,
-    plan_digest,
     preflight,
     response_schema,
 )
 
 SECRET = "AIzaPlaceholderNeverARealKey0000000000"
-Script = list[AIMessage | Exception | str]
+Script = list[AIMessage | BaseException | str]
 
 
 @pytest.fixture(autouse=True)
@@ -135,7 +143,7 @@ class ScriptedModel:
     def invoke(self, input: list[BaseMessage], **kwargs: Any) -> AIMessage:
         self.invocations.append(kwargs)
         step = self.script.pop(0) if self.script else self.answer(input)
-        if isinstance(step, Exception):
+        if isinstance(step, BaseException):
             raise step
         return step if isinstance(step, AIMessage) else answered(step)
 
@@ -148,8 +156,21 @@ class Sink:
         self.lines.append(line)
 
 
+HEAD = "1" * 40
+
+
+def approved_inputs() -> RunInputs:
+    return RunInputs(
+        head=HEAD,
+        plan_sha256=file_digest(PILOT_FIXTURE),
+        dataset_sha256=file_digest(FIXTURE),
+        split_sha256=file_digest(SPLIT_FIXTURE),
+        modified=(),
+    )
+
+
 def provenance(plan: PilotPlan) -> Any:
-    return live.provenance_for(plan, "0" * 64, "1" * 40)
+    return live.provenance_for(plan, approved_inputs(), "dm2b-pilot-test")
 
 
 def provider_for(
@@ -348,26 +369,52 @@ def test_invalid_structured_output_is_never_retried_and_its_rate_stops_the_run(
     assert result.invalid_calls == result.calls
 
 
-def test_unknown_usage_stops_the_run_and_reserves_the_worst_case(
-    plan: PilotPlan, pilot: tuple[tuple[ResolvedPair, ...], tuple[PreparedCall, ...]]
+@pytest.mark.parametrize(
+    "usage",
+    [
+        None,
+        {},
+        {"input_tokens": 1500},
+        {"input_tokens": 1500, "output_tokens": None},
+        {"input_tokens": 0, "output_tokens": 400},
+        {"input_tokens": -1, "output_tokens": 400},
+        {"input_tokens": "1500", "output_tokens": 400},
+        {"input_tokens": 1500.5, "output_tokens": 400},
+        {"input_tokens": True, "output_tokens": 400},
+        {"input_tokens": 1500, "output_tokens": 400, "output_token_details": {"reasoning": 401}},
+        {"input_tokens": 1500, "output_tokens": 400, "output_token_details": {"reasoning": -1}},
+        {"input_tokens": 1500, "output_tokens": 400, "output_token_details": "thinking"},
+        "1500 in, 400 out",
+    ],
+)
+def test_absent_incomplete_or_invalid_usage_is_unknown_and_never_retried(
+    plan: PilotPlan,
+    pilot: tuple[tuple[ResolvedPair, ...], tuple[PreparedCall, ...]],
+    usage: object,
 ) -> None:
     pairs, calls = pilot
     sink = Sink()
-    provider = provider_for(
-        plan, ScriptedModel(answer=lambda _: AIMessage(content='{"comparisons": []}')), sink
+    reply = AIMessage.model_construct(
+        content='{"comparisons": []}', usage_metadata=usage, tool_calls=[]
     )
+    model = ScriptedModel(answer=lambda _: reply)
+    provider = provider_for(plan, model, sink)
 
     result = run_pipeline(calls, pairs, provider, (plan.model, plan.pricing, plan.caps))
+    worst = spend(
+        plan.pricing,
+        input_token_bound(calls[0].request, plan.live.message_overhead_tokens),
+        plan.caps.max_output_tokens_per_call,
+    )
 
     assert result.stop == "usage_unknown"
-    assert provider.ledger.reserved_usd == pytest.approx(
-        spend(
-            plan.pricing,
-            input_token_bound(calls[0].request, plan.live.message_overhead_tokens),
-            plan.caps.max_output_tokens_per_call,
-        )
-    )
-    assert json.loads(sink.lines[0])["outcome"] == "usage_unknown"
+    assert len(model.invocations) == provider.ledger.attempts == 1
+    assert (provider.ledger.input_tokens, provider.ledger.output_tokens) == (0, 0)
+    assert provider.ledger.reserved_usd == pytest.approx(worst)
+    assert provider.ledger.spend(plan) == pytest.approx(worst)
+    assert [json.loads(line)["outcome"] for line in sink.lines] == ["usage_unknown"]
+    assert SECRET not in sink.lines[0]
+    assert set(json.loads(sink.lines[0])) >= {"request_digest", "attempt", "provenance"}
 
 
 def test_usage_beyond_the_bound_stops_the_run_as_unexpected_cost(
@@ -409,18 +456,25 @@ def test_retries_and_spend_count_against_the_caps(
     assert by_spend.ledger.spend(plan) <= 0.04
 
 
-def test_a_secret_is_never_written_to_the_cassette(
+def test_error_details_and_secrets_never_reach_the_cassette(
     plan: PilotPlan, pilot: tuple[tuple[ResolvedPair, ...], tuple[PreparedCall, ...]]
 ) -> None:
     pairs, calls = pilot
     sink = Sink()
-    leaky = ScriptedModel(script=[server_error(503, f"bad key {SECRET}")])
-    provider = provider_for(plan, leaky, sink)
+    echoing = ScriptedModel(
+        script=[server_error(503, f"bad key {SECRET} at /v1beta/models"), f"echo {SECRET}"]
+    )
+    provider = provider_for(plan, echoing, sink)
 
     result = run_pipeline(calls, pairs, provider, (plan.model, plan.pricing, plan.caps))
+    recorded = [json.loads(line) for line in sink.lines]
 
     assert result.stop == "secret_in_record"
-    assert sink.lines == []
+    assert [line["outcome"] for line in recorded] == ["error"]
+    assert (recorded[0]["error_kind"], recorded[0]["error_status"]) == ("unavailable", 503)
+    assert "detail" not in " ".join(recorded[0])
+    assert SECRET not in "".join(sink.lines)
+    assert "v1beta" not in "".join(sink.lines)
 
 
 def test_participant_approval_assertions_never_become_owner_authority(
@@ -487,47 +541,241 @@ def test_participant_approval_assertions_never_become_owner_authority(
 
 
 def approval_for(plan: PilotPlan, **changes: Any) -> ExecutionApproval:
+    inputs = approved_inputs()
     return ExecutionApproval.model_validate(
         {
+            "approval_id": "dm2b-pilot-test",
             "approved_by": "co-founder",
             "approved_on": "2026-11-17",
-            "head": "1" * 40,
-            "plan_sha256": plan_digest(PILOT_FIXTURE),
+            "head": inputs.head,
+            "plan_sha256": inputs.plan_sha256,
+            "dataset_sha256": inputs.dataset_sha256,
+            "split_sha256": inputs.split_sha256,
+            "provider": plan.provider,
             "model": plan.model,
             "max_calls": plan.caps.max_calls,
+            "max_input_tokens": plan.caps.max_input_tokens,
+            "max_output_tokens": plan.caps.max_output_tokens,
+            "max_output_tokens_per_call": plan.caps.max_output_tokens_per_call,
             "max_spend_usd": plan.caps.max_spend_usd,
         }
         | changes
     )
 
 
-def test_an_approval_must_match_head_plan_model_and_caps(plan: PilotPlan) -> None:
-    digest = plan_digest(PILOT_FIXTURE)
+@pytest.mark.parametrize(
+    ("change", "problem"),
+    [
+        ({"head": "2" * 40}, "head"),
+        ({"plan_sha256": "f" * 64}, "plan_sha256"),
+        ({"dataset_sha256": "f" * 64}, "dataset_sha256"),
+        ({"split_sha256": "f" * 64}, "split_sha256"),
+        ({"provider": "openai"}, "provider"),
+        ({"model": "gemini-3.8-pro"}, "model"),
+        ({"max_calls": 25}, "max_calls"),
+        ({"max_input_tokens": 200_000}, "max_input_tokens"),
+        ({"max_output_tokens": 200_000}, "max_output_tokens"),
+        ({"max_output_tokens_per_call": 8192}, "max_output_tokens_per_call"),
+        ({"max_spend_usd": 5.0}, "max_spend_usd"),
+    ],
+)
+def test_an_approval_binds_every_input_and_cap(
+    plan: PilotPlan, change: dict[str, object], problem: str
+) -> None:
+    assert approval_problems(approval_for(plan), plan, approved_inputs()) == []
+    problems = approval_problems(approval_for(plan, **change), plan, approved_inputs())
+    assert [item.split(":")[0] for item in problems] == [problem]
 
-    assert approval_problems(approval_for(plan), plan, digest, "1" * 40) == []
-    assert approval_problems(approval_for(plan), plan, digest, "2" * 40)[0].startswith("head")
-    assert approval_problems(approval_for(plan, max_spend_usd=5.0), plan, digest, "1" * 40)
-    assert approval_problems(approval_for(plan, plan_sha256="f" * 64), plan, digest, "1" * 40)
+
+def test_locally_modified_tracked_files_refuse_the_run(plan: PilotPlan) -> None:
+    dirty = RunInputs(**(vars_of(approved_inputs()) | {"modified": (" M evals/_lineage_live.py",)}))
+
+    assert approval_problems(approval_for(plan), plan, dirty) == [
+        "tracked files modified locally: [' M evals/_lineage_live.py']"
+    ]
 
 
-def test_the_run_command_refuses_without_a_matching_approval(
+def vars_of(inputs: RunInputs) -> dict[str, Any]:
+    return {name: getattr(inputs, name) for name in RunInputs.__slots__}
+
+
+@dataclass
+class Harness:
+    tmp_path: Path
+    plan: PilotPlan
+    credentials: list[str] = field(default_factory=list)
+    model: Any = None
+
+    def approval(self, **changes: Any) -> Path:
+        path = self.tmp_path / f"approval-{len(list(self.tmp_path.glob('approval-*')))}.json"
+        path.write_text(approval_for(self.plan, **changes).model_dump_json(), encoding="utf-8")
+        return path
+
+    def run(self, approval: Path, cassette: str, *extra: str) -> int:
+        return live.main(
+            [
+                *extra,
+                "run",
+                "--approval",
+                str(approval),
+                "--cassette",
+                str(self.tmp_path / cassette),
+            ]
+        )
+
+    def receipts(self) -> list[Path]:
+        return sorted((self.tmp_path / "receipts").glob("*.json"))
+
+
+@pytest.fixture
+def harness(
     plan: PilotPlan,
+    dataset: LineageDataset,
+    pilot: tuple[tuple[ResolvedPair, ...], tuple[PreparedCall, ...]],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    def forbidden(*_: object) -> str:
-        raise AssertionError("credentials or a model were requested")
+) -> Harness:
+    state = Harness(tmp_path, plan, model=oracle_model(pilot, resolve_pairs(dataset)))
 
-    monkeypatch.setattr(live, "debrief_key", forbidden)
-    monkeypatch.setattr(live, "create_model", forbidden)
-    monkeypatch.setattr(live, "git_head", lambda: "2" * 40)
+    def key(_: PilotPlan) -> str:
+        state.credentials.append("read")
+        return SECRET
+
+    monkeypatch.setattr(live, "RECEIPTS", tmp_path / "receipts")
+    monkeypatch.setattr(live, "git_head", lambda: HEAD)
+    monkeypatch.setattr(live, "tracked_modifications", tuple)
+    monkeypatch.setattr(live, "debrief_key", key)
+    monkeypatch.setattr(live, "create_model", lambda *_: state.model)
+    return state
+
+
+def test_an_approval_runs_once_and_never_again_with_another_cassette(
+    harness: Harness, capsys: pytest.CaptureFixture[str]
+) -> None:
+    approval = harness.approval()
+
+    assert harness.run(approval, "first.jsonl") == 0
+    first: Any = json.loads(capsys.readouterr().out)
+    assert harness.run(approval, "second.jsonl") == 2
+    refusal = json.loads(capsys.readouterr().out)
+    receipt = harness.receipts()[0].read_text(encoding="utf-8").splitlines()
+
+    assert first["pipeline"]["stop"] == "completed"
+    assert first["ledger"]["attempts"] == 21
+    assert "already claimed" in refusal["refused"]
+    assert harness.credentials == ["read"]
+    assert not (harness.tmp_path / "second.jsonl").exists()
+    assert [json.loads(line).get("outcome") for line in receipt] == [None, "completed"]
+    assert json.loads(receipt[0])["cassette"].endswith("first.jsonl")
+
+
+def test_parallel_claims_let_exactly_one_thread_through(plan: PilotPlan, tmp_path: Path) -> None:
+    approval = approval_for(plan)
+    start = threading.Barrier(8)
+    outcomes: list[str] = []
+
+    def contend(index: int) -> None:
+        start.wait()
+        try:
+            claim_approval(approval, tmp_path, tmp_path / f"{index}.jsonl")
+            outcomes.append("claimed")
+        except ApprovalSpentError:
+            outcomes.append("refused")
+
+    threads = [threading.Thread(target=contend, args=(index,)) for index in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert sorted(outcomes) == ["claimed"] + ["refused"] * 7
+    assert len(list(tmp_path.glob("*.json"))) == 1
+
+
+def test_parallel_processes_cannot_both_claim(plan: PilotPlan, tmp_path: Path) -> None:
     approval = tmp_path / "approval.json"
     approval.write_text(approval_for(plan).model_dump_json(), encoding="utf-8")
-    cassette = tmp_path / "pilot.jsonl"
+    script = (
+        "import sys\n"
+        "from pathlib import Path\n"
+        "from evals._lineage_live import ApprovalSpentError, ExecutionApproval, claim_approval\n"
+        "approval = ExecutionApproval.model_validate_json(Path(sys.argv[1]).read_text())\n"
+        "try:\n"
+        "    claim_approval(approval, Path(sys.argv[2]), Path(sys.argv[3]))\n"
+        "except ApprovalSpentError:\n"
+        "    raise SystemExit(3)\n"
+    )
+    processes = [
+        subprocess.Popen(
+            [sys.executable, "-c", script, str(approval), str(tmp_path / "receipts"), f"{index}"]
+        )
+        for index in range(4)
+    ]
 
+    codes = sorted(process.wait(timeout=60) for process in processes)
+
+    assert codes == [0, 3, 3, 3]
+
+
+@pytest.mark.parametrize("interruption", [KeyboardInterrupt(), RuntimeError("worker crashed")])
+def test_an_interrupted_or_failed_run_spends_the_approval(
+    harness: Harness, interruption: BaseException
+) -> None:
+    harness.model = ScriptedModel(script=[interruption])
+    approval = harness.approval()
+
+    if isinstance(interruption, KeyboardInterrupt):
+        with pytest.raises(KeyboardInterrupt):
+            harness.run(approval, "first.jsonl")
+    else:
+        assert harness.run(approval, "first.jsonl") == 0
+    receipt = harness.receipts()[0].read_text(encoding="utf-8").splitlines()
+    assert harness.run(approval, "retry.jsonl") == 2
+
+    assert harness.credentials == ["read"]
+    assert json.loads(receipt[-1])["outcome"] == (
+        "aborted: KeyboardInterrupt"
+        if isinstance(interruption, KeyboardInterrupt)
+        else "provider_rejected"
+    )
+    assert not (harness.tmp_path / "retry.jsonl").exists()
+
+
+def test_a_replaced_dataset_is_refused_even_with_the_same_head_and_plan(
+    harness: Harness, dataset: LineageDataset, capsys: pytest.CaptureFixture[str]
+) -> None:
+    swapped = harness.tmp_path / "dataset.json"
+    meetings = list(dataset.meetings)
+    first = meetings[0]
+    edited = first.items[0].model_copy(update={"text": "Real meeting text"})
+    meetings[0] = first.model_copy(update={"items": (edited, *first.items[1:])})
+    swapped.write_text(
+        dataset.model_copy(update={"meetings": tuple(meetings)}).model_dump_json(),
+        encoding="utf-8",
+    )
+
+    assert harness.run(harness.approval(), "pilot.jsonl", "--dataset", str(swapped)) == 2
+    refusal = json.loads(capsys.readouterr().out)
+
+    assert [item.split(":")[0] for item in refusal["problems"]] == ["dataset_sha256"]
+    assert harness.credentials == []
+    assert harness.receipts() == []
+
+
+def test_a_mismatched_or_dirty_run_never_claims_or_reads_credentials(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    approval = harness.approval()
+    monkeypatch.setattr(live, "git_head", lambda: "2" * 40)
+    assert harness.run(approval, "pilot.jsonl") == 2
+    monkeypatch.setattr(live, "git_head", lambda: HEAD)
+    monkeypatch.setattr(live, "tracked_modifications", lambda: (" M evals/_lineage_live.py",))
+    assert harness.run(approval, "pilot.jsonl") == 2
+    output = capsys.readouterr().out
+
+    assert "head" in output
+    assert "tracked files modified locally" in output
+    assert harness.credentials == []
+    assert harness.receipts() == []
     with pytest.raises(SystemExit):
-        live.main(["run", "--cassette", str(cassette)])
-    assert live.main(["run", "--approval", str(approval), "--cassette", str(cassette)]) == 2
-    assert "head" in capsys.readouterr().out
-    assert not cassette.exists()
+        live.main(["run", "--cassette", str(harness.tmp_path / "pilot.jsonl")])

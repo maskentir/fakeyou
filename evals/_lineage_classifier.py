@@ -258,6 +258,9 @@ class Provenance(BaseModel):
     google_genai: str
     head: str
     plan_sha256: str
+    dataset_sha256: str
+    split_sha256: str
+    approval_id: str
     recorded_at: str
 
 
@@ -288,8 +291,6 @@ class CassetteFailure(BaseModel):
     attempt: int
     error_kind: str | None
     error_status: int | None
-    error_detail: str | None
-    response: str | None
     provenance: Provenance
 
 

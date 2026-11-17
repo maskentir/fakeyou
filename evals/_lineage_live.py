@@ -1,6 +1,7 @@
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -13,9 +14,15 @@ from typing import Annotated, Any, Literal, Protocol
 from google.genai import errors as genai_errors
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
-from evals._decision_lineage import FIXTURE, LABELS, load_dataset
+from evals._decision_lineage import (
+    FIXTURE,
+    LABELS,
+    SPLIT_FIXTURE,
+    LineageDataset,
+    load_dataset,
+)
 from evals._lineage_classifier import (
     PILOT_FIXTURE,
     PROMPT_VERSION,
@@ -44,9 +51,9 @@ _STRICT = ConfigDict(extra="forbid", frozen=True)
 
 
 class TokenUsage(BaseModel):
-    model_config = _STRICT
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    input_tokens: Annotated[int, Field(ge=0)]
+    input_tokens: Annotated[int, Field(ge=1)]
     output_tokens: Annotated[int, Field(ge=0)]
     thinking_tokens: Annotated[int, Field(ge=0)]
 
@@ -118,16 +125,24 @@ def classify_fault(error: Exception) -> ProviderFault:
     return classify_exception("llm", error)
 
 
-def _usage(message: BaseMessage) -> TokenUsage | None:
+def reported_usage(message: BaseMessage) -> TokenUsage | None:
     usage = getattr(message, "usage_metadata", None)
-    if not usage:
+    if not isinstance(usage, Mapping):
         return None
     details = usage.get("output_token_details") or {}
-    return TokenUsage(
-        input_tokens=usage["input_tokens"],
-        output_tokens=usage["output_tokens"],
-        thinking_tokens=details.get("reasoning", 0),
-    )
+    try:
+        parsed = TokenUsage.model_validate(
+            {
+                "input_tokens": usage.get("input_tokens"),
+                "output_tokens": usage.get("output_tokens"),
+                "thinking_tokens": details.get("reasoning", 0)
+                if isinstance(details, Mapping)
+                else None,
+            }
+        )
+    except ValidationError:
+        return None
+    return parsed if parsed.thinking_tokens <= parsed.output_tokens else None
 
 
 @dataclass
@@ -203,7 +218,6 @@ class GeminiPilotProvider:
         attempt: int,
         outcome: Literal["error", "usage_unknown"],
         fault: ProviderFault | None,
-        response: str | None,
     ) -> None:
         self._write(
             CassetteFailure(
@@ -215,8 +229,6 @@ class GeminiPilotProvider:
                 attempt=attempt,
                 error_kind=fault.kind if fault else None,
                 error_status=fault.status if fault else None,
-                error_detail=fault.detail if fault else None,
-                response=response,
                 provenance=self.provenance,
             )
         )
@@ -229,14 +241,14 @@ class GeminiPilotProvider:
         for attempt in range(1, self.plan.live.max_attempts_per_call + 1):
             self._admit(bound)
             self.ledger.attempts += 1
+            self.ledger.reserved_usd += self._worst(bound)
             try:
                 message = self.model.invoke(messages(request), **call_options(self.plan, request))
             except Exception as error:
                 fault = classify_fault(error)
                 self.ledger.failed_attempts += 1
                 self.ledger.consecutive_errors += 1
-                self.ledger.reserved_usd += self._worst(bound)
-                self._failure(request, attempt, "error", fault, None)
+                self._failure(request, attempt, "error", fault)
                 if not fault.retryable:
                     raise RunStoppedError("provider_rejected") from error
                 if (
@@ -252,11 +264,12 @@ class GeminiPilotProvider:
     def _accept(
         self, request: ClassifierRequest, attempt: int, message: BaseMessage, bound: int
     ) -> CassetteEntry:
-        usage = _usage(message)
-        if usage is None:
-            self.ledger.reserved_usd += self._worst(bound)
-            self._failure(request, attempt, "usage_unknown", None, message.text)
+        usage = reported_usage(message)
+        text = message.text if isinstance(message.content, str | list) else None
+        if usage is None or text is None:
+            self._failure(request, attempt, "usage_unknown", None)
             raise RunStoppedError("usage_unknown")
+        self.ledger.reserved_usd -= self._worst(bound)
         self.ledger.input_tokens += usage.input_tokens
         self.ledger.output_tokens += usage.output_tokens
         self.ledger.thinking_tokens += usage.thinking_tokens
@@ -264,7 +277,7 @@ class GeminiPilotProvider:
             request_digest=request.digest(self.plan.model),
             model=self.plan.model,
             prompt_version=PROMPT_VERSION,
-            response=message.text,
+            response=text,
             input_tokens=usage.input_tokens,
             output_tokens=usage.output_tokens,
             thinking_tokens=usage.thinking_tokens,
@@ -285,39 +298,131 @@ class GeminiPilotProvider:
 
 _Sha = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{40}$")]
 _Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+RECEIPTS = Path(__file__).resolve().parents[1] / ".runtime" / "lineage-pilot" / "receipts"
 
 
 class ExecutionApproval(BaseModel):
     model_config = _STRICT
 
+    approval_id: Annotated[str, StringConstraints(pattern=r"^[a-z0-9][a-z0-9-]{2,63}$")]
     approved_by: Annotated[str, StringConstraints(min_length=1)]
     approved_on: date
     head: _Sha
     plan_sha256: _Sha256
+    dataset_sha256: _Sha256
+    split_sha256: _Sha256
+    provider: str
     model: str
     max_calls: int
+    max_input_tokens: int
+    max_output_tokens: int
+    max_output_tokens_per_call: int
     max_spend_usd: float
 
 
-def plan_digest(path: Path) -> str:
+@dataclass(frozen=True, slots=True)
+class RunInputs:
+    head: str
+    plan_sha256: str
+    dataset_sha256: str
+    split_sha256: str
+    modified: tuple[str, ...]
+
+
+def file_digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def approval_problems(
-    approval: ExecutionApproval, plan: PilotPlan, plan_sha256: str, head: str
-) -> list[str]:
+def _git(*arguments: str) -> str:
+    return subprocess.run(
+        ["git", *arguments], check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def git_head() -> str:
+    return _git("rev-parse", "HEAD")
+
+
+def tracked_modifications() -> tuple[str, ...]:
+    return tuple(_git("status", "--porcelain", "--untracked-files=no").splitlines())
+
+
+def observe_inputs(plan_path: Path, dataset_path: Path) -> RunInputs:
+    return RunInputs(
+        head=git_head(),
+        plan_sha256=file_digest(plan_path),
+        dataset_sha256=file_digest(dataset_path),
+        split_sha256=file_digest(SPLIT_FIXTURE),
+        modified=tracked_modifications(),
+    )
+
+
+def approval_problems(approval: ExecutionApproval, plan: PilotPlan, inputs: RunInputs) -> list[str]:
     checks = {
-        "head": (approval.head, head),
-        "plan_sha256": (approval.plan_sha256, plan_sha256),
+        "head": (approval.head, inputs.head),
+        "plan_sha256": (approval.plan_sha256, inputs.plan_sha256),
+        "dataset_sha256": (approval.dataset_sha256, inputs.dataset_sha256),
+        "split_sha256": (approval.split_sha256, inputs.split_sha256),
+        "provider": (approval.provider, plan.provider),
         "model": (approval.model, plan.model),
         "max_calls": (approval.max_calls, plan.caps.max_calls),
+        "max_input_tokens": (approval.max_input_tokens, plan.caps.max_input_tokens),
+        "max_output_tokens": (approval.max_output_tokens, plan.caps.max_output_tokens),
+        "max_output_tokens_per_call": (
+            approval.max_output_tokens_per_call,
+            plan.caps.max_output_tokens_per_call,
+        ),
         "max_spend_usd": (approval.max_spend_usd, plan.caps.max_spend_usd),
     }
-    return [
+    problems = [
         f"{name}: approved {approved}, running {running}"
         for name, (approved, running) in checks.items()
         if approved != running
     ]
+    if inputs.modified:
+        problems.append(f"tracked files modified locally: {list(inputs.modified)}")
+    return problems
+
+
+class ApprovalSpentError(Exception):
+    pass
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def claim_approval(approval: ExecutionApproval, receipts: Path, cassette: Path) -> Path:
+    receipts.mkdir(parents=True, exist_ok=True)
+    receipt = receipts / f"{approval.approval_id}.json"
+    try:
+        descriptor = os.open(receipt, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError as error:
+        raise ApprovalSpentError(f"approval {approval.approval_id} was already claimed") from error
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        claimed = {
+            "approval_id": approval.approval_id,
+            "approval_sha256": hashlib.sha256(approval.model_dump_json().encode()).hexdigest(),
+            "claimed_at": _now(),
+            "pid": os.getpid(),
+            "cassette": str(cassette),
+        }
+        handle.write(json.dumps(claimed, sort_keys=True) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    directory = os.open(receipts, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+    return receipt
+
+
+def settle_receipt(receipt: Path, outcome: str) -> None:
+    with receipt.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"finished_at": _now(), "outcome": outcome}) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
 
 
 def preflight(plan: PilotPlan, requests: Sequence[ClassifierRequest]) -> dict[str, object]:
@@ -345,13 +450,7 @@ def preflight(plan: PilotPlan, requests: Sequence[ClassifierRequest]) -> dict[st
     }
 
 
-def git_head() -> str:
-    return subprocess.run(
-        ["git", "rev-parse", "HEAD"], check=True, capture_output=True, text=True
-    ).stdout.strip()
-
-
-def provenance_for(plan: PilotPlan, plan_sha256: str, head: str) -> Provenance:
+def provenance_for(plan: PilotPlan, inputs: RunInputs, approval_id: str) -> Provenance:
     return Provenance(
         provider=plan.provider,
         model=plan.model,
@@ -361,9 +460,12 @@ def provenance_for(plan: PilotPlan, plan_sha256: str, head: str) -> Provenance:
         timeout_seconds=plan.live.timeout_seconds,
         langchain_google_genai=version("langchain-google-genai"),
         google_genai=version("google-genai"),
-        head=head,
-        plan_sha256=plan_sha256,
-        recorded_at=datetime.now(UTC).isoformat(),
+        head=inputs.head,
+        plan_sha256=inputs.plan_sha256,
+        dataset_sha256=inputs.dataset_sha256,
+        split_sha256=inputs.split_sha256,
+        approval_id=approval_id,
+        recorded_at=_now(),
     )
 
 
@@ -378,38 +480,71 @@ def _write(report: Mapping[str, object]) -> None:
     sys.stdout.write(json.dumps(report, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
 
 
-def run_command(arguments: argparse.Namespace) -> int:
-    plan = load_plan(arguments.plan)
-    approval = ExecutionApproval.model_validate_json(arguments.approval.read_text("utf-8"))
-    plan_sha256 = plan_digest(arguments.plan)
-    head = git_head()
-    problems = approval_problems(approval, plan, plan_sha256, head)
-    if problems:
-        _write({"refused": "execution approval does not match this run", "problems": problems})
-        return 2
-    if arguments.cassette.exists():
-        _write({"refused": f"{arguments.cassette} exists; a cassette is never overwritten"})
-        return 2
-    dataset = load_dataset(arguments.dataset)
+def _refuse(reason: str, problems: Sequence[str] = ()) -> int:
+    _write({"refused": reason, "problems": list(problems)})
+    return 2
+
+
+def _execute(
+    plan: PilotPlan,
+    dataset: LineageDataset,
+    cassette_path: Path,
+    provenance: Provenance,
+) -> tuple[dict[str, object], Ledger]:
     secret = debrief_key(plan)
-    with arguments.cassette.open("x", encoding="utf-8") as cassette:
+    with cassette_path.open("x", encoding="utf-8") as cassette:
 
         def sink(line: str) -> None:
             cassette.write(line)
             cassette.flush()
 
-        provider = GeminiPilotProvider(
-            create_model(plan, secret), plan, provenance_for(plan, plan_sha256, head), sink, secret
+        provider = GeminiPilotProvider(create_model(plan, secret), plan, provenance, sink, secret)
+        return replay_report(dataset, plan, provider), provider.ledger
+
+
+def run_command(arguments: argparse.Namespace) -> int:
+    plan = load_plan(arguments.plan)
+    approval = ExecutionApproval.model_validate_json(arguments.approval.read_text("utf-8"))
+    inputs = observe_inputs(arguments.plan, arguments.dataset)
+    problems = approval_problems(approval, plan, inputs)
+    if problems:
+        return _refuse("execution approval does not match this run", problems)
+    dataset = load_dataset(arguments.dataset)
+    if not dataset.benchmark_status.startswith("synthetic"):
+        return _refuse("only the synthetic benchmark may be sent under a pilot approval")
+    if arguments.cassette.exists():
+        return _refuse(f"{arguments.cassette} exists; a cassette is never overwritten")
+    try:
+        receipt = claim_approval(approval, RECEIPTS, arguments.cassette)
+    except ApprovalSpentError as spent:
+        return _refuse(str(spent), ["a new run needs a fresh approval with a new approval_id"])
+    outcome = "aborted"
+    try:
+        report, ledger = _execute(
+            plan, dataset, arguments.cassette, provenance_for(plan, inputs, approval.approval_id)
         )
-        report = replay_report(dataset, plan, provider)
-    _write({**report, "ledger": provider.ledger.summary(plan)})
+        pipeline = report["pipeline"]
+        outcome = str(pipeline["stop"]) if isinstance(pipeline, Mapping) else "unknown"
+    except BaseException as error:
+        outcome = f"aborted: {type(error).__name__}"
+        raise
+    finally:
+        settle_receipt(receipt, outcome)
+    _write({**report, "ledger": ledger.summary(plan), "receipt": str(receipt)})
     return 0
 
 
 def preflight_command(arguments: argparse.Namespace) -> int:
     plan = load_plan(arguments.plan)
     _, calls = pilot_scope(load_dataset(arguments.dataset), plan)
-    _write(preflight(plan, [call.request for call in calls]))
+    _write(
+        {
+            **preflight(plan, [call.request for call in calls]),
+            "plan_sha256": file_digest(arguments.plan),
+            "dataset_sha256": file_digest(arguments.dataset),
+            "split_sha256": file_digest(SPLIT_FIXTURE),
+        }
+    )
     return 0
 
 
@@ -422,9 +557,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--plan", type=Path, default=PILOT_FIXTURE)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser(
-        "preflight", help="Offline request bounds and worst-case spend"
+        "preflight", help="Offline request bounds, worst-case spend and input digests"
     ).set_defaults(run=preflight_command)
-    run = commands.add_parser("run", help="Call the provider; needs a matching execution approval")
+    run = commands.add_parser("run", help="Call the provider once; needs an unspent approval")
     run.add_argument("--approval", type=Path, required=True)
     run.add_argument("--cassette", type=Path, required=True)
     run.set_defaults(run=run_command)

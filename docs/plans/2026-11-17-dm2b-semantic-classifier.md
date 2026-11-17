@@ -439,8 +439,10 @@ only with an execution approval.
   is refused.
 - **Reconciliation after each response:** LangChain's usage metadata gives
   input tokens and output tokens; output includes thinking tokens, which are
-  also recorded separately. A response without usage stops the run
-  (`usage_unknown`) and is charged at the worst case. Usage above the bound or the
+  also recorded separately. The worst case is reserved before every attempt and
+  released only when usage is valid. Absent, incomplete or invalid usage
+  (missing or non-integer counts, zero input, thinking above output) stops the
+  run as `usage_unknown`, keeps the reservation and is never retried. Usage above the bound or the
   per-call output cap stops the run (`usage_over_bound`). A failed attempt is
   charged at the worst case.
 - **Retries:** one retry for a timeout, connection error, 429 or 5xx; every
@@ -450,18 +452,26 @@ only with an execution approval.
   outputs after five calls, unknown usage, usage over the bound, a model
   mismatch, or a credential found in a record.
 - **Cassette:** one JSONL line per attempt with request digest, model, prompt
-  version, raw response or error kind, status and redacted detail, usage, and
-  provenance (provider, model, tier, thinking level, output cap, timeout, SDK
-  versions, git head, plan digest, time). A line containing the API key is never
+  version, raw response or error kind and status (never the error text), usage,
+  and provenance (provider, model, tier, thinking level, output cap, timeout, SDK
+  versions, git head, plan, dataset and split digests, approval id, time). A line containing the API key is never
   written. Each line is flushed as written, so an interrupted run keeps every
   completed attempt; the in-flight attempt is not in the ledger and must be
   checked against provider billing. `replay --cassette` rescoring skips failure
   lines.
 - **Approval gate:** `python -m evals._lineage_live run --approval FILE
   --cassette OUT` refuses unless the approval names the current git head, the
-  SHA-256 of the pilot plan, the model, the request cap and the spend cap. It
-  checks this before reading credentials or building a model, and never
-  overwrites a cassette. `preflight` prints the bounds offline.
+  SHA-256 of the pilot plan, the benchmark dataset and the split, the provider
+  and model, and every cap, and no tracked file is modified locally. A
+  `--dataset` path whose digest differs is refused, and only a synthetic
+  benchmark is accepted. `preflight` prints the bounds and the three digests
+  offline.
+- **Single use:** after those checks, and before credentials are read, the run
+  claims `.runtime/lineage-pilot/receipts/<approval_id>.json` with an exclusive
+  create, fsynced. A second claim fails whatever the cassette path, parallel
+  threads and processes get exactly one success, and the receipt is never
+  removed: a completed, failed or interrupted run records its outcome and spends
+  the approval. A new run needs a fresh approval with a new `approval_id`.
 
 **Participant approval claims.** The validator turns supersession into
 `approval_authority` only when one side is an `owner_decision` item. A
