@@ -10,9 +10,5 @@ def emit_text(line: str) -> None:
     print(line)
 
 
-def emit_progress(line: str) -> None:
-    print(line, file=sys.stderr)
-
-
 def emit_error(error: Exception) -> None:
     print(f"fakeyou: error: {error}", file=sys.stderr)

@@ -3,8 +3,6 @@ from collections.abc import Mapping
 from typing import Any, cast
 
 from redis.asyncio import Redis
-from redis.exceptions import ConnectionError as RedisConnectionError
-from redis.exceptions import TimeoutError as RedisTimeoutError
 from redis.typing import EncodableT, FieldT
 
 from fakeyou.catalog.config import ConfigKey
@@ -12,7 +10,6 @@ from fakeyou.config.settings import Settings, require_secret
 from fakeyou.transport.schemas import event_stream, validate_event
 
 OVERRIDE_TTL_SECONDS = 120.0
-CONNECTION_ERRORS: tuple[type[Exception], ...] = (RedisConnectionError, RedisTimeoutError)
 
 
 def _overrides_key(scope: str) -> str:

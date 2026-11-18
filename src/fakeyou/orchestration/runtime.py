@@ -1364,24 +1364,6 @@ async def _prepare_session(
     return ended
 
 
-async def _record_session_failure(
-    lifecycle: SessionLifecycle,
-    journal: Journal,
-    kind: LifecycleEventKind,
-    error: Exception,
-    label: str,
-) -> str:
-    detail = f"{label} ({type(error).__name__})"
-    journal.record(
-        f"{kind.removesuffix('_failed')}_error_recorded",
-        source="runtime",
-        error=str(error),
-        error_type=type(error).__name__,
-    )
-    lifecycle.send(kind, "system_fault")
-    return detail
-
-
 async def _record_conversation_failure(
     lifecycle: SessionLifecycle, journal: Journal, error: ConversationError
 ) -> str:

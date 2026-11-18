@@ -33,12 +33,12 @@ def test_the_first_ready_turn_is_taken_in_order() -> None:
     turns.add(_turn("quiet", quiet=True))
     turns.add(_turn("chat"))
 
-    taken = turns.next_ready(lambda turn: not turn.needs_quiet_floor)
+    taken = turns.next_ready_for("voice", lambda turn: not turn.needs_quiet_floor)
 
     assert taken is not None
     assert taken.event.id == "chat"
     assert turns.holds("quiet")
-    assert turns.next_ready(lambda _turn: False) is None
+    assert turns.next_ready_for("voice", lambda _turn: False) is None
 
 
 def test_expired_turns_are_removed_and_returned() -> None:
@@ -58,7 +58,7 @@ def test_a_preempted_turn_is_retried_once_at_the_front() -> None:
     first = _turn("a1")
 
     assert turns.retry(first)
-    again = turns.next_ready(lambda _turn: True)
+    again = turns.next_ready_for("voice", lambda _turn: True)
     assert again is not None
     assert (again.event.id, again.attempts) == ("a1", 1)
     assert not turns.retry(again)

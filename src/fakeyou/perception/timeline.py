@@ -112,10 +112,6 @@ class _Registry:
     screens_created: int = 0
 
 
-def _reads_alike(screen: ScreenSegment, reading: ScreenReading) -> bool:
-    return screen.reading is not None and screen.reading.matches(reading)
-
-
 class KeyframeCache:
     def __init__(self, *, capacity: int = KEYFRAME_CACHE_SIZE) -> None:
         self._capacity = capacity

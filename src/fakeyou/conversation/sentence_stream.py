@@ -5,7 +5,7 @@ from fakeyou.foundation.sentences import sentence_end
 
 
 class SentenceStream:
-    def __init__(self, max_sentences: int, language: str, boundary: int = 0) -> None:
+    def __init__(self, max_sentences: int, language: str) -> None:
         if max_sentences <= 0:
             raise ValueError("max_sentences must be positive")
         self.max_sentences = max_sentences
@@ -13,12 +13,6 @@ class SentenceStream:
         self.buffer = ""
         self.yielded = 0
         self.capped = False
-        self._boundary = boundary
-
-    def observe_boundary(self, boundary: int) -> None:
-        if boundary != self._boundary:
-            self._boundary = boundary
-            self.buffer = ""
 
     def observe_language(self, language: str) -> None:
         if language:

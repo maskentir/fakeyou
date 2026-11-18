@@ -37,7 +37,6 @@ ReplyLanguage = Literal["id", "en"]
 REPLY_LANGUAGES: frozenset[str] = frozenset(get_args(ReplyLanguage))
 SHORT_INTENTS = frozenset({"ack", "decline", "stop", "shorter", "louder"})
 JSON_START = "{"
-GateOutcome = Literal["pass", "drop", "n/a"]
 
 IntentHandler = Callable[[ReplyIntent], str | None]
 

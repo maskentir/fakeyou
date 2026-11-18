@@ -101,7 +101,3 @@ def recovered(state: CommandState) -> CommandState:
     if state == "dispatching":
         return "unknown"
     return "cancelled_before_boundary"
-
-
-def visible_effect_possible(state: CommandState) -> bool:
-    return state in {"dispatching", *_AFTER_BOUNDARY_EXITS} - {"failed_after_boundary"}

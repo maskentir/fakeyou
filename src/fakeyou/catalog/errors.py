@@ -127,7 +127,6 @@ class ErrorCode(StrEnum):
     DIARIZE_SCHEMA_UNSUPPORTED = "diarize.schema_unsupported"
     DIARIZE_TURNS_INVALID = "diarize.turns_invalid"
     DIARIZE_STALE = "diarize.stale"
-    DOCKER_UNAVAILABLE = "docker.unavailable"
     OPERATION_INTERRUPTED = "operation.interrupted"
     INTERNAL_FAILURE = "internal.failure"
     PROVIDER_UNAVAILABLE = "provider.unavailable"
@@ -567,9 +566,6 @@ CATALOG: dict[ErrorCode, ErrorSpec] = {
     ErrorCode.DIARIZE_STALE: ErrorSpec(
         "diarization sidecar is stale: record changed since correction",
         ExitCode.INPUT_REJECTED,
-    ),
-    ErrorCode.DOCKER_UNAVAILABLE: ErrorSpec(
-        "docker is not available: {reason}", ExitCode.INFRA_FAILURE
     ),
     ErrorCode.OPERATION_INTERRUPTED: ErrorSpec("operation interrupted"),
     ErrorCode.INTERNAL_FAILURE: ErrorSpec("internal failure", ExitCode.FAILURE),

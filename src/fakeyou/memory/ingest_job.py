@@ -2,10 +2,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict
-
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.config.identifiers import SessionIdField, parse_session_id
+from fakeyou.config.identifiers import parse_session_id
 from fakeyou.memory.ingest_service import (
     IngestPorts,
     IngestRequest,
@@ -25,16 +23,6 @@ class IngestionJob:
     meeting_id: str
     kind: IngestionJobKind
     job_id: str
-
-
-class _IngestionJobFields(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
-
-    v: Literal["1"]
-    type: Literal["ingestion_job"]
-    at: AwareDatetime
-    meeting_id: SessionIdField
-    kind: IngestionJobKind
 
 
 def _corrupt_status_summary(meeting_id: str) -> IngestSummary:

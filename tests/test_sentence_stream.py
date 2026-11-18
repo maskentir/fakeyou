@@ -157,10 +157,6 @@ async def test_full_reply_without_trailing_fragment_matches_the_loop() -> None:
 def test_tool_boundary_discards_text_buffered_before_the_boundary() -> None:
     steps: list[str | None] = ["Half thought", None, "Fresh. "]
 
-    stream = SentenceStream(max_sentences=5, language="en")
-    assert stream.take("Half thought") == []
-    stream.observe_boundary(1)
-    assert stream.take("Fresh. ") == ["Fresh."]
     assert _loop_pump(steps, 5) == ["Fresh."]
 
 

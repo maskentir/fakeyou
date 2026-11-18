@@ -65,7 +65,6 @@ from fakeyou.db.checkpoint import is_database_error
 from fakeyou.db.owner_model import ItemDisclosure
 from fakeyou.diarization.diarize_service import diarize_run
 from fakeyou.identity.enrollment import EnrollSubject, LivenessGate
-from fakeyou.memory.persona import OperatorIdentity
 from fakeyou.observability.provider_faults import ProviderFault
 from fakeyou.session.facts import Confidence, OwnerModelKind
 
@@ -103,12 +102,6 @@ def _guard_interrupts(command: Callable[..., None]) -> Callable[..., None]:
             raise FakeYouError(ErrorCode.OPERATION_INTERRUPTED) from None
 
     return run
-
-
-def _operator_identity(
-    persona_path: Path | None, owner_id: str | None, twin_id: str | None
-) -> OperatorIdentity:
-    return OperatorIdentity(persona_path, owner_id, twin_id)
 
 
 def _resolve_barge_in(*, barge_in: bool | None, conversation: bool) -> bool:

@@ -9,7 +9,6 @@ EVENT_TYPES: tuple[str, ...] = (
     "fault",
     "session_ended",
 )
-INGESTION_JOB_TYPES: tuple[str, ...] = ("ingest", "correct")
 
 _FORBIDDEN_EVENT_FIELDS = frozenset({"evidence", "api-key"})
 

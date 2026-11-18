@@ -103,13 +103,16 @@ class ModelResponder:
         stream = SentenceStream(self._max_sentences, self._language)
         answer = _AnswerJournal(self._trace)
         tool_active = False
+        snapshot = self._phase.boundary
         async for message, metadata in self._chunks(transcript):
             if self._phase.pending and not tool_active and self._trace.on_tool_start is not None:
                 self._trace.on_tool_start()
             tool_active = self._phase.pending
             if not _is_model_chunk(metadata):
                 continue
-            stream.observe_boundary(self._phase.boundary)
+            if self._phase.boundary != snapshot:
+                snapshot = self._phase.boundary
+                stream.buffer = ""
             piece = model_text(message, metadata, tool_pending=self._phase.pending)
             if not piece:
                 continue
