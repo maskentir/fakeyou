@@ -111,14 +111,6 @@ class HistoryTrimMiddleware(AgentMiddleware[Any, Any, Any]):
         return await handler(request.override(messages=trimmed))
 
 
-def _tool_name(tool: object) -> str | None:
-    if isinstance(tool, dict):
-        name = tool.get("name")
-        return name if isinstance(name, str) else None
-    name = getattr(tool, "name", None)
-    return name if isinstance(name, str) else None
-
-
 def attributed(message: AnyMessage) -> AnyMessage:
     event = meeting_event_of(message)
     speaker = event.get("speaker") if event is not None else None

@@ -14,7 +14,7 @@ def test_reads_a_nested_asset() -> None:
 
 
 def test_reads_a_resource_from_a_subpackage() -> None:
-    assert package_resource("catalog", "error_catalog.json").is_file()
+    assert package_resource("debrief", "debrief_labels.json").is_file()
 
 
 def test_resource_handle_is_the_bundled_file_on_disk() -> None:

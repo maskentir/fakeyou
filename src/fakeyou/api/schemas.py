@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Annotated, Any, Literal, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import (
     BaseModel,
@@ -232,17 +232,3 @@ class ForgetView(BaseModel):
     browser_profile_removed: bool
     stages: tuple[ForgetStageView, ...]
     complete: bool
-
-
-class ErrorBody(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
-
-    code: str
-    message: str
-    details: dict[str, Any] | None = None
-
-
-class ErrorEnvelope(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
-
-    error: ErrorBody

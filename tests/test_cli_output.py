@@ -3,7 +3,7 @@ import json
 import pytest
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.cli.output import emit_error, emit_json, emit_progress, emit_text
+from fakeyou.cli.output import emit_error, emit_json, emit_text
 
 
 def test_emit_json_uses_indent_two_without_ascii_escaping(
@@ -23,14 +23,6 @@ def test_emit_text_writes_a_single_stdout_line(capsys: pytest.CaptureFixture[str
     captured = capsys.readouterr()
     assert captured.out == "status: ok\n"
     assert captured.err == ""
-
-
-def test_emit_progress_writes_to_stderr_only(capsys: pytest.CaptureFixture[str]) -> None:
-    emit_progress("fakeyou: note-id operation")
-
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert captured.err == "fakeyou: note-id operation\n"
 
 
 def test_emit_error_renders_the_catalog_message(capsys: pytest.CaptureFixture[str]) -> None:

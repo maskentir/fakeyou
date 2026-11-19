@@ -515,9 +515,6 @@ class FloorActor:
         self._cue = cue
         self._prepare_cues()
 
-    def set_addressing_names(self, names: Sequence[str]) -> None:
-        self._addressing_names = addressing_phrases(names)
-
     def configure_policy(self, options: PolicyOptions) -> None:
         if options.enabled and not (self._wake_phrases or self._addressing_names):
             raise ValueError("participant policy requires configured twin aliases")

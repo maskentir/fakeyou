@@ -107,13 +107,6 @@ class DeferredTurns:
             self._turns = deque(turn for turn in self._turns if turn.expires_at > now)
         return expired
 
-    def next_ready(self, ready: Callable[[DeferredTurn], bool]) -> DeferredTurn | None:
-        for turn in self._turns:
-            if ready(turn):
-                self._turns.remove(turn)
-                return turn
-        return None
-
     def next_ready_for(
         self, channel: ReplyChannel, ready: Callable[[DeferredTurn], bool]
     ) -> DeferredTurn | None:

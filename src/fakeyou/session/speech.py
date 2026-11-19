@@ -1,5 +1,5 @@
 import re
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
@@ -79,11 +79,6 @@ class FactBook:
     entries: Mapping[str, BookEntry] = field(default_factory=dict)
     heard: str = ""
     internal: tuple[str, ...] = ()
-
-    def with_entries(self, entries: Iterable[BookEntry]) -> "FactBook":
-        merged = dict(self.entries)
-        merged.update((entry.fact_id, entry) for entry in entries)
-        return FactBook(merged, self.heard, self.internal)
 
 
 class ClaimHeader(BaseModel):

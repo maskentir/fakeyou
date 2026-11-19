@@ -589,29 +589,6 @@ def _record_speech_rejected(
     )
 
 
-def _record_reply_text(state: _SentenceStream, reply: str) -> None:
-    if not state.first_text and reply.strip():
-        state.first_text = True
-        if state.journal is not None:
-            state.journal.record(
-                "answer_text_emitted",
-                source="llm",
-                request_id=state.request_id,
-                transcript_id=state.transcript_id,
-            )
-
-
-def _record_reply_cap(state: _SentenceStream, reply: str, capped_text: str) -> None:
-    if capped_text != reply.strip() and state.journal is not None:
-        state.journal.record(
-            "reply_capped",
-            source="agent",
-            request_id=state.request_id,
-            chars_in=len(reply),
-            chars_out=len(capped_text),
-        )
-
-
 def _record_stream_failure(state: _SentenceStream, started: float) -> None:
     if state.journal is not None:
         state.journal.record(

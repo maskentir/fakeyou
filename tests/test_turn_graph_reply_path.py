@@ -8,7 +8,7 @@ from langchain_core.messages import AIMessageChunk
 
 from fakeyou.conversation import actor, turn_graph
 from fakeyou.conversation import conversation as conversation_module
-from fakeyou.conversation.actor import ActorWiring, FloorActor
+from fakeyou.conversation.actor import ActorWiring, FloorActor, IngressOptions
 from fakeyou.conversation.meeting_turns import TurnInteraction, build_meeting_turns
 from fakeyou.conversation.turn_graph import OWNER_CLAIM_NOTE, build_turn_graph
 from fakeyou.foundation.transcript import TranscriptEvent
@@ -98,6 +98,7 @@ class Harness:
         max_sentences: int = 3,
         phase: ToolPhaseState | None = None,
         tool_acting: bool = False,
+        names: tuple[str, ...] = (),
     ) -> None:
         self.journal = FakeJournal()
         self.session = FakeSession()
@@ -117,7 +118,11 @@ class Harness:
         )
         self.actor = FloorActor(
             build_turn_graph(),
-            ActorWiring(journal=self.journal, responder=self.responder),
+            ActorWiring(
+                journal=self.journal,
+                responder=self.responder,
+                ingress=IngressOptions(addressing_names=names),
+            ),
         )
         self.actor.observe(self._record_move)
         self.actor.bind(self.session)
@@ -125,14 +130,10 @@ class Harness:
     def _record_move(self, _previous: str, phase: str, _detail: str) -> None:
         self.moves.append(phase)
 
-    def addressed(self, names: tuple[str, ...]) -> FloorActor:
-        self.actor.set_addressing_names(names)
-        return self.actor
-
 
 async def test_name_addressed_final_admits_and_replies() -> None:
-    harness = Harness()
-    ingress = harness.addressed(("twin",))
+    harness = Harness(names=("twin",))
+    ingress = harness.actor
 
     decision = await ingress.handle_final(transcript("f1", "twin, are you there?"))
 
@@ -142,8 +143,8 @@ async def test_name_addressed_final_admits_and_replies() -> None:
 
 
 async def test_whole_phrase_name_match_rejects_a_longer_word() -> None:
-    harness = Harness()
-    ingress = harness.addressed(("twin",))
+    harness = Harness(names=("twin",))
+    ingress = harness.actor
 
     decision = await ingress.handle_final(transcript("f1", "twinkle, are you there?"))
 
@@ -154,8 +155,8 @@ async def test_whole_phrase_name_match_rejects_a_longer_word() -> None:
 
 
 async def test_unaddressed_final_with_names_is_silent_and_journals_the_loop_reason() -> None:
-    harness = Harness()
-    ingress = harness.addressed(("twin",))
+    harness = Harness(names=("twin",))
+    ingress = harness.actor
 
     decision = await ingress.handle_final(transcript("f1", "okay"))
 
@@ -171,8 +172,8 @@ async def test_unaddressed_final_with_names_is_silent_and_journals_the_loop_reas
 
 
 async def test_unaddressed_final_without_names_is_admitted_like_the_loop() -> None:
-    harness = Harness()
-    ingress = harness.addressed(())
+    harness = Harness(names=())
+    ingress = harness.actor
 
     decision = await ingress.handle_final(transcript("f1", "Alice, lunch at noon?"))
 
@@ -183,8 +184,8 @@ async def test_unaddressed_final_without_names_is_admitted_like_the_loop() -> No
 
 
 async def test_bare_ack_not_after_a_bare_ack_is_admitted_without_names() -> None:
-    harness = Harness()
-    ingress = harness.addressed(())
+    harness = Harness(names=())
+    ingress = harness.actor
 
     await ingress.handle_final(transcript("f1", "Alice, lunch at noon?"))
     decision = await ingress.handle_final(transcript("f2", "yeah"))
@@ -195,8 +196,8 @@ async def test_bare_ack_not_after_a_bare_ack_is_admitted_without_names() -> None
 
 
 async def test_queue_admits_a_second_final_after_the_first_finishes() -> None:
-    harness = Harness()
-    ingress = harness.addressed(("twin",))
+    harness = Harness(names=("twin",))
+    ingress = harness.actor
 
     first = await ingress.handle_final(transcript("f1", "twin, one?"))
     assert harness.actor.queue.pending is False
@@ -211,8 +212,8 @@ async def test_queue_admits_a_second_final_after_the_first_finishes() -> None:
 
 
 async def test_reply_path_journals_answer_events_with_the_loop_literals() -> None:
-    harness = Harness()
-    ingress = harness.addressed(("twin",))
+    harness = Harness(names=("twin",))
+    ingress = harness.actor
 
     await ingress.handle_final(transcript("f1", "twin, are you there?"))
 
@@ -227,8 +228,8 @@ async def test_reply_path_journals_answer_events_with_the_loop_literals() -> Non
 
 
 async def test_reply_path_moves_queued_then_listening_after_weighing() -> None:
-    harness = Harness()
-    ingress = harness.addressed(("twin",))
+    harness = Harness(names=("twin",))
+    ingress = harness.actor
 
     await ingress.handle_final(transcript("f1", "twin, are you there?"))
 
@@ -236,8 +237,8 @@ async def test_reply_path_moves_queued_then_listening_after_weighing() -> None:
 
 
 async def test_reply_with_no_sentence_moves_to_waiting() -> None:
-    harness = Harness(model_chunks())
-    ingress = harness.addressed(("twin",))
+    harness = Harness(model_chunks(), names=("twin",))
+    ingress = harness.actor
 
     await ingress.handle_final(transcript("f1", "twin, are you there?"))
 
@@ -257,8 +258,8 @@ async def test_tool_start_during_the_reply_moves_acting_before_listening() -> No
         phase.boundary += 1
         yield AIMessageChunk(content="It is noon. "), MODEL_NODE
 
-    harness = Harness(chunks, phase=phase, tool_acting=True)
-    ingress = harness.addressed(("twin",))
+    harness = Harness(chunks, phase=phase, tool_acting=True, names=("twin",))
+    ingress = harness.actor
 
     await ingress.handle_final(transcript("f1", "twin, what time is it?"))
 
@@ -266,8 +267,8 @@ async def test_tool_start_during_the_reply_moves_acting_before_listening() -> No
 
 
 async def test_reply_over_the_sentence_cap_journals_reply_capped() -> None:
-    harness = Harness(model_chunks("One. Two. "), max_sentences=1)
-    ingress = harness.addressed(("twin",))
+    harness = Harness(model_chunks("One. Two. "), max_sentences=1, names=("twin",))
+    ingress = harness.actor
 
     await ingress.handle_final(transcript("f1", "twin, count?"))
 
@@ -278,8 +279,8 @@ async def test_reply_over_the_sentence_cap_journals_reply_capped() -> None:
 
 
 async def test_pending_queue_is_empty_again_after_the_next_reply() -> None:
-    harness = Harness()
-    ingress = harness.addressed(("twin",))
+    harness = Harness(names=("twin",))
+    ingress = harness.actor
 
     harness.actor.queue.admit(transcript("f0", "twin, queued?"))
     assert harness.actor.queue.pending is True

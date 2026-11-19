@@ -32,7 +32,6 @@ INACTIVITY_TIMEOUT_SECONDS = 180
 QUIET_END_SECONDS = 2.0
 LANGUAGE_BLIND_MODELS = ("eleven_multilingual_v1", "eleven_multilingual_v2", "eleven_monolingual")
 NORMAL_CLOSE = 1000
-SERVER_ERROR_CLOSE = 1011
 POLICY_CLOSE = 1008
 FAULT_STATUSES: tuple[tuple[tuple[str, ...], int], ...] = (
     (("quota", "credit", "payment"), 402),

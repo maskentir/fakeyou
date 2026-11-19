@@ -209,7 +209,6 @@ def test_exit_code_classification_is_deliberate() -> None:
         ErrorCode.API_UNREACHABLE,
         ErrorCode.BROWSER_NODE_MISSING,
         ErrorCode.DATABASE_UNREACHABLE,
-        ErrorCode.DOCKER_UNAVAILABLE,
         ErrorCode.MEMORY_UNAVAILABLE,
         ErrorCode.PROVIDER_UNAVAILABLE,
     }

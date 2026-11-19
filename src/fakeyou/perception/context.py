@@ -77,10 +77,6 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-def _look_result(code: LookCode, **fields: Any) -> str:
-    return json.dumps({"code": code, **fields}, ensure_ascii=False, separators=(",", ":"))
-
-
 def _unavailable(
     source: Literal["camera", "screen"],
     subject_id: str,

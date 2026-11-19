@@ -1635,11 +1635,6 @@ async def ingest_turn(state: TurnGraphState) -> dict[str, str | ParticipationDec
     return update
 
 
-async def gather_branches(state: TurnGraphState) -> dict[str, Any]:
-    del state
-    return {}
-
-
 async def record_turn_failure(state: TurnGraphState, context: TurnContext) -> None:
     context.journal.record("turn_failed", source="agent", code=state["failure"])
 
