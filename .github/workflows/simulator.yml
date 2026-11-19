@@ -27,13 +27,21 @@ jobs:
           load: true
           cache-from: type=gha,scope=audio-test
           cache-to: type=gha,scope=audio-test,mode=max
-      - name: Replay every simulator scenario from its cassette
+      - name: Replay every simulator scenario from its cassette, with every provider host refused
         run: |
           mkdir -p "$RUNNER_TEMP/simulator"
           chmod 777 "$RUNNER_TEMP/simulator"
           docker run --rm \
+            --add-host generativelanguage.googleapis.com:127.0.0.1 \
+            --add-host api.cartesia.ai:127.0.0.1 \
+            --add-host api.meta.ai:127.0.0.1 \
+            --add-host api.openai.com:127.0.0.1 \
+            --add-host api.anthropic.com:127.0.0.1 \
+            --add-host api.elevenlabs.io:127.0.0.1 \
+            --add-host api.minimax.io:127.0.0.1 \
             -e SIMULATOR_PROVIDERS=replay \
             -e SIMULATOR_ARTIFACT_DIR=/artifacts \
+            -e SIMULATOR_REVISION="$GITHUB_SHA" \
             -v "$RUNNER_TEMP/simulator:/artifacts" \
             -v "$PWD/tests:/workspace/tests:ro" \
             -v "$PWD/evals:/workspace/evals:ro" \
@@ -41,11 +49,11 @@ jobs:
             -v "$PWD/conftest.py:/workspace/conftest.py:ro" \
             -v "$PWD/pyproject.toml:/workspace/pyproject.toml:ro" \
             fakeyou-test:local uv run --no-sync pytest -m simulator evals/test_meeting_simulator_eval.py -q -p no:cacheprovider
-      - name: Show the twin's journals when a scenario fails
+      - name: Show each scenario report when a scenario fails
         if: failure()
         run: |
-          for journal in "$RUNNER_TEMP"/simulator/journals/*.jsonl; do
-            echo "::group::$journal"
-            grep -E '"event":"(policy_decided|plan_selected|meet_action_finished|transcript_finalized|turn_failed|fault_recorded)"' "$journal" || true
+          for report in "$RUNNER_TEMP"/simulator/reports/*.json; do
+            echo "::group::$report"
+            cat "$report"
             echo "::endgroup::"
           done

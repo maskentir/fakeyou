@@ -1,4 +1,5 @@
 import json
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -7,124 +8,174 @@ import pytest
 
 from evals import _provider_doubles as doubles_module
 from evals._provider_doubles import (
-    Cassette,
+    CASSETTES,
+    CassetteWriter,
     ProviderDoubles,
-    RequestKey,
-    _is_look_request,
     _token_vector,
+    provider_doubles,
+    provider_mode,
 )
-from evals._visual_cassette import ExperimentBudget
+from evals._replay_cassette import (
+    HeardTranscripts,
+    ModelExchange,
+    ReplayLedger,
+    canonical_request,
+    model_exchange,
+    read_cassette,
+)
+from fakeyou.config.settings import Settings
 from fakeyou.perception.inspector import VisualInspection
-from fakeyou.perception.interpreter import INSPECTION_PROMPT, INSPECTION_PROMPT_MARKER
 
-JUDGE = "You decide whether the twin should take the floor."
-EARLIER = "Ayu: " + "the slides look fine and the checklist is on track. " * 6
-QUESTION = "Harun: Twin, please raise your hand"
-CASSETTES = Path(__file__).parent / "fixtures" / "simulator" / "cassettes"
+ROUTE = "/v1beta/models/gemini-3.1-flash-lite:generateContent"
+ANSWER = {"candidates": [{"content": {"parts": [{"text": "raise_hand"}], "role": "model"}}]}
 
 
-@pytest.mark.parametrize("closed_ledger", [False, True])
-async def test_full_recording_does_not_change_the_visual_experiment_ledger(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, closed_ledger: bool
+def _payload(question: str) -> dict[str, Any]:
+    return {"contents": [{"role": "user", "parts": [{"text": question}]}]}
+
+
+def _recorded(path: Path, question: str) -> Path:
+    exchange = model_exchange(
+        canonical_request(ROUTE, json.dumps(_payload(question)).encode()),
+        200,
+        "application/json",
+        [(0.0, json.dumps(ANSWER))],
+    )
+    path.write_text(exchange.model_dump_json() + "\n", encoding="utf-8")
+    return path
+
+
+def _upstream(seen: list[httpx.Request]) -> httpx.AsyncClient:
+    def respond(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=ANSWER)
+
+    return httpx.AsyncClient(transport=httpx.MockTransport(respond))
+
+
+async def _ask(doubles: ProviderDoubles, question: str) -> httpx.Response:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=doubles.app()), base_url="http://double"
+    ) as client:
+        return await client.post(ROUTE, json=_payload(question))
+
+
+async def test_record_relays_the_provider_answer_and_keeps_the_canonical_exchange(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    ledger = tmp_path / "experiment-attempts.jsonl"
-    budget = ExperimentBudget(max_requests=1, ledger=ledger)
-    if closed_ledger:
-        budget.reserve({"source": "test"})
-        assert budget.exhausted
-    before = ledger.read_bytes() if ledger.exists() else None
-    monkeypatch.setattr(doubles_module, "ExperimentBudget", lambda: budget)
-    cassette = Cassette.load(tmp_path / "full-recording.jsonl")
-    doubles = ProviderDoubles("record", cassette)
-    payload = {"contents": [{"parts": [{"text": INSPECTION_PROMPT_MARKER}]}]}
-    recorded = {"usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 2}}
+    path = tmp_path / "scenario.jsonl"
+    doubles = ProviderDoubles("record", path, writer=CassetteWriter(path, fresh=True))
+    seen: list[httpx.Request] = []
 
-    def respond(_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=recorded)
-
-    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as upstream:
+    async with _upstream(seen) as upstream:
         monkeypatch.setattr(doubles, "_client", upstream)
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=doubles.app()), base_url="http://double"
-        ) as client:
-            response = await client.post("/v1beta/models/test:generateContent", json=payload)
+        response = await _ask(doubles, "Twin, raise your hand")
 
-    assert response.status_code == 200
-    assert response.json() == recorded
-    [entry] = Cassette.load(cassette.path).entries
-    assert json.loads("".join(chunk[1] for chunk in entry["chunks"])) == recorded
-    assert (ledger.read_bytes() if ledger.exists() else None) == before
-
-
-def _gemini_entry(answer: str) -> dict[str, Any]:
-    body = json.dumps({"candidates": [{"content": {"parts": [{"text": answer}], "role": "model"}}]})
-    return {
-        "route": "/v1beta/models/gemini-3.8-flash:generateContent",
-        "system": "",
-        "focus": "focus",
-        "status": 200,
-        "media_type": "application/json",
-        "chunks": [[0.0, body]],
-    }
+    [exchange] = read_cassette(path)
+    assert response.json() == ANSWER
+    assert len(seen) == 1
+    assert isinstance(exchange, ModelExchange)
+    assert exchange.request == canonical_request(
+        ROUTE, json.dumps(_payload("Twin, raise your hand")).encode()
+    )
 
 
-def _recorded_look_entries() -> list[dict[str, Any]]:
-    entries: list[dict[str, Any]] = []
+async def test_replay_answers_only_the_recorded_request_and_never_reaches_a_provider(
+    tmp_path: Path,
+) -> None:
+    path = _recorded(tmp_path / "scenario.jsonl", "Twin, raise your hand")
+    doubles = ProviderDoubles("replay", path, ledger=ReplayLedger.load(path))
+
+    recorded = await _ask(doubles, "Twin, raise your hand")
+    unrecorded = await _ask(doubles, "Twin, lower your hand")
+
+    assert recorded.json() == ANSWER
+    assert unrecorded.status_code == 500
+    assert "unrecorded_request" in unrecorded.text
+    assert doubles.reaches_providers is False
+    report: Any = doubles.report()
+    assert [miss["kind"] for miss in report["replay"]["misses"]] == ["unrecorded_request"]
+
+
+async def test_record_missing_replays_what_exists_and_records_only_what_is_new(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = _recorded(tmp_path / "scenario.jsonl", "Twin, raise your hand")
+    doubles = ProviderDoubles(
+        "record_missing",
+        path,
+        ledger=ReplayLedger.load(path),
+        writer=CassetteWriter(path, fresh=False),
+    )
+    seen: list[httpx.Request] = []
+
+    async with _upstream(seen) as upstream:
+        monkeypatch.setattr(doubles, "_client", upstream)
+        await _ask(doubles, "Twin, raise your hand")
+        await _ask(doubles, "Twin, lower your hand")
+
+    assert len(seen) == 1
+    assert len(read_cassette(path)) == 2
+    assert ReplayLedger.load(path).summary(HeardTranscripts())["recorded_exchanges"] == 2
+
+
+def test_replay_needs_a_cassette_and_names_the_scenario(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SIMULATOR_PROVIDERS", "replay")
+    monkeypatch.setenv("SIMULATOR_CASSETTE_DIR", str(tmp_path))
+
+    with pytest.raises(ValueError, match="sim-absent"):
+        provider_doubles("sim-absent")
+
+
+@pytest.mark.parametrize("mode", ["record_looks", "fuzzy", ""])
+def test_only_the_supported_provider_modes_are_accepted(
+    monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    monkeypatch.setenv("SIMULATOR_PROVIDERS", mode)
+
+    with pytest.raises(ValueError, match="SIMULATOR_PROVIDERS"):
+        provider_mode()
+
+
+def test_replay_points_every_provider_at_the_doubles_with_a_placeholder_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    snapshot = tmp_path / "settings.json"
+    snapshot.write_text(doubles_module.SNAPSHOT.read_text(encoding="utf-8"), encoding="utf-8")
+    monkeypatch.setattr(doubles_module, "SNAPSHOT", snapshot)
+    path = _recorded(tmp_path / "scenario.jsonl", "hello")
+    doubles = ProviderDoubles(
+        "replay", path, ledger=ReplayLedger.load(path), base_url="http://127.0.0.1:9"
+    )
+    settings = doubles.settings(Settings())
+
+    assert settings.reply is not None
+    assert str(settings.reply.base_url).startswith("http://127.0.0.1:9")
+    assert settings.reply.api_key is not None
+    assert settings.reply.api_key.get_secret_value() == "double"
+    assert settings.stt.url.startswith("ws://127.0.0.1:9")
+
+
+def _recorded_looks() -> Iterator[tuple[str, ModelExchange]]:
     for path in sorted(CASSETTES.glob("*.jsonl")):
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if not line:
-                continue
-            entry = json.loads(line)
-            if INSPECTION_PROMPT_MARKER in str(entry.get("focus", "")):
-                entries.append(entry)
-    return entries
+        for line in read_cassette(path):
+            if isinstance(line, ModelExchange) and "inlineData" in json.dumps(line.request):
+                yield path.stem, line
 
 
 def test_every_recorded_simulator_look_is_a_structured_inspection() -> None:
-    entries = _recorded_look_entries()
-
-    assert entries, "the simulator cassettes must hold the recorded look requests"
-
-    for entry in entries:
-        body = "".join(chunk[1] for chunk in entry.get("chunks", []) if len(chunk) > 1)
+    for scenario, exchange in _recorded_looks():
+        body = "".join(text for _delay, text in exchange.chunks)
         text = json.loads(body)["candidates"][0]["content"]["parts"][0]["text"]
         inspection = VisualInspection.model_validate_json(text)
-        assert inspection.verdict in {"supported", "not_visible", "unclear"}
+        assert inspection.verdict in {"supported", "not_visible", "unclear"}, scenario
 
 
-def test_a_recorded_free_text_look_is_rejected_by_the_inspection_contract() -> None:
-    free_text = _gemini_entry("Harun's shirt is red.")
-    body = "".join(chunk[1] for chunk in free_text["chunks"])
-    text = json.loads(body)["candidates"][0]["content"]["parts"][0]["text"]
-
+def test_a_free_text_look_is_rejected_by_the_inspection_contract() -> None:
     with pytest.raises(ValueError, match="expected value"):
-        VisualInspection.model_validate_json(text)
-
-
-def test_a_look_request_is_recognised_by_the_inspection_prompt() -> None:
-    look = json.dumps(
-        {
-            "contents": [
-                {
-                    "role": "user",
-                    "parts": [
-                        {"inlineData": {"mimeType": "image/jpeg", "data": "<image>"}},
-                        {"text": INSPECTION_PROMPT.format(source="a camera", question="color?")},
-                    ],
-                }
-            ]
-        }
-    ).encode()
-    reading = json.dumps(
-        {"contents": [{"role": "user", "parts": [{"text": "Fill every field from the screen"}]}]}
-    ).encode()
-
-    assert _is_look_request(look) is True
-    assert _is_look_request(reading) is False
-
-
-def _entry(focus: str, verdict: str) -> dict[str, str]:
-    return {"route": "judge", "system": JUDGE, "focus": focus, "verdict": verdict}
+        VisualInspection.model_validate_json("Harun's shirt is red.")
 
 
 def test_the_embedding_double_is_deterministic_and_orders_shared_words_first() -> None:
@@ -136,40 +187,3 @@ def test_the_embedding_double_is_deterministic_and_orders_shared_words_first() -
     related = sum(left * right for left, right in zip(slide, brief, strict=True))
     unrelated = sum(left * right for left, right in zip(slide, other, strict=True))
     assert related > 0.15 > unrelated
-
-
-def test_repeated_requests_take_recorded_answers_in_order(tmp_path: Path) -> None:
-    cassette = Cassette(
-        tmp_path / "judge.jsonl",
-        [
-            _entry(EARLIER + QUESTION, "silent"),
-            _entry("Budi: morning all. " + EARLIER + QUESTION + ".", "reply"),
-        ],
-    )
-    asked = RequestKey(JUDGE, "Budi: morning all. " + EARLIER + QUESTION)
-
-    first = cassette.match("judge", asked)
-    second = cassette.match("judge", asked)
-
-    assert first is not None
-    assert second is not None
-    assert (first["verdict"], second["verdict"]) == ("silent", "reply")
-    assert cassette.reused == 0
-
-
-def test_a_different_question_never_takes_an_unused_answer(tmp_path: Path) -> None:
-    cassette = Cassette(
-        tmp_path / "judge.jsonl",
-        [
-            _entry(EARLIER + QUESTION, "silent"),
-            _entry(EARLIER + "Harun: Twin, what is the beta date?", "reply"),
-        ],
-    )
-    asked = RequestKey(JUDGE, EARLIER + QUESTION)
-
-    cassette.match("judge", asked)
-    again = cassette.match("judge", asked)
-
-    assert again is not None
-    assert again["verdict"] == "silent"
-    assert cassette.reused == 1

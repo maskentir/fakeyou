@@ -2,13 +2,14 @@ import asyncio
 import base64
 import json
 import time
-from collections.abc import AsyncIterator, Callable, Coroutine, Mapping
-from contextlib import asynccontextmanager, suppress
+from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from playwright.async_api import Page, Route
+from playwright.async_api import TimeoutError as PlaywrightTimeout
 
 from fakeyou.conversation.session import SessionConfig, SessionResult
 from fakeyou.meet.browser import open_direct_page
@@ -28,6 +29,9 @@ TWIN_DEVICE = "spaces/simulated/devices/twin"
 LOBBY = 3
 IN_CALL = 1
 PLAY_LIMIT_SECONDS = 60.0
+POLL_SECONDS = 0.1
+VOICE_POLL_SECONDS = 0.05
+SILENCE_SECONDS = 0.6
 SHUTDOWN_LIMIT_SECONDS = 30.0
 
 FAKE_MEET_PAGE = """<!doctype html><html><head><title>Meet</title></head><body>
@@ -251,6 +255,7 @@ window.__simSay = async (deviceId, wav) => {
   await heard;
   return { start: started / 1000, end: (performance.timeOrigin + performance.now()) / 1000 };
 };
+window.__simNow = () => (performance.timeOrigin + performance.now()) / 1000;
 window.__simTwin = { segments: [], chunks: [] };
 window.__simListen = async () => {
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -374,15 +379,25 @@ class MeetingSimulator:
         )
         if session in done:
             ready.cancel()
-            raise RuntimeError(
-                f"the session ended before opening the meeting: {session.result()!r}"
+            raise ScenarioFailure(
+                "browser_failure",
+                f"the session ended before opening the meeting: {session.result()!r}",
             )
         if ready not in done:
             ready.cancel()
-            raise TimeoutError(f"the worker did not open the meeting page within {within} seconds")
-        await self.page.wait_for_function(
-            "() => document.body.innerText.includes('Asking to be let in')", timeout=within * 1000
-        )
+            raise ScenarioFailure(
+                "browser_failure",
+                f"the worker did not open the meeting page within {within} seconds",
+            )
+        try:
+            await self.page.wait_for_function(
+                "() => document.body.innerText.includes('Asking to be let in')",
+                timeout=within * 1000,
+            )
+        except PlaywrightTimeout as error:
+            raise ScenarioFailure(
+                "protocol_failure", "the worker never asked to be let in"
+            ) from error
 
     async def admit(self) -> None:
         self.people[0].status = IN_CALL
@@ -428,14 +443,25 @@ class MeetingSimulator:
         return state
 
     async def wait_for_state(
-        self, condition: Callable[[Mapping[str, Any]], bool], within: float = 60.0
+        self,
+        condition: Callable[[Mapping[str, Any]], bool],
+        *,
+        expecting: str,
+        within: float = 60.0,
     ) -> dict[str, Any]:
-        async with asyncio.timeout(within):
-            while True:
-                current = await self.state()
-                if condition(current):
-                    return current
-                await asyncio.sleep(0.25)
+        current: dict[str, Any] = {}
+        try:
+            async with asyncio.timeout(within):
+                while True:
+                    current = await self.state()
+                    if condition(current):
+                        return current
+                    await asyncio.sleep(POLL_SECONDS)
+        except TimeoutError as error:
+            raise ScenarioFailure(
+                "behavioral_assertion_failure",
+                f"the meeting never showed {expecting} within {within} s; last state {current}",
+            ) from error
 
     async def say(self, clip: str, *, speaker: str) -> Span:
         wav = base64.b64encode((FIXTURES / clip).read_bytes()).decode()
@@ -451,18 +477,71 @@ class MeetingSimulator:
         segments = await self.page.evaluate("() => window.__simTwin.segments")
         return [Span(**segment) for segment in segments]
 
+    async def now(self) -> float:
+        now: float = await self.page.evaluate("() => window.__simNow()")
+        return now
+
     async def wait_for_twin_voice(
-        self, condition: Callable[[Span], bool], within: float = 60.0
+        self, condition: Callable[[Span], bool], *, expecting: str, within: float = 60.0
     ) -> Span:
-        async with asyncio.timeout(within):
-            while True:
-                found = [span for span in await self.twin_voice() if condition(span)]
-                if found:
-                    return found[0]
-                await asyncio.sleep(0.1)
+        heard: list[Span] = []
+        try:
+            async with asyncio.timeout(within):
+                while True:
+                    heard = await self.twin_voice()
+                    found = [span for span in heard if condition(span)]
+                    if found:
+                        return found[0]
+                    await asyncio.sleep(VOICE_POLL_SECONDS)
+        except TimeoutError as error:
+            raise ScenarioFailure(
+                "audio_failure",
+                f"the meeting never heard {expecting} within {within} s; twin voice {heard}",
+            ) from error
+
+    async def wait_for_twin_silence(self, after: float, *, within: float = 30.0) -> list[Span]:
+        heard: list[Span] = []
+        try:
+            async with asyncio.timeout(within):
+                while True:
+                    heard = await self.twin_voice()
+                    now = await self.now()
+                    latest = max((span.end for span in heard), default=after)
+                    if now - max(latest, after) >= SILENCE_SECONDS:
+                        return heard
+                    await asyncio.sleep(VOICE_POLL_SECONDS)
+        except TimeoutError as error:
+            raise ScenarioFailure(
+                "audio_failure", f"the twin kept speaking for {within} s; twin voice {heard}"
+            ) from error
 
     async def twin_recording(self) -> bytes:
         return base64.b64decode(await self.page.evaluate("() => window.__simRecording()"))
+
+
+FailureCategory = Literal[
+    "environment_failure",
+    "browser_failure",
+    "protocol_failure",
+    "provider_replay_mismatch",
+    "audio_failure",
+    "policy_failure",
+    "behavioral_assertion_failure",
+    "timing_failure",
+    "cleanup_failure",
+]
+
+
+class ScenarioFailure(AssertionError):
+    def __init__(self, category: FailureCategory, detail: str) -> None:
+        super().__init__(f"{category}: {detail}")
+        self.category: FailureCategory = category
+        self.detail = detail
+
+
+def require(condition: object, category: FailureCategory, detail: str) -> None:
+    if not condition:
+        raise ScenarioFailure(category, detail)
 
 
 @asynccontextmanager
@@ -473,9 +552,16 @@ async def running_session(work: Coroutine[Any, Any, Any]) -> AsyncIterator[async
     finally:
         if not session.done():
             session.cancel()
-            with suppress(asyncio.CancelledError, TimeoutError):
+            try:
                 async with asyncio.timeout(SHUTDOWN_LIMIT_SECONDS):
                     await session
+            except asyncio.CancelledError:
+                pass
+            except TimeoutError as error:
+                raise ScenarioFailure(
+                    "cleanup_failure",
+                    f"the worker did not stop within {SHUTDOWN_LIMIT_SECONDS} s of cancellation",
+                ) from error
 
 
 def journal_rows(path: Path) -> list[dict[str, Any]]:
@@ -490,10 +576,26 @@ async def wait_for_event(
     *,
     matching: Callable[[Mapping[str, Any]], bool] = lambda _row: True,
     within: float = 60.0,
+    category: FailureCategory = "behavioral_assertion_failure",
 ) -> dict[str, Any]:
-    async with asyncio.timeout(within):
-        while True:
-            for row in journal_rows(path):
-                if row.get("event") == event and matching(row):
-                    return row
-            await asyncio.sleep(0.25)
+    try:
+        async with asyncio.timeout(within):
+            while True:
+                for row in journal_rows(path):
+                    if row.get("event") == event and matching(row):
+                        return row
+                await asyncio.sleep(POLL_SECONDS)
+    except TimeoutError as error:
+        seen = [row.get("event") for row in journal_rows(path)][-12:]
+        raise ScenarioFailure(
+            category, f"no matching {event} within {within} s; last journal events {seen}"
+        ) from error
+
+
+def session_modes(rows: Sequence[Mapping[str, Any]]) -> set[str]:
+    modes: set[str] = set()
+    for row in rows:
+        if row.get("event") == "session_mode_transitioned":
+            modes |= set(row.get("entered") or ())
+            modes -= set(row.get("left") or ())
+    return modes

@@ -31,21 +31,58 @@ docker run --rm -v "$PWD/tests:/workspace/tests:ro" -v "$PWD/evals:/workspace/ev
   fakeyou-test:local uv run --no-sync pytest -m simulator evals/test_meeting_simulator_eval.py
 ```
 
-`SIMULATOR_PROVIDERS` picks where the providers come from. `live` (the default) calls
-the real ones. `replay` needs no `.env` and no network: it rebuilds the settings from
-the recorded snapshot, answers every Gemini call and replays what Muse heard for each
-clip from the cassettes in `evals/fixtures/simulator/cassettes/`, and speaks through a
-synthetic Cartesia. A request with no close enough cassette entry fails the scenario
-instead of passing silently. CI runs `replay` on every pull request. `record` relays
-Gemini and Muse to the real services and rewrites the cassettes and the settings
-snapshot; record after changing a prompt, a setting or a scenario, with the cassette
-folder mounted writable:
+`SIMULATOR_PROVIDERS` picks where the providers come from:
+
+- `live` (the default) calls the real providers.
+- `replay` needs no `.env` and contacts no provider. It rebuilds the settings from
+  the recorded snapshot, replays Muse and Gemini from the cassettes in
+  `evals/fixtures/simulator/cassettes/`, and speaks through a synthetic Cartesia. CI
+  runs it on every pull request, with every provider host mapped to a refused address.
+- `record` relays Gemini and Muse to the real services and rewrites the cassettes and
+  the settings snapshot.
+- `record_missing` replays what a cassette holds and relays to Gemini only the requests
+  it does not hold, appending them. It needs the Gemini keys in `.env`.
+
+**Replay contract** (`evals/_replay_cassette.py`). A Gemini request matches a recording
+only when its canonical identity is identical:
+
+- the route, which carries the model and the method
+- the whole JSON body: system instruction, every turn, generation config and tools
+- images replaced by the SHA-256 of their bytes
+
+Identical requests are served in the order they were recorded. A request with no
+identical recording is answered with a provider error, never with another recording.
+Each spoken clip plays its recorded takes in order.
+
+A scenario fails unless its replay is closed:
+
+- no unrecorded or repeated request
+- no recording left unused
+- no clip heard more often than it was recorded
+
+The only exception is a turn-judge prefetch for interim text that never became a final
+transcript. Whether the worker sends one depends on scheduling, not on the
+conversation, so it is reported as speculative and does not fail the scenario.
+
+Each scenario writes `reports/<scenario>.json` under `SIMULATOR_ARTIFACT_DIR`, holding:
+
+- the revision and the fixture digests
+- the simulator's actions and the journal timeline
+- every replay miss, with the closest recording's differing lines
+- a failure category: environment, browser, protocol, provider replay, audio, policy,
+  behaviour, timing or cleanup
+
+To record after changing a prompt, a setting or a scenario, mount the cassette folder
+writable:
 
 ```sh
 docker run --rm -e SIMULATOR_PROVIDERS=record \
   -v "$PWD/evals/fixtures/simulator/cassettes:/workspace/evals/fixtures/simulator/cassettes" \
   ...same mounts as above... fakeyou-test:local uv run --no-sync pytest -m simulator evals/test_meeting_simulator_eval.py
 ```
+
+Then run `replay` until every scenario is closed. Where a replay asks something the
+recording run did not, fill the gap with `record_missing`, and replay again.
 
 Meta-tests enforce the conventions mechanically rather than by review: no comments
 or docstrings in source, no Indonesian in source files, every test file named after
