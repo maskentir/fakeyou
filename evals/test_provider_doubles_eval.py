@@ -25,6 +25,7 @@ from evals._replay_cassette import (
 )
 from fakeyou.config.settings import Settings
 from fakeyou.perception.inspector import VisualInspection
+from fakeyou.perception.interpreter import INSPECTION_PROMPT_MARKER
 
 ROUTE = "/v1beta/models/gemini-3.1-flash-lite:generateContent"
 ANSWER = {"candidates": [{"content": {"parts": [{"text": "raise_hand"}], "role": "model"}}]}
@@ -161,7 +162,9 @@ def test_replay_points_every_provider_at_the_doubles_with_a_placeholder_key(
 def _recorded_looks() -> Iterator[tuple[str, ModelExchange]]:
     for path in sorted(CASSETTES.glob("*.jsonl")):
         for line in read_cassette(path):
-            if isinstance(line, ModelExchange) and "inlineData" in json.dumps(line.request):
+            if isinstance(line, ModelExchange) and INSPECTION_PROMPT_MARKER in json.dumps(
+                line.request["body"].get("contents", [])[-1:], ensure_ascii=False
+            ):
                 yield path.stem, line
 
 
@@ -187,3 +190,79 @@ def test_the_embedding_double_is_deterministic_and_orders_shared_words_first() -
     related = sum(left * right for left, right in zip(slide, brief, strict=True))
     unrelated = sum(left * right for left, right in zip(slide, other, strict=True))
     assert related > 0.15 > unrelated
+
+
+async def test_a_provider_error_is_relayed_but_never_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "scenario.jsonl"
+    doubles = ProviderDoubles("record", path, writer=CassetteWriter(path, fresh=True))
+
+    def busy(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, json={"error": {"code": 429}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(busy)) as upstream:
+        monkeypatch.setattr(doubles, "_client", upstream)
+        response = await _ask(doubles, "Twin, raise your hand")
+
+    assert response.status_code == 429
+    assert read_cassette(path) == ()
+    assert doubles.report()["provider_errors_not_recorded"] == [f"{ROUTE} answered 429"]
+
+
+def test_record_missing_refuses_to_start_without_gemini_keys(tmp_path: Path) -> None:
+    path = _recorded(tmp_path / "scenario.jsonl", "hello")
+    doubles = ProviderDoubles(
+        "record_missing",
+        path,
+        ledger=ReplayLedger.load(path),
+        writer=CassetteWriter(path, fresh=False),
+    )
+    keyless = Settings().model_copy(update={"reply": None, "reply_strong": None, "debrief": None})
+    keyless = keyless.model_copy(
+        update={
+            "perception": keyless.perception.model_copy(
+                update={
+                    "interpreter": keyless.perception.interpreter.model_copy(
+                        update={"api_key": None}
+                    )
+                }
+            )
+        }
+    )
+
+    with pytest.raises(ValueError, match="needs Gemini keys"):
+        doubles.settings(keyless)
+
+
+async def test_record_missing_keeps_only_what_the_run_used_and_what_it_added(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "scenario.jsonl"
+    stale = model_exchange(
+        canonical_request(ROUTE, json.dumps(_payload("Twin, stale question")).encode()),
+        200,
+        "application/json",
+        [(0.0, json.dumps(ANSWER))],
+    )
+    _recorded(path, "Twin, raise your hand")
+    with path.open("a", encoding="utf-8") as file:
+        file.write(stale.model_dump_json() + "\n")
+    doubles = ProviderDoubles(
+        "record_missing",
+        path,
+        ledger=ReplayLedger.load(path),
+        writer=CassetteWriter(path, fresh=False),
+    )
+    seen: list[httpx.Request] = []
+
+    async with _upstream(seen) as upstream:
+        monkeypatch.setattr(doubles, "_client", upstream)
+        await _ask(doubles, "Twin, raise your hand")
+        await _ask(doubles, "Twin, lower your hand")
+    doubles.finish_recording()
+
+    kept = [line for line in read_cassette(path) if isinstance(line, ModelExchange)]
+    asked = {json.dumps(line.request["body"]) for line in kept}
+    assert len(kept) == 2
+    assert not any("stale" in question for question in asked)

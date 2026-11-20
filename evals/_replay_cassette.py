@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, TypeAdapte
 
 _STRICT = ConfigDict(extra="forbid", frozen=True)
 _Digest = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+DIFF_CONTEXT = 80
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,7 +24,18 @@ class VolatileRule:
     placeholder: str
 
 
-VOLATILE_RULES: tuple[VolatileRule, ...] = ()
+VOLATILE_RULES: tuple[VolatileRule, ...] = (
+    VolatileRule(
+        "vision_latency_ms",
+        re.compile(r'("vision_latency_ms\\*"\s*:\s*)\d+'),
+        r"\1<measured>",
+    ),
+    VolatileRule(
+        "seconds_ago",
+        re.compile(r'("seconds_ago\\*"\s*:\s*)\d+'),
+        r"\1<elapsed>",
+    ),
+)
 
 
 class CassetteError(ValueError):
@@ -64,6 +76,20 @@ def _canonical(value: Any, rules: Sequence[VolatileRule]) -> Any:
     if isinstance(value, str):
         return _text(value, rules)
     return value
+
+
+def _with_rules(value: Any, rules: Sequence[VolatileRule]) -> Any:
+    if isinstance(value, dict):
+        return {key: _with_rules(item, rules) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_with_rules(item, rules) for item in value]
+    if isinstance(value, str):
+        return _text(value, rules)
+    return value
+
+
+def matching_digest(request: Mapping[str, Any], rules: Sequence[VolatileRule]) -> str:
+    return request_digest(_with_rules(dict(request), rules))
 
 
 def canonical_request(
@@ -151,7 +177,6 @@ MissKind = Literal[
     "repeated_request",
     "malformed_request",
     "unrecorded_clip",
-    "repeated_clip",
 ]
 
 
@@ -230,12 +255,32 @@ def _nearest(asked: Mapping[str, Any], recorded: Sequence[ModelExchange]) -> str
     other = json.dumps(
         best.request["body"], sort_keys=True, ensure_ascii=False, indent=0
     ).splitlines()
-    changes = [
-        line[:200]
-        for line in difflib.unified_diff(other, text, "recorded", "asked", n=0, lineterm="")
-        if line.startswith(("-", "+")) and not line.startswith(("---", "+++"))
-    ]
+    matcher = difflib.SequenceMatcher(None, other, text, autojunk=False)
+    changes: list[str] = []
+    for tag, old_start, old_end, new_start, new_end in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        for before, after in zip(
+            other[old_start:old_end] or [""], text[new_start:new_end] or [""], strict=False
+        ):
+            changes.append(_difference(before, after))
     return "\n".join(changes[:12])
+
+
+def _difference(before: str, after: str) -> str:
+    start = next(
+        (
+            index
+            for index, pair in enumerate(zip(before, after, strict=False))
+            if pair[0] != pair[1]
+        ),
+        min(len(before), len(after)),
+    )
+    left = max(0, start - DIFF_CONTEXT)
+    return (
+        f"at {start}: recorded …{before[left : start + DIFF_CONTEXT]}… "
+        f"asked …{after[left : start + DIFF_CONTEXT]}…"
+    )
 
 
 @dataclass(slots=True)
@@ -245,13 +290,13 @@ class ReplayLedger:
     rules: Sequence[VolatileRule] = VOLATILE_RULES
     misses: list[ReplayMiss] = field(default_factory=list)
     served: Counter[str] = field(default_factory=Counter)
-    heard: Counter[str] = field(default_factory=Counter)
+    heard: set[tuple[str, int]] = field(default_factory=set)
     _by_digest: dict[str, list[ModelExchange]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         grouped: defaultdict[str, list[ModelExchange]] = defaultdict(list)
         for exchange in self.exchanges:
-            grouped[exchange.request_sha256].append(exchange)
+            grouped[matching_digest(exchange.request, self.rules)].append(exchange)
         self._by_digest = dict(grouped)
 
     @classmethod
@@ -302,20 +347,26 @@ class ReplayLedger:
         self.misses.append(miss)
         return miss
 
-    def speech(self, clip: str) -> tuple[SpeechMessage, ...] | ReplayMiss:
+    def speech(self, clip: str, take: int) -> tuple[SpeechMessage, ...] | ReplayMiss:
         recorded = self.takes.get(clip, ())
-        position = self.heard[clip]
-        if position < len(recorded):
-            self.heard[clip] += 1
-            return recorded[position]
+        if 1 <= take <= len(recorded):
+            self.heard.add((clip, take))
+            return recorded[take - 1]
         miss = ReplayMiss(
-            kind="repeated_clip" if recorded else "unrecorded_clip",
+            kind="unrecorded_clip",
             route="stt",
             request_sha256=None,
-            detail=f"{clip} heard {position + 1} times, recorded {len(recorded)} takes",
+            detail=f"{clip} was spoken as take {take}, recorded {len(recorded)} takes",
         )
         self.misses.append(miss)
         return miss
+
+    def used_exchanges(self) -> list[ModelExchange]:
+        return [
+            exchange
+            for digest, exchanges in self._by_digest.items()
+            for exchange in exchanges[: self.served[digest]]
+        ]
 
     def unused(
         self, heard: HeardTranscripts
@@ -333,9 +384,10 @@ class ReplayLedger:
             }
             (speculative if heard.speculative(exchanges[0].request) else fatal).append(left)
         fatal += [
-            {"route": "stt", "clip": clip, "unused": len(takes) - self.heard[clip]}
+            {"route": "stt", "clip": clip, "take": take}
             for clip, takes in self.takes.items()
-            if self.heard[clip] < len(takes)
+            for take in range(1, len(takes) + 1)
+            if (clip, take) not in self.heard
         ]
         return fatal, speculative
 
@@ -351,7 +403,7 @@ class ReplayLedger:
             "recorded_exchanges": len(self.exchanges),
             "served_exchanges": sum(self.served.values()),
             "recorded_takes": sum(len(takes) for takes in self.takes.values()),
-            "heard_takes": sum(self.heard.values()),
+            "heard_takes": len(self.heard),
             "misses": [miss.summary() for miss in fatal],
             "unused": unused,
             "speculative_misses": [miss.summary() for miss in speculative],

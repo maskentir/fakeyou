@@ -49,6 +49,8 @@ only when its canonical identity is identical:
 - the route, which carries the model and the method
 - the whole JSON body: system instruction, every turn, generation config and tools
 - images replaced by the SHA-256 of their bytes
+- two measured values replaced by a placeholder, because replay timing cannot
+  reproduce them: `vision_latency_ms` and the whole seconds in `seconds_ago`
 
 Identical requests are served in the order they were recorded. A request with no
 identical recording is answered with a provider error, never with another recording.
@@ -83,6 +85,8 @@ docker run --rm -e SIMULATOR_PROVIDERS=record \
 
 Then run `replay` until every scenario is closed. Where a replay asks something the
 recording run did not, fill the gap with `record_missing`, and replay again.
+`record_missing` rewrites the cassette to exactly what its run used and added, so a
+recording that no run asks for any more is dropped.
 
 Meta-tests enforce the conventions mechanically rather than by review: no comments
 or docstrings in source, no Indonesian in source files, every test file named after

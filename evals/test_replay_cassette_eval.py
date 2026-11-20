@@ -208,24 +208,44 @@ def test_a_miss_names_the_nearest_recording_only_as_a_diagnostic(tmp_path: Path)
     assert ledger.served.total() == 0
 
 
-def test_speech_takes_play_in_order_and_an_extra_hearing_is_refused(tmp_path: Path) -> None:
+def test_each_spoken_take_replays_its_own_recording_even_on_a_reconnect(
+    tmp_path: Path,
+) -> None:
     ledger = _ledger(
         tmp_path,
         _speech("raise-hand.wav", 1, "Twin, raise your hand"),
         _speech("raise-hand.wav", 2, "Twin, raise your hand please"),
     )
 
-    first, second, third = (ledger.speech("raise-hand.wav") for _ in range(3))
-    unknown = ledger.speech("leave.wav")
+    first = ledger.speech("raise-hand.wav", 1)
+    reconnected = ledger.speech("raise-hand.wav", 1)
+    second = ledger.speech("raise-hand.wav", 2)
+    third = ledger.speech("raise-hand.wav", 3)
+    unknown = ledger.speech("leave.wav", 1)
 
     assert isinstance(first, tuple)
     assert isinstance(second, tuple)
+    assert first == reconnected
     assert first[0].message["transcript"] == "Twin, raise your hand"
     assert second[0].message["transcript"] == "Twin, raise your hand please"
     assert isinstance(third, ReplayMiss)
-    assert third.kind == "repeated_clip"
+    assert third.kind == "unrecorded_clip"
     assert isinstance(unknown, ReplayMiss)
     assert unknown.kind == "unrecorded_clip"
+
+
+def test_a_recorded_take_that_is_never_spoken_keeps_the_replay_open(tmp_path: Path) -> None:
+    ledger = _ledger(
+        tmp_path,
+        _speech("raise-hand.wav", 1, "Twin, raise your hand"),
+        _speech("leave.wav", 1, "you can leave"),
+    )
+
+    ledger.speech("raise-hand.wav", 1)
+    summary: Any = ledger.summary(HeardTranscripts())
+
+    assert summary["unused"] == [{"route": "stt", "clip": "leave.wav", "take": 1}]
+    assert summary["closed"] is False
 
 
 @pytest.mark.parametrize(
@@ -380,7 +400,7 @@ def test_a_request_that_is_not_a_judge_window_is_never_speculative() -> None:
     ("recorded", "asked"),
     [
         ("The beta launch is 14 October 2026.", "The beta launch is 21 October 2026."),
-        ("seconds_ago: 2", "seconds_ago: 20"),
+        ("Slide 2 of 20", "Slide 20 of 20"),
         ("evidence ref 3f9a1c2b7d4e", "evidence ref 3f9a1c2b7d4f"),
         ("2026-11-19T18:48:17Z", "2026-11-19T18:48:18Z"),
     ],
@@ -389,3 +409,32 @@ def test_no_normalisation_hides_a_changed_value(tmp_path: Path, recorded: str, a
     ledger = _ledger(tmp_path, _exchange(_body(recorded), "recorded"))
 
     assert isinstance(ledger.respond(ROUTE, _body(asked)), ReplayMiss)
+
+
+def _view(latency: int, seconds: int = 4) -> bytes:
+    view = {"screen": {"title": "Plan", "vision_latency_ms": latency, "seconds_ago": seconds}}
+    return _body("Meeting view: " + json.dumps(view))
+
+
+def test_only_measured_latency_and_elapsed_seconds_are_treated_as_volatile(
+    tmp_path: Path,
+) -> None:
+    ledger = _ledger(tmp_path, _exchange(_view(2901), "described"), _exchange(_view(2901), "again"))
+
+    jittered = ledger.respond(ROUTE, _view(2903))
+    later = ledger.respond(ROUTE, _view(2901, seconds=5))
+    retitled = ledger.respond(ROUTE, _view(2901).replace(b"Plan", b"Plot"))
+
+    assert _text(jittered) == "described"
+    assert _text(later) == "again"
+    assert isinstance(retitled, ReplayMiss)
+    assert [rule.name for rule in VOLATILE_RULES] == ["vision_latency_ms", "seconds_ago"]
+
+
+def test_recordings_made_before_a_volatile_rule_still_match_under_it(tmp_path: Path) -> None:
+    unruled = model_exchange(
+        canonical_request(ROUTE, _view(2901), rules=()), 200, "application/json", _answer("seen")
+    )
+    ledger = _ledger(tmp_path, unruled)
+
+    assert _text(ledger.respond(ROUTE, _view(3120))) == "seen"

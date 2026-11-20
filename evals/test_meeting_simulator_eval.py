@@ -78,7 +78,15 @@ def _settings(tmp_path: Path) -> Settings:
     return settings.model_copy(update={"paths": paths})
 
 
-def _brief(directory: Path, meeting_id: str) -> Path:
+PLAN_FACTS = (
+    {"id": "plan-freeze", "text": "Step one: Dimas freezes the Orchid code on 30 September 2026."},
+    {"id": "plan-beta", "text": "Step two: Rani opens the Orchid beta on 14 October 2026."},
+    {"id": "plan-docs", "text": "Step three: Ayu publishes the Orchid guides on 21 October 2026."},
+    {"id": "plan-launch", "text": "Step four: the Orchid public launch is on 4 November 2026."},
+)
+
+
+def _brief(directory: Path, meeting_id: str, *, plan: bool = False) -> Path:
     brief = {
         "schema_version": "meeting_brief/v2",
         "owner_id": "sim_owner",
@@ -88,6 +96,7 @@ def _brief(directory: Path, meeting_id: str) -> Path:
         "approved_facts": [
             {"id": "beta-date", "text": "The Orchid beta launch is planned for 14 October 2026."},
             {"id": "checklist-owner", "text": "Rani owns the Orchid launch checklist."},
+            *(PLAN_FACTS if plan else ()),
         ],
         "permissions": ["explain_facts", "meet_act", "meet_chat", "meet_leave"],
         "knowledge_scope": "brief_only",
@@ -285,7 +294,12 @@ def _report(
 
 @asynccontextmanager
 async def _meeting(
-    tmp_path: Path, meeting_id: str, *, duration: float = 300, brief: bool = True
+    tmp_path: Path,
+    meeting_id: str,
+    *,
+    duration: float = 300,
+    brief: bool = True,
+    plan: bool = False,
 ) -> AsyncIterator[Meeting]:
     doubles = provider_doubles(meeting_id)
     actions: list[dict[str, Any]] = []
@@ -301,7 +315,7 @@ async def _meeting(
         async with doubles.running():
             settings = doubles.settings(settings)
             simulator = MeetingSimulator(twin_name="Rani Twin", on_say=said)
-            briefing = _brief(tmp_path, meeting_id) if brief else None
+            briefing = _brief(tmp_path, meeting_id, plan=plan) if brief else None
             request = _request(settings, meeting_id, duration, briefing)
             async with running_session(run_join_session(request, _ports(simulator))) as session:
                 await _admitted(simulator, session, journal)
@@ -491,7 +505,7 @@ async def test_the_twin_sends_the_reaction_meet_offers_for_what_was_asked(tmp_pa
 async def test_the_meeting_hears_the_twin_answer_quickly_and_stop_when_cut_off(
     tmp_path: Path,
 ) -> None:
-    async with _meeting(tmp_path, "sim-s4-timing") as meeting:
+    async with _meeting(tmp_path, "sim-s4-timing", plan=True) as meeting:
         simulator = meeting.simulator
         question = await simulator.say("beta-question.wav", speaker=HARUN)
         answer = await simulator.wait_for_twin_voice(

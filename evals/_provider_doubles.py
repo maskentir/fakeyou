@@ -178,6 +178,20 @@ def _with_google_keys(recorded: Settings, live: Settings) -> Settings:
     )
 
 
+def _require_google_keys(settings: Settings) -> None:
+    roles = {name: getattr(settings, name) for name in REPLY_ROLES}
+    roles["turn_judge"] = settings.turn_judge.model
+    missing = [
+        name
+        for name, role in roles.items()
+        if isinstance(role, GoogleReply) and role.api_key is None
+    ]
+    if settings.perception.interpreter.api_key is None:
+        missing.append("perception")
+    if missing:
+        raise ValueError(f"record_missing needs Gemini keys in .env for {missing}")
+
+
 def _require_google(settings: Settings) -> None:
     roles = {name: getattr(settings, name) for name in REPLY_ROLES}
     roles["turn_judge"] = settings.turn_judge.model
@@ -195,13 +209,20 @@ def _require_google(settings: Settings) -> None:
 class CassetteWriter:
     def __init__(self, path: Path, *, fresh: bool) -> None:
         self.path = path
+        self.appended: list[ModelExchange | SpeechMessage] = []
         path.parent.mkdir(parents=True, exist_ok=True)
         if fresh:
             path.write_text("", encoding="utf-8")
 
     def append(self, line: ModelExchange | SpeechMessage) -> None:
+        self.appended.append(line)
         with self.path.open("a", encoding="utf-8") as file:
             file.write(line.model_dump_json() + "\n")
+
+    def rewrite(self, lines: Sequence[ModelExchange | SpeechMessage]) -> None:
+        self.path.write_text(
+            "".join(line.model_dump_json() + "\n" for line in lines), encoding="utf-8"
+        )
 
 
 @dataclass(slots=True)
@@ -217,6 +238,7 @@ class ProviderDoubles:
     _spoken_takes: Counter[str] = field(default_factory=Counter)
     unheard_voice_ends: list[str] = field(default_factory=list)
     transcripts: HeardTranscripts = field(default_factory=HeardTranscripts)
+    refused_recordings: list[str] = field(default_factory=list)
 
     def settings(self, settings: Settings) -> Settings:
         if self.mode == "live":
@@ -232,7 +254,9 @@ class ProviderDoubles:
         if self.mode == "replay":
             return self._pointed(recorded, SecretStr(DOUBLE_KEY))
         _require_google(recorded)
-        return self._pointed(_with_google_keys(recorded, settings), None)
+        keyed = _with_google_keys(recorded, settings)
+        _require_google_keys(keyed)
+        return self._pointed(keyed, None)
 
     def _pointed(self, settings: Settings, key: SecretStr | None) -> Settings:
         pointed: dict[str, Any] = {"base_url": self.base_url, **({"api_key": key} if key else {})}
@@ -362,7 +386,12 @@ class ProviderDoubles:
                     yield chunk
             finally:
                 await upstream.aclose()
-                writer.append(model_exchange(canonical, upstream.status_code, media_type, chunks))
+                if 200 <= upstream.status_code < 300:
+                    writer.append(
+                        model_exchange(canonical, upstream.status_code, media_type, chunks)
+                    )
+                else:
+                    self.refused_recordings.append(f"{route} answered {upstream.status_code}")
 
         return StreamingResponse(relay(), status_code=upstream.status_code, media_type=media_type)
 
@@ -439,7 +468,7 @@ class ProviderDoubles:
                 heard = hearing.hear(audio) if audio else None
                 if heard is None or heard[0] != "start":
                     continue
-                recorded = self.ledger.speech(heard[1].clip)
+                recorded = self.ledger.speech(heard[1].clip, heard[1].take)
                 if isinstance(recorded, ReplayMiss):
                     continue
                 speaking.append(asyncio.ensure_future(self._spoken(socket, heard[1], recorded)))
@@ -490,6 +519,7 @@ class ProviderDoubles:
             else None,
             "replay": ledger,
             "voice_ends_not_heard": list(self.unheard_voice_ends),
+            "provider_errors_not_recorded": list(self.refused_recordings),
         }
 
     @asynccontextmanager
@@ -517,6 +547,13 @@ class ProviderDoubles:
                 server.should_exit = True
                 with suppress(asyncio.CancelledError):
                     await serving
+                self.finish_recording()
+
+    def finish_recording(self) -> None:
+        if self.mode != "record_missing" or self.ledger is None or self.writer is None:
+            return
+        speech = [line for takes in self.ledger.takes.values() for take in takes for line in take]
+        self.writer.rewrite([*speech, *self.ledger.used_exchanges(), *self.writer.appended])
 
 
 async def _started(server: uvicorn.Server, serving: asyncio.Future[None]) -> None:
