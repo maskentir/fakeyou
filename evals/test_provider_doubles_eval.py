@@ -169,7 +169,10 @@ def _recorded_looks() -> Iterator[tuple[str, ModelExchange]]:
 
 
 def test_every_recorded_simulator_look_is_a_structured_inspection() -> None:
-    for scenario, exchange in _recorded_looks():
+    looks = list(_recorded_looks())
+
+    assert {scenario for scenario, _ in looks} == {"sim-s3-camera", "sim-s3-screen"}
+    for scenario, exchange in looks:
         body = "".join(text for _delay, text in exchange.chunks)
         text = json.loads(body)["candidates"][0]["content"]["parts"][0]["text"]
         inspection = VisualInspection.model_validate_json(text)

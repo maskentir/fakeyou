@@ -438,3 +438,21 @@ def test_recordings_made_before_a_volatile_rule_still_match_under_it(tmp_path: P
     ledger = _ledger(tmp_path, unruled)
 
     assert _text(ledger.respond(ROUTE, _view(3120))) == "seen"
+
+
+def _structured_view(latency: int, frames: int = 1) -> bytes:
+    response = {"screen": {"vision_latency_ms": latency, "frames": frames}}
+    parts = [{"functionResponse": {"name": "meeting_view", "response": response}}]
+    return json.dumps({"contents": [{"role": "user", "parts": parts}]}).encode()
+
+
+def test_a_measured_value_is_volatile_as_a_structured_field_and_nothing_else_is(
+    tmp_path: Path,
+) -> None:
+    ledger = _ledger(tmp_path, _exchange(_structured_view(2888), "seen"))
+
+    jittered = ledger.respond(ROUTE, _structured_view(2959))
+    changed = ledger.respond(ROUTE, _structured_view(2888, frames=2))
+
+    assert _text(jittered) == "seen"
+    assert isinstance(changed, ReplayMiss)

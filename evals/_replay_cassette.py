@@ -63,12 +63,19 @@ def _text(value: str, rules: Sequence[VolatileRule]) -> str:
     return value
 
 
+def _field(key: str, item: Any, rules: Sequence[VolatileRule]) -> Any:
+    measured = next((rule for rule in rules if rule.name == key), None)
+    if measured is not None and isinstance(item, int | float) and not isinstance(item, bool):
+        return measured.placeholder.removeprefix("\\1")
+    return None
+
+
 def _canonical(value: Any, rules: Sequence[VolatileRule]) -> Any:
     if isinstance(value, dict):
         return {
             key: _image(item)
             if key == "inlineData" and isinstance(item, dict)
-            else _canonical(item, rules)
+            else _field(key, item, rules) or _canonical(item, rules)
             for key, item in value.items()
         }
     if isinstance(value, list):
@@ -80,7 +87,9 @@ def _canonical(value: Any, rules: Sequence[VolatileRule]) -> Any:
 
 def _with_rules(value: Any, rules: Sequence[VolatileRule]) -> Any:
     if isinstance(value, dict):
-        return {key: _with_rules(item, rules) for key, item in value.items()}
+        return {
+            key: _field(key, item, rules) or _with_rules(item, rules) for key, item in value.items()
+        }
     if isinstance(value, list):
         return [_with_rules(item, rules) for item in value]
     if isinstance(value, str):
