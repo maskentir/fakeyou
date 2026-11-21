@@ -269,10 +269,12 @@ class ProviderDoubles:
         if self.mode == "record":
             _require_google(settings)
             snapshot = _without_secrets(settings.model_dump(mode="json", exclude={"paths"}))
-            SNAPSHOT.write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n")
+            self.staged_snapshot.write_text(
+                json.dumps(snapshot, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
             self._stt_upstream = settings.stt.url
             return self._pointed(settings, None)
-        snapshot = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
+        snapshot = json.loads(self.snapshot.read_text(encoding="utf-8"))
         recorded = Settings.model_validate({**snapshot, "paths": settings.paths.model_dump()})
         _require_google(recorded)
         if self.mode == "replay":
@@ -654,6 +656,14 @@ class ProviderDoubles:
                 await socket.send_json(line.message)
 
     @property
+    def snapshot(self) -> Path:
+        return self.cassette.with_name(SNAPSHOT.name)
+
+    @property
+    def staged_snapshot(self) -> Path:
+        return self.cassette.with_name(f"{self.cassette.stem}.{SNAPSHOT.name}.candidate")
+
+    @property
     def reaches_providers(self) -> bool:
         return self._client is not None
 
@@ -700,6 +710,29 @@ class ProviderDoubles:
                     await serving
                 self.finish_recording()
 
+    def integrity_failures(self) -> list[str]:
+        summary = self.ledger.summary(self.transcripts) if self.ledger is not None else None
+        if self.mode == "replay":
+            if summary is None or summary["closed"]:
+                return []
+            return [f"replay is not closed: misses {summary['misses']}, unused {summary['unused']}"]
+        failures = list(self.refused_recordings)
+        if summary is not None and summary["misses"]:
+            failures.append(f"recording missed {summary['misses']}")
+        if self.budget is not None and self.budget.ledger.stop_reason is not None:
+            failures.append(f"recording stopped: {self.budget.ledger.stop_reason}")
+        return failures
+
+    def promote(self) -> None:
+        if self.writer is None:
+            return
+        failures = self.integrity_failures()
+        if failures:
+            raise CassetteError(f"{self.cassette.name} not promoted: {'; '.join(failures)}")
+        if self.mode == "record":
+            self.staged_snapshot.replace(self.snapshot)
+        self.writer.path.replace(self.cassette)
+
     def finish_recording(self) -> None:
         if self.mode != "record_missing" or self.ledger is None or self.writer is None:
             return
@@ -744,7 +777,7 @@ async def _started(server: uvicorn.Server, serving: asyncio.Future[None]) -> Non
 
 
 def recorded_judge(folder: Path = CASSETTES) -> TurnJudgeShape:
-    snapshot = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
+    snapshot = json.loads((folder / SNAPSHOT.name).read_text(encoding="utf-8"))
     role = snapshot["turn_judge"]["model"] or snapshot["reply"]
     exchanges = (
         line
@@ -761,12 +794,15 @@ def provider_doubles(scenario: str) -> ProviderDoubles:
     path = folder / f"{scenario}.jsonl"
     if mode == "live":
         return ProviderDoubles(mode, path)
+    candidate = path.with_name(f"{path.name}.candidate")
     if mode == "record":
         return ProviderDoubles(
-            mode, path, writer=CassetteWriter(path, fresh=True), budget=recording_budget()
+            mode, path, writer=CassetteWriter(candidate, fresh=True), budget=recording_budget()
         )
     if not path.exists():
         raise CassetteError(f"no cassette for {scenario} at {path}; record it before replaying")
+    if not (folder / SNAPSHOT.name).exists():
+        raise CassetteError(f"no settings snapshot in {folder}; record it before replaying")
     ledger = ReplayLedger.load(path, recorded_judge(folder))
     if mode == "replay":
         return ProviderDoubles(mode, path, ledger=ledger)
@@ -774,7 +810,7 @@ def provider_doubles(scenario: str) -> ProviderDoubles:
         mode,
         path,
         ledger=ledger,
-        writer=CassetteWriter(path, fresh=False),
+        writer=CassetteWriter(candidate, fresh=True),
         budget=recording_budget(),
         speech=speech_recording(ledger),
     )

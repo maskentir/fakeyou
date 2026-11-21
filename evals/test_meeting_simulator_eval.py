@@ -24,7 +24,7 @@ from evals._meeting_simulator import (
     session_modes,
     wait_for_event,
 )
-from evals._provider_doubles import SNAPSHOT, ProviderDoubles, provider_doubles
+from evals._provider_doubles import ProviderDoubles, provider_doubles
 from evals._replay_cassette import CassetteError
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import PathSettings, Settings
@@ -175,6 +175,10 @@ class Meeting:
     simulator: MeetingSimulator
     journal: Path
     session: asyncio.Task[Any]
+    doubles: ProviderDoubles
+
+    def promote(self) -> None:
+        self.doubles.promote()
 
     def twin_speech(self) -> list[TwinSpeechEntry]:
         path = meeting_record_path(self.settings.paths.record_dir, SessionId(self.meeting_id))
@@ -255,7 +259,7 @@ def _report(
         "revision": os.environ.get("SIMULATOR_REVISION", "unknown"),
         "fixtures": {
             "cassette_sha256": provider.get("cassette_sha256"),
-            "settings_sha256": _digest(SNAPSHOT),
+            "settings_sha256": _digest(doubles.snapshot),
             "clips": {
                 action["clip"]: _digest(FIXTURES / action["clip"])
                 for action in actions
@@ -319,14 +323,9 @@ async def _meeting(
             request = _request(settings, meeting_id, duration, briefing)
             async with running_session(run_join_session(request, _ports(simulator))) as session:
                 await _admitted(simulator, session, journal)
-                yield Meeting(meeting_id, settings, simulator, journal, session)
-        replay = doubles.report().get("replay")
-        if isinstance(replay, Mapping):
-            require(
-                replay["closed"],
-                "provider_replay_mismatch",
-                f"replay is not closed: misses {replay['misses']}, unused {replay['unused']}",
-            )
+                yield Meeting(meeting_id, settings, simulator, journal, session, doubles)
+        failures = doubles.integrity_failures()
+        require(not failures, "provider_replay_mismatch", "; ".join(failures))
     except BaseException as raised:
         error = raised
         raise
@@ -374,6 +373,7 @@ async def test_the_twin_joins_a_simulated_meeting_and_answers_a_spoken_question(
         f"ended with {outcome.session.terminal_reason}",
     )
     require("turn_failed" not in meeting.events(), "behavioral_assertion_failure", "a turn failed")
+    meeting.promote()
 
 
 async def test_the_twin_answers_chat_and_acts_on_the_meeting_when_asked(tmp_path: Path) -> None:
@@ -419,6 +419,7 @@ async def test_the_twin_answers_chat_and_acts_on_the_meeting_when_asked(tmp_path
         f"phase {outcome.session.phase}",
     )
     require("turn_failed" not in meeting.events(), "behavioral_assertion_failure", "a turn failed")
+    meeting.promote()
 
 
 SLIDE_ONLY_TOKEN = "HARBOR-47"
@@ -482,6 +483,7 @@ async def test_the_twin_corrects_a_wrong_slide_and_reads_the_shared_screen(tmp_p
         f"read {read!r}",
     )
     require("turn_failed" not in meeting.events(), "behavioral_assertion_failure", "a turn failed")
+    meeting.promote()
 
 
 def _camera_of(device: str) -> Callable[[Mapping[str, Any]], bool]:
@@ -515,6 +517,7 @@ async def test_the_twin_only_describes_a_camera_it_can_attribute(tmp_path: Path)
     )
     require("red" in named, "behavioral_assertion_failure", f"named answer {named!r}")
     require("turn_failed" not in meeting.events(), "behavioral_assertion_failure", "a turn failed")
+    meeting.promote()
 
 
 async def test_the_twin_sends_the_reaction_meet_offers_for_what_was_asked(tmp_path: Path) -> None:
@@ -543,6 +546,7 @@ async def test_the_twin_sends_the_reaction_meet_offers_for_what_was_asked(tmp_pa
         str(heart),
     )
     require("turn_failed" not in meeting.events(), "behavioral_assertion_failure", "a turn failed")
+    meeting.promote()
 
 
 async def test_the_meeting_hears_the_twin_answer_quickly_and_stop_when_cut_off(
@@ -589,3 +593,4 @@ async def test_the_meeting_hears_the_twin_answer_quickly_and_stop_when_cut_off(
     require(reply_latency < MAX_REPLY_LATENCY_SECONDS, "timing_failure", json.dumps(timing))
     require(stop_latency < MAX_STOP_LATENCY_SECONDS, "timing_failure", json.dumps(timing))
     require(interrupted, "behavioral_assertion_failure", "no interrupted twin speech was recorded")
+    meeting.promote()

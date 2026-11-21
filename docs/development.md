@@ -36,16 +36,17 @@ The modes that reach a provider also need `-v "$PWD/.env:/workspace/.env:ro"`.
 `SIMULATOR_PROVIDERS` picks where the providers come from:
 
 - `replay` (the default) needs no `.env` and contacts no provider. It rebuilds the settings from
-  the recorded snapshot, replays Muse and Gemini from the cassettes in
-  `evals/fixtures/simulator/cassettes/`, and speaks through a synthetic Cartesia. CI
+  the settings snapshot (`settings.json`) beside the cassettes, replays Muse and Gemini
+  from the cassettes in `evals/fixtures/simulator/cassettes/` (or `SIMULATOR_CASSETTE_DIR`,
+  which must hold its own `settings.json`), and speaks through a synthetic Cartesia. CI
   runs it on every pull request, with every provider host mapped to a refused address.
   Every provider endpoint, the memory model included, points at the doubles, and a
   request to a route no double serves fails the scenario.
 - `live` calls the real providers and spends money; select it explicitly.
-- `record` relays Gemini and Muse to the real services and rewrites the cassettes and
+- `record` relays Gemini and Muse to the real services and records a new cassette and
   the settings snapshot.
 - `record_missing` replays what a cassette holds and relays to Gemini only the requests
-  it does not hold, appending them. It needs the Gemini keys in `.env` and a recording
+  it does not hold, adding them. It needs the Gemini keys in `.env` and a recording
   budget.
 
 **Replay contract** (`evals/_replay_cassette.py`). A Gemini request matches a recording
@@ -137,16 +138,30 @@ The run stops on any of:
 - a take without `speechStart`, a transcript, `speechComplete` with text, and the voice-end
   marker
 
-A stopped run leaves the cassette exactly as it was. Takes that were not heard are dropped.
+A stopped run is never promoted. Takes that were not heard are dropped.
 The report's `speech_recording` gives every session's lifecycle (open and close times, close
 code, ending, keyword count, PCM bytes). It also gives the totals, the recorded take, the
 estimated charge (USD 3 per 1,000 audio minutes) and the stop reason. A provider error or an
 unexpected close stops the run for good, and later sessions are refused before reaching
 Muse.
 
+**Promotion.** Both recording modes write `<scenario>.jsonl.candidate` next to the
+cassette and leave the cassette itself untouched. When the meeting ends, a recording
+integrity failure fails the scenario: a refused or failed provider call, a replay miss, a
+stopped budget or a stopped speech session. Unused recordings are not a failure while
+recording, because they are pruned. The scenario's behavioural assertions then run, and
+its last statement, `meeting.promote()`, replaces the cassette with the candidate.
+`record` also stages the settings snapshot as `<scenario>.settings.json.candidate` in the
+same folder and never writes `settings.json` directly; promotion replaces the snapshot
+first, then the cassette. Each replacement is atomic on its own, but the pair is not: an
+interruption between the two leaves the new snapshot with the old cassette, so re-run the
+recording. A scenario that fails anywhere leaves the candidates behind for inspection and
+the cassette and snapshot as they were. A meta-test checks that every scenario promotes only as its last statement.
+`replay` still requires a closed replay before the assertions run.
+
 Then run `replay` until every scenario is closed. Where a replay asks something the
 recording run did not, fill the gap with `record_missing`, and replay again.
-`record_missing` rewrites the cassette to exactly what its run used and added, so a
+A promoted `record_missing` candidate holds exactly what its run used and added, so a
 recording that no run asks for any more is dropped.
 
 Meta-tests enforce the conventions mechanically rather than by review: no comments
