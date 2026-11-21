@@ -12,6 +12,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, TypeAdapter, ValidationError
 
+from fakeyou.conversation.turn_judge import _JUDGE_RULES, JudgeLine, JudgeWindow, TurnJudgement
+
 _STRICT = ConfigDict(extra="forbid", frozen=True)
 _Digest = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 DIFF_CONTEXT = 80
@@ -189,23 +191,48 @@ MissKind = Literal[
 ]
 
 
-def judge_latest(request: Mapping[str, Any]) -> str | None:
-    contents = request.get("body", {}).get("contents") or []
-    if not contents or not isinstance(contents[-1], dict):
-        return None
-    text = "".join(
-        str(part.get("text", ""))
-        for part in contents[-1].get("parts") or []
-        if isinstance(part, dict)
-    )
-    try:
-        window = json.loads(text)
-    except ValueError:
-        return None
-    latest = window.get("latest") if isinstance(window, dict) else None
-    if not isinstance(latest, dict) or not isinstance(latest.get("text"), str):
-        return None
-    return str(latest["text"]).strip()
+JUDGE_WINDOW_KEYS = frozenset(
+    {"twin_names", *JudgeWindow((), JudgeLine(speaker="", text="")).reading}
+)
+JUDGE_LATEST_KEYS = frozenset({"speaker", "text"})
+
+
+def judge_route(model: str) -> str:
+    return f"/v1beta/models/{model}:generateContent"
+
+
+@dataclass(frozen=True, slots=True)
+class TurnJudgeShape:
+    route: str
+
+    def latest(self, request: Mapping[str, Any]) -> str | None:
+        body = request.get("body")
+        if request.get("route") != self.route or not isinstance(body, dict):
+            return None
+        schema = (body.get("generationConfig") or {}).get("responseJsonSchema") or {}
+        if (
+            body.get("systemInstruction") != {"parts": [{"text": _JUDGE_RULES}]}
+            or schema.get("title") != TurnJudgement.__name__
+        ):
+            return None
+        match body.get("contents"):
+            case [{"role": "user", "parts": [{"text": str(text)}]} as content] if set(content) == {
+                "role",
+                "parts",
+            }:
+                pass
+            case _:
+                return None
+        try:
+            window = json.loads(text)
+        except ValueError:
+            return None
+        if not isinstance(window, dict) or set(window) != JUDGE_WINDOW_KEYS:
+            return None
+        latest = window["latest"]
+        if not isinstance(latest, dict) or set(latest) != JUDGE_LATEST_KEYS:
+            return None
+        return latest["text"].strip() if isinstance(latest["text"], str) else None
 
 
 @dataclass(slots=True)
@@ -220,9 +247,8 @@ class HeardTranscripts:
         if text:
             (self.final if message.get("final") else self.interim).add(text)
 
-    def speculative(self, request: Mapping[str, Any]) -> bool:
-        latest = judge_latest(request)
-        return latest is not None and latest in self.interim and latest not in self.final
+    def only_interim(self, text: str | None) -> bool:
+        return text is not None and text in self.interim and text not in self.final
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,7 +258,7 @@ class ReplayMiss:
     request_sha256: str | None
     detail: str
     nearest: str | None = None
-    request: Mapping[str, Any] | None = None
+    judge_latest: str | None = None
 
     def summary(self) -> dict[str, object]:
         return {
@@ -240,9 +266,12 @@ class ReplayMiss:
             "route": self.route,
             "request_sha256": self.request_sha256,
             "detail": self.detail,
-            "judge_latest": judge_latest(self.request) if self.request is not None else None,
+            "judge_latest": self.judge_latest,
             "nearest_recorded_difference": self.nearest,
         }
+
+    def speculative(self, heard: HeardTranscripts) -> bool:
+        return self.kind == "unrecorded_request" and heard.only_interim(self.judge_latest)
 
 
 def _nearest(asked: Mapping[str, Any], recorded: Sequence[ModelExchange]) -> str | None:
@@ -296,6 +325,7 @@ def _difference(before: str, after: str) -> str:
 class ReplayLedger:
     exchanges: tuple[ModelExchange, ...]
     takes: Mapping[str, tuple[tuple[SpeechMessage, ...], ...]]
+    judge: TurnJudgeShape
     rules: Sequence[VolatileRule] = VOLATILE_RULES
     misses: list[ReplayMiss] = field(default_factory=list)
     served: Counter[str] = field(default_factory=Counter)
@@ -309,7 +339,9 @@ class ReplayLedger:
         self._by_digest = dict(grouped)
 
     @classmethod
-    def load(cls, path: Path, rules: Sequence[VolatileRule] = VOLATILE_RULES) -> "ReplayLedger":
+    def load(
+        cls, path: Path, judge: TurnJudgeShape, rules: Sequence[VolatileRule] = VOLATILE_RULES
+    ) -> "ReplayLedger":
         lines = read_cassette(path)
         exchanges = tuple(line for line in lines if isinstance(line, ModelExchange))
         speech: defaultdict[str, defaultdict[int, list[SpeechMessage]]] = defaultdict(
@@ -326,7 +358,7 @@ class ReplayLedger:
             numbers = sorted({take[0].take for take in recorded})
             if numbers != list(range(1, len(numbers) + 1)):
                 raise CassetteError(f"takes of {clip} are not numbered 1..n: {numbers}")
-        return cls(exchanges, takes, rules)
+        return cls(exchanges, takes, judge, rules)
 
     def respond(self, route: str, body: bytes) -> ModelExchange | ReplayMiss:
         try:
@@ -351,7 +383,7 @@ class ReplayLedger:
                 else "no recorded exchange has this canonical request"
             ),
             nearest=None if recorded else _nearest(request, self.exchanges),
-            request=request,
+            judge_latest=self.judge.latest(request),
         )
         self.misses.append(miss)
         return miss
@@ -370,6 +402,11 @@ class ReplayLedger:
         self.misses.append(miss)
         return miss
 
+    def refuse(self, route: str) -> ReplayMiss:
+        miss = ReplayMiss("unrecorded_request", route, None, "no provider double serves this route")
+        self.misses.append(miss)
+        return miss
+
     def used_exchanges(self) -> list[ModelExchange]:
         return [
             exchange
@@ -385,13 +422,14 @@ class ReplayLedger:
         for digest, exchanges in self._by_digest.items():
             if self.served[digest] >= len(exchanges):
                 continue
+            latest = self.judge.latest(exchanges[0].request)
             left: dict[str, object] = {
                 "route": exchanges[0].route,
                 "request_sha256": digest,
                 "unused": len(exchanges) - self.served[digest],
-                "judge_latest": judge_latest(exchanges[0].request),
+                "judge_latest": latest,
             }
-            (speculative if heard.speculative(exchanges[0].request) else fatal).append(left)
+            (speculative if heard.only_interim(latest) else fatal).append(left)
         fatal += [
             {"route": "stt", "clip": clip, "take": take}
             for clip, takes in self.takes.items()
@@ -401,12 +439,8 @@ class ReplayLedger:
         return fatal, speculative
 
     def summary(self, heard: HeardTranscripts) -> dict[str, object]:
-        fatal = [
-            miss
-            for miss in self.misses
-            if miss.request is None or not heard.speculative(miss.request)
-        ]
-        speculative = [miss for miss in self.misses if miss not in fatal]
+        speculative = [miss for miss in self.misses if miss.speculative(heard)]
+        fatal = [miss for miss in self.misses if not miss.speculative(heard)]
         unused, unused_speculative = self.unused(heard)
         return {
             "recorded_exchanges": len(self.exchanges),

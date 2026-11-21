@@ -1,11 +1,13 @@
 import asyncio
 import base64
+import copy
 import json
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from evals._provider_doubles import CASSETTES, recorded_judge
 from evals._replay_cassette import (
     VOLATILE_RULES,
     CassetteError,
@@ -14,12 +16,18 @@ from evals._replay_cassette import (
     ReplayLedger,
     ReplayMiss,
     SpeechMessage,
+    TurnJudgeShape,
     canonical_request,
     model_exchange,
+    read_cassette,
     request_digest,
 )
+from fakeyou.conversation.turn_judge import _JUDGE_RULES
 
 ROUTE = "/v1beta/models/gemini-3.1-flash-lite:generateContent"
+JUDGE_ROUTE = ROUTE
+OTHER_ROUTE = "/v1beta/models/gemini-3.8-flash:generateContent"
+JUDGE_SHAPE = TurnJudgeShape(JUDGE_ROUTE)
 JUDGE = "You read a live meeting for a digital twin and decide who the latest line is for."
 REPLY = "You are a digital twin for a meeting participant."
 PIXELS = b"\xff\xd8\xff\xe0red-shirt-frame"
@@ -63,7 +71,7 @@ def _write(path: Path, lines: list[ModelExchange | SpeechMessage]) -> Path:
 
 
 def _ledger(tmp_path: Path, *lines: ModelExchange | SpeechMessage) -> ReplayLedger:
-    return ReplayLedger.load(_write(tmp_path / "scenario.jsonl", list(lines)))
+    return ReplayLedger.load(_write(tmp_path / "scenario.jsonl", list(lines)), JUDGE_SHAPE)
 
 
 def _text(answer: ModelExchange | ReplayMiss) -> str:
@@ -266,7 +274,7 @@ def test_a_malformed_or_outdated_cassette_line_is_rejected(
     path.write_text(content, encoding="utf-8")
 
     with pytest.raises(CassetteError, match=complaint):
-        ReplayLedger.load(path)
+        ReplayLedger.load(path, JUDGE_SHAPE)
 
 
 def test_a_recording_whose_digest_does_not_match_its_request_is_rejected(tmp_path: Path) -> None:
@@ -281,7 +289,7 @@ def test_a_recording_whose_digest_does_not_match_its_request_is_rejected(tmp_pat
 
 def test_missing_cassettes_and_gapped_takes_are_rejected(tmp_path: Path) -> None:
     with pytest.raises(CassetteError, match="record it"):
-        ReplayLedger.load(tmp_path / "absent.jsonl")
+        ReplayLedger.load(tmp_path / "absent.jsonl", JUDGE_SHAPE)
     with pytest.raises(CassetteError, match="not numbered"):
         _ledger(tmp_path, _speech("leave.wav", 2, "leave"))
 
@@ -328,8 +336,25 @@ def test_volatile_rules_are_declared_and_named() -> None:
     assert len({rule.name for rule in VOLATILE_RULES}) == len(VOLATILE_RULES)
 
 
-def _window(latest: str) -> bytes:
-    return _body(json.dumps({"earlier": [], "latest": {"speaker": "Speaker A", "text": latest}}))
+JUDGE_CASSETTE = CASSETTES / "sim-s1.jsonl"
+
+
+def _recorded_judge_body() -> dict[str, Any]:
+    for line in read_cassette(JUDGE_CASSETTE):
+        if isinstance(line, ModelExchange) and line.route == JUDGE_ROUTE:
+            body = dict(line.request["body"])
+            if body.get("systemInstruction") == {"parts": [{"text": _JUDGE_RULES}]}:
+                return body
+    raise AssertionError("the s1 cassette has no turn-judge request")
+
+
+def _window(latest: str, *, route_body: dict[str, Any] | None = None, **window: Any) -> bytes:
+    body = copy.deepcopy(route_body or _recorded_judge_body())
+    reading = json.loads(body["contents"][0]["parts"][0]["text"])
+    reading["latest"]["text"] = latest
+    reading.update(window)
+    body["contents"][0]["parts"][0]["text"] = json.dumps(reading)
+    return json.dumps(body).encode()
 
 
 def _heard(interim: tuple[str, ...], final: tuple[str, ...]) -> HeardTranscripts:
@@ -341,32 +366,89 @@ def _heard(interim: tuple[str, ...], final: tuple[str, ...]) -> HeardTranscripts
     return heard
 
 
+ABANDONED = "Rani Twin, can you"
+SPOKEN = "Rani Twin, can you walk me through it?"
+
+
+def _judged(tmp_path: Path) -> ReplayLedger:
+    return _ledger(tmp_path, _exchange(_window(SPOKEN), "reply", route=JUDGE_ROUTE))
+
+
+def _abandoned_heard() -> HeardTranscripts:
+    return _heard(("Rani Twin, can", ABANDONED), (SPOKEN,))
+
+
+def test_every_recorded_turn_judge_request_has_the_production_judge_shape() -> None:
+    judge = recorded_judge()
+    judged = [
+        line
+        for path in sorted(CASSETTES.glob("*.jsonl"))
+        for line in read_cassette(path)
+        if isinstance(line, ModelExchange)
+        and line.request["body"].get("systemInstruction") == {"parts": [{"text": _JUDGE_RULES}]}
+    ]
+
+    assert judged
+    assert all(judge.latest(line.request) for line in judged)
+
+
 def test_an_unrecorded_judgement_of_an_abandoned_interim_is_reported_but_not_fatal(
     tmp_path: Path,
 ) -> None:
-    final = "Rani Twin, can you walk me through it?"
-    ledger = _ledger(tmp_path, _exchange(_window(final), "reply"))
-    heard = _heard(("Rani Twin, can", "Rani Twin, can you"), (final,))
+    ledger = _judged(tmp_path)
 
-    miss = ledger.respond(ROUTE, _window("Rani Twin, can you"))
-    served = ledger.respond(ROUTE, _window(final))
-    summary: Any = ledger.summary(heard)
+    miss = ledger.respond(JUDGE_ROUTE, _window(ABANDONED))
+    served = ledger.respond(JUDGE_ROUTE, _window(SPOKEN))
+    summary: Any = ledger.summary(_abandoned_heard())
 
     assert isinstance(miss, ReplayMiss)
     assert _text(served) == "reply"
     assert summary["closed"] is True
-    assert [item["judge_latest"] for item in summary["speculative_misses"]] == [
-        "Rani Twin, can you"
-    ]
+    assert summary["misses"] == []
+    assert [item["judge_latest"] for item in summary["speculative_misses"]] == [ABANDONED]
+
+
+def test_a_repeated_judgement_is_fatal_even_when_its_text_was_only_an_interim(
+    tmp_path: Path,
+) -> None:
+    ledger = _ledger(tmp_path, _exchange(_window(ABANDONED), "silent", route=JUDGE_ROUTE))
+
+    first = ledger.respond(JUDGE_ROUTE, _window(ABANDONED))
+    again = ledger.respond(JUDGE_ROUTE, _window(ABANDONED))
+    summary: Any = ledger.summary(_abandoned_heard())
+
+    assert _text(first) == "silent"
+    assert isinstance(again, ReplayMiss)
+    assert again.kind == "repeated_request"
+    assert summary["closed"] is False
+    assert summary["speculative_misses"] == []
+    assert [item["kind"] for item in summary["misses"]] == ["repeated_request"]
+
+
+def test_a_malformed_request_and_an_unrecorded_clip_are_fatal_beside_interim_text(
+    tmp_path: Path,
+) -> None:
+    ledger = _judged(tmp_path)
+
+    ledger.respond(JUDGE_ROUTE, b'{"contents": [')
+    ledger.speech("sim-greeting", 1)
+    ledger.respond(JUDGE_ROUTE, _window(SPOKEN))
+    summary: Any = ledger.summary(_abandoned_heard())
+
+    assert summary["closed"] is False
+    assert summary["speculative_misses"] == []
+    assert [item["kind"] for item in summary["misses"]] == ["malformed_request", "unrecorded_clip"]
 
 
 def test_a_judgement_of_text_that_became_final_is_never_treated_as_speculative(
     tmp_path: Path,
 ) -> None:
-    ledger = _ledger(tmp_path, _exchange(_window("Rani Twin, raise your hand"), "raise_hand"))
+    ledger = _ledger(
+        tmp_path, _exchange(_window("Rani Twin, raise your hand"), "raise", route=JUDGE_ROUTE)
+    )
     spoken = "Rani Twin, raise your hand please"
 
-    ledger.respond(ROUTE, _window(spoken))
+    ledger.respond(JUDGE_ROUTE, _window(spoken))
     summary: Any = ledger.summary(_heard((spoken,), (spoken,)))
 
     assert summary["closed"] is False
@@ -374,26 +456,101 @@ def test_a_judgement_of_text_that_became_final_is_never_treated_as_speculative(
     assert summary["misses"][0]["judge_latest"] == spoken
 
 
+def _reply_with_latest(latest: str) -> bytes:
+    window = {"earlier": [], "latest": {"speaker": "Speaker A", "text": latest}}
+    return _body(json.dumps(window), system=REPLY)
+
+
+def _role_swapped(latest: str) -> bytes:
+    body = json.loads(_window(latest))
+    body["contents"][0]["role"] = "model"
+    return json.dumps(body).encode()
+
+
+def _second_turn(latest: str) -> bytes:
+    body = json.loads(_window(latest))
+    body["contents"].insert(0, {"role": "user", "parts": [{"text": "earlier"}]})
+    return json.dumps(body).encode()
+
+
+def _other_instruction(latest: str) -> bytes:
+    body = json.loads(_window(latest))
+    body["systemInstruction"] = {"parts": [{"text": REPLY}]}
+    return json.dumps(body).encode()
+
+
+def _other_schema(latest: str) -> bytes:
+    body = json.loads(_window(latest))
+    body["generationConfig"]["responseJsonSchema"]["title"] = "Reply"
+    return json.dumps(body).encode()
+
+
+@pytest.mark.parametrize(
+    ("route", "asked"),
+    [
+        (JUDGE_ROUTE, _reply_with_latest(ABANDONED)),
+        (OTHER_ROUTE, _window(ABANDONED)),
+        (JUDGE_ROUTE.replace(":generateContent", ":streamGenerateContent"), _window(ABANDONED)),
+        (JUDGE_ROUTE, _role_swapped(ABANDONED)),
+        (JUDGE_ROUTE, _second_turn(ABANDONED)),
+        (JUDGE_ROUTE, _other_instruction(ABANDONED)),
+        (JUDGE_ROUTE, _other_schema(ABANDONED)),
+        (JUDGE_ROUTE, _window(ABANDONED, reply_hint="extra")),
+    ],
+    ids=[
+        "reply_request_with_latest_field",
+        "other_model",
+        "streaming_route",
+        "model_role",
+        "extra_turn",
+        "other_system_instruction",
+        "other_response_schema",
+        "extra_window_field",
+    ],
+)
+def test_only_the_production_turn_judge_request_can_be_speculative(
+    tmp_path: Path, route: str, asked: bytes
+) -> None:
+    ledger = _judged(tmp_path)
+
+    ledger.respond(route, asked)
+    ledger.respond(JUDGE_ROUTE, _window(SPOKEN))
+    summary: Any = ledger.summary(_abandoned_heard())
+
+    assert summary["closed"] is False
+    assert summary["speculative_misses"] == []
+    assert [item["kind"] for item in summary["misses"]] == ["unrecorded_request"]
+
+
 def test_an_unused_judgement_is_fatal_unless_its_text_was_only_ever_an_interim(
     tmp_path: Path,
 ) -> None:
     ledger = _ledger(
         tmp_path,
-        _exchange(_window("Rani Twin, can"), "silent"),
-        _exchange(_window("Rani Twin, raise your hand"), "raise_hand"),
+        _exchange(_window("Rani Twin, can"), "silent", route=JUDGE_ROUTE),
+        _exchange(_window("Rani Twin, raise your hand"), "raise", route=JUDGE_ROUTE),
+        _exchange(_reply_with_latest("Rani Twin, can"), "reply", route=JUDGE_ROUTE),
     )
 
     summary: Any = ledger.summary(_heard(("Rani Twin, can",), ("Rani Twin, raise your hand",)))
 
     assert [item["judge_latest"] for item in summary["speculative_unused"]] == ["Rani Twin, can"]
-    assert [item["judge_latest"] for item in summary["unused"]] == ["Rani Twin, raise your hand"]
+    assert [item["judge_latest"] for item in summary["unused"]] == [
+        "Rani Twin, raise your hand",
+        None,
+    ]
     assert summary["closed"] is False
 
 
-def test_a_request_that_is_not_a_judge_window_is_never_speculative() -> None:
-    heard = _heard(("Twin, raise your hand",), ())
+def test_a_route_no_double_serves_is_a_fatal_miss(tmp_path: Path) -> None:
+    ledger = _judged(tmp_path)
 
-    assert heard.speculative(canonical_request(ROUTE, _body("Twin, raise your hand"))) is False
+    ledger.refuse("/memory/chat/completions")
+    ledger.respond(JUDGE_ROUTE, _window(SPOKEN))
+    summary: Any = ledger.summary(_abandoned_heard())
+
+    assert summary["closed"] is False
+    assert summary["misses"][0]["route"] == "/memory/chat/completions"
 
 
 @pytest.mark.parametrize(

@@ -19,6 +19,7 @@ from evals._replay_cassette import (
     HeardTranscripts,
     ModelExchange,
     ReplayLedger,
+    TurnJudgeShape,
     canonical_request,
     model_exchange,
     read_cassette,
@@ -28,6 +29,7 @@ from fakeyou.perception.inspector import VisualInspection
 from fakeyou.perception.interpreter import INSPECTION_PROMPT_MARKER
 
 ROUTE = "/v1beta/models/gemini-3.1-flash-lite:generateContent"
+JUDGE = TurnJudgeShape(ROUTE)
 ANSWER = {"candidates": [{"content": {"parts": [{"text": "raise_hand"}], "role": "model"}}]}
 
 
@@ -85,7 +87,7 @@ async def test_replay_answers_only_the_recorded_request_and_never_reaches_a_prov
     tmp_path: Path,
 ) -> None:
     path = _recorded(tmp_path / "scenario.jsonl", "Twin, raise your hand")
-    doubles = ProviderDoubles("replay", path, ledger=ReplayLedger.load(path))
+    doubles = ProviderDoubles("replay", path, ledger=ReplayLedger.load(path, JUDGE))
 
     recorded = await _ask(doubles, "Twin, raise your hand")
     unrecorded = await _ask(doubles, "Twin, lower your hand")
@@ -105,7 +107,7 @@ async def test_record_missing_replays_what_exists_and_records_only_what_is_new(
     doubles = ProviderDoubles(
         "record_missing",
         path,
-        ledger=ReplayLedger.load(path),
+        ledger=ReplayLedger.load(path, JUDGE),
         writer=CassetteWriter(path, fresh=False),
     )
     seen: list[httpx.Request] = []
@@ -117,7 +119,7 @@ async def test_record_missing_replays_what_exists_and_records_only_what_is_new(
 
     assert len(seen) == 1
     assert len(read_cassette(path)) == 2
-    assert ReplayLedger.load(path).summary(HeardTranscripts())["recorded_exchanges"] == 2
+    assert ReplayLedger.load(path, JUDGE).summary(HeardTranscripts())["recorded_exchanges"] == 2
 
 
 def test_replay_needs_a_cassette_and_names_the_scenario(
@@ -128,6 +130,59 @@ def test_replay_needs_a_cassette_and_names_the_scenario(
 
     with pytest.raises(ValueError, match="sim-absent"):
         provider_doubles("sim-absent")
+
+
+def test_the_simulator_replays_unless_an_operator_selects_a_provider_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("SIMULATOR_PROVIDERS", raising=False)
+
+    assert provider_mode() == "replay"
+
+
+def _endpoints(value: Any, path: str = "") -> Iterator[tuple[str, str]]:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            yield from _endpoints(item, f"{path}.{key}")
+    elif isinstance(value, str) and "://" in value:
+        yield path, value
+
+
+def test_replay_leaves_no_provider_endpoint_outside_the_doubles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SIMULATOR_PROVIDERS", "replay")
+    monkeypatch.setenv("SIMULATOR_CASSETTE_DIR", str(tmp_path))
+    _recorded(tmp_path / "sim-s1.jsonl", "hello")
+    doubles = provider_doubles("sim-s1")
+    doubles.base_url = "http://127.0.0.1:9"
+
+    settings = doubles.settings(Settings())
+    outside = {
+        path: url
+        for path, url in _endpoints(settings.model_dump(mode="json"))
+        if not url.removeprefix("ws").removeprefix("http").startswith("://127.0.0.1:9")
+    }
+
+    assert doubles.mode == "replay"
+    assert outside == {".memory.store.uri": settings.memory.store.uri}
+    assert not doubles.reaches_providers
+
+
+async def test_a_route_without_a_double_is_refused_and_keeps_the_replay_open(
+    tmp_path: Path,
+) -> None:
+    path = _recorded(tmp_path / "scenario.jsonl", "hello")
+    doubles = ProviderDoubles("replay", path, ledger=ReplayLedger.load(path, JUDGE))
+
+    async with doubles.running():
+        async with httpx.AsyncClient(base_url=doubles.base_url) as client:
+            answer = await client.post("/memory/chat/completions", json={"messages": []})
+    replay: Any = doubles.report()["replay"]
+
+    assert answer.status_code == 501
+    assert replay["closed"] is False
+    assert replay["misses"][0]["route"] == "/memory/chat/completions"
 
 
 @pytest.mark.parametrize("mode", ["record_looks", "fuzzy", ""])
@@ -148,7 +203,7 @@ def test_replay_points_every_provider_at_the_doubles_with_a_placeholder_key(
     monkeypatch.setattr(doubles_module, "SNAPSHOT", snapshot)
     path = _recorded(tmp_path / "scenario.jsonl", "hello")
     doubles = ProviderDoubles(
-        "replay", path, ledger=ReplayLedger.load(path), base_url="http://127.0.0.1:9"
+        "replay", path, ledger=ReplayLedger.load(path, JUDGE), base_url="http://127.0.0.1:9"
     )
     settings = doubles.settings(Settings())
 
@@ -218,7 +273,7 @@ def test_record_missing_refuses_to_start_without_gemini_keys(tmp_path: Path) -> 
     doubles = ProviderDoubles(
         "record_missing",
         path,
-        ledger=ReplayLedger.load(path),
+        ledger=ReplayLedger.load(path, JUDGE),
         writer=CassetteWriter(path, fresh=False),
     )
     keyless = Settings().model_copy(update={"reply": None, "reply_strong": None, "debrief": None})
@@ -254,7 +309,7 @@ async def test_record_missing_keeps_only_what_the_run_used_and_what_it_added(
     doubles = ProviderDoubles(
         "record_missing",
         path,
-        ledger=ReplayLedger.load(path),
+        ledger=ReplayLedger.load(path, JUDGE),
         writer=CassetteWriter(path, fresh=False),
     )
     seen: list[httpx.Request] = []

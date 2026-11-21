@@ -21,23 +21,27 @@ after building the worker image with `docker compose build worker-sessions`.
 The meeting simulator runs the whole worker — browser, PulseAudio, speech to text, the
 judge, the reply model, text to speech — against a fake Meet page instead of a live
 meeting. It plays each participant through the same boundaries a real call uses, then
-checks the twin's journal. It needs the audio test image and the API keys in `.env`:
+checks the twin's journal. It needs the audio test image and, by default, no API keys:
 
 ```sh
 docker build -f docker/audio/Dockerfile --target test -t fakeyou-test:local .
 docker run --rm -v "$PWD/tests:/workspace/tests:ro" -v "$PWD/evals:/workspace/evals:ro" \
   -v "$PWD/src:/workspace/src:ro" -v "$PWD/conftest.py:/workspace/conftest.py:ro" \
-  -v "$PWD/pyproject.toml:/workspace/pyproject.toml:ro" -v "$PWD/.env:/workspace/.env:ro" \
+  -v "$PWD/pyproject.toml:/workspace/pyproject.toml:ro" \
   fakeyou-test:local uv run --no-sync pytest -m simulator evals/test_meeting_simulator_eval.py
 ```
 
+The modes that reach a provider also need `-v "$PWD/.env:/workspace/.env:ro"`.
+
 `SIMULATOR_PROVIDERS` picks where the providers come from:
 
-- `live` (the default) calls the real providers.
-- `replay` needs no `.env` and contacts no provider. It rebuilds the settings from
+- `replay` (the default) needs no `.env` and contacts no provider. It rebuilds the settings from
   the recorded snapshot, replays Muse and Gemini from the cassettes in
   `evals/fixtures/simulator/cassettes/`, and speaks through a synthetic Cartesia. CI
   runs it on every pull request, with every provider host mapped to a refused address.
+  Every provider endpoint, the memory model included, points at the doubles, and a
+  request to a route no double serves fails the scenario.
+- `live` calls the real providers and spends money; select it explicitly.
 - `record` relays Gemini and Muse to the real services and rewrites the cassettes and
   the settings snapshot.
 - `record_missing` replays what a cassette holds and relays to Gemini only the requests
@@ -58,13 +62,17 @@ Each spoken clip plays its recorded takes in order.
 
 A scenario fails unless its replay is closed:
 
-- no unrecorded or repeated request
+- no unrecorded, repeated or malformed request
 - no recording left unused
 - no clip heard more often than it was recorded
 
-The only exception is a turn-judge prefetch for interim text that never became a final
-transcript. Whether the worker sends one depends on scheduling, not on the
-conversation, so it is reported as speculative and does not fail the scenario.
+The only exception is an unrecorded or unused turn-judge prefetch for interim text that
+never became a final transcript. Whether the worker sends one depends on scheduling,
+not on the conversation, so it is reported as speculative and does not fail the
+scenario. A request counts as a judge prefetch only when it has the production judge's
+shape: the judge model's `generateContent` route, the judge's system instruction and
+response schema, one user turn holding exactly the judge window. A repeated request is
+fatal even when it is a judge prefetch.
 
 Each scenario writes `reports/<scenario>.json` under `SIMULATOR_ARTIFACT_DIR`, holding:
 

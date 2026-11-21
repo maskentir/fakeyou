@@ -31,7 +31,9 @@ from evals._replay_cassette import (
     ReplayLedger,
     ReplayMiss,
     SpeechMessage,
+    TurnJudgeShape,
     canonical_request,
+    judge_route,
     model_exchange,
 )
 from fakeyou.config.settings import CartesiaTTS, GoogleReply, Settings
@@ -60,11 +62,12 @@ CLAIM_WINDOW_SECONDS = 3.0
 END_GRACE_SECONDS = 3.0
 VOICE_END = "simulatorVoiceEnd"
 SERVER_START_SECONDS = 30.0
+UNSERVED_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
 MODES: tuple[ProviderMode, ...] = get_args(ProviderMode)
 
 
 def provider_mode() -> ProviderMode:
-    mode = os.environ.get("SIMULATOR_PROVIDERS", "live")
+    mode = os.environ.get("SIMULATOR_PROVIDERS", "replay")
     if mode not in MODES:
         raise ValueError(f"SIMULATOR_PROVIDERS must be one of {MODES}, not {mode!r}")
     return mode
@@ -251,9 +254,9 @@ class ProviderDoubles:
             return self._pointed(settings, None)
         snapshot = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
         recorded = Settings.model_validate({**snapshot, "paths": settings.paths.model_dump()})
+        _require_google(recorded)
         if self.mode == "replay":
             return self._pointed(recorded, SecretStr(DOUBLE_KEY))
-        _require_google(recorded)
         keyed = _with_google_keys(recorded, settings)
         _require_google_keys(keyed)
         return self._pointed(keyed, None)
@@ -279,12 +282,18 @@ class ProviderDoubles:
                 "tts_fallback": None,
                 "memory": settings.memory.model_copy(
                     update={
+                        "llm": settings.memory.llm.model_copy(
+                            update={
+                                "base_url": self.base_url + "/memory",
+                                "api_key": SecretStr(DOUBLE_KEY),
+                            }
+                        ),
                         "embedder": settings.memory.embedder.model_copy(
                             update={
                                 "base_url": self.base_url + "/v1",
                                 "api_key": SecretStr(DOUBLE_KEY),
                             }
-                        )
+                        ),
                     }
                 ),
                 "stt": settings.stt.model_copy(
@@ -307,8 +316,17 @@ class ProviderDoubles:
                 Route("/v1beta/models/{call:path}", self._gemini, methods=["POST"]),
                 WebSocketRoute("/tts/websocket", self._cartesia),
                 WebSocketRoute("/stt", self._muse),
+                Route("/{path:path}", self._unserved, methods=list(UNSERVED_METHODS)),
             ]
         )
+
+    async def _unserved(self, request: Request) -> Response:
+        route = request.url.path
+        if self.ledger is not None:
+            self.ledger.refuse(route)
+        else:
+            self.refused_recordings.append(f"{route} has no provider double")
+        return JSONResponse({"error": {"code": 501, "message": f"no double for {route}"}}, 501)
 
     async def _embeddings(self, request: Request) -> Response:
         payload = await request.json()
@@ -570,6 +588,12 @@ async def _started(server: uvicorn.Server, serving: asyncio.Future[None]) -> Non
         ) from error
 
 
+def recorded_judge() -> TurnJudgeShape:
+    snapshot = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
+    role = snapshot["turn_judge"]["model"] or snapshot["reply"]
+    return TurnJudgeShape(judge_route(role["model"]))
+
+
 def provider_doubles(scenario: str) -> ProviderDoubles:
     mode = provider_mode()
     folder = Path(os.environ.get("SIMULATOR_CASSETTE_DIR", CASSETTES))
@@ -578,7 +602,7 @@ def provider_doubles(scenario: str) -> ProviderDoubles:
         return ProviderDoubles(mode, path)
     if mode == "record":
         return ProviderDoubles(mode, path, writer=CassetteWriter(path, fresh=True))
-    ledger = ReplayLedger.load(path)
+    ledger = ReplayLedger.load(path, recorded_judge())
     writer = CassetteWriter(path, fresh=False) if mode == "record_missing" else None
     return ProviderDoubles(mode, path, ledger=ledger, writer=writer)
 
