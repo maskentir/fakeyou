@@ -231,6 +231,7 @@ EvidencePort = Callable[[str, tuple[str, ...], str | None], Awaitable[Mapping[st
 class BoundEffects:
     dispatched: tuple[CommandOutcome, ...]
     revised: bool
+    early_transcript_id: str
 
     @property
     def chat(self) -> CommandOutcome | None:
@@ -332,7 +333,7 @@ class TurnContext(Protocol):
 
     def plan_recorded(self, transcript_id: str, plan_id: str) -> None: ...
 
-    def take_bound_effects(self, transcript_ids: Sequence[str]) -> BoundEffects | None: ...
+    def take_bound_effects(self, transcript_ids: Sequence[str]) -> dict[str, BoundEffects]: ...
 
     @property
     def faults(self) -> FaultReporter | None: ...
@@ -1467,7 +1468,7 @@ async def _settle_outcome(
 async def _drain_pending(runtime: TurnContext, speech: SpeechGraph, queue: PendingFinals) -> None:
     while queue.pending and not _closed(runtime):
         batch = queue.take()
-        bound = runtime.take_bound_effects([event.id for event in batch])
+        bound = runtime.take_bound_effects([event.id for event in batch]).get(batch[-1].id)
         generation = _admitted_count(runtime)
         transcript_id = batch[-1].id
         _move_phase(runtime, "weighing", transcript_id)
@@ -1566,6 +1567,7 @@ async def _withhold_chat(
         action_id=sent.command_id,
         state=sent.state,
         revised=bound.revised,
+        early_transcript_id=bound.early_transcript_id,
     )
     if not bound.revised or not _admission_current(runtime, generation):
         _move_phase(runtime, "waiting", event.id)

@@ -86,13 +86,8 @@ class TurnTestContext:
     def plan_recorded(self, transcript_id: str, plan_id: str) -> None:
         self.plans_recorded.append((transcript_id, plan_id))
 
-    def take_bound_effects(self, transcript_ids: Sequence[str]) -> BoundEffects | None:
-        bound = [
-            self.carried.pop(transcript_id)
-            for transcript_id in transcript_ids
-            if transcript_id in self.carried
-        ]
-        return bound[0] if bound else None
+    def take_bound_effects(self, transcript_ids: Sequence[str]) -> dict[str, BoundEffects]:
+        return {each: self.carried.pop(each) for each in transcript_ids if each in self.carried}
 
     def request_pending(self) -> None:
         self.requested = True

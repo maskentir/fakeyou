@@ -123,8 +123,7 @@ def _early_words(text: str) -> list[str]:
 
 
 def _confirms(committed: str, final: str) -> bool:
-    before, after = _early_words(committed), _early_words(final)
-    return after[: len(before)] == before and len(after) - len(before) < _EXTRA_WORDS_FOR_MORE
+    return _early_words(committed) == _early_words(final)
 
 
 def says_more(text: str, committed: str) -> bool:
@@ -1195,8 +1194,17 @@ class FloorActor:
     def _carry_effects(self, commit: _EarlyCommit, final: TranscriptEvent) -> None:
         if not commit.dispatched:
             return
+        if final.participant_id != commit.event.participant_id:
+            self._journal.record(
+                "early_effects_dropped",
+                source="agent",
+                transcript_id=final.id,
+                early_transcript_id=commit.event.id,
+                reason="other_participant",
+            )
+            return
         revised = not _confirms(commit.text, final.text)
-        self._carried_effects[final.id] = BoundEffects(commit.dispatched, revised)
+        self._carried_effects[final.id] = BoundEffects(commit.dispatched, revised, commit.event.id)
         self._journal.record(
             "early_effects_bound",
             source="agent",
@@ -1277,18 +1285,12 @@ class FloorActor:
             return
         commit.plan_id = plan_id
 
-    def take_bound_effects(self, transcript_ids: Sequence[str]) -> BoundEffects | None:
-        bound = [
-            effects
+    def take_bound_effects(self, transcript_ids: Sequence[str]) -> dict[str, BoundEffects]:
+        return {
+            transcript_id: effects
             for transcript_id in transcript_ids
             if (effects := self._carried_effects.pop(transcript_id, None)) is not None
-        ]
-        if not bound:
-            return None
-        return BoundEffects(
-            tuple(sent for effects in bound for sent in effects.dispatched),
-            any(effects.revised for effects in bound),
-        )
+        }
 
     def _withdraw_effects(self, commit: _EarlyCommit) -> None:
         commands = self.commands

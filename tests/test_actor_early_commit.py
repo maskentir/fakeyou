@@ -1149,6 +1149,7 @@ async def test_a_withdrawn_early_turn_keeps_the_earlier_answer_deduplicated(
 
 
 CHANGED = "Rani, please send the beta launch date in the meeting chat and add who owns QA."
+CONFIRMED = "rani, please send the beta launch date in the meeting."
 WITHDRAWN = "Rani, please send the beta launch date in the meeting chat. No, wait, don't send it."
 NEGATED = "Rani, please send the beta launch date in the meeting chat. Actually never mind."
 AGAIN = "Rani, could you post the beta date to the chat once more?"
@@ -1453,20 +1454,6 @@ async def dispatched_then_resumed(harness: EffectHarness) -> None:
     await harness.resume()
 
 
-async def test_a_confirming_final_is_not_acknowledged_out_loud(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    harness = EffectHarness(tmp_path, monkeypatch)
-    await dispatched_then_resumed(harness)
-
-    await harness.final("final-1", SEND_IN_CHAT)
-    await harness.settle()
-
-    assert harness.audio.spoken == []
-    [bound] = harness.journal.events("early_effects_bound")
-    assert bound["revised"] is False
-
-
 async def test_a_final_that_withdraws_the_request_hears_that_the_chat_had_started(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1504,7 +1491,7 @@ async def test_an_unknown_effect_with_a_confirming_final_stays_silent(
     harness.meet.lost_after_enter = True
     await dispatched_then_resumed(harness)
 
-    await harness.final("final-1", SEND_IN_CHAT)
+    await harness.final("final-1", CONFIRMED)
     await harness.settle()
 
     assert harness.states() == ["unknown"]
@@ -1530,10 +1517,9 @@ async def test_an_effect_stays_bound_to_its_final_however_many_others_are_bound(
     rest = actor.take_bound_effects([f"final-{index}" for index in range(1, 12)])
     await harness.settle()
 
-    assert first is not None
-    assert len(first.dispatched) == 1
-    assert rest is not None
-    assert len(rest.dispatched) == 11
+    assert [len(bound.dispatched) for bound in first.values()] == [1]
+    assert first["final-0"].early_transcript_id == "early-0"
+    assert len(rest) == 11
 
 
 async def test_a_final_that_is_never_answered_releases_its_bound_effect(
@@ -1547,7 +1533,7 @@ async def test_a_final_that_is_never_answered_releases_its_bound_effect(
 
     await harness.loop.actor.receive_final(final)
 
-    assert harness.loop.actor.take_bound_effects(["final-1"]) is None
+    assert harness.loop.actor.take_bound_effects(["final-1"]) == {}
     await harness.settle()
 
 
@@ -1560,7 +1546,7 @@ async def test_a_bound_effect_is_released_when_the_turns_close(
 
     await harness.settle()
 
-    assert harness.loop.actor.take_bound_effects(["final-1"]) is None
+    assert harness.loop.actor.take_bound_effects(["final-1"]) == {}
 
 
 async def test_a_final_the_judge_leaves_unanswered_releases_its_bound_effect(
@@ -1573,6 +1559,66 @@ async def test_a_final_the_judge_leaves_unanswered_releases_its_bound_effect(
 
     await harness.loop.actor.receive_final(final)
 
-    assert harness.loop.actor.take_bound_effects(["final-1"]) is None
+    assert harness.loop.actor.take_bound_effects(["final-1"]) == {}
     assert len(harness.meet.calls) == 1
     await harness.settle()
+
+
+@pytest.mark.parametrize(
+    "said",
+    [
+        f"{SEND_IN_CHAT} Don't.",
+        f"{SEND_IN_CHAT} Not today.",
+        f"{SEND_IN_CHAT} Tomorrow.",
+        SEND_IN_CHAT,
+    ],
+    ids=["dont", "not_today", "tomorrow", "finishing_the_sentence"],
+)
+async def test_any_final_but_the_exact_committed_words_is_acknowledged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, said: str
+) -> None:
+    harness = EffectHarness(tmp_path, monkeypatch)
+    await dispatched_then_resumed(harness)
+
+    await harness.final("final-1", said)
+    await harness.settle()
+
+    assert len(harness.meet.calls) == 1
+    assert harness.audio.spoken == [CHAT_ALREADY_SENT_LINES["en"]]
+
+
+async def test_a_final_with_exactly_the_committed_words_is_a_silent_confirmation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = EffectHarness(tmp_path, monkeypatch)
+    await dispatched_then_resumed(harness)
+    actor = harness.loop.actor
+
+    final = event("final-1", CONFIRMED)
+    assert await actor.settle_early(final) is False
+    await actor.receive_final(final)
+    await harness.settle()
+
+    assert len(harness.meet.calls) == 1
+    assert harness.audio.spoken == []
+    assert [row["revised"] for row in harness.journal.events("early_effects_bound")] == [False]
+
+
+async def test_another_participants_final_inherits_no_dispatched_chat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = EffectHarness(tmp_path, monkeypatch)
+    await dispatched_then_resumed(harness)
+
+    other = event("final-1", SEND_IN_CHAT, participant_id="speaker-b")
+    assert await harness.loop.actor.settle_early(other) is False
+    harness.meet.release_dispatch.set()
+    await harness.loop.actor.receive_final(other)
+    await asyncio.wait_for(harness.loop.actor.wait_idle(), 2)
+    await harness.settle()
+
+    assert [row["reason"] for row in harness.journal.events("early_effects_dropped")] == [
+        "other_participant"
+    ]
+    assert harness.dropped() == []
+    assert len(harness.meet.calls) == 2
