@@ -373,13 +373,14 @@ class ReplayLedger:
         if position < len(recorded):
             self.served[digest] += 1
             return recorded[position]
+        refused = sum(miss.request_sha256 == digest for miss in self.misses)
         miss = ReplayMiss(
-            kind="repeated_request" if recorded else "unrecorded_request",
+            kind="repeated_request" if recorded or refused else "unrecorded_request",
             route=route,
             request_sha256=digest,
             detail=(
-                f"asked {position + 1} times, recorded {len(recorded)}"
-                if recorded
+                f"asked {position + refused + 1} times, recorded {len(recorded)}"
+                if recorded or refused
                 else "no recorded exchange has this canonical request"
             ),
             nearest=None if recorded else _nearest(request, self.exchanges),

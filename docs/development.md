@@ -57,7 +57,8 @@ only when its canonical identity is identical:
   reproduce them: `vision_latency_ms` and the whole seconds in `seconds_ago`
 
 Identical requests are served in the order they were recorded. A request with no
-identical recording is answered with a provider error, never with another recording.
+identical recording is answered with a provider error that no client retries (HTTP 400),
+never with another recording, so asking it again is a repeated request.
 Each spoken clip plays its recorded takes in order.
 
 A scenario fails unless its replay is closed:

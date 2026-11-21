@@ -30,6 +30,7 @@ from fakeyou.perception.interpreter import INSPECTION_PROMPT_MARKER
 
 ROUTE = "/v1beta/models/gemini-3.1-flash-lite:generateContent"
 JUDGE = TurnJudgeShape(ROUTE)
+RETRIED_STATUSES = (408, 429, 500, 502, 503, 504)
 ANSWER = {"candidates": [{"content": {"parts": [{"text": "raise_hand"}], "role": "model"}}]}
 
 
@@ -91,13 +92,19 @@ async def test_replay_answers_only_the_recorded_request_and_never_reaches_a_prov
 
     recorded = await _ask(doubles, "Twin, raise your hand")
     unrecorded = await _ask(doubles, "Twin, lower your hand")
+    retried = await _ask(doubles, "Twin, lower your hand")
 
     assert recorded.json() == ANSWER
-    assert unrecorded.status_code == 500
+    assert unrecorded.status_code == 400
+    assert unrecorded.status_code not in RETRIED_STATUSES
     assert "unrecorded_request" in unrecorded.text
+    assert "repeated_request" in retried.text
     assert doubles.reaches_providers is False
     report: Any = doubles.report()
-    assert [miss["kind"] for miss in report["replay"]["misses"]] == ["unrecorded_request"]
+    assert [miss["kind"] for miss in report["replay"]["misses"]] == [
+        "unrecorded_request",
+        "repeated_request",
+    ]
 
 
 async def test_record_missing_replays_what_exists_and_records_only_what_is_new(

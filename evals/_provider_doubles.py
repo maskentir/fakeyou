@@ -62,6 +62,7 @@ CLAIM_WINDOW_SECONDS = 3.0
 END_GRACE_SECONDS = 3.0
 VOICE_END = "simulatorVoiceEnd"
 SERVER_START_SECONDS = 30.0
+MISS_STATUS = 400
 UNSERVED_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
 MODES: tuple[ProviderMode, ...] = get_args(ProviderMode)
 
@@ -364,12 +365,12 @@ class ProviderDoubles:
             return JSONResponse(
                 {
                     "error": {
-                        "code": 500,
+                        "code": MISS_STATUS,
                         "message": f"cassette {answer.kind}",
-                        "status": "INTERNAL",
+                        "status": "FAILED_PRECONDITION",
                     }
                 },
-                status_code=500,
+                status_code=MISS_STATUS,
             )
         return StreamingResponse(
             _replayed(answer.chunks), status_code=answer.status, media_type=answer.media_type

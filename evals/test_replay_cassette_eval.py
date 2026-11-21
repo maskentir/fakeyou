@@ -425,6 +425,24 @@ def test_a_repeated_judgement_is_fatal_even_when_its_text_was_only_an_interim(
     assert [item["kind"] for item in summary["misses"]] == ["repeated_request"]
 
 
+def test_an_unrecorded_judgement_asked_twice_is_fatal_on_the_second_ask(
+    tmp_path: Path,
+) -> None:
+    ledger = _judged(tmp_path)
+
+    first = ledger.respond(JUDGE_ROUTE, _window(ABANDONED))
+    second = ledger.respond(JUDGE_ROUTE, _window(ABANDONED))
+    ledger.respond(JUDGE_ROUTE, _window(SPOKEN))
+    summary: Any = ledger.summary(_abandoned_heard())
+
+    assert isinstance(first, ReplayMiss)
+    assert isinstance(second, ReplayMiss)
+    assert (first.kind, second.kind) == ("unrecorded_request", "repeated_request")
+    assert summary["closed"] is False
+    assert [item["kind"] for item in summary["speculative_misses"]] == ["unrecorded_request"]
+    assert [item["kind"] for item in summary["misses"]] == ["repeated_request"]
+
+
 def test_a_malformed_request_and_an_unrecorded_clip_are_fatal_beside_interim_text(
     tmp_path: Path,
 ) -> None:
