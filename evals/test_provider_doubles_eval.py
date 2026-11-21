@@ -28,6 +28,7 @@ from evals._replay_cassette import (
     canonical_request,
     model_exchange,
     read_cassette,
+    request_digest,
 )
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.turn_judge import JudgeLine, JudgeWindow, ModelTurnJudge
@@ -340,11 +341,18 @@ async def test_record_missing_keeps_only_what_the_run_used_and_what_it_added(
     assert not any("stale" in question for question in asked)
 
 
-CAPTURE_IN_SIMULATOR_ORDER = (
-    "import fakeyou.orchestration.runtime, asyncio, json, sys; "
+CAPTURE_AFTER = (
+    "import importlib, asyncio, json, sys; importlib.import_module(sys.argv[2]); "
     "from evals.test_provider_doubles_eval import captured_judge_request; "
     "json.dump(asyncio.run(captured_judge_request(sys.argv[1])), sys.stdout)"
 )
+FIRST_IMPORTS = {
+    "production_worker": "fakeyou.worker.__main__",
+    "production_cli": "fakeyou.cli.main",
+    "simulator": "evals._meeting_simulator",
+    "session_runtime": "fakeyou.orchestration.runtime",
+    "language_first": "fakeyou.foundation.language",
+}
 CAPTURED_LATEST = "Rani Twin, can you"
 
 
@@ -369,15 +377,25 @@ async def captured_judge_request(folder: str) -> dict[str, Any]:
     return request
 
 
-def test_the_recorded_judge_shape_is_what_the_simulated_worker_sends_today(
-    tmp_path: Path,
-) -> None:
+def _captured_after(first_import: str, folder: Path) -> dict[str, Any]:
+    folder.mkdir()
     captured = subprocess.run(
-        [sys.executable, "-c", CAPTURE_IN_SIMULATOR_ORDER, str(tmp_path)],
+        [sys.executable, "-c", CAPTURE_AFTER, str(folder), first_import],
         capture_output=True,
         check=True,
         text=True,
         cwd=Path(__file__).parent.parent,
     )
+    request: dict[str, Any] = json.loads(captured.stdout)
+    return request
 
-    assert JUDGE.latest(json.loads(captured.stdout)) == CAPTURED_LATEST
+
+def test_every_process_sends_the_recorded_judge_request_whatever_it_imports_first(
+    tmp_path: Path,
+) -> None:
+    frames = {
+        name: _captured_after(module, tmp_path / name) for name, module in FIRST_IMPORTS.items()
+    }
+
+    assert len({request_digest(request) for request in frames.values()}) == 1
+    assert all(JUDGE.latest(request) == CAPTURED_LATEST for request in frames.values())

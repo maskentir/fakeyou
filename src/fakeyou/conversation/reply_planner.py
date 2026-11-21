@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.state_speech import locale_of, speech_line
+from fakeyou.foundation.language import SpokenLanguage
 from fakeyou.foundation.sentences import split_sentences
 from fakeyou.session.speech import (
     ClaimAct,
@@ -32,9 +33,8 @@ ReplyIntent = Literal[
     "repeat",
     "louder",
 ]
-ReplyLanguage = Literal["id", "en"]
 
-REPLY_LANGUAGES: frozenset[str] = frozenset(get_args(ReplyLanguage))
+REPLY_LANGUAGES: frozenset[str] = frozenset(get_args(SpokenLanguage))
 SHORT_INTENTS = frozenset({"ack", "decline", "stop", "shorter", "louder"})
 JSON_START = "{"
 
@@ -60,7 +60,7 @@ class SpeechPlan(BaseModel):
             "with misheard words corrected to their most plausible meaning."
         )
     )
-    language: ReplyLanguage = Field(
+    language: SpokenLanguage = Field(
         description=(
             "The language of understood: en for English words, id for Indonesian words. The "
             "participant's words decide it, never the language of your profile, your speaking "
@@ -109,7 +109,7 @@ class _ClaimDraft(TypedDict, total=False):
 
 class _PlanDraft(TypedDict, total=False):
     understood: str
-    language: ReplyLanguage
+    language: SpokenLanguage
     intent: ReplyIntent
     commits_owner: bool
     claims: list[_ClaimDraft]

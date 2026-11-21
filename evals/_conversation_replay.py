@@ -18,6 +18,7 @@ import fakeyou.orchestration.assembly as assembly
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.session import SessionConfig
+from fakeyou.foundation.language import SpokenLanguage
 from fakeyou.foundation.sentences import sentence_end
 from fakeyou.foundation.transcript import EventSource, TranscriptEvent
 from fakeyou.memory.persona import PersonaProfile
@@ -53,7 +54,7 @@ class Expectation(BaseModel):
     allow_question: bool = False
     forbid: tuple[str, ...] = ()
     means: str | None = None
-    language: Literal["en", "id"] | None = None
+    language: SpokenLanguage | None = None
     barge_in: bool | None = None
     severity: Severity = "quality"
 

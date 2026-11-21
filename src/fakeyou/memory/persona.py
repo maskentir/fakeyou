@@ -19,12 +19,12 @@ from fakeyou.config.identifiers import SessionIdField, parse_session_id
 from fakeyou.config.settings import Settings
 from fakeyou.foundation.digest import canonical_json_digest
 from fakeyou.foundation.invariants import TwinName
+from fakeyou.foundation.language import SpokenLanguage
 from fakeyou.foundation.resources import read_package_text
 from fakeyou.foundation.speakers import TWIN_SPEAKER
 from fakeyou.persistence.brief import KnowledgeScope, MeetingBrief
 
 PersonaTool = Literal["recall_meeting_context"]
-PersonaLanguage = Literal["id", "en"]
 AiDisclosure = Literal["when_asked", "upfront"]
 ProfileText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
 VocabularyTerm = Annotated[
@@ -166,7 +166,7 @@ class PersonaProfile(BaseModel):
     display_name: TwinName
     owner_name: TwinName | None = None
     role: ProfileText
-    language: PersonaLanguage = "id"
+    language: SpokenLanguage = "id"
     speaking_style: ProfileText = "concise"
     allowed_tools: Annotated[
         frozenset[PersonaTool],

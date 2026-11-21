@@ -5,7 +5,7 @@ from typing import Literal
 
 from fakeyou.foundation.resources import read_package_text
 
-SpokenLanguage = Literal["en", "id"]
+SpokenLanguage = Literal["id", "en"]
 WORD = re.compile(r"\w+")
 
 
