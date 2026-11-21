@@ -34,10 +34,10 @@ from fakeyou.conversation.turn_graph import TurnInput, record_barge_in
 from fakeyou.conversation.turn_queue import (
     TurnEvent,
 )
+from fakeyou.foundation.language import SpokenLanguage
 from fakeyou.foundation.participation import ParticipationContext
 from fakeyou.foundation.speakers import UNIDENTIFIED_PARTICIPANT
 from fakeyou.foundation.transcript import TranscriptEvent, spoken_part
-from fakeyou.memory.persona import PersonaLanguage
 from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.orchestration.persona_prompt import build_persona_prompt
 from tests._audio_fakes import FakeReplyAudio
@@ -525,7 +525,7 @@ async def test_a_backchannel_while_speaking_does_not_yield_the_floor() -> None:
 
 @pytest.mark.parametrize("language", ["id", "en"])
 def test_persona_prompt_without_profile_is_the_default_meeting_prompt(
-    language: PersonaLanguage,
+    language: SpokenLanguage,
 ) -> None:
     prompt = build_persona_prompt(None, language=language)
     assert prompt == f"{MEETING_GUIDANCE} {SPOKEN_LANGUAGE_GUIDANCE[language]}"

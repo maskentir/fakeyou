@@ -45,7 +45,8 @@ The modes that reach a provider also need `-v "$PWD/.env:/workspace/.env:ro"`.
 - `record` relays Gemini and Muse to the real services and rewrites the cassettes and
   the settings snapshot.
 - `record_missing` replays what a cassette holds and relays to Gemini only the requests
-  it does not hold, appending them. It needs the Gemini keys in `.env`.
+  it does not hold, appending them. It needs the Gemini keys in `.env` and a recording
+  budget.
 
 **Replay contract** (`evals/_replay_cassette.py`). A Gemini request matches a recording
 only when its canonical identity is identical:
@@ -94,6 +95,54 @@ docker run --rm -e SIMULATOR_PROVIDERS=record \
   -v "$PWD/evals/fixtures/simulator/cassettes:/workspace/evals/fixtures/simulator/cassettes" \
   ...same mounts as above... fakeyou-test:local uv run --no-sync pytest -m simulator evals/test_meeting_simulator_eval.py
 ```
+
+`record` and `record_missing` refuse to start without `SIMULATOR_RECORDING_BUDGET`,
+the path of a writable JSON ledger (`evals/_recording_budget.py`) holding:
+
+- caps: upstream attempts, estimated spend in USD, and the model's output-token limit
+- the verified price per model
+
+Before each upstream call:
+
+- the worst case (request bytes as input tokens plus the full output limit) is reserved
+- a call that would exceed a cap waits for calls in flight, or stops the batch
+- a model without a price is never forwarded
+
+After each call, the usage metadata replaces the reservation. A failed call, or one
+without usage metadata, is charged its full reservation and stops the batch. A stopped
+batch answers every later request with a non-retried error. The ledger keeps every
+attempt, its tokens, its cost and the stop reason, and carries them over to the next
+scenario run that uses the same file.
+
+`record_missing` replays speech. A new spoken clip has no recording to replay, so it
+can be recorded live by naming it in `SIMULATOR_RECORD_SPEECH` (for example
+`review-token.wav`). The run's speech session is then relayed to Muse
+(`evals/_speech_recording.py`):
+
+- the session handshake must name `muse-voice-transcribe-1.0` and 16 kHz 16-bit PCM
+- the live Muse key from `.env` replaces the worker's token; the key is never written
+- every caught clip must be the named clip, heard once (take 1)
+
+The worker reconnects when its STT keywords change (the screen title, the roster).
+`SIMULATOR_RECORD_SPEECH_SESSIONS` (1 by default, at most 4) allows that many sequential
+sessions in one run. A new session opens only after the previous one closed cleanly. One
+that is still open, rather than ending with `endStream`, is never joined.
+
+The run stops on any of:
+
+- one session more than allowed, or one opened while another is live
+- more than 10 minutes of audio across all sessions
+- a 15-minute wall clock counted from the first session
+- a provider error or an unexpected close
+- a take without `speechStart`, a transcript, `speechComplete` with text, and the voice-end
+  marker
+
+A stopped run leaves the cassette exactly as it was. Takes that were not heard are dropped.
+The report's `speech_recording` gives every session's lifecycle (open and close times, close
+code, ending, keyword count, PCM bytes). It also gives the totals, the recorded take, the
+estimated charge (USD 3 per 1,000 audio minutes) and the stop reason. A provider error or an
+unexpected close stops the run for good, and later sessions are refused before reaching
+Muse.
 
 Then run `replay` until every scenario is closed. Where a replay asks something the
 recording run did not, fill the gap with `record_missing`, and replay again.

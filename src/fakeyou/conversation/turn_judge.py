@@ -10,6 +10,7 @@ from langchain_core.runnables import Runnable
 from pydantic import BaseModel, ConfigDict, Field
 
 from fakeyou.conversation.meeting_messages import MeetingHistory, spoken_by
+from fakeyou.foundation.language import SpokenLanguage
 from fakeyou.foundation.participation import is_vocative, mentions_whole_phrase
 from fakeyou.foundation.speakers import UNIDENTIFIED_PARTICIPANT
 from fakeyou.foundation.transcript import TranscriptEvent
@@ -140,7 +141,7 @@ class TurnJudgement(BaseModel):
         default=(),
         description="Evidence required before the twin can answer the latest line.",
     )
-    language: Literal["id", "en"] | None = Field(
+    language: SpokenLanguage | None = Field(
         default=None, description="The language of the latest line."
     )
     state_question: StateQuestionField = Field(

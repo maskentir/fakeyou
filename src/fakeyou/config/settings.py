@@ -26,6 +26,7 @@ from fakeyou.catalog.config import (
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import SessionIdField, parse_session_id
 from fakeyou.foundation.invariants import PLAYBACK_SAMPLE_RATE, PositiveSeconds, TwinName
+from fakeyou.foundation.language import SpokenLanguage
 
 ReasoningEffort = Literal["minimal", "low", "medium", "high"]
 STTMode = Literal["ENDPOINTING", "PUSH_TO_TALK", "DIARIZATION"]
@@ -174,7 +175,7 @@ class StorageSettings(Section):
 
 
 class SpeechSettings(Section):
-    language: Literal["id", "en"] = "id"
+    language: SpokenLanguage = "id"
 
 
 class ReplyBase(EndpointSettings):
