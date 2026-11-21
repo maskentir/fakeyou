@@ -1,4 +1,5 @@
 import asyncio
+import json
 from collections.abc import Callable, Sequence
 from typing import override
 
@@ -6,9 +7,15 @@ from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.actor import EarlyOptions, says_more
 from fakeyou.conversation.meeting_turns import MeetingTurns, TurnInteraction, build_meeting_turns
 from fakeyou.conversation.reply_planner import SpokenChunk
+from fakeyou.conversation.turn_graph import PlannedTurn, TurnPlanning
 from fakeyou.conversation.turn_judge import JudgeWindow, TurnJudgement
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.observability.diagnostics import Diagnostics
+from fakeyou.observability.journal import Journal
+from fakeyou.session.commands import CommandOutcome, CommandSpec
+from fakeyou.session.intent import Reading, intent_of
+from fakeyou.session.planner import plan_turn
+from fakeyou.session.policy import Actor, Channel, Grant, authorize
 from tests._audio_fakes import FakeReplyAudio
 from tests._conversation_fakes import FakeResponder, ScriptedJudge, judged
 from tests._conversation_support import event
@@ -925,4 +932,205 @@ async def test_a_withdrawn_early_turn_settles_its_gate_as_resumed(
     assert gate.settled.is_set()
     assert gate.resumed is True
     await asyncio.wait_for(loop.actor.wait_idle(), 2)
+    await loop.actor.close()
+
+
+SEND = "Rani, please send the beta launch date in the meeting"
+SEND_IN_CHAT = "Rani, please send the beta launch date in the meeting chat."
+
+
+async def test_a_withdrawn_early_turn_leaves_its_final_continuation_to_be_answered(
+    journal: RecordingJournal,
+) -> None:
+    responder = FakeResponder(asyncio.Event())
+    loop, audio = early_loop(journal, responder)
+    await loop.actor.note_interim(SEND, history_seq=None)
+    loop.actor.note_speech(active=False)
+    assert await asyncio.wait_for(responder.started.wait(), 2)
+
+    await loop.actor.note_interim(SEND_IN_CHAT, history_seq=None)
+    final = event("final-1", SEND_IN_CHAT)
+    assert await loop.actor.settle_early(final) is False
+    await loop.actor.receive_final(final)
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
+
+    assert [row["reason"] for row in journal.events("early_turn_cancelled")] == ["speech_resumed"]
+    assert [row["reason"] for row in journal.events("transcript_suppressed")] == []
+    assert [call[-1].id for call in responder.calls] == ["early-0", "final-1"]
+    assert audio.spoken == [SEND_IN_CHAT]
+    await loop.actor.close()
+
+
+class SentChat:
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, str]] = []
+
+    async def run(
+        self, spec: CommandSpec, *, plan_id: str, ordinal: int, actor: str
+    ) -> CommandOutcome:
+        del actor
+        self.sent.append((plan_id, spec.text))
+        return CommandOutcome(f"{plan_id}:{ordinal}", spec.kind, "effect_observed")
+
+
+def chat_planning() -> TurnPlanning:
+    def planning(event: TranscriptEvent, reading: Reading, channel: Channel) -> PlannedTurn:
+        authorization = authorize(
+            intent_of(reading),
+            actor=Actor("participant", event.participant_id),
+            channel=channel,
+            grant=Grant(frozenset({"meet_chat"})),
+        )
+        plan = plan_turn(authorization, channel=channel, plan_id=f"plan-{event.id}")
+        return PlannedTurn(plan, actor=event.participant_id)
+
+    return planning
+
+
+def chat_loop(
+    journal: RecordingJournal,
+    responder: FakeResponder,
+    chat: SentChat,
+) -> MeetingTurns:
+    loop = build_meeting_turns(
+        responder,
+        interaction=TurnInteraction(
+            twin_names=["Rani"],
+            judge=ScriptedJudge(lambda _window: judged("reply", requests_chat=True)),
+            commands=chat,
+            planning=chat_planning(),
+        ),
+        diagnostics=Diagnostics(journal=journal),
+    )
+    loop.actor.bind(FakeReplyAudio())
+    counter = iter(range(100))
+    loop.actor.configure_early(
+        EarlyOptions(
+            hold_seconds=0.0, build_event=lambda text: event(f"early-{next(counter)}", text)
+        )
+    )
+    return loop
+
+
+async def answer_final(loop: MeetingTurns, final: TranscriptEvent) -> None:
+    if not await loop.actor.settle_early(final):
+        await loop.actor.receive_final(final)
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
+
+
+async def test_a_chat_request_withdrawn_after_admission_is_sent_once_for_its_final(
+    journal: RecordingJournal,
+) -> None:
+    responder, chat = FakeResponder(asyncio.Event()), SentChat()
+    loop = chat_loop(journal, responder, chat)
+    await loop.actor.note_interim(SEND, history_seq=None)
+    loop.actor.note_speech(active=False)
+    assert await asyncio.wait_for(responder.started.wait(), 2)
+
+    await loop.actor.note_interim(SEND_IN_CHAT, history_seq=None)
+    await answer_final(loop, event("final-1", SEND_IN_CHAT))
+
+    assert [row["reason"] for row in journal.events("early_turn_cancelled")] == ["speech_resumed"]
+    assert [plan for plan, _text in chat.sent] == ["plan-final-1"]
+    await loop.actor.close()
+
+
+class ResumingJournal(RecordingJournal):
+    def __init__(self, resume: Callable[[], None]) -> None:
+        self.lines = []
+        self._resume = resume
+        Journal.__init__(self, "meeting-1", emit=self._resume_on_start)
+
+    def _resume_on_start(self, line: str) -> None:
+        self.lines.append(line)
+        if json.loads(line)["event"] == "early_turn_started":
+            self._resume()
+
+
+async def test_a_chat_request_withdrawn_before_its_reply_starts_is_sent_once_for_its_final() -> (
+    None
+):
+    resumed: list[asyncio.Task[None]] = []
+    journal = ResumingJournal(
+        lambda: resumed.append(
+            asyncio.ensure_future(loop.actor.note_interim(SEND_IN_CHAT, history_seq=None))
+        )
+    )
+    chat = SentChat()
+    loop = chat_loop(journal, FakeResponder(), chat)
+    await loop.actor.note_interim(SEND, history_seq=None)
+    loop.actor.note_speech(active=False)
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
+    await asyncio.gather(*resumed)
+
+    await answer_final(loop, event("final-1", SEND_IN_CHAT))
+
+    assert [row["reason"] for row in journal.events("early_turn_cancelled")] == ["speech_resumed"]
+    assert [row["reason"] for row in journal.events("transcript_suppressed")] == []
+    assert [plan for plan, _text in chat.sent] == ["plan-final-1"]
+    await loop.actor.close()
+    journal.close()
+
+
+async def test_a_verified_early_turn_is_answered_once_and_its_echo_stays_suppressed(
+    journal: RecordingJournal,
+) -> None:
+    loop, audio = early_loop(journal, FakeResponder())
+    await loop.actor.note_interim(QUESTION, history_seq=None)
+    loop.actor.note_speech(active=False)
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
+
+    assert await loop.actor.settle_early(event("final-1", QUESTION)) is True
+    await loop.actor.receive_final(event("final-2", f"{QUESTION} please"))
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
+
+    assert audio.spoken == [QUESTION]
+    assert [row["reason"] for row in journal.events("transcript_suppressed")] == [
+        "overlap_duplicate"
+    ]
+    await loop.actor.close()
+
+
+async def test_another_speaker_continuing_an_answered_line_is_a_turn_of_its_own(
+    journal: RecordingJournal,
+) -> None:
+    loop, audio = early_loop(journal, FakeResponder())
+    await loop.actor.note_interim(QUESTION, history_seq=None)
+    loop.actor.note_speech(active=False)
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
+    assert await loop.actor.settle_early(event("final-1", QUESTION)) is True
+
+    await loop.actor.receive_final(
+        event("final-2", f"{QUESTION} please", participant_id="speaker-b")
+    )
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
+
+    assert journal.events("transcript_suppressed") == []
+    assert audio.spoken == [QUESTION, f"{QUESTION} please"]
+    await loop.actor.close()
+
+
+async def test_a_withdrawn_early_turn_keeps_the_earlier_answer_deduplicated(
+    journal: RecordingJournal,
+) -> None:
+    responder = GatedSecondResponder()
+    loop, audio = early_loop(journal, responder)
+    await loop.actor.receive_final(event("t1", "Rani, what is the plan for the beta launch"))
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
+
+    await loop.actor.note_interim("Rani, second question about the", history_seq=None)
+    loop.actor.note_speech(active=False)
+    assert await asyncio.wait_for(responder.second_started.wait(), 2)
+    await loop.actor.note_interim("Rani, second question about the launch", history_seq=None)
+    responder.second_gate.set()
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
+    await loop.actor.receive_final(
+        event("t1-echo", "Rani, what is the plan for the beta launch again")
+    )
+    await asyncio.wait_for(loop.actor.wait_idle(), 2)
+
+    assert [row["reason"] for row in journal.events("transcript_suppressed")] == [
+        "overlap_duplicate"
+    ]
+    assert audio.spoken[0] == "Rani, what is the plan for the beta launch"
     await loop.actor.close()
