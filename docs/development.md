@@ -45,7 +45,8 @@ The modes that reach a provider also need `-v "$PWD/.env:/workspace/.env:ro"`.
 - `record` relays Gemini and Muse to the real services and rewrites the cassettes and
   the settings snapshot.
 - `record_missing` replays what a cassette holds and relays to Gemini only the requests
-  it does not hold, appending them. It needs the Gemini keys in `.env`.
+  it does not hold, appending them. It needs the Gemini keys in `.env` and a recording
+  budget.
 
 **Replay contract** (`evals/_replay_cassette.py`). A Gemini request matches a recording
 only when its canonical identity is identical:
@@ -94,6 +95,24 @@ docker run --rm -e SIMULATOR_PROVIDERS=record \
   -v "$PWD/evals/fixtures/simulator/cassettes:/workspace/evals/fixtures/simulator/cassettes" \
   ...same mounts as above... fakeyou-test:local uv run --no-sync pytest -m simulator evals/test_meeting_simulator_eval.py
 ```
+
+`record` and `record_missing` refuse to start without `SIMULATOR_RECORDING_BUDGET`,
+the path of a writable JSON ledger (`evals/_recording_budget.py`) holding:
+
+- caps: upstream attempts, estimated spend in USD, and the model's output-token limit
+- the verified price per model
+
+Before each upstream call:
+
+- the worst case (request bytes as input tokens plus the full output limit) is reserved
+- a call that would exceed a cap waits for calls in flight, or stops the batch
+- a model without a price is never forwarded
+
+After each call, the usage metadata replaces the reservation. A failed call, or one
+without usage metadata, is charged its full reservation and stops the batch. A stopped
+batch answers every later request with a non-retried error. The ledger keeps every
+attempt, its tokens, its cost and the stop reason, and carries them over to the next
+scenario run that uses the same file.
 
 Then run `replay` until every scenario is closed. Where a replay asks something the
 recording run did not, fill the gap with `record_missing`, and replay again.

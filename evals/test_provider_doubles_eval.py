@@ -12,6 +12,7 @@ import pytest
 from langchain_google_genai.chat_models import GoogleInvalidRequestError
 
 from evals import _provider_doubles as doubles_module
+from evals._lineage_classifier import Pricing
 from evals._provider_doubles import (
     CASSETTES,
     CassetteWriter,
@@ -21,6 +22,7 @@ from evals._provider_doubles import (
     provider_mode,
     recorded_judge,
 )
+from evals._recording_budget import RecordingBudget, RecordingCaps, RecordingLedger
 from evals._replay_cassette import (
     HeardTranscripts,
     ModelExchange,
@@ -39,7 +41,29 @@ from fakeyou.perception.interpreter import INSPECTION_PROMPT_MARKER
 ROUTE = "/v1beta/models/gemini-3.1-flash-lite:generateContent"
 JUDGE = recorded_judge()
 RETRIED_STATUSES = (408, 429, 500, 502, 503, 504)
-ANSWER = {"candidates": [{"content": {"parts": [{"text": "raise_hand"}], "role": "model"}}]}
+ANSWER = {
+    "candidates": [{"content": {"parts": [{"text": "raise_hand"}], "role": "model"}}],
+    "usageMetadata": {"promptTokenCount": 120, "candidatesTokenCount": 4, "thoughtsTokenCount": 10},
+}
+FLASH_LITE = Pricing(
+    input_per_million_usd=0.25,
+    output_per_million_usd=1.5,
+    source="test",
+    retrieved="2026-11-21",
+    valid_until="2026-12-31",
+)
+
+
+def _budget(folder: Path, max_attempts: int = 10) -> RecordingBudget:
+    path = folder / "budget.json"
+    ledger = RecordingLedger(
+        caps=RecordingCaps(
+            max_attempts=max_attempts, max_spend_usd=0.25, max_output_tokens_per_call=65536
+        ),
+        pricing={"gemini-3.1-flash-lite": FLASH_LITE},
+    )
+    path.write_text(ledger.model_dump_json(), encoding="utf-8")
+    return RecordingBudget.load(path)
 
 
 def _payload(question: str) -> dict[str, Any]:
@@ -76,7 +100,9 @@ async def test_record_relays_the_provider_answer_and_keeps_the_canonical_exchang
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     path = tmp_path / "scenario.jsonl"
-    doubles = ProviderDoubles("record", path, writer=CassetteWriter(path, fresh=True))
+    doubles = ProviderDoubles(
+        "record", path, writer=CassetteWriter(path, fresh=True), budget=_budget(tmp_path)
+    )
     seen: list[httpx.Request] = []
 
     async with _upstream(seen) as upstream:
@@ -124,6 +150,7 @@ async def test_record_missing_replays_what_exists_and_records_only_what_is_new(
         path,
         ledger=ReplayLedger.load(path, JUDGE),
         writer=CassetteWriter(path, fresh=False),
+        budget=_budget(tmp_path),
     )
     seen: list[httpx.Request] = []
 
@@ -269,18 +296,46 @@ async def test_a_provider_error_is_relayed_but_never_recorded(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     path = tmp_path / "scenario.jsonl"
-    doubles = ProviderDoubles("record", path, writer=CassetteWriter(path, fresh=True))
+    doubles = ProviderDoubles(
+        "record", path, writer=CassetteWriter(path, fresh=True), budget=_budget(tmp_path)
+    )
 
-    def busy(_request: httpx.Request) -> httpx.Response:
+    sent: list[httpx.Request] = []
+
+    def busy(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
         return httpx.Response(429, json={"error": {"code": 429}})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(busy)) as upstream:
         monkeypatch.setattr(doubles, "_client", upstream)
         response = await _ask(doubles, "Twin, raise your hand")
+        retried = await _ask(doubles, "Twin, raise your hand")
+    report: Any = doubles.report()
 
     assert response.status_code == 429
+    assert retried.status_code == 400
+    assert retried.status_code not in RETRIED_STATUSES
+    assert len(sent) == 1
     assert read_cassette(path) == ()
-    assert doubles.report()["provider_errors_not_recorded"] == [f"{ROUTE} answered 429"]
+    assert report["provider_errors_not_recorded"] == [
+        f"{ROUTE} answered 429",
+        f"{ROUTE} not relayed: recording stopped: provider_failure",
+    ]
+    assert report["recording"]["attempts"] == 1
+    assert report["recording"]["failed_attempts"] == 1
+    assert report["recording"]["stop_reason"] == "provider_failure"
+
+
+def test_recording_refuses_to_start_without_a_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SIMULATOR_PROVIDERS", "record_missing")
+    monkeypatch.setenv("SIMULATOR_CASSETTE_DIR", str(tmp_path))
+    monkeypatch.delenv("SIMULATOR_RECORDING_BUDGET", raising=False)
+    (tmp_path / "sim-s1.jsonl").write_bytes((CASSETTES / "sim-s1.jsonl").read_bytes())
+
+    with pytest.raises(ValueError, match="SIMULATOR_RECORDING_BUDGET"):
+        provider_doubles("sim-s1")
 
 
 def test_record_missing_refuses_to_start_without_gemini_keys(tmp_path: Path) -> None:
@@ -290,6 +345,7 @@ def test_record_missing_refuses_to_start_without_gemini_keys(tmp_path: Path) -> 
         path,
         ledger=ReplayLedger.load(path, JUDGE),
         writer=CassetteWriter(path, fresh=False),
+        budget=_budget(tmp_path),
     )
     keyless = Settings().model_copy(update={"reply": None, "reply_strong": None, "debrief": None})
     keyless = keyless.model_copy(
@@ -326,6 +382,7 @@ async def test_record_missing_keeps_only_what_the_run_used_and_what_it_added(
         path,
         ledger=ReplayLedger.load(path, JUDGE),
         writer=CassetteWriter(path, fresh=False),
+        budget=_budget(tmp_path),
     )
     seen: list[httpx.Request] = []
 

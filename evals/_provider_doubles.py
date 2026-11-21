@@ -25,6 +25,7 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
+from evals._recording_budget import RecordingBudget, RecordingStopped
 from evals._replay_cassette import (
     CassetteError,
     HeardTranscripts,
@@ -65,6 +66,7 @@ END_GRACE_SECONDS = 3.0
 VOICE_END = "simulatorVoiceEnd"
 SERVER_START_SECONDS = 30.0
 MISS_STATUS = 400
+RECORDING_BUDGET_ENV = "SIMULATOR_RECORDING_BUDGET"
 UNSERVED_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
 MODES: tuple[ProviderMode, ...] = get_args(ProviderMode)
 
@@ -245,6 +247,7 @@ class ProviderDoubles:
     unheard_voice_ends: list[str] = field(default_factory=list)
     transcripts: HeardTranscripts = field(default_factory=HeardTranscripts)
     refused_recordings: list[str] = field(default_factory=list)
+    budget: RecordingBudget | None = None
 
     def settings(self, settings: Settings) -> Settings:
         if self.mode == "live":
@@ -379,19 +382,32 @@ class ProviderDoubles:
         )
 
     async def _relay(self, request: Request, route: str, body: bytes) -> Response:
-        if self._client is None or self.writer is None:
+        if self._client is None or self.writer is None or self.budget is None:
             raise RuntimeError(f"{self.mode} relays only while the doubles are running")
+        budget = self.budget
+        try:
+            reservation = await budget.admit(route, body)
+        except RecordingStopped as stopped:
+            self.refused_recordings.append(f"{route} not relayed: {stopped}")
+            return JSONResponse(
+                {"error": {"code": MISS_STATUS, "message": str(stopped), "status": "ABORTED"}},
+                status_code=MISS_STATUS,
+            )
         canonical = canonical_request(route, body)
         headers = {
             name: request.headers[name] for name in FORWARDED_HEADERS if name in request.headers
         }
         started = time.monotonic()
-        upstream = await self._client.send(
-            self._client.build_request(
-                "POST", GOOGLE + route, params=request.url.query, content=body, headers=headers
-            ),
-            stream=True,
-        )
+        try:
+            upstream = await self._client.send(
+                self._client.build_request(
+                    "POST", GOOGLE + route, params=request.url.query, content=body, headers=headers
+                ),
+                stream=True,
+            )
+        except httpx.HTTPError:
+            await budget.settle(route, reservation, 0, "")
+            raise
         writer = self.writer
         media_type = upstream.headers.get("content-type", "application/json")
 
@@ -407,6 +423,9 @@ class ProviderDoubles:
                     yield chunk
             finally:
                 await upstream.aclose()
+                await budget.settle(
+                    route, reservation, upstream.status_code, "".join(text for _, text in chunks)
+                )
                 if 200 <= upstream.status_code < 300:
                     writer.append(
                         model_exchange(canonical, upstream.status_code, media_type, chunks)
@@ -541,6 +560,7 @@ class ProviderDoubles:
             "replay": ledger,
             "voice_ends_not_heard": list(self.unheard_voice_ends),
             "provider_errors_not_recorded": list(self.refused_recordings),
+            "recording": self.budget.ledger.report() if self.budget is not None else None,
         }
 
     @asynccontextmanager
@@ -610,12 +630,28 @@ def provider_doubles(scenario: str) -> ProviderDoubles:
     if mode == "live":
         return ProviderDoubles(mode, path)
     if mode == "record":
-        return ProviderDoubles(mode, path, writer=CassetteWriter(path, fresh=True))
+        return ProviderDoubles(
+            mode, path, writer=CassetteWriter(path, fresh=True), budget=recording_budget()
+        )
     if not path.exists():
         raise CassetteError(f"no cassette for {scenario} at {path}; record it before replaying")
     ledger = ReplayLedger.load(path, recorded_judge(folder))
-    writer = CassetteWriter(path, fresh=False) if mode == "record_missing" else None
-    return ProviderDoubles(mode, path, ledger=ledger, writer=writer)
+    if mode == "replay":
+        return ProviderDoubles(mode, path, ledger=ledger)
+    return ProviderDoubles(
+        mode,
+        path,
+        ledger=ledger,
+        writer=CassetteWriter(path, fresh=False),
+        budget=recording_budget(),
+    )
+
+
+def recording_budget() -> RecordingBudget:
+    path = os.environ.get(RECORDING_BUDGET_ENV)
+    if not path:
+        raise ValueError(f"recording reaches a paid provider; set {RECORDING_BUDGET_ENV}")
+    return RecordingBudget.load(Path(path))
 
 
 async def _replayed(chunks: Sequence[tuple[float, str]]) -> AsyncIterator[bytes]:
