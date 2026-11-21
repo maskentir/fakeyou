@@ -19,3 +19,4 @@ node_modules/
 tmp/
 
 /docs/readme/previews/
+/evals/fixtures/simulator/cassettes/*.candidate

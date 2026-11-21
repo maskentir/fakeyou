@@ -1,8 +1,9 @@
+import ast
 import asyncio
 import json
 import subprocess
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,6 +30,7 @@ from evals._provider_doubles import (
 )
 from evals._recording_budget import RecordingBudget, RecordingCaps, RecordingLedger
 from evals._replay_cassette import (
+    CassetteError,
     HeardTranscripts,
     ModelExchange,
     ReplayLedger,
@@ -961,3 +963,181 @@ async def test_only_one_of_two_competing_reconnects_reaches_muse(
     assert report["sessions"] == 2
     assert [cycle["ending"] for cycle in report["session_lifecycles"]] == ["clean", "clean"]
     assert report["stop_reason"] == "incomplete_transcript"
+
+
+def _recording(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str, max_attempts: int = 10
+) -> ProviderDoubles:
+    folder = tmp_path / "cassettes"
+    folder.mkdir()
+    (folder / "sim-s1.jsonl").write_bytes((CASSETTES / "sim-s1.jsonl").read_bytes())
+    lines = [
+        _recorded(tmp_path / f"{index}.jsonl", question).read_text(encoding="utf-8")
+        for index, question in enumerate(["Twin, raise your hand", "Twin, stale question"])
+    ]
+    (folder / "scenario.jsonl").write_text("".join(lines), encoding="utf-8")
+    monkeypatch.setenv("SIMULATOR_PROVIDERS", mode)
+    monkeypatch.setenv("SIMULATOR_CASSETTE_DIR", str(folder))
+    monkeypatch.setenv(
+        "SIMULATOR_RECORDING_BUDGET", str(_budget(tmp_path, max_attempts=max_attempts).path)
+    )
+    return provider_doubles("scenario")
+
+
+def _questions(cassette: Path) -> list[str]:
+    return [
+        line.request["body"]["contents"][0]["parts"][0]["text"]
+        for line in read_cassette(cassette)
+        if isinstance(line, ModelExchange)
+    ]
+
+
+async def test_record_missing_keeps_the_cassette_until_a_clean_run_promotes_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    doubles = _recording(tmp_path, monkeypatch, "record_missing")
+    before = doubles.cassette.read_bytes()
+
+    async with _upstream([]) as upstream:
+        monkeypatch.setattr(doubles, "_client", upstream)
+        await _ask(doubles, "Twin, raise your hand")
+        await _ask(doubles, "Twin, lower your hand")
+    doubles.finish_recording()
+
+    assert doubles.cassette.read_bytes() == before
+    assert doubles.integrity_failures() == []
+    doubles.promote()
+    assert _questions(doubles.cassette) == ["Twin, raise your hand", "Twin, lower your hand"]
+    assert not doubles.cassette.with_name("scenario.jsonl.candidate").exists()
+
+
+async def test_record_writes_only_a_candidate_until_it_is_promoted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    doubles = _recording(tmp_path, monkeypatch, "record")
+    before = doubles.cassette.read_bytes()
+
+    async with _upstream([]) as upstream:
+        monkeypatch.setattr(doubles, "_client", upstream)
+        await _ask(doubles, "Twin, lower your hand")
+
+    assert doubles.cassette.read_bytes() == before
+    assert doubles.integrity_failures() == []
+    doubles.promote()
+    assert _questions(doubles.cassette) == ["Twin, lower your hand"]
+
+
+async def test_replay_integrity_still_requires_a_closed_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    doubles = _recording(tmp_path, monkeypatch, "replay")
+    before = doubles.cassette.read_bytes()
+
+    await _ask(doubles, "Twin, raise your hand")
+    [failure] = doubles.integrity_failures()
+    doubles.promote()
+
+    assert "replay is not closed" in failure
+    assert "unused" in failure
+    assert doubles.cassette.read_bytes() == before
+
+
+def _stop_the_budget(doubles: ProviderDoubles) -> None:
+    assert doubles.budget is not None
+    doubles.budget.ledger.stop_reason = "usage_unknown"
+
+
+def _stop_the_speech(doubles: ProviderDoubles) -> None:
+    doubles.speech = SpeechRecording(frozenset({"clip.wav"}))
+    doubles.speech.stop("provider_error", "test")
+
+
+def _refuse_a_route(doubles: ProviderDoubles) -> None:
+    doubles.refused_recordings.append("/v1beta/models/x answered 500")
+
+
+def _miss(doubles: ProviderDoubles) -> None:
+    assert doubles.ledger is not None
+    doubles.ledger.refuse("/v1/unserved")
+
+
+@pytest.mark.parametrize(
+    ("broken", "named"),
+    [
+        (_stop_the_budget, "recording stopped: usage_unknown"),
+        (_stop_the_speech, "speech not recorded: provider_error"),
+        (_refuse_a_route, "answered 500"),
+        (_miss, "recording missed"),
+    ],
+)
+async def test_a_failed_recording_is_reported_and_never_promoted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    broken: Callable[[ProviderDoubles], None],
+    named: str,
+) -> None:
+    doubles = _recording(tmp_path, monkeypatch, "record_missing")
+    before = doubles.cassette.read_bytes()
+
+    async with _upstream([]) as upstream:
+        monkeypatch.setattr(doubles, "_client", upstream)
+        await _ask(doubles, "Twin, raise your hand")
+        await _ask(doubles, "Twin, lower your hand")
+    broken(doubles)
+    doubles.finish_recording()
+
+    assert any(named in failure for failure in doubles.integrity_failures())
+    with pytest.raises(CassetteError, match="not promoted"):
+        doubles.promote()
+    assert doubles.cassette.read_bytes() == before
+
+
+async def test_a_budget_refusal_during_record_missing_is_never_promoted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    doubles = _recording(tmp_path, monkeypatch, "record_missing", max_attempts=1)
+    before = doubles.cassette.read_bytes()
+    seen: list[httpx.Request] = []
+
+    async with _upstream(seen) as upstream:
+        monkeypatch.setattr(doubles, "_client", upstream)
+        await _ask(doubles, "Twin, raise your hand")
+        await _ask(doubles, "Twin, lower your hand")
+        refused = await _ask(doubles, "Twin, leave the call")
+    doubles.finish_recording()
+
+    assert len(seen) == 1
+    assert refused.status_code == 400
+    assert doubles.integrity_failures()
+    with pytest.raises(CassetteError):
+        doubles.promote()
+    assert doubles.cassette.read_bytes() == before
+
+
+def _scenario_tests() -> list[ast.AsyncFunctionDef]:
+    source = Path(__file__).with_name("test_meeting_simulator_eval.py").read_text(encoding="utf-8")
+    return [
+        node
+        for node in ast.parse(source).body
+        if isinstance(node, ast.AsyncFunctionDef)
+        and node.name.startswith("test_")
+        and any(
+            isinstance(call, ast.Call) and getattr(call.func, "id", None) == "_meeting"
+            for call in ast.walk(node)
+        )
+    ]
+
+
+def test_every_scenario_promotes_its_recording_only_after_its_last_assertion() -> None:
+    scenarios = _scenario_tests()
+    promotions = {
+        scenario.name: [
+            index
+            for index, statement in enumerate(scenario.body)
+            if ast.unparse(statement) == "meeting.promote()"
+        ]
+        for scenario in scenarios
+    }
+
+    assert len(scenarios) == 6
+    assert promotions == {scenario.name: [len(scenario.body) - 1] for scenario in scenarios}

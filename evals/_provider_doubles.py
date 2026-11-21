@@ -700,6 +700,27 @@ class ProviderDoubles:
                     await serving
                 self.finish_recording()
 
+    def integrity_failures(self) -> list[str]:
+        summary = self.ledger.summary(self.transcripts) if self.ledger is not None else None
+        if self.mode == "replay":
+            if summary is None or summary["closed"]:
+                return []
+            return [f"replay is not closed: misses {summary['misses']}, unused {summary['unused']}"]
+        failures = list(self.refused_recordings)
+        if summary is not None and summary["misses"]:
+            failures.append(f"recording missed {summary['misses']}")
+        if self.budget is not None and self.budget.ledger.stop_reason is not None:
+            failures.append(f"recording stopped: {self.budget.ledger.stop_reason}")
+        return failures
+
+    def promote(self) -> None:
+        if self.writer is None:
+            return
+        failures = self.integrity_failures()
+        if failures:
+            raise CassetteError(f"{self.cassette.name} not promoted: {'; '.join(failures)}")
+        self.writer.path.replace(self.cassette)
+
     def finish_recording(self) -> None:
         if self.mode != "record_missing" or self.ledger is None or self.writer is None:
             return
@@ -761,9 +782,10 @@ def provider_doubles(scenario: str) -> ProviderDoubles:
     path = folder / f"{scenario}.jsonl"
     if mode == "live":
         return ProviderDoubles(mode, path)
+    candidate = path.with_name(f"{path.name}.candidate")
     if mode == "record":
         return ProviderDoubles(
-            mode, path, writer=CassetteWriter(path, fresh=True), budget=recording_budget()
+            mode, path, writer=CassetteWriter(candidate, fresh=True), budget=recording_budget()
         )
     if not path.exists():
         raise CassetteError(f"no cassette for {scenario} at {path}; record it before replaying")
@@ -774,7 +796,7 @@ def provider_doubles(scenario: str) -> ProviderDoubles:
         mode,
         path,
         ledger=ledger,
-        writer=CassetteWriter(path, fresh=False),
+        writer=CassetteWriter(candidate, fresh=True),
         budget=recording_budget(),
         speech=speech_recording(ledger),
     )
