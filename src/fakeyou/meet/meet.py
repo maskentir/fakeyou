@@ -19,7 +19,7 @@ JoinStatus = Literal["admitted", "denied", "blocked", "timeout", "aborted", "fai
 CallState = Literal["in_call", "removed", "ended", "lobby", "left", "unknown"]
 LeaveStatus = Literal["left", "failed"]
 Destination = Literal[
-    "the requested meeting", "the Meet home page", "a different Meet page", "another host"
+    "the requested meeting", "the Meet home page", "a different Meet page", "another origin"
 ]
 
 EXPLICIT_DENIAL_MARKERS = (
@@ -42,7 +42,16 @@ WAITING_ROOM_MARKERS = (
 )
 
 _LOCATION_PROBE = "(() => location.href)()"
-HEADING_LIMIT = 80
+HEADING_CATEGORIES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Meet home", ("video calls and meetings for everyone", "premium video meetings")),
+    ("pre-join", ("ready to join", "what's your name", "what\u2019s your name")),
+    ("getting ready", ("getting ready",)),
+    ("access refused", ("can't join this video call", "can\u2019t join this video call")),
+    ("call ended", ("call has ended", "you left the meeting", "call ended")),
+    ("removed", ("been removed",)),
+    ("sign-in", ("sign in",)),
+    ("invalid meeting code", ("check your meeting code", "invalid video call name")),
+)
 PREPARE_TIMEOUT_SECONDS = 120.0
 CALL_STATE_TIMEOUT_SECONDS = 5.0
 LOBBY_READ_FAILURE_LIMIT = 5
@@ -176,10 +185,19 @@ async def _page_location(page: Page, *, poll_interval_seconds: float) -> str | N
     return str(current)
 
 
+def _origin(url: str) -> tuple[str, str | None, int | None]:
+    parts = urlparse(url)
+    try:
+        port = parts.port
+    except ValueError:
+        port = -1
+    return parts.scheme.lower(), parts.hostname, port
+
+
 def landed_destination(landed: str, link: str) -> Destination:
     actual = urlparse(landed)
-    if actual.hostname != urlparse(link).hostname:
-        return "another host"
+    if _origin(landed) != _origin(link):
+        return "another origin"
     if actual.path in ("", "/"):
         return "the Meet home page"
     code = meeting_code(landed)
@@ -192,9 +210,17 @@ def _landed_failure(landed: str, link: str) -> str | None:
     destination = landed_destination(landed, link)
     if destination == "the requested meeting":
         return None
-    if destination == "another host":
+    if destination == "another origin":
         return f"navigation landed on an unexpected host: {urlparse(landed).hostname or 'unknown'}"
     return f"navigation landed on {destination} instead of the requested meeting"
+
+
+def heading_category(heading: str) -> str:
+    lowered = heading.casefold()
+    for category, markers in HEADING_CATEGORIES:
+        if any(marker in lowered for marker in markers):
+            return category
+    return "unrecognised"
 
 
 async def _page_heading(page: Page) -> str:
@@ -204,7 +230,15 @@ async def _page_heading(page: Page) -> str:
         )
     except PlaywrightError:
         return "unknown"
-    return " | ".join(str(heading)[:HEADING_LIMIT] for heading in headings[:3]) or "none"
+    categories = dict.fromkeys(heading_category(str(heading)) for heading in headings)
+    return ", ".join(categories) or "none"
+
+
+async def _destination_failure(page: Page, link: str) -> str | None:
+    navigation = _landed_failure(page.url, link)
+    if navigation is None:
+        return None
+    return f"{navigation}; heading: {await _page_heading(page)}"
 
 
 async def _has_live_captcha(page: Page) -> bool:
@@ -229,7 +263,7 @@ async def _open_meeting_page(
     else:
         failed = response is not None and not response.ok
     if not failed:
-        return _landed_failure(page.url, link)
+        return await _destination_failure(page, link)
     current = await _page_location(page, poll_interval_seconds=poll_interval_seconds)
     if current is not None and _landed_failure(current, link) is None:
         return None
@@ -280,13 +314,11 @@ async def _dismiss_media_dialog(
 
 
 async def _name_field_failure(page: Page, link: str, failure: str) -> str:
-    landed = page.url
-    heading = await _page_heading(page)
-    navigation = _landed_failure(landed, link)
+    navigation = await _destination_failure(page, link)
     if navigation is not None:
-        return f"{navigation}; heading: {heading}"
+        return navigation
     return (
-        f"{failure}; destination: {landed_destination(landed, link)}; heading: {heading}; "
+        f"{failure}; destination: the requested meeting; heading: {await _page_heading(page)}; "
         f"visible controls: {await visible_control_labels(page)}"
     )
 
@@ -386,7 +418,13 @@ async def _prepare_lobby(
     failure = await _dismiss_media_dialog(page, signals, polling.sleep)
     if failure is not None:
         return failure
+    failure = await _destination_failure(page, request.link)
+    if failure is not None:
+        return failure
     failure = await _enter_twin_name(page, request, signals, polling.sleep)
+    if failure is not None:
+        return failure
+    failure = await _destination_failure(page, request.link)
     if failure is not None:
         return failure
     return await _click_join(
