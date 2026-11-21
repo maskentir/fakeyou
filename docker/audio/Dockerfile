@@ -19,6 +19,8 @@ RUN curl -fsSL --retry 10 --retry-all-errors --retry-max-time 600 -o /tmp/eres2n
     && .venv/bin/python -c "import pathlib; upstream = pathlib.Path('/tmp/eres2net-upstream.onnx').read_bytes(); assert upstream.count(b'\x1a\x062.14.1') == 1; pathlib.Path('/workspace/models/eres2net-voxceleb-en-16k.onnx').write_bytes(upstream.replace(b'\x1a\x062.14.1', b'\x1a\x052.4.1', 1))" \
     && rm /tmp/eres2net-upstream.onnx \
     && echo "c59158379255ad66e161679cca6af8d52d51e389e3224ab7d7a7baae295c2db5  /workspace/models/eres2net-voxceleb-en-16k.onnx" | sha256sum -c -
+RUN TIKTOKEN_CACHE_DIR=/workspace/tiktoken .venv/bin/python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')" \
+    && echo "223921b76ee99bde995b7ff738513eef100fb51d18c93597a113bcffe865b2a7  /workspace/tiktoken/9b5ad71b2ce5302211f9c61530b329a4922fc6a4" | sha256sum -c -
 RUN .venv/bin/python -c "import onnxruntime, os, glob; libs = glob.glob(os.path.join(os.path.dirname(onnxruntime.__file__), 'capi', 'libonnxruntime.so.*')); assert len(libs) == 1, libs; os.makedirs('/opt/ort', exist_ok=True); os.symlink(libs[0], '/opt/ort/libonnxruntime.so')"
 
 FROM base AS runtime
@@ -35,6 +37,7 @@ COPY --from=builder /workspace/.venv /workspace/.venv
 COPY --from=builder /workspace/src /workspace/src
 COPY --from=builder /workspace/models /workspace/models
 COPY --from=builder /opt/ort /opt/ort
+COPY --from=builder /workspace/tiktoken /opt/tiktoken
 RUN mkdir -p /workspace/.runtime && chown twin:twin /workspace/.runtime
 COPY docker/audio/default.pa /etc/fakeyou/default.pa
 COPY docker/audio/daemon.conf /etc/pulse/daemon.conf
@@ -47,7 +50,8 @@ ENV PATH="/workspace/.venv/bin:$PATH" \
     XDG_RUNTIME_DIR=/tmp/fakeyou-runtime \
     PULSE_SOURCE=meeting_audio.monitor \
     PULSE_SINK=agent_output \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    TIKTOKEN_CACHE_DIR=/opt/tiktoken
 USER twin
 ENTRYPOINT ["/usr/local/bin/fakeyou-entrypoint"]
 CMD ["fakeyou", "check"]
