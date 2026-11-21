@@ -26,6 +26,7 @@ from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from evals._replay_cassette import (
+    CassetteError,
     HeardTranscripts,
     ModelExchange,
     ReplayLedger,
@@ -35,6 +36,7 @@ from evals._replay_cassette import (
     canonical_request,
     judge_route,
     model_exchange,
+    read_cassette,
 )
 from fakeyou.config.settings import CartesiaTTS, GoogleReply, Settings
 from fakeyou.foundation.invariants import PLAYBACK_SAMPLE_RATE
@@ -589,10 +591,16 @@ async def _started(server: uvicorn.Server, serving: asyncio.Future[None]) -> Non
         ) from error
 
 
-def recorded_judge() -> TurnJudgeShape:
+def recorded_judge(folder: Path = CASSETTES) -> TurnJudgeShape:
     snapshot = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
     role = snapshot["turn_judge"]["model"] or snapshot["reply"]
-    return TurnJudgeShape(judge_route(role["model"]))
+    exchanges = (
+        line
+        for path in sorted(folder.glob("*.jsonl"))
+        for line in read_cassette(path)
+        if isinstance(line, ModelExchange)
+    )
+    return TurnJudgeShape.captured(judge_route(role["model"]), exchanges)
 
 
 def provider_doubles(scenario: str) -> ProviderDoubles:
@@ -603,7 +611,9 @@ def provider_doubles(scenario: str) -> ProviderDoubles:
         return ProviderDoubles(mode, path)
     if mode == "record":
         return ProviderDoubles(mode, path, writer=CassetteWriter(path, fresh=True))
-    ledger = ReplayLedger.load(path, recorded_judge())
+    if not path.exists():
+        raise CassetteError(f"no cassette for {scenario} at {path}; record it before replaying")
+    ledger = ReplayLedger.load(path, recorded_judge(folder))
     writer = CassetteWriter(path, fresh=False) if mode == "record_missing" else None
     return ProviderDoubles(mode, path, ledger=ledger, writer=writer)
 

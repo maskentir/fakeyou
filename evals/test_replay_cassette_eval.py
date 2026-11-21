@@ -2,6 +2,7 @@ import asyncio
 import base64
 import copy
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +28,6 @@ from fakeyou.conversation.turn_judge import _JUDGE_RULES
 ROUTE = "/v1beta/models/gemini-3.1-flash-lite:generateContent"
 JUDGE_ROUTE = ROUTE
 OTHER_ROUTE = "/v1beta/models/gemini-3.8-flash:generateContent"
-JUDGE_SHAPE = TurnJudgeShape(JUDGE_ROUTE)
 JUDGE = "You read a live meeting for a digital twin and decide who the latest line is for."
 REPLY = "You are a digital twin for a meeting participant."
 PIXELS = b"\xff\xd8\xff\xe0red-shirt-frame"
@@ -348,6 +348,11 @@ def _recorded_judge_body() -> dict[str, Any]:
     raise AssertionError("the s1 cassette has no turn-judge request")
 
 
+JUDGE_SHAPE = TurnJudgeShape(
+    JUDGE_ROUTE, {k: v for k, v in _recorded_judge_body().items() if k != "contents"}
+)
+
+
 def _window(latest: str, *, route_body: dict[str, Any] | None = None, **window: Any) -> bytes:
     body = copy.deepcopy(route_body or _recorded_judge_body())
     reading = json.loads(body["contents"][0]["parts"][0]["text"])
@@ -390,6 +395,17 @@ def test_every_recorded_turn_judge_request_has_the_production_judge_shape() -> N
 
     assert judged
     assert all(judge.latest(line.request) for line in judged)
+
+
+def test_the_judge_shape_comes_from_exactly_one_recorded_production_frame() -> None:
+    recorded = _exchange(_window(SPOKEN), "reply", route=JUDGE_ROUTE)
+    drifted = _exchange(_changed(SPOKEN, _widened_action_enum), "reply", route=JUDGE_ROUTE)
+
+    assert TurnJudgeShape.captured(JUDGE_ROUTE, [recorded, recorded]) == JUDGE_SHAPE
+    with pytest.raises(CassetteError, match="found 2"):
+        TurnJudgeShape.captured(JUDGE_ROUTE, [recorded, drifted])
+    with pytest.raises(CassetteError, match="found 0"):
+        TurnJudgeShape.captured(OTHER_ROUTE, [recorded])
 
 
 def test_an_unrecorded_judgement_of_an_abandoned_interim_is_reported_but_not_fatal(
@@ -497,10 +513,33 @@ def _other_instruction(latest: str) -> bytes:
     return json.dumps(body).encode()
 
 
-def _other_schema(latest: str) -> bytes:
+def _changed(latest: str, change: Callable[[dict[str, Any]], object]) -> bytes:
     body = json.loads(_window(latest))
-    body["generationConfig"]["responseJsonSchema"]["title"] = "Reply"
+    change(body)
     return json.dumps(body).encode()
+
+
+def _schema(body: dict[str, Any]) -> dict[str, Any]:
+    schema: dict[str, Any] = body["generationConfig"]["responseJsonSchema"]
+    return schema
+
+
+def _without_owner_claim(body: dict[str, Any]) -> None:
+    schema = _schema(body)
+    del schema["properties"]["owner_claim"]
+    schema["required"] = [name for name in schema.get("required", []) if name != "owner_claim"]
+
+
+def _widened_action_enum(body: dict[str, Any]) -> None:
+    _schema(body)["properties"]["action"]["enum"].append("interrupt")
+
+
+def _retyped_field(body: dict[str, Any]) -> None:
+    _schema(body)["properties"]["confidence"]["type"] = "string"
+
+
+def _retitled(body: dict[str, Any]) -> None:
+    _schema(body)["title"] = "Reply"
 
 
 @pytest.mark.parametrize(
@@ -512,7 +551,43 @@ def _other_schema(latest: str) -> bytes:
         (JUDGE_ROUTE, _role_swapped(ABANDONED)),
         (JUDGE_ROUTE, _second_turn(ABANDONED)),
         (JUDGE_ROUTE, _other_instruction(ABANDONED)),
-        (JUDGE_ROUTE, _other_schema(ABANDONED)),
+        (JUDGE_ROUTE, _changed(ABANDONED, _retitled)),
+        (JUDGE_ROUTE, _changed(ABANDONED, _without_owner_claim)),
+        (JUDGE_ROUTE, _changed(ABANDONED, _widened_action_enum)),
+        (JUDGE_ROUTE, _changed(ABANDONED, _retyped_field)),
+        (
+            JUDGE_ROUTE,
+            _changed(ABANDONED, lambda body: body["generationConfig"].update(temperature=0.9)),
+        ),
+        (
+            JUDGE_ROUTE,
+            _changed(
+                ABANDONED,
+                lambda body: body["generationConfig"].update(
+                    thinkingConfig={"thinking_level": "HIGH"}
+                ),
+            ),
+        ),
+        (
+            JUDGE_ROUTE,
+            _changed(ABANDONED, lambda body: body["generationConfig"].update(candidateCount=2)),
+        ),
+        (
+            JUDGE_ROUTE,
+            _changed(
+                ABANDONED,
+                lambda body: body["generationConfig"].update(responseMimeType="text/plain"),
+            ),
+        ),
+        (JUDGE_ROUTE, _changed(ABANDONED, lambda body: body.pop("safetySettings"))),
+        (
+            JUDGE_ROUTE,
+            _changed(ABANDONED, lambda body: body.update(cachedContent="cachedContents/x")),
+        ),
+        (
+            JUDGE_ROUTE,
+            _changed(ABANDONED, lambda body: body.update(tools=[{"functionDeclarations": []}])),
+        ),
         (JUDGE_ROUTE, _window(ABANDONED, reply_hint="extra")),
     ],
     ids=[
@@ -522,7 +597,17 @@ def _other_schema(latest: str) -> bytes:
         "model_role",
         "extra_turn",
         "other_system_instruction",
-        "other_response_schema",
+        "schema_retitled",
+        "schema_without_owner_claim",
+        "schema_enum_widened",
+        "schema_field_retyped",
+        "temperature_added",
+        "thinking_changed",
+        "candidate_count_changed",
+        "output_format_changed",
+        "safety_settings_dropped",
+        "cached_content_added",
+        "tools_added",
         "extra_window_field",
     ],
 )

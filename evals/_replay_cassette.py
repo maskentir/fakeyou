@@ -12,7 +12,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, TypeAdapter, ValidationError
 
-from fakeyou.conversation.turn_judge import _JUDGE_RULES, JudgeLine, JudgeWindow, TurnJudgement
+from fakeyou.conversation.turn_judge import _JUDGE_RULES, JudgeLine, JudgeWindow
 
 _STRICT = ConfigDict(extra="forbid", frozen=True)
 _Digest = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
@@ -195,6 +195,11 @@ JUDGE_WINDOW_KEYS = frozenset(
     {"twin_names", *JudgeWindow((), JudgeLine(speaker="", text="")).reading}
 )
 JUDGE_LATEST_KEYS = frozenset({"speaker", "text"})
+JUDGE_INSTRUCTION = {"parts": [{"text": _JUDGE_RULES}]}
+
+
+def _frame(body: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in body.items() if key != "contents"}
 
 
 def judge_route(model: str) -> str:
@@ -204,16 +209,27 @@ def judge_route(model: str) -> str:
 @dataclass(frozen=True, slots=True)
 class TurnJudgeShape:
     route: str
+    frame: Mapping[str, Any]
+
+    @classmethod
+    def captured(cls, route: str, exchanges: Iterable[ModelExchange]) -> "TurnJudgeShape":
+        frames = {
+            request_digest(_frame(exchange.request["body"])): _frame(exchange.request["body"])
+            for exchange in exchanges
+            if exchange.route == route
+            and exchange.request["body"].get("systemInstruction") == JUDGE_INSTRUCTION
+        }
+        if len(frames) != 1:
+            raise CassetteError(
+                f"expected one recorded turn-judge request shape on {route}, found {len(frames)}"
+            )
+        return cls(route, next(iter(frames.values())))
 
     def latest(self, request: Mapping[str, Any]) -> str | None:
         body = request.get("body")
         if request.get("route") != self.route or not isinstance(body, dict):
             return None
-        schema = (body.get("generationConfig") or {}).get("responseJsonSchema") or {}
-        if (
-            body.get("systemInstruction") != {"parts": [{"text": _JUDGE_RULES}]}
-            or schema.get("title") != TurnJudgement.__name__
-        ):
+        if body.get("systemInstruction") != JUDGE_INSTRUCTION or _frame(body) != self.frame:
             return None
         match body.get("contents"):
             case [{"role": "user", "parts": [{"text": str(text)}]} as content] if set(content) == {

@@ -1,10 +1,15 @@
 import json
+import subprocess
+import sys
 from collections.abc import Iterator
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import httpx
 import pytest
+from langchain_google_genai.chat_models import GoogleInvalidRequestError
 
 from evals import _provider_doubles as doubles_module
 from evals._provider_doubles import (
@@ -14,22 +19,24 @@ from evals._provider_doubles import (
     _token_vector,
     provider_doubles,
     provider_mode,
+    recorded_judge,
 )
 from evals._replay_cassette import (
     HeardTranscripts,
     ModelExchange,
     ReplayLedger,
-    TurnJudgeShape,
     canonical_request,
     model_exchange,
     read_cassette,
 )
 from fakeyou.config.settings import Settings
+from fakeyou.conversation.turn_judge import JudgeLine, JudgeWindow, ModelTurnJudge
+from fakeyou.orchestration.providers import create_turn_judge_model
 from fakeyou.perception.inspector import VisualInspection
 from fakeyou.perception.interpreter import INSPECTION_PROMPT_MARKER
 
 ROUTE = "/v1beta/models/gemini-3.1-flash-lite:generateContent"
-JUDGE = TurnJudgeShape(ROUTE)
+JUDGE = recorded_judge()
 RETRIED_STATUSES = (408, 429, 500, 502, 503, 504)
 ANSWER = {"candidates": [{"content": {"parts": [{"text": "raise_hand"}], "role": "model"}}]}
 
@@ -160,7 +167,7 @@ def test_replay_leaves_no_provider_endpoint_outside_the_doubles(
 ) -> None:
     monkeypatch.setenv("SIMULATOR_PROVIDERS", "replay")
     monkeypatch.setenv("SIMULATOR_CASSETTE_DIR", str(tmp_path))
-    _recorded(tmp_path / "sim-s1.jsonl", "hello")
+    (tmp_path / "sim-s1.jsonl").write_bytes((CASSETTES / "sim-s1.jsonl").read_bytes())
     doubles = provider_doubles("sim-s1")
     doubles.base_url = "http://127.0.0.1:9"
 
@@ -331,3 +338,46 @@ async def test_record_missing_keeps_only_what_the_run_used_and_what_it_added(
     asked = {json.dumps(line.request["body"]) for line in kept}
     assert len(kept) == 2
     assert not any("stale" in question for question in asked)
+
+
+CAPTURE_IN_SIMULATOR_ORDER = (
+    "import fakeyou.orchestration.runtime, asyncio, json, sys; "
+    "from evals.test_provider_doubles_eval import captured_judge_request; "
+    "json.dump(asyncio.run(captured_judge_request(sys.argv[1])), sys.stdout)"
+)
+CAPTURED_LATEST = "Rani Twin, can you"
+
+
+async def captured_judge_request(folder: str) -> dict[str, Any]:
+    path = Path(folder) / "scenario.jsonl"
+    path.write_text("", encoding="utf-8")
+    doubles = ProviderDoubles("replay", path, ledger=ReplayLedger.load(path, JUDGE))
+    asked: list[dict[str, Any]] = []
+    respond = ReplayLedger.respond
+
+    def capture(ledger: ReplayLedger, route: str, body: bytes) -> object:
+        asked.append(canonical_request(route, body))
+        return respond(ledger, route, body)
+
+    with patch.object(ReplayLedger, "respond", capture):
+        async with doubles.running():
+            model = create_turn_judge_model(doubles.settings(Settings()))
+            judge = ModelTurnJudge(model, twin_names=("Rani Twin",), timeout_seconds=10.0)
+            with suppress(GoogleInvalidRequestError):
+                await judge.judge(JudgeWindow((), JudgeLine("Speaker A", CAPTURED_LATEST)))
+    [request] = asked
+    return request
+
+
+def test_the_recorded_judge_shape_is_what_the_simulated_worker_sends_today(
+    tmp_path: Path,
+) -> None:
+    captured = subprocess.run(
+        [sys.executable, "-c", CAPTURE_IN_SIMULATOR_ORDER, str(tmp_path)],
+        capture_output=True,
+        check=True,
+        text=True,
+        cwd=Path(__file__).parent.parent,
+    )
+
+    assert JUDGE.latest(json.loads(captured.stdout)) == CAPTURED_LATEST

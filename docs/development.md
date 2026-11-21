@@ -71,8 +71,11 @@ The only exception is an unrecorded or unused turn-judge prefetch for interim te
 never became a final transcript. Whether the worker sends one depends on scheduling,
 not on the conversation, so it is reported as speculative and does not fail the
 scenario. A request counts as a judge prefetch only when it has the production judge's
-shape: the judge model's `generateContent` route, the judge's system instruction and
-response schema, one user turn holding exactly the judge window. A repeated request is
+shape: the judge model's `generateContent` route, and a body that equals the recorded
+turn-judge requests in everything but its one user turn (system instruction, the whole
+response schema, generation and safety settings, no extra field), with that turn holding
+exactly the judge window. The cassettes must agree on one such frame, and a test checks
+it against a request the worker builds today. A repeated request is
 fatal even when it is a judge prefetch.
 
 Each scenario writes `reports/<scenario>.json` under `SIMULATOR_ARTIFACT_DIR`, holding:
