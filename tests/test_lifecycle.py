@@ -51,6 +51,7 @@ _SCRIPTED_JOIN_EVENTS: dict[JoinStatus, tuple[LifecycleEventKind, LifecycleAttri
     "timeout": ("lobby_timed_out", "system_fault"),
     "aborted": ("owner_stopped", "owner_action"),
     "failed": ("browser_failed", "system_fault"),
+    "ended": ("meeting_ended", "host_action"),
 }
 
 
@@ -213,6 +214,7 @@ def test_lifecycle_join_and_leave_happy_path() -> None:
         ("denied", "host_action", "denied_by_host"),
         ("blocked", "system_fault", "blocked_by_platform"),
         ("lobby_timed_out", "system_fault", "lobby_timeout_reached"),
+        ("meeting_ended", "host_action", "ended_by_host"),
     ],
 )
 def test_lobby_outcomes_end_the_session(
@@ -417,6 +419,7 @@ async def test_owner_abort_is_not_retried(pinned_join_jitter: JitterPin) -> None
         ("denied", "denied_by_host"),
         ("blocked", "blocked_by_platform"),
         ("timeout", "lobby_timeout_reached"),
+        ("ended", "ended_by_host"),
     ],
 )
 async def test_domain_join_outcomes_end_on_the_first_attempt(

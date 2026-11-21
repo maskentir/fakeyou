@@ -32,6 +32,7 @@ from tests._error_support import message_pattern
 from tests._fakes_common import FakeClock
 from tests._meet_browser_fakes import (
     ASK_SELECTOR,
+    CALL_ENDED,
     DENIED,
     ENDED,
     EXPLICIT_DENIED,
@@ -935,3 +936,38 @@ async def test_a_rejoin_that_stays_blocked_ends_when_the_budget_runs_out() -> No
 
     assert (result.phase, result.terminal_reason) == ("ended", "blocked_by_platform")
     assert len(opened) == REJOIN_LIMIT + 1
+
+
+@pytest.mark.parametrize(
+    ("ending", "evaluates", "expected"),
+    [
+        (ENDED, [], "ended_by_host"),
+        (CALL_ENDED, [NO_CAPTCHA], "blocked_by_platform"),
+        (EXPLICIT_DENIED, [], "denied_by_host"),
+    ],
+    ids=["meeting_ended", "access_refused", "host_denied"],
+)
+async def test_a_call_that_ends_while_the_twin_knocks_ends_by_its_own_reason(
+    ending: str, evaluates: list[Any], expected: str
+) -> None:
+    browser = FakePageSession(meet_page([LOBBY, LOBBY, ending], evaluates=evaluates))
+    journal = RecordingJournal()
+    clock = FakeClock()
+
+    result = await run_meeting_session(
+        session_config(),
+        SessionWiring(
+            open_page=browser.open,
+            sleep=clock.sleep,
+            monotonic=clock.monotonic,
+            journal=journal,
+        ),
+    )
+
+    [finished] = journal.events("join_finished")
+    assert len(journal.events("join_requested")) == 1
+    assert (result.phase, result.terminal_reason) == ("ended", expected)
+    assert result.detail == finished["detail"]
+    assert journal.events("browser_error_recorded") == []
+    assert journal.events("browser_rejoined") == []
+    assert (browser.opened, browser.closed) == (1, 1)

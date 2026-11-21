@@ -392,7 +392,9 @@ def _classify_denial(content: str, signals: MeetSignals) -> JoinResult | None:
     if signals.denied in headings:
         return None
     if signals.ended in headings:
-        return JoinResult(status="ended", detail="the call had already ended when the twin arrived")
+        return JoinResult(
+            status="ended", detail="the meeting ended while the twin was waiting in the lobby"
+        )
     return None
 
 
