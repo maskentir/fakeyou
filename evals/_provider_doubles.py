@@ -74,6 +74,7 @@ SERVER_START_SECONDS = 30.0
 MISS_STATUS = 400
 RECORDING_BUDGET_ENV = "SIMULATOR_RECORDING_BUDGET"
 RECORD_SPEECH_ENV = "SIMULATOR_RECORD_SPEECH"
+RECORD_SPEECH_SESSIONS_ENV = "SIMULATOR_RECORD_SPEECH_SESSIONS"
 UNSERVED_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
 MODES: tuple[ProviderMode, ...] = get_args(ProviderMode)
 
@@ -523,7 +524,7 @@ class ProviderDoubles:
     ) -> None:
         try:
             request = json.loads(handshake)
-            speech.open_session(request if isinstance(request, dict) else {})
+            await speech.open_session(request if isinstance(request, dict) else {})
             if self._stt_key is None:
                 raise SpeechStopped("unexpected_handshake", "no live speech key")
             request["authorization"] = {"accessToken": f"Bearer {self._stt_key.get_secret_value()}"}
@@ -551,6 +552,9 @@ class ProviderDoubles:
         hearing: _Hearing,
         speech: SpeechRecording,
     ) -> None:
+        session = speech.current
+        if session is None:
+            raise speech.stop("concurrent_session", "no open session to relay")
         async with websockets.connect(f"{self.stt_upstream_url}?{socket.url.query}") as upstream:
             await upstream.send(json.dumps(request))
             await socket.send_text(str(await upstream.recv()))
@@ -563,14 +567,14 @@ class ProviderDoubles:
                         self.transcripts.note(message)
                         self._keep_speech(hearing.claim, message)
                         await socket.send_text(raw)
-                speech.provider_closed(upstream.close_code, expected=speech.closing)
+                speech.provider_closed(upstream.close_code, expected=session.closing)
 
             answering = asyncio.ensure_future(answers())
             try:
                 while (message := await socket.receive())["type"] != "websocket.disconnect":
                     _raise_if_failed(answering)
                     await self._forward_worker(message, upstream, hearing, speech)
-                speech.closing = True
+                speech.worker_closing()
                 _raise_if_failed(answering)
             finally:
                 answering.cancel()
@@ -594,7 +598,8 @@ class ProviderDoubles:
                 self._keep_speech(heard[1], {"type": VOICE_END}, at=heard[1].end)
             await upstream.send(audio)
         elif text := message.get("text"):
-            speech.closing = speech.closing or '"endStream"' in text
+            if '"endStream"' in text:
+                speech.worker_closing()
             await upstream.send(text)
 
     async def _replay_muse(self, socket: WebSocket, hearing: _Hearing) -> None:
@@ -779,7 +784,8 @@ def speech_recording(ledger: ReplayLedger) -> SpeechRecording | None:
     recorded = sorted(clip for clip in allowed if ledger.takes.get(clip))
     if recorded:
         raise ValueError(f"{RECORD_SPEECH_ENV} names clips that already have takes: {recorded}")
-    return SpeechRecording(allowed)
+    sessions = int(os.environ.get(RECORD_SPEECH_SESSIONS_ENV, "1"))
+    return SpeechRecording(allowed, max_sessions=sessions)
 
 
 def _speech_key(recorded: Settings, live: Settings) -> SecretStr:

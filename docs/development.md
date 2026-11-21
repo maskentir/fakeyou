@@ -123,19 +123,26 @@ can be recorded live by naming it in `SIMULATOR_RECORD_SPEECH` (for example
 - the live Muse key from `.env` replaces the worker's token; the key is never written
 - every caught clip must be the named clip, heard once (take 1)
 
+The worker reconnects when its STT keywords change (the screen title, the roster).
+`SIMULATOR_RECORD_SPEECH_SESSIONS` (1 by default, at most 4) allows that many sequential
+sessions in one run. A new session opens only after the previous one closed cleanly. One
+that is still open, rather than ending with `endStream`, is never joined.
+
 The run stops on any of:
 
-- a second session
-- more than 10 minutes of audio
-- a 15-minute wall clock
+- one session more than allowed, or one opened while another is live
+- more than 10 minutes of audio across all sessions
+- a 15-minute wall clock counted from the first session
 - a provider error or an unexpected close
 - a take without `speechStart`, a transcript, `speechComplete` with text, and the voice-end
   marker
 
 A stopped run leaves the cassette exactly as it was. Takes that were not heard are dropped.
-The report's `speech_recording` gives the session count, PCM bytes, audio seconds, wall
-seconds, close code, recorded take, estimated charge (USD 3 per 1,000 audio minutes) and
-stop reason.
+The report's `speech_recording` gives every session's lifecycle (open and close times, close
+code, ending, keyword count, PCM bytes). It also gives the totals, the recorded take, the
+estimated charge (USD 3 per 1,000 audio minutes) and the stop reason. A provider error or an
+unexpected close stops the run for good, and later sessions are refused before reaching
+Muse.
 
 Then run `replay` until every scenario is closed. Where a replay asks something the
 recording run did not, fill the gap with `record_missing`, and replay again.

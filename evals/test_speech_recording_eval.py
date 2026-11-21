@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any
 
 import pytest
@@ -14,7 +15,7 @@ from evals._speech_recording import (
 )
 
 CLIP = "review-token.wav"
-HANDSHAKE = {"model": MUSE_MODEL, "audioEncoding": MUSE_AUDIO_ENCODING}
+HANDSHAKE: dict[str, Any] = {"model": MUSE_MODEL, "audioEncoding": MUSE_AUDIO_ENCODING}
 COMPLETE: list[dict[str, Any]] = [
     {"type": "speechStart", "turnId": 0},
     {"type": "transcript", "transcript": " Rani", "final": False},
@@ -31,88 +32,177 @@ class Clock:
         return self.now
 
 
-def opened(
-    max_audio_seconds: float = MAX_AUDIO_SECONDS, max_wall_seconds: float = MAX_WALL_SECONDS
+def recording(
+    *,
+    sessions: int = 1,
+    max_audio_seconds: float = MAX_AUDIO_SECONDS,
+    max_wall_seconds: float = MAX_WALL_SECONDS,
 ) -> tuple[SpeechRecording, Clock]:
     clock = Clock()
-    recording = SpeechRecording(
-        frozenset({CLIP}),
-        max_audio_seconds=max_audio_seconds,
-        max_wall_seconds=max_wall_seconds,
-        clock=clock,
+    return (
+        SpeechRecording(
+            frozenset({CLIP}),
+            max_sessions=sessions,
+            max_audio_seconds=max_audio_seconds,
+            max_wall_seconds=max_wall_seconds,
+            handover_seconds=0.05,
+            clock=clock,
+        ),
+        clock,
     )
-    recording.open_session(HANDSHAKE)
-    return recording, clock
 
 
-def test_only_one_session_with_the_expected_model_and_audio_is_opened() -> None:
-    recording, _clock = opened()
+async def opened(**limits: Any) -> tuple[SpeechRecording, Clock]:
+    speech, clock = recording(**limits)
+    await speech.open_session(HANDSHAKE)
+    return speech, clock
+
+
+async def reconnect(speech: SpeechRecording, keywords: tuple[str, ...] = ()) -> None:
+    speech.worker_closing()
+    speech.provider_closed(1000, expected=True)
+    await speech.open_session({**HANDSHAKE, "keywords": list(keywords)})
+
+
+def test_the_session_limit_is_explicit_and_bounded() -> None:
+    for sessions in (0, 5):
+        with pytest.raises(ValueError, match="1 to 4 sessions"):
+            SpeechRecording(frozenset({CLIP}), max_sessions=sessions)
+
+
+async def test_a_single_session_recording_refuses_a_second_session() -> None:
+    speech, _clock = await opened()
 
     with pytest.raises(SpeechStopped, match="session_limit"):
-        recording.open_session(HANDSHAKE)
-    for handshake, reason in (
+        await reconnect(speech)
+
+
+@pytest.mark.parametrize(
+    ("handshake", "reason"),
+    [
         ({**HANDSHAKE, "model": "other"}, "unexpected_handshake"),
         ({**HANDSHAKE, "audioEncoding": "OPUS"}, "unsupported_audio"),
-    ):
-        with pytest.raises(SpeechStopped, match=reason):
-            SpeechRecording(frozenset({CLIP})).open_session(handshake)
+    ],
+)
+async def test_an_unexpected_handshake_is_refused(handshake: dict[str, Any], reason: str) -> None:
+    speech, _clock = recording()
+
+    with pytest.raises(SpeechStopped, match=reason):
+        await speech.open_session(handshake)
 
 
-def test_audio_is_counted_and_stops_at_its_limit() -> None:
-    recording, _clock = opened(max_audio_seconds=1.0)
+async def test_cleanly_closed_sessions_hand_over_up_to_the_limit() -> None:
+    speech, _clock = await opened(sessions=4)
 
-    recording.admit_audio(bytes(PCM_BYTES_PER_SECOND // 2))
+    for keywords in (("Orchid",), ("Orchid", "Launch"), ("Orchid", "Launch", "Plan")):
+        await reconnect(speech, keywords)
+
+    with pytest.raises(SpeechStopped, match="session_limit"):
+        await reconnect(speech)
+    report: Any = speech.report()
+    assert [cycle["keywords"] for cycle in report["session_lifecycles"]] == [0, 1, 2, 3]
+    assert [cycle["ending"] for cycle in report["session_lifecycles"]] == ["clean"] * 4
+    assert (report["sessions"], report["stop_reason"]) == (4, "session_limit")
+
+
+async def test_a_session_that_is_still_open_cannot_be_joined_by_another() -> None:
+    speech, _clock = await opened(sessions=4)
+
+    with pytest.raises(SpeechStopped, match="concurrent_session"):
+        await speech.open_session(HANDSHAKE)
+
+
+async def test_a_closing_session_hands_over_once_it_has_closed() -> None:
+    speech, _clock = await opened(sessions=2)
+    speech.worker_closing()
+
+    joining = asyncio.ensure_future(speech.open_session(HANDSHAKE))
+    await asyncio.sleep(0)
+    waited = not joining.done()
+    speech.provider_closed(1000, expected=True)
+    second = await joining
+
+    assert waited
+    assert (second.index, second.closing) == (2, False)
+
+
+async def test_a_closing_session_that_never_closes_stops_the_recording() -> None:
+    speech, _clock = await opened(sessions=2)
+    speech.worker_closing()
+
+    with pytest.raises(SpeechStopped, match="concurrent_session"):
+        await speech.open_session(HANDSHAKE)
+
+
+async def test_audio_accumulates_across_sessions() -> None:
+    speech, _clock = await opened(sessions=2, max_audio_seconds=1.0)
+    speech.admit_audio(bytes(PCM_BYTES_PER_SECOND // 2))
+    await reconnect(speech)
+
+    speech.admit_audio(bytes(PCM_BYTES_PER_SECOND // 4))
     with pytest.raises(SpeechStopped, match="audio_limit"):
-        recording.admit_audio(bytes(PCM_BYTES_PER_SECOND))
-    with pytest.raises(SpeechStopped, match="audio_limit"):
-        recording.admit_audio(bytes(2))
+        speech.admit_audio(bytes(PCM_BYTES_PER_SECOND // 2))
 
-    assert recording.report()["audio_seconds"] == 0.5
+    assert speech.report()["audio_seconds"] == 0.75
 
 
-def test_odd_length_audio_is_not_16_bit_pcm() -> None:
-    recording, _clock = opened()
-
-    with pytest.raises(SpeechStopped, match="unsupported_audio"):
-        recording.admit_audio(bytes(3))
-
-
-def test_the_wall_clock_deadline_stops_the_session() -> None:
-    recording, clock = opened(max_wall_seconds=5.0)
-    recording.admit_audio(bytes(2))
-
-    clock.now += 5.0
+async def test_the_deadline_accumulates_across_sessions() -> None:
+    speech, clock = await opened(sessions=3, max_wall_seconds=10.0)
+    clock.now += 6.0
+    await reconnect(speech)
+    clock.now += 4.0
 
     with pytest.raises(SpeechStopped, match="deadline"):
-        recording.admit_audio(bytes(2))
+        speech.admit_audio(bytes(2))
+    with pytest.raises(SpeechStopped, match="deadline"):
+        await reconnect(speech)
 
 
-def test_only_the_first_take_of_an_allowed_clip_is_recorded() -> None:
-    recording, _clock = opened()
+async def test_odd_length_audio_is_not_16_bit_pcm() -> None:
+    speech, _clock = await opened()
 
-    recording.admit_claim(CLIP, 1)
-
-    with pytest.raises(SpeechStopped, match="additional_take"):
-        recording.admit_claim(CLIP, 2)
-    with pytest.raises(SpeechStopped, match="additional_take"):
-        opened()[0].admit_claim(CLIP, 2)
-    with pytest.raises(SpeechStopped, match="unexpected_clip"):
-        opened()[0].admit_claim("beta-question.wav", 1)
+    with pytest.raises(SpeechStopped, match="unsupported_audio"):
+        speech.admit_audio(bytes(3))
 
 
-def test_a_provider_error_or_an_unexpected_close_stops_the_session() -> None:
-    errored, _clock = opened()
-    closed, _other = opened()
+async def test_an_unexpected_close_in_a_later_session_is_fatal_and_final() -> None:
+    speech, _clock = await opened(sessions=4)
+    await reconnect(speech)
+
+    with pytest.raises(SpeechStopped, match="provider_closed"):
+        speech.provider_closed(1011, expected=False)
+    with pytest.raises(SpeechStopped, match="provider_closed"):
+        await speech.open_session(HANDSHAKE)
+    report: Any = speech.report()
+    assert [cycle["ending"] for cycle in report["session_lifecycles"]] == [
+        "clean",
+        "provider_closed",
+    ]
+    assert report["session_lifecycles"][1]["close_code"] == 1011
+
+
+async def test_a_provider_error_forbids_any_further_session() -> None:
+    speech, _clock = await opened(sessions=4)
+    await reconnect(speech)
 
     with pytest.raises(SpeechStopped, match="provider_error"):
-        errored.provider_message({"type": "error", "message": "unauthorized"})
-    with pytest.raises(SpeechStopped, match="provider_closed"):
-        closed.provider_closed(1011, expected=False)
-    finished, _third = opened()
-    finished.provider_closed(1000, expected=True)
+        speech.provider_message({"type": "error", "message": "unauthorized"})
+    with pytest.raises(SpeechStopped, match="provider_error"):
+        await speech.open_session(HANDSHAKE)
 
-    assert finished.report()["upstream_close_code"] == 1000
-    assert finished.stop_reason is None
+    assert speech.report()["sessions"] == 2
+
+
+async def test_only_the_first_take_of_an_allowed_clip_is_recorded() -> None:
+    speech, _clock = await opened(sessions=2)
+    speech.admit_claim(CLIP, 1)
+    await reconnect(speech)
+
+    with pytest.raises(SpeechStopped, match="additional_take"):
+        speech.admit_claim(CLIP, 1)
+    other, _other_clock = await opened()
+    with pytest.raises(SpeechStopped, match="unexpected_clip"):
+        other.admit_claim("beta-question.wav", 1)
 
 
 @pytest.mark.parametrize(
@@ -125,37 +215,43 @@ def test_a_provider_error_or_an_unexpected_close_stops_the_session() -> None:
     ],
     ids=["never_heard", "no_completion", "no_voice_end", "empty_completion"],
 )
-def test_an_incomplete_take_is_refused(messages: list[dict[str, Any]]) -> None:
-    recording, _clock = opened()
+async def test_an_incomplete_take_is_refused(messages: list[dict[str, Any]]) -> None:
+    speech, _clock = await opened()
     if messages:
-        recording.admit_claim(CLIP, 1)
+        speech.admit_claim(CLIP, 1)
 
     with pytest.raises(SpeechStopped, match="incomplete_transcript"):
-        recording.verify({(CLIP, 1): messages})
+        speech.verify({(CLIP, 1): messages})
 
 
-def test_a_complete_take_is_accepted_and_priced_by_audio_minute() -> None:
-    recording, clock = opened()
-    recording.admit_claim(CLIP, 1)
-    recording.admit_audio(bytes(PCM_BYTES_PER_SECOND * 60))
-    clock.now += 61.0
+async def test_a_complete_take_is_accepted_and_priced_by_audio_minute() -> None:
+    speech, clock = await opened(sessions=2)
+    speech.admit_audio(bytes(PCM_BYTES_PER_SECOND * 30))
+    clock.now += 31.0
+    await reconnect(speech)
+    speech.admit_claim(CLIP, 1)
+    speech.admit_audio(bytes(PCM_BYTES_PER_SECOND * 30))
+    clock.now += 30.0
 
-    recording.verify({(CLIP, 1): COMPLETE})
-    recording.provider_closed(1000, expected=True)
-    report = recording.report()
+    speech.verify({(CLIP, 1): COMPLETE})
+    speech.worker_closing()
+    speech.provider_closed(1000, expected=True)
+    report: Any = speech.report()
 
     assert report["estimated_usd"] == pytest.approx(0.003)
     assert report["recorded"] == [f"{CLIP} take 1"]
     assert report["wall_seconds"] == 61.0
+    assert [cycle["opened_s"] for cycle in report["session_lifecycles"]] == [0.0, 31.0]
     assert report["stop_reason"] is None
 
 
-def test_a_stopped_recording_refuses_everything_after() -> None:
-    recording, _clock = opened()
-    with pytest.raises(SpeechStopped):
-        recording.admit_claim("other.wav", 1)
+async def test_a_second_session_is_refused_at_once_even_if_the_first_closes_soon_after() -> None:
+    speech, _clock = await opened(sessions=4)
 
-    with pytest.raises(SpeechStopped, match="unexpected_clip"):
-        recording.admit_audio(bytes(2))
-    with pytest.raises(SpeechStopped, match="unexpected_clip"):
-        recording.verify({})
+    joining = asyncio.ensure_future(speech.open_session(HANDSHAKE))
+    await asyncio.sleep(0)
+    speech.worker_closing()
+    speech.provider_closed(1000, expected=True)
+
+    with pytest.raises(SpeechStopped, match="concurrent_session"):
+        await joining
