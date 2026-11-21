@@ -25,6 +25,7 @@ from fakeyou.conversation.session import (
 )
 from fakeyou.conversation.thinking_cue import ThinkingCue
 from fakeyou.conversation.turn_graph import (
+    BoundEffects,
     CommandPort,
     ConversationPhase,
     EvidencePort,
@@ -88,7 +89,6 @@ _STOP_FILLER = frozenset(_STOP_DATA["filler"])
 _STOP_PHRASES = frozenset(_STOP_DATA["phrases"])
 _STOP_MAX_TOKENS = 6
 _OVERLAP_WINDOW_SECONDS = 20.0
-_CARRIED_EFFECTS = 8
 _RESUMED_MATCH = 0.7
 _EXTRA_WORDS_FOR_MORE = 3
 WAKEUP_FLOOR_SECONDS = 0.25
@@ -120,6 +120,11 @@ def _tokens(text: str) -> list[str]:
 
 def _early_words(text: str) -> list[str]:
     return "".join(ch for ch in text.casefold() if ch.isalnum() or ch.isspace()).split()
+
+
+def _confirms(committed: str, final: str) -> bool:
+    before, after = _early_words(committed), _early_words(final)
+    return after[: len(before)] == before and len(after) - len(before) < _EXTRA_WORDS_FOR_MORE
 
 
 def says_more(text: str, committed: str) -> bool:
@@ -317,7 +322,7 @@ class FloorActor:
         self._judge_tasks: set[asyncio.Task[None]] = set()
         self._last_attention: str | None = None
         self._last_final: _AdmittedFinal | None = None
-        self._carried_effects: dict[str, tuple[CommandOutcome, ...]] = {}
+        self._carried_effects: dict[str, BoundEffects] = {}
         self._early_options: EarlyOptions | None = None
         self._early_answer: Callable[[TranscriptEvent], Awaitable[None]] | None = None
         self._early_text = ""
@@ -845,6 +850,7 @@ class FloorActor:
         self._closed = True
         self._admitted.advance()
         self._queue.clear()
+        self._carried_effects.clear()
         self._deferred.clear()
         early_tasks = [
             task
@@ -896,8 +902,11 @@ class FloorActor:
             self._early_withdrawn.discard(event.id)
             return None
         if self._open_final(event) is None:
+            self._carried_effects.pop(event.id, None)
             return None
         output = await self._invoke_final(event)
+        if not self._queue.holds(event):
+            self._carried_effects.pop(event.id, None)
         if event.id in self._early_withdrawn:
             self._early_withdrawn.discard(event.id)
             self._queue.discard(event.id)
@@ -1186,9 +1195,8 @@ class FloorActor:
     def _carry_effects(self, commit: _EarlyCommit, final: TranscriptEvent) -> None:
         if not commit.dispatched:
             return
-        self._carried_effects[final.id] = commit.dispatched
-        for stale in list(self._carried_effects)[:-_CARRIED_EFFECTS]:
-            del self._carried_effects[stale]
+        revised = not _confirms(commit.text, final.text)
+        self._carried_effects[final.id] = BoundEffects(commit.dispatched, revised)
         self._journal.record(
             "early_effects_bound",
             source="agent",
@@ -1196,6 +1204,7 @@ class FloorActor:
             early_transcript_id=commit.event.id,
             dispatched=[sent.command_id for sent in commit.dispatched],
             states=[sent.state for sent in commit.dispatched],
+            revised=revised,
         )
 
     def _cancel_early_hold(self, *, declined: str | None = None, words: int | None = None) -> None:
@@ -1268,8 +1277,18 @@ class FloorActor:
             return
         commit.plan_id = plan_id
 
-    def prior_effects(self, transcript_id: str) -> tuple[CommandOutcome, ...]:
-        return self._carried_effects.get(transcript_id, ())
+    def take_bound_effects(self, transcript_ids: Sequence[str]) -> BoundEffects | None:
+        bound = [
+            effects
+            for transcript_id in transcript_ids
+            if (effects := self._carried_effects.pop(transcript_id, None)) is not None
+        ]
+        if not bound:
+            return None
+        return BoundEffects(
+            tuple(sent for effects in bound for sent in effects.dispatched),
+            any(effects.revised for effects in bound),
+        )
 
     def _withdraw_effects(self, commit: _EarlyCommit) -> None:
         commands = self.commands

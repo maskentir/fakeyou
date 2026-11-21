@@ -11,7 +11,7 @@ from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.actor import EarlyOptions, says_more
 from fakeyou.conversation.meeting_turns import MeetingTurns, TurnInteraction, build_meeting_turns
 from fakeyou.conversation.reply_planner import SpokenChunk
-from fakeyou.conversation.turn_graph import PlannedTurn, TurnPlanning
+from fakeyou.conversation.turn_graph import CHAT_ALREADY_SENT_LINES, PlannedTurn, TurnPlanning
 from fakeyou.conversation.turn_judge import JudgeWindow, TurnJudgement
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.meet.meet_actions import MeetActionResult
@@ -1149,6 +1149,7 @@ async def test_a_withdrawn_early_turn_keeps_the_earlier_answer_deduplicated(
 
 
 CHANGED = "Rani, please send the beta launch date in the meeting chat and add who owns QA."
+WITHDRAWN = "Rani, please send the beta launch date in the meeting chat. No, wait, don't send it."
 NEGATED = "Rani, please send the beta launch date in the meeting chat. Actually never mind."
 AGAIN = "Rani, could you post the beta date to the chat once more?"
 
@@ -1195,11 +1196,20 @@ class StillClock:
 def requested(window: JudgeWindow) -> TurnJudgement:
     if "never mind" in window.latest.text:
         return judged("reply")
+    if "Budi" in window.latest.text:
+        return judged("stay_silent")
     return judged("reply", requests_chat=True)
 
 
 class EffectHarness:
-    def __init__(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def __init__(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        chat_per_minute: int = 5,
+        responder: FakeResponder | None = None,
+    ) -> None:
         self.journal = RecordingJournal("meeting-9")
         self.meet = GatedMeet()
         for name in ("send_chat", "count_chat_echoes"):
@@ -1211,14 +1221,14 @@ class EffectHarness:
             tmp_path / "meeting-9" / "record.jsonl",
             meeting_id="meeting-9",
             kernel=kernel,
-            chat_per_minute=5,
+            chat_per_minute=chat_per_minute,
             journal=self.journal,
         )
         clock = StillClock()
         self.runner.bind_page(
             cast(Page, object()), sleep=clock.sleep, monotonic=clock.monotonic, stop=asyncio.Event()
         )
-        self.responder = FakeResponder()
+        self.responder = responder or FakeResponder()
         self.audio = FakeReplyAudio()
         self.loop = build_meeting_turns(
             self.responder,
@@ -1382,7 +1392,7 @@ async def test_a_final_that_changes_the_chat_neither_resends_nor_claims_success(
 
     assert len(harness.meet.calls) == 1
     assert harness.dropped() == ["already_dispatched"]
-    assert harness.audio.spoken == []
+    assert harness.audio.spoken == [CHAT_ALREADY_SENT_LINES["en"]]
 
 
 async def test_a_final_that_takes_the_request_back_is_told_the_chat_may_be_out(
@@ -1434,3 +1444,135 @@ async def test_a_later_independent_chat_request_is_still_sent(
 
     assert len(harness.meet.calls) == 2
     assert harness.dropped() == ["already_dispatched"]
+
+
+async def dispatched_then_resumed(harness: EffectHarness) -> None:
+    harness.meet.release_dispatch.clear()
+    await harness.commit_early()
+    await asyncio.wait_for(harness.meet.dispatched.wait(), 2)
+    await harness.resume()
+
+
+async def test_a_confirming_final_is_not_acknowledged_out_loud(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = EffectHarness(tmp_path, monkeypatch)
+    await dispatched_then_resumed(harness)
+
+    await harness.final("final-1", SEND_IN_CHAT)
+    await harness.settle()
+
+    assert harness.audio.spoken == []
+    [bound] = harness.journal.events("early_effects_bound")
+    assert bound["revised"] is False
+
+
+async def test_a_final_that_withdraws_the_request_hears_that_the_chat_had_started(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = EffectHarness(tmp_path, monkeypatch)
+    await dispatched_then_resumed(harness)
+
+    await harness.final("final-1", WITHDRAWN)
+    await harness.settle()
+
+    assert len(harness.meet.calls) == 1
+    assert harness.audio.spoken == [CHAT_ALREADY_SENT_LINES["en"]]
+
+
+async def test_a_changed_final_after_an_unknown_effect_claims_neither_success_nor_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = EffectHarness(tmp_path, monkeypatch)
+    harness.meet.lost_after_enter = True
+    await dispatched_then_resumed(harness)
+
+    await harness.final("final-1", CHANGED)
+    await harness.settle()
+
+    assert harness.states() == ["unknown"]
+    assert len(harness.meet.calls) == 1
+    assert harness.audio.spoken == [CHAT_ALREADY_SENT_LINES["en"]]
+    [dropped] = harness.journal.events("chat_reply_dropped")
+    assert dropped["state"] == "dispatching"
+
+
+async def test_an_unknown_effect_with_a_confirming_final_stays_silent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = EffectHarness(tmp_path, monkeypatch)
+    harness.meet.lost_after_enter = True
+    await dispatched_then_resumed(harness)
+
+    await harness.final("final-1", SEND_IN_CHAT)
+    await harness.settle()
+
+    assert harness.states() == ["unknown"]
+    assert harness.audio.spoken == []
+
+
+async def test_an_effect_stays_bound_to_its_final_however_many_others_are_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = EffectHarness(tmp_path, monkeypatch, chat_per_minute=50)
+    actor = harness.loop.actor
+    for index in range(12):
+        harness.meet.dispatched.clear()
+        harness.meet.release_dispatch.clear()
+        await harness.commit_early(f"Rani, please send note {index} to the")
+        await asyncio.wait_for(harness.meet.dispatched.wait(), 2)
+        await actor.note_interim(f"Rani, please send note {index} to the chat", history_seq=None)
+        assert await actor.settle_early(event(f"final-{index}", f"note {index}")) is False
+        harness.meet.release_dispatch.set()
+        await asyncio.wait_for(actor.wait_idle(), 2)
+
+    first = actor.take_bound_effects(["final-0"])
+    rest = actor.take_bound_effects([f"final-{index}" for index in range(1, 12)])
+    await harness.settle()
+
+    assert first is not None
+    assert len(first.dispatched) == 1
+    assert rest is not None
+    assert len(rest.dispatched) == 11
+
+
+async def test_a_final_that_is_never_answered_releases_its_bound_effect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = EffectHarness(tmp_path, monkeypatch)
+    await dispatched_then_resumed(harness)
+    final = event("final-1", SEND_IN_CHAT)
+    assert await harness.loop.actor.settle_early(final) is False
+    await harness.loop.actor.pause()
+
+    await harness.loop.actor.receive_final(final)
+
+    assert harness.loop.actor.take_bound_effects(["final-1"]) is None
+    await harness.settle()
+
+
+async def test_a_bound_effect_is_released_when_the_turns_close(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = EffectHarness(tmp_path, monkeypatch)
+    await dispatched_then_resumed(harness)
+    assert await harness.loop.actor.settle_early(event("final-1", SEND_IN_CHAT)) is False
+
+    await harness.settle()
+
+    assert harness.loop.actor.take_bound_effects(["final-1"]) is None
+
+
+async def test_a_final_the_judge_leaves_unanswered_releases_its_bound_effect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = EffectHarness(tmp_path, monkeypatch)
+    await dispatched_then_resumed(harness)
+    final = event("final-1", f"{SEND_IN_CHAT} Budi, you take the rest.")
+    assert await harness.loop.actor.settle_early(final) is False
+
+    await harness.loop.actor.receive_final(final)
+
+    assert harness.loop.actor.take_bound_effects(["final-1"]) is None
+    assert len(harness.meet.calls) == 1
+    await harness.settle()

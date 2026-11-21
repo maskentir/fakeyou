@@ -15,6 +15,7 @@ from fakeyou.conversation.turn_graph import (
     plan_notes,
     with_evidence,
 )
+from fakeyou.conversation.turn_queue import PendingFinals
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.orchestration.kernel_port import KernelPort
 from fakeyou.perception.meet_protocol import MeetUser
@@ -363,3 +364,45 @@ async def test_recovery_apology_is_declared_no_visual() -> None:
 
     assert speaker.declared == [recovery_runtime.recovery.failed_line]
     assert speaker.spoken == []
+
+
+async def test_a_chat_state_answer_is_withheld_when_its_utterance_already_sent_a_chat() -> None:
+    commands = FakeCommands()
+    planned = PlannedTurn(
+        TurnPlan("p", "chat_only", output="chat", state_question="participant_count")
+    )
+    state_runtime = TurnTestContext(
+        speaker=RecordingSpeaker(),
+        journal=RecordingJournal(),
+        commands=commands,
+        state_speech=lambda _question, _language: StateAnswer("2 people are here."),
+    )
+    bound = turn_graph.BoundEffects(
+        (CommandOutcome("c1", "send_chat", "dispatching"),), revised=False
+    )
+
+    answered = await turn_graph.answer_state(
+        state_runtime, event("How many are here? Post it."), planned, 0, bound
+    )
+
+    assert answered is True
+    assert commands.ran == []
+
+
+async def test_a_batch_withholds_a_chat_already_sent_for_any_of_its_finals() -> None:
+    commands = FakeCommands()
+    journal = RecordingJournal()
+    runtime = TurnTestContext(speaker=RecordingSpeaker(), journal=journal, commands=commands)
+    runtime.carried["f1"] = turn_graph.BoundEffects(
+        (CommandOutcome("c1", "send_chat", "dispatching"),), revised=False
+    )
+    runtime.plans["f2"] = PlannedTurn(TurnPlan("plan-f2", "chat_only", output="chat"))
+    queue = PendingFinals()
+    queue.admit(replace(event("Rani, post the beta date in the chat."), id="f1"))
+    queue.admit(replace(event("And the QA owner too."), id="f2"))
+
+    await turn_graph.drain_turns(runtime, turn_graph.build_speech_graph(), queue)
+
+    assert commands.ran == []
+    assert [row["reason"] for row in journal.events("chat_reply_dropped")] == ["already_dispatched"]
+    assert runtime.carried == {}

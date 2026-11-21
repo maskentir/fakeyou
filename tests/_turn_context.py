@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 from fakeyou.config.settings import DEFAULTS
@@ -7,6 +7,7 @@ from fakeyou.conversation.participation_graph import TurnJudging
 from fakeyou.conversation.reply_draft import ReplyDrafts
 from fakeyou.conversation.thinking_cue import ThinkingCue
 from fakeyou.conversation.turn_graph import (
+    BoundEffects,
     CommandPort,
     ConversationPhase,
     EvidencePort,
@@ -26,7 +27,6 @@ from fakeyou.conversation.turn_queue import AdmittedFinals, BargeLatch, PendingF
 from fakeyou.conversation.turn_recovery import RecoveryOptions, TurnRecovery
 from fakeyou.observability.faults import FaultReporter
 from fakeyou.observability.journal import JournalSink
-from fakeyou.session.commands import CommandOutcome
 
 
 @dataclass
@@ -55,7 +55,7 @@ class TurnTestContext:
     barge: BargeLatch = field(default_factory=BargeLatch)
     plans: dict[str, PlannedTurn] = field(default_factory=dict)
     plans_recorded: list[tuple[str, str]] = field(default_factory=list)
-    carried: dict[str, tuple[CommandOutcome, ...]] = field(default_factory=dict)
+    carried: dict[str, BoundEffects] = field(default_factory=dict)
     moves: list[tuple[ConversationPhase, str]] = field(default_factory=list)
     failures: list[Exception] = field(default_factory=list)
     barge_in: bool = True
@@ -86,8 +86,13 @@ class TurnTestContext:
     def plan_recorded(self, transcript_id: str, plan_id: str) -> None:
         self.plans_recorded.append((transcript_id, plan_id))
 
-    def prior_effects(self, transcript_id: str) -> tuple[CommandOutcome, ...]:
-        return self.carried.get(transcript_id, ())
+    def take_bound_effects(self, transcript_ids: Sequence[str]) -> BoundEffects | None:
+        bound = [
+            self.carried.pop(transcript_id)
+            for transcript_id in transcript_ids
+            if transcript_id in self.carried
+        ]
+        return bound[0] if bound else None
 
     def request_pending(self) -> None:
         self.requested = True
