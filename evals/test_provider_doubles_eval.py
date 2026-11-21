@@ -480,6 +480,7 @@ class FakeMuse:
     close_on: frozenset[int] = frozenset()
     error_on: frozenset[int] = frozenset()
     close_after_complete: bool = False
+    close_gate: asyncio.Event | None = None
     handshakes: list[dict[str, Any]] = field(default_factory=list)
     audio_bytes: int = 0
     sent: list[dict[str, Any]] = field(default_factory=list)
@@ -496,6 +497,8 @@ class FakeMuse:
         async for raw in connection:
             if isinstance(raw, str):
                 if '"endStream"' in raw:
+                    if self.close_gate is not None:
+                        await self.close_gate.wait()
                     await connection.close()
                     return
                 continue
@@ -916,3 +919,45 @@ async def test_muse_closing_a_session_the_worker_did_not_end_is_fatal(
 
     assert report["stop_reason"] == "provider_closed"
     assert speech_lines(doubles.cassette) == []
+
+
+HANDSHAKE_FRAME = json.dumps({"audioEncoding": "PCM_16KHZ", "model": "muse-voice-transcribe-1.0"})
+
+
+async def claim_session(url: str) -> dict[str, Any] | None:
+    with suppress(websockets.ConnectionClosed, TimeoutError):
+        async with websockets.connect(url) as stt:
+            await stt.send(HANDSHAKE_FRAME)
+            async with asyncio.timeout(3):
+                ack: dict[str, Any] = json.loads(await stt.recv())
+            await stt.send(json.dumps({"type": "endStream"}))
+            return ack
+    return None
+
+
+async def test_only_one_of_two_competing_reconnects_reaches_muse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gate = asyncio.Event()
+    muse = FakeMuse(silent=True, close_gate=gate)
+    async with websockets.serve(muse.handler, "127.0.0.1", 0) as server:
+        port = next(iter(server.sockets)).getsockname()[1]
+        doubles = sessions_doubles(tmp_path, monkeypatch, f"ws://127.0.0.1:{port}")
+        async with doubles.running():
+            url = doubles.base_url.replace("http://", "ws://") + "/stt?sessionId=worker"
+            async with websockets.connect(url) as first:
+                await first.send(HANDSHAKE_FRAME)
+                await first.recv()
+                await first.send(json.dumps({"type": "endStream"}))
+                claims = [asyncio.ensure_future(claim_session(url)) for _ in range(2)]
+                await asyncio.sleep(0.3)
+                gate.set()
+                acks = await asyncio.gather(*claims)
+    report: Any = doubles.report()["speech_recording"]
+
+    assert sorted(ack is not None for ack in acks) == [False, True]
+    assert len(muse.handshakes) == 2
+    assert report["refused_claimants"] == 1
+    assert report["sessions"] == 2
+    assert [cycle["ending"] for cycle in report["session_lifecycles"]] == ["clean", "clean"]
+    assert report["stop_reason"] == "incomplete_transcript"

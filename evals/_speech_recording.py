@@ -32,6 +32,10 @@ SpeechStop = Literal[
 ]
 
 
+class SessionRefused(RuntimeError):
+    pass
+
+
 class SpeechStopped(RuntimeError):
     def __init__(self, reason: SpeechStop, detail: str) -> None:
         super().__init__(f"speech recording stopped: {reason}: {detail}")
@@ -43,6 +47,8 @@ class SpeechSession:
     index: int
     opened_at: float
     keywords: int
+    recording: "SpeechRecording" = field(repr=False, compare=False)
+    closed: asyncio.Event = field(default_factory=asyncio.Event, repr=False, compare=False)
     closing: bool = False
     closed_at: float | None = None
     close_code: int | None = None
@@ -77,12 +83,12 @@ class SpeechRecording:
     recorded: list[tuple[str, int]] = field(default_factory=list)
     stop_reason: SpeechStop | None = None
     stop_detail: str = ""
-    _idle: asyncio.Event = field(default_factory=asyncio.Event)
+    refused_claimants: int = 0
+    _claimed: bool = False
 
     def __post_init__(self) -> None:
         if not 1 <= self.max_sessions <= MOST_SESSIONS:
             raise ValueError(f"speech recording allows 1 to {MOST_SESSIONS} sessions")
-        self._idle.set()
 
     def stop(self, reason: SpeechStop, detail: str) -> SpeechStopped:
         if self.stop_reason is None:
@@ -113,13 +119,19 @@ class SpeechRecording:
         current = self.current
         if current is not None and not current.closing:
             raise self.stop("concurrent_session", f"session {current.index} is still open")
+        if self._claimed:
+            self.refused_claimants += 1
+            raise SessionRefused("another connection is already taking over the session")
         if current is not None:
+            self._claimed = True
             try:
-                await asyncio.wait_for(self._idle.wait(), self.handover_seconds)
+                await asyncio.wait_for(current.closed.wait(), self.handover_seconds)
             except TimeoutError as error:
                 raise self.stop(
                     "concurrent_session", f"session {current.index} did not close"
                 ) from error
+            finally:
+                self._claimed = False
             self._live()
         if len(self.sessions) >= self.max_sessions:
             raise self.stop("session_limit", f"session {len(self.sessions) + 1} refused")
@@ -130,10 +142,9 @@ class SpeechRecording:
         if self.first_opened_at is not None and not self.remaining_wall_seconds:
             raise self.stop("deadline", f"{self.max_wall_seconds} s wall clock spent")
         session = SpeechSession(
-            len(self.sessions) + 1, self.clock(), len(handshake.get("keywords") or ())
+            len(self.sessions) + 1, self.clock(), len(handshake.get("keywords") or ()), self
         )
         self.sessions.append(session)
-        self._idle.clear()
         return session
 
     @property
@@ -143,18 +154,17 @@ class SpeechRecording:
             return self.max_wall_seconds
         return max(0.0, self.max_wall_seconds - (self.clock() - origin))
 
-    def admit_audio(self, pcm: bytes) -> None:
+    def admit_audio(self, session: SpeechSession, pcm: bytes) -> None:
         self._live()
-        current = self.current
-        if current is None:
-            raise self.stop("concurrent_session", "audio arrived outside a session")
+        if session is not self.current:
+            raise self.stop("concurrent_session", f"audio for closed session {session.index}")
         if len(pcm) % 2:
             raise self.stop("unsupported_audio", f"{len(pcm)} bytes is not 16-bit PCM")
         if not self.remaining_wall_seconds:
             raise self.stop("deadline", f"{self.max_wall_seconds} s wall clock spent")
         if (self.pcm_bytes + len(pcm)) / PCM_BYTES_PER_SECOND > self.max_audio_seconds:
             raise self.stop("audio_limit", f"{self.max_audio_seconds} s of audio sent")
-        current.pcm_bytes += len(pcm)
+        session.pcm_bytes += len(pcm)
 
     def admit_claim(self, clip: str, take: int) -> None:
         self._live()
@@ -164,30 +174,27 @@ class SpeechRecording:
             raise self.stop("additional_take", f"{clip} take {take}")
         self.recorded.append((clip, take))
 
-    def worker_closing(self) -> None:
-        current = self.current
-        if current is not None:
-            current.closing = True
+    def worker_closing(self, session: SpeechSession) -> None:
+        if session.open:
+            session.closing = True
 
     def provider_message(self, message: Mapping[str, Any]) -> None:
         if message.get("type") == "error":
             raise self.stop("provider_error", str(message.get("message", "")))
 
     def _close(self, session: SpeechSession, code: int | None, ending: str) -> None:
-        if session.open:
-            session.closed_at = self.clock()
-            session.close_code = code
-            session.ending = ending
-        self._idle.set()
+        session.closed_at = self.clock()
+        session.close_code = code
+        session.ending = ending
+        session.closed.set()
 
-    def provider_closed(self, code: int | None, *, expected: bool) -> None:
-        current = self.current
-        if current is None:
+    def provider_closed(self, session: SpeechSession, code: int | None, *, expected: bool) -> None:
+        if not session.open:
             return
         if not expected:
-            current.close_code = code
-            raise self.stop("provider_closed", f"session {current.index} closed with {code}")
-        self._close(current, code, "clean")
+            session.close_code = code
+            raise self.stop("provider_closed", f"session {session.index} closed with {code}")
+        self._close(session, code, "clean")
 
     def verify(self, messages: Mapping[tuple[str, int], Sequence[Mapping[str, Any]]]) -> None:
         self._live()
@@ -228,6 +235,7 @@ class SpeechRecording:
             "wall_seconds": wall,
             "recorded": [f"{clip} take {take}" for clip, take in self.recorded],
             "estimated_usd": round(audio_seconds / 60 * MUSE_USD_PER_AUDIO_MINUTE, 6),
+            "refused_claimants": self.refused_claimants,
             "stop_reason": self.stop_reason,
             "stop_detail": self.stop_detail,
         }

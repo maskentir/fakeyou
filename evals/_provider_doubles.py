@@ -42,7 +42,9 @@ from evals._replay_cassette import (
 from evals._speech_recording import (
     MUSE_ENDPOINT,
     MUSE_MODEL,
+    SessionRefused,
     SpeechRecording,
+    SpeechSession,
     SpeechStopped,
 )
 from fakeyou.config.settings import CartesiaTTS, GoogleReply, Settings
@@ -524,12 +526,15 @@ class ProviderDoubles:
     ) -> None:
         try:
             request = json.loads(handshake)
-            await speech.open_session(request if isinstance(request, dict) else {})
+            session = await speech.open_session(request if isinstance(request, dict) else {})
             if self._stt_key is None:
                 raise SpeechStopped("unexpected_handshake", "no live speech key")
             request["authorization"] = {"accessToken": f"Bearer {self._stt_key.get_secret_value()}"}
             async with asyncio.timeout(speech.remaining_wall_seconds):
-                await self._relay_speech(socket, request, hearing, speech)
+                await self._relay_speech(socket, request, hearing, session)
+        except SessionRefused:
+            with suppress(RuntimeError, WebSocketDisconnect):
+                await socket.close(code=1011)
         except (
             SpeechStopped,
             TimeoutError,
@@ -550,11 +555,9 @@ class ProviderDoubles:
         socket: WebSocket,
         request: dict[str, Any],
         hearing: _Hearing,
-        speech: SpeechRecording,
+        session: SpeechSession,
     ) -> None:
-        session = speech.current
-        if session is None:
-            raise speech.stop("concurrent_session", "no open session to relay")
+        speech = session.recording
         async with websockets.connect(f"{self.stt_upstream_url}?{socket.url.query}") as upstream:
             await upstream.send(json.dumps(request))
             await socket.send_text(str(await upstream.recv()))
@@ -567,30 +570,31 @@ class ProviderDoubles:
                         self.transcripts.note(message)
                         self._keep_speech(hearing.claim, message)
                         await socket.send_text(raw)
-                speech.provider_closed(upstream.close_code, expected=session.closing)
+                speech.provider_closed(session, upstream.close_code, expected=session.closing)
 
             answering = asyncio.ensure_future(answers())
             try:
                 while (message := await socket.receive())["type"] != "websocket.disconnect":
                     _raise_if_failed(answering)
-                    await self._forward_worker(message, upstream, hearing, speech)
-                speech.worker_closing()
+                    await self._forward_worker(message, upstream, hearing, session)
+                speech.worker_closing(session)
                 _raise_if_failed(answering)
             finally:
                 answering.cancel()
                 with suppress(asyncio.CancelledError, websockets.ConnectionClosed):
                     await answering
-        speech.provider_closed(upstream.close_code, expected=True)
+        speech.provider_closed(session, upstream.close_code, expected=True)
 
     async def _forward_worker(
         self,
         message: Mapping[str, Any],
         upstream: websockets.ClientConnection,
         hearing: _Hearing,
-        speech: SpeechRecording,
+        session: SpeechSession,
     ) -> None:
+        speech = session.recording
         if audio := message.get("bytes"):
-            speech.admit_audio(audio)
+            speech.admit_audio(session, audio)
             heard = hearing.hear(audio)
             if heard is not None and heard[0] == "start":
                 speech.admit_claim(heard[1].clip, heard[1].take)
@@ -599,7 +603,7 @@ class ProviderDoubles:
             await upstream.send(audio)
         elif text := message.get("text"):
             if '"endStream"' in text:
-                speech.worker_closing()
+                speech.worker_closing(session)
             await upstream.send(text)
 
     async def _replay_muse(self, socket: WebSocket, hearing: _Hearing) -> None:
