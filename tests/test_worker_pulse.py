@@ -79,3 +79,10 @@ def test_the_image_bakes_the_encoding_the_embedder_counts_tokens_with() -> None:
     assert f"{expected_hash}  /workspace/tiktoken/{cached}" in dockerfile
     assert "COPY --from=builder /workspace/tiktoken /opt/tiktoken" in runtime
     assert "TIKTOKEN_CACHE_DIR=/opt/tiktoken" in runtime
+
+
+def test_every_image_stage_keeps_the_browser_it_was_built_with() -> None:
+    dockerfile = _read("Dockerfile")
+    runtime = dockerfile.index("FROM base AS runtime")
+    test = dockerfile.index("FROM runtime AS test")
+    assert "CLOAKBROWSER_AUTO_UPDATE=false" in dockerfile[runtime:test]

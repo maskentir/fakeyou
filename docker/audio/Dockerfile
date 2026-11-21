@@ -51,7 +51,8 @@ ENV PATH="/workspace/.venv/bin:$PATH" \
     PULSE_SOURCE=meeting_audio.monitor \
     PULSE_SINK=agent_output \
     PYTHONUNBUFFERED=1 \
-    TIKTOKEN_CACHE_DIR=/opt/tiktoken
+    TIKTOKEN_CACHE_DIR=/opt/tiktoken \
+    CLOAKBROWSER_AUTO_UPDATE=false
 USER twin
 ENTRYPOINT ["/usr/local/bin/fakeyou-entrypoint"]
 CMD ["fakeyou", "check"]
