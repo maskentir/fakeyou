@@ -13,8 +13,11 @@ RUN uv sync --frozen --no-dev --extra voiceprint --no-install-project
 COPY src/ src/
 RUN uv sync --frozen --no-dev --extra voiceprint \
     && mkdir -p /workspace/models
-RUN curl -fsSL --retry 10 --retry-all-errors --retry-max-time 600 -o /workspace/models/eres2net-voxceleb-en-16k.onnx \
+RUN curl -fsSL --retry 10 --retry-all-errors --retry-max-time 600 -o /tmp/eres2net-upstream.onnx \
     https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx \
+    && echo "c4947caf150b8502fdd75bbe4089b971ab1ec42e90ee3ba547faca2cde44d9ee  /tmp/eres2net-upstream.onnx" | sha256sum -c - \
+    && .venv/bin/python -c "import pathlib; upstream = pathlib.Path('/tmp/eres2net-upstream.onnx').read_bytes(); assert upstream.count(b'\x1a\x062.14.1') == 1; pathlib.Path('/workspace/models/eres2net-voxceleb-en-16k.onnx').write_bytes(upstream.replace(b'\x1a\x062.14.1', b'\x1a\x052.4.1', 1))" \
+    && rm /tmp/eres2net-upstream.onnx \
     && echo "c59158379255ad66e161679cca6af8d52d51e389e3224ab7d7a7baae295c2db5  /workspace/models/eres2net-voxceleb-en-16k.onnx" | sha256sum -c -
 RUN .venv/bin/python -c "import onnxruntime, os, glob; libs = glob.glob(os.path.join(os.path.dirname(onnxruntime.__file__), 'capi', 'libonnxruntime.so.*')); assert len(libs) == 1, libs; os.makedirs('/opt/ort', exist_ok=True); os.symlink(libs[0], '/opt/ort/libonnxruntime.so')"
 
