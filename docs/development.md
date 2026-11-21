@@ -114,6 +114,29 @@ batch answers every later request with a non-retried error. The ledger keeps eve
 attempt, its tokens, its cost and the stop reason, and carries them over to the next
 scenario run that uses the same file.
 
+`record_missing` replays speech. A new spoken clip has no recording to replay, so it
+can be recorded live by naming it in `SIMULATOR_RECORD_SPEECH` (for example
+`review-token.wav`). The run's speech session is then relayed to Muse
+(`evals/_speech_recording.py`):
+
+- the session handshake must name `muse-voice-transcribe-1.0` and 16 kHz 16-bit PCM
+- the live Muse key from `.env` replaces the worker's token; the key is never written
+- every caught clip must be the named clip, heard once (take 1)
+
+The run stops on any of:
+
+- a second session
+- more than 10 minutes of audio
+- a 15-minute wall clock
+- a provider error or an unexpected close
+- a take without `speechStart`, a transcript, `speechComplete` with text, and the voice-end
+  marker
+
+A stopped run leaves the cassette exactly as it was. Takes that were not heard are dropped.
+The report's `speech_recording` gives the session count, PCM bytes, audio seconds, wall
+seconds, close code, recorded take, estimated charge (USD 3 per 1,000 audio minutes) and
+stop reason.
+
 Then run `replay` until every scenario is closed. Where a replay asks something the
 recording run did not, fill the gap with `record_missing`, and replay again.
 `record_missing` rewrites the cassette to exactly what its run used and added, so a

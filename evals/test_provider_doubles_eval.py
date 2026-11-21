@@ -1,3 +1,4 @@
+import asyncio
 import json
 import subprocess
 import sys
@@ -9,7 +10,9 @@ from unittest.mock import patch
 
 import httpx
 import pytest
+import websockets
 from langchain_google_genai.chat_models import GoogleInvalidRequestError
+from pydantic import SecretStr
 
 from evals import _provider_doubles as doubles_module
 from evals._lineage_classifier import Pricing
@@ -21,17 +24,20 @@ from evals._provider_doubles import (
     provider_doubles,
     provider_mode,
     recorded_judge,
+    speech_recording,
 )
 from evals._recording_budget import RecordingBudget, RecordingCaps, RecordingLedger
 from evals._replay_cassette import (
     HeardTranscripts,
     ModelExchange,
     ReplayLedger,
+    SpeechMessage,
     canonical_request,
     model_exchange,
     read_cassette,
     request_digest,
 )
+from evals._speech_recording import SpeechRecording
 from fakeyou.config.settings import Settings
 from fakeyou.conversation.turn_judge import JudgeLine, JudgeWindow, ModelTurnJudge
 from fakeyou.orchestration.providers import create_turn_judge_model
@@ -456,3 +462,237 @@ def test_every_process_sends_the_recorded_judge_request_whatever_it_imports_firs
 
     assert len({request_digest(request) for request in frames.values()}) == 1
     assert all(JUDGE.latest(request) == CAPTURED_LATEST for request in frames.values())
+
+
+SPEECH_CLIP = "review-token.wav"
+LIVE_MUSE_KEY = "muse-live-key-never-written"
+LOUD = b"\x40\x1f" * 320
+QUIET = bytes(640)
+SPOKEN = " Rani Twin, what's the review token printed below the launch date? "
+
+
+class FakeMuse:
+    def __init__(
+        self, *, complete: bool = True, close_after_audio: bool = False, silent: bool = False
+    ) -> None:
+        self.complete = complete
+        self.close_after_audio = close_after_audio
+        self.silent = silent
+        self.handshakes: list[dict[str, Any]] = []
+        self.audio_bytes = 0
+        self.sent: list[dict[str, Any]] = []
+
+    async def say(self, connection: websockets.ServerConnection, message: dict[str, Any]) -> None:
+        self.sent.append(message)
+        await connection.send(json.dumps(message))
+
+    async def handler(self, connection: websockets.ServerConnection) -> None:
+        self.handshakes.append(json.loads(await connection.recv()))
+        await connection.send(json.dumps({"sessionId": "muse-session-1"}))
+        started = ended = False
+        async for raw in connection:
+            if isinstance(raw, str):
+                if '"endStream"' in raw:
+                    await connection.close()
+                    return
+                continue
+            self.audio_bytes += len(raw)
+            if self.close_after_audio:
+                await connection.close(code=1011)
+                return
+            if self.silent:
+                continue
+            if raw != QUIET and not started:
+                started = True
+                await self.say(connection, {"type": "speechStart", "turnId": 3})
+                await self.say(
+                    connection, {"type": "transcript", "transcript": " Rani Twin,", "final": False}
+                )
+                await self.say(connection, {"type": "speaker", "label": "A"})
+            elif raw == QUIET and started and not ended:
+                ended = True
+                await self.say(connection, {"type": "speechEnd", "turnId": 3})
+                if self.complete:
+                    await self.say(
+                        connection, {"type": "speechComplete", "turnId": 3, "transcript": SPOKEN}
+                    )
+
+
+async def speak_through(
+    doubles: ProviderDoubles, clips: list[str], *, hold: float = 2.0
+) -> list[dict[str, Any]]:
+    received: list[dict[str, Any]] = []
+    url = doubles.base_url.replace("http://", "ws://") + "/stt?sessionId=worker-1"
+    async with websockets.connect(url) as stt:
+        handshake = {
+            "authorization": {"accessToken": "Bearer double"},
+            "audioEncoding": "PCM_16KHZ",
+            "model": "muse-voice-transcribe-1.0",
+        }
+        with suppress(websockets.ConnectionClosed, TimeoutError):
+            await stt.send(json.dumps(handshake))
+            received.append(json.loads(await stt.recv()))
+            for clip in clips:
+                doubles.script(clip)
+                for chunk in (LOUD, LOUD, LOUD, QUIET, QUIET):
+                    await stt.send(chunk)
+            async with asyncio.timeout(hold):
+                async for raw in stt:
+                    received.append(json.loads(raw))
+                    if received[-1].get("type") == "speechComplete":
+                        break
+        with suppress(websockets.ConnectionClosed, TimeoutError):
+            await stt.send(json.dumps({"type": "endStream"}))
+    return received
+
+
+def speech_doubles(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    muse_url: str,
+    speech: SpeechRecording | None = None,
+) -> ProviderDoubles:
+    monkeypatch.setattr(doubles_module, "QUIET_GAP_SECONDS", 0.0)
+    path = tmp_path / "sim-s3-screen.jsonl"
+    path.write_text("", encoding="utf-8")
+    doubles = ProviderDoubles(
+        "record_missing",
+        path,
+        ledger=ReplayLedger.load(path, JUDGE),
+        writer=CassetteWriter(path, fresh=False),
+        budget=_budget(tmp_path),
+        speech=speech or SpeechRecording(frozenset({SPEECH_CLIP})),
+        stt_upstream_url=muse_url,
+    )
+    monkeypatch.setattr(doubles, "_stt_key", SecretStr(LIVE_MUSE_KEY))
+    return doubles
+
+
+async def record_speech(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    muse: FakeMuse,
+    clips: list[str],
+    speech: SpeechRecording | None = None,
+) -> tuple[ProviderDoubles, list[dict[str, Any]]]:
+    async with websockets.serve(muse.handler, "127.0.0.1", 0) as server:
+        port = next(iter(server.sockets)).getsockname()[1]
+        doubles = speech_doubles(tmp_path, monkeypatch, f"ws://127.0.0.1:{port}", speech)
+        async with doubles.running():
+            received = await speak_through(doubles, clips)
+    return doubles, received
+
+
+def speech_lines(path: Path) -> list[SpeechMessage]:
+    return [line for line in read_cassette(path) if isinstance(line, SpeechMessage)]
+
+
+async def test_an_allowed_clip_is_relayed_to_muse_and_recorded_faithfully(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    snapshot = doubles_module.SNAPSHOT.read_bytes()
+    muse = FakeMuse()
+
+    doubles, received = await record_speech(tmp_path, monkeypatch, muse, [SPEECH_CLIP])
+    lines = speech_lines(doubles.cassette)
+    report: Any = doubles.report()
+
+    assert received[0] == {"sessionId": "muse-session-1"}
+    assert received[-1]["transcript"] == SPOKEN
+    assert muse.handshakes[0]["authorization"] == {"accessToken": f"Bearer {LIVE_MUSE_KEY}"}
+    assert {(line.clip, line.take) for line in lines} == {(SPEECH_CLIP, 1)}
+    assert [line.message for line in lines if line.message["type"] != "simulatorVoiceEnd"] == (
+        muse.sent
+    )
+    assert "simulatorVoiceEnd" in [line.message["type"] for line in lines]
+    assert report["speech_recording"]["sessions"] == 1
+    assert report["speech_recording"]["pcm_bytes"] == muse.audio_bytes
+    assert report["speech_recording"]["stop_reason"] is None
+    assert report["provider_errors_not_recorded"] == []
+    assert LIVE_MUSE_KEY not in doubles.cassette.read_text(encoding="utf-8")
+    assert LIVE_MUSE_KEY not in json.dumps(report)
+    assert doubles_module.SNAPSHOT.read_bytes() == snapshot
+
+
+async def test_strict_replay_consumes_the_newly_recorded_clip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorded, _received = await record_speech(tmp_path, monkeypatch, FakeMuse(), [SPEECH_CLIP])
+    replay = ProviderDoubles(
+        "replay", recorded.cassette, ledger=ReplayLedger.load(recorded.cassette, JUDGE)
+    )
+
+    async with replay.running():
+        received = await speak_through(replay, [SPEECH_CLIP])
+    summary: Any = replay.report()["replay"]
+
+    assert received[-1] == {"type": "speechComplete", "turnId": 3, "transcript": SPOKEN}
+    assert (summary["heard_takes"], summary["recorded_takes"]) == (1, 1)
+    assert summary["closed"] is True
+
+
+UNTRUSTED = {
+    "unexpected_clip": (["beta-question.wav"], FakeMuse(), None),
+    "additional_take": ([SPEECH_CLIP, SPEECH_CLIP], FakeMuse(), None),
+    "audio_limit": (
+        [SPEECH_CLIP],
+        FakeMuse(),
+        SpeechRecording(frozenset({SPEECH_CLIP}), max_audio_seconds=0.01),
+    ),
+    "deadline": (
+        [],
+        FakeMuse(silent=True),
+        SpeechRecording(frozenset({SPEECH_CLIP}), max_wall_seconds=0.2),
+    ),
+    "provider_closed": ([SPEECH_CLIP], FakeMuse(close_after_audio=True), None),
+    "incomplete_transcript": ([SPEECH_CLIP], FakeMuse(complete=False), None),
+}
+
+
+@pytest.mark.parametrize("reason", list(UNTRUSTED))
+async def test_a_speech_recording_that_cannot_be_trusted_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reason: str
+) -> None:
+    clips, muse, speech = UNTRUSTED[reason]
+
+    doubles, _received = await record_speech(tmp_path, monkeypatch, muse, clips, speech)
+    report: Any = doubles.report()
+
+    assert report["speech_recording"]["stop_reason"] == reason
+    assert report["provider_errors_not_recorded"] == [f"speech not recorded: {reason}"]
+    assert speech_lines(doubles.cassette) == []
+
+
+async def test_without_a_speech_allowlist_recorded_clips_still_replay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorded, _received = await record_speech(tmp_path, monkeypatch, FakeMuse(), [SPEECH_CLIP])
+    doubles = ProviderDoubles(
+        "record_missing",
+        recorded.cassette,
+        ledger=ReplayLedger.load(recorded.cassette, JUDGE),
+        writer=CassetteWriter(recorded.cassette, fresh=False),
+        budget=_budget(tmp_path),
+        stt_upstream_url="ws://127.0.0.1:9",
+    )
+
+    async with doubles.running():
+        received = await speak_through(doubles, [SPEECH_CLIP])
+
+    assert received[-1]["transcript"] == SPOKEN
+    assert doubles.report()["speech_recording"] is None
+
+
+def test_an_allowlisted_clip_that_already_has_takes_is_refused(tmp_path: Path) -> None:
+    path = tmp_path / "scenario.jsonl"
+    path.write_text(
+        SpeechMessage(
+            kind="speech", clip=SPEECH_CLIP, take=1, offset=0.1, message={"type": "speechStart"}
+        ).model_dump_json()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with patch.dict("os.environ", {"SIMULATOR_RECORD_SPEECH": SPEECH_CLIP}):
+        with pytest.raises(ValueError, match="already have takes"):
+            speech_recording(ReplayLedger.load(path, JUDGE))

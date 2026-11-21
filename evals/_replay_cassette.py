@@ -424,6 +424,10 @@ class ReplayLedger:
         self.misses.append(miss)
         return miss
 
+    def recorded_lines(self) -> list[ModelExchange | SpeechMessage]:
+        speech = [line for takes in self.takes.values() for take in takes for line in take]
+        return [*speech, *self.exchanges]
+
     def used_exchanges(self) -> list[ModelExchange]:
         return [
             exchange

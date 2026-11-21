@@ -9,7 +9,7 @@ import re
 import struct
 import time
 from collections import Counter
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -39,6 +39,12 @@ from evals._replay_cassette import (
     model_exchange,
     read_cassette,
 )
+from evals._speech_recording import (
+    MUSE_ENDPOINT,
+    MUSE_MODEL,
+    SpeechRecording,
+    SpeechStopped,
+)
 from fakeyou.config.settings import CartesiaTTS, GoogleReply, Settings
 from fakeyou.foundation.invariants import PLAYBACK_SAMPLE_RATE
 from fakeyou.speech.websocket import secure_scheme
@@ -67,6 +73,7 @@ VOICE_END = "simulatorVoiceEnd"
 SERVER_START_SECONDS = 30.0
 MISS_STATUS = 400
 RECORDING_BUDGET_ENV = "SIMULATOR_RECORDING_BUDGET"
+RECORD_SPEECH_ENV = "SIMULATOR_RECORD_SPEECH"
 UNSERVED_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
 MODES: tuple[ProviderMode, ...] = get_args(ProviderMode)
 
@@ -248,6 +255,10 @@ class ProviderDoubles:
     transcripts: HeardTranscripts = field(default_factory=HeardTranscripts)
     refused_recordings: list[str] = field(default_factory=list)
     budget: RecordingBudget | None = None
+    speech: SpeechRecording | None = None
+    stt_upstream_url: str = MUSE_ENDPOINT
+    _stt_key: SecretStr | None = None
+    _speech_messages: dict[tuple[str, int], list[dict[str, Any]]] = field(default_factory=dict)
 
     def settings(self, settings: Settings) -> Settings:
         if self.mode == "live":
@@ -265,6 +276,8 @@ class ProviderDoubles:
             return self._pointed(recorded, SecretStr(DOUBLE_KEY))
         keyed = _with_google_keys(recorded, settings)
         _require_google_keys(keyed)
+        if self.speech is not None:
+            self._stt_key = _speech_key(recorded, settings)
         return self._pointed(keyed, None)
 
     def _pointed(self, settings: Settings, key: SecretStr | None) -> Settings:
@@ -452,6 +465,8 @@ class ProviderDoubles:
         hearing = _Hearing(self._said)
         if self.mode == "record":
             await self._relay_muse(socket, handshake, hearing)
+        elif self.speech is not None:
+            await self._record_speech(socket, handshake, hearing, self.speech)
         else:
             await self._replay_muse(socket, hearing)
 
@@ -496,6 +511,91 @@ class ProviderDoubles:
                 answering.cancel()
                 with suppress(asyncio.CancelledError, websockets.ConnectionClosed):
                     await answering
+
+    def _keep_speech(self, claim: Claim | None, message: Any, *, at: float | None = None) -> None:
+        if claim is None or self.speech is None:
+            return
+        self._speech_messages.setdefault((claim.clip, claim.take), []).append(message)
+        self._keep_heard(claim, message, at=at)
+
+    async def _record_speech(
+        self, socket: WebSocket, handshake: str, hearing: _Hearing, speech: SpeechRecording
+    ) -> None:
+        try:
+            request = json.loads(handshake)
+            speech.open_session(request if isinstance(request, dict) else {})
+            if self._stt_key is None:
+                raise SpeechStopped("unexpected_handshake", "no live speech key")
+            request["authorization"] = {"accessToken": f"Bearer {self._stt_key.get_secret_value()}"}
+            async with asyncio.timeout(speech.remaining_wall_seconds):
+                await self._relay_speech(socket, request, hearing, speech)
+        except (
+            SpeechStopped,
+            TimeoutError,
+            ValueError,
+            OSError,
+            websockets.WebSocketException,
+        ) as error:
+            if isinstance(error, TimeoutError):
+                speech.stop("deadline", f"{speech.max_wall_seconds} s wall clock spent")
+            elif not isinstance(error, SpeechStopped):
+                speech.stop("provider_closed", type(error).__name__)
+            self.refused_recordings.append(f"speech not recorded: {speech.stop_reason}")
+            with suppress(RuntimeError, WebSocketDisconnect):
+                await socket.close(code=1011)
+
+    async def _relay_speech(
+        self,
+        socket: WebSocket,
+        request: dict[str, Any],
+        hearing: _Hearing,
+        speech: SpeechRecording,
+    ) -> None:
+        async with websockets.connect(f"{self.stt_upstream_url}?{socket.url.query}") as upstream:
+            await upstream.send(json.dumps(request))
+            await socket.send_text(str(await upstream.recv()))
+
+            async def answers() -> None:
+                async for raw in upstream:
+                    if isinstance(raw, str):
+                        message = json.loads(raw)
+                        speech.provider_message(message)
+                        self.transcripts.note(message)
+                        self._keep_speech(hearing.claim, message)
+                        await socket.send_text(raw)
+                speech.provider_closed(upstream.close_code, expected=speech.closing)
+
+            answering = asyncio.ensure_future(answers())
+            try:
+                while (message := await socket.receive())["type"] != "websocket.disconnect":
+                    _raise_if_failed(answering)
+                    await self._forward_worker(message, upstream, hearing, speech)
+                speech.closing = True
+                _raise_if_failed(answering)
+            finally:
+                answering.cancel()
+                with suppress(asyncio.CancelledError, websockets.ConnectionClosed):
+                    await answering
+        speech.provider_closed(upstream.close_code, expected=True)
+
+    async def _forward_worker(
+        self,
+        message: Mapping[str, Any],
+        upstream: websockets.ClientConnection,
+        hearing: _Hearing,
+        speech: SpeechRecording,
+    ) -> None:
+        if audio := message.get("bytes"):
+            speech.admit_audio(audio)
+            heard = hearing.hear(audio)
+            if heard is not None and heard[0] == "start":
+                speech.admit_claim(heard[1].clip, heard[1].take)
+            elif heard is not None:
+                self._keep_speech(heard[1], {"type": VOICE_END}, at=heard[1].end)
+            await upstream.send(audio)
+        elif text := message.get("text"):
+            speech.closing = speech.closing or '"endStream"' in text
+            await upstream.send(text)
 
     async def _replay_muse(self, socket: WebSocket, hearing: _Hearing) -> None:
         if self.ledger is None:
@@ -561,6 +661,7 @@ class ProviderDoubles:
             "voice_ends_not_heard": list(self.unheard_voice_ends),
             "provider_errors_not_recorded": list(self.refused_recordings),
             "recording": self.budget.ledger.report() if self.budget is not None else None,
+            "speech_recording": self.speech.report() if self.speech is not None else None,
         }
 
     @asynccontextmanager
@@ -593,8 +694,30 @@ class ProviderDoubles:
     def finish_recording(self) -> None:
         if self.mode != "record_missing" or self.ledger is None or self.writer is None:
             return
-        speech = [line for takes in self.ledger.takes.values() for take in takes for line in take]
+        if self.speech is not None:
+            try:
+                self.speech.verify(self._speech_messages)
+            except SpeechStopped:
+                if f"speech not recorded: {self.speech.stop_reason}" not in self.refused_recordings:
+                    self.refused_recordings.append(
+                        f"speech not recorded: {self.speech.stop_reason}"
+                    )
+                self.writer.rewrite(self.ledger.recorded_lines())
+                return
+        heard = self.ledger.heard
+        speech = [
+            line
+            for takes in self.ledger.takes.values()
+            for take in takes
+            if (take[0].clip, take[0].take) in heard
+            for line in take
+        ]
         self.writer.rewrite([*speech, *self.ledger.used_exchanges(), *self.writer.appended])
+
+
+def _raise_if_failed(task: asyncio.Future[None]) -> None:
+    if task.done():
+        task.result()
 
 
 async def _started(server: uvicorn.Server, serving: asyncio.Future[None]) -> None:
@@ -644,7 +767,27 @@ def provider_doubles(scenario: str) -> ProviderDoubles:
         ledger=ledger,
         writer=CassetteWriter(path, fresh=False),
         budget=recording_budget(),
+        speech=speech_recording(ledger),
     )
+
+
+def speech_recording(ledger: ReplayLedger) -> SpeechRecording | None:
+    named = os.environ.get(RECORD_SPEECH_ENV, "")
+    allowed = frozenset(clip.strip() for clip in named.split(",") if clip.strip())
+    if not allowed:
+        return None
+    recorded = sorted(clip for clip in allowed if ledger.takes.get(clip))
+    if recorded:
+        raise ValueError(f"{RECORD_SPEECH_ENV} names clips that already have takes: {recorded}")
+    return SpeechRecording(allowed)
+
+
+def _speech_key(recorded: Settings, live: Settings) -> SecretStr:
+    if recorded.stt.url != MUSE_ENDPOINT or recorded.stt.model != MUSE_MODEL:
+        raise ValueError(f"speech recording needs {MUSE_MODEL} at {MUSE_ENDPOINT}")
+    if live.stt.api_key is None:
+        raise ValueError("speech recording needs the Muse key in .env")
+    return live.stt.api_key
 
 
 def recording_budget() -> RecordingBudget:
