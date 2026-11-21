@@ -261,6 +261,10 @@ class RecordingCommands:
         self.kinds.append(spec.kind)
         return CommandOutcome(f"{plan_id}-{ordinal}", spec.kind, "effect_unobserved")
 
+    def withdraw(self, plan_id: str) -> tuple[CommandOutcome, ...]:
+        del plan_id
+        return ()
+
 
 def leave_planning(event: TranscriptEvent, reading: Reading, channel: Channel) -> PlannedTurn:
     del reading, channel

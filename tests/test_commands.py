@@ -366,3 +366,41 @@ async def test_a_closed_runner_stays_closed_after_a_new_page(
     )
 
     assert runner.available is False
+
+
+async def test_a_command_requested_for_a_withdrawn_plan_never_crosses_the_boundary(
+    tmp_path: Path, kernel: KernelPort, meet: FakeMeet
+) -> None:
+    runner = runner_for(tmp_path, kernel)
+
+    assert runner.withdraw("p1") == ()
+    state = await run(runner, CommandSpec("send_chat", "Deck is up."))
+
+    assert state == "cancelled_before_boundary"
+    assert meet.calls == []
+
+
+async def test_withdrawing_a_plan_mid_dispatch_reports_it_and_lets_it_settle(
+    tmp_path: Path, kernel: KernelPort, meet: FakeMeet, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def slow_chat(page: object, text: str, *args: object) -> MeetActionResult:
+        entered.set()
+        await release.wait()
+        return await meet.send_chat(page, text, *args)
+
+    monkeypatch.setattr(runner_module, "send_chat", slow_chat)
+    runner = runner_for(tmp_path, kernel)
+    turn = asyncio.create_task(run(runner, CommandSpec("send_chat", "Deck is up.")))
+    await entered.wait()
+
+    [dispatched] = runner.withdraw("p1")
+    turn.cancel()
+    release.set()
+    await runner.close()
+
+    assert (dispatched.kind, dispatched.state) == ("send_chat", "dispatching")
+    [record] = CommandLedger(record_path(tmp_path), "meeting-9").records()
+    assert record.state == "effect_observed"
+    assert meet.calls == ["send_chat"]

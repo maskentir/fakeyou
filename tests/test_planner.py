@@ -43,6 +43,10 @@ class FakeCommands:
         self.actors.append(actor)
         return CommandOutcome(f"{plan_id}:{ordinal}", spec.kind, self.state)
 
+    def withdraw(self, plan_id: str) -> tuple[CommandOutcome, ...]:
+        del plan_id
+        return ()
+
 
 class SilentSpeaker(PreparedSpeaker):
     is_speaking = False

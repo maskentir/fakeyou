@@ -1,7 +1,11 @@
 import asyncio
 import json
 from collections.abc import Callable, Sequence
-from typing import override
+from pathlib import Path
+from typing import cast, override
+
+import pytest
+from playwright.async_api import Page
 
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.conversation.actor import EarlyOptions, says_more
@@ -10,8 +14,12 @@ from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_graph import PlannedTurn, TurnPlanning
 from fakeyou.conversation.turn_judge import JudgeWindow, TurnJudgement
 from fakeyou.foundation.transcript import TranscriptEvent
+from fakeyou.meet.meet_actions import MeetActionResult
 from fakeyou.observability.diagnostics import Diagnostics
 from fakeyou.observability.journal import Journal
+from fakeyou.orchestration import commands as runner_module
+from fakeyou.orchestration.commands import CommandRunner
+from fakeyou.orchestration.kernel_port import KernelPort
 from fakeyou.session.commands import CommandOutcome, CommandSpec
 from fakeyou.session.intent import Reading, intent_of
 from fakeyou.session.planner import plan_turn
@@ -972,6 +980,10 @@ class SentChat:
         self.sent.append((plan_id, spec.text))
         return CommandOutcome(f"{plan_id}:{ordinal}", spec.kind, "effect_observed")
 
+    def withdraw(self, plan_id: str) -> tuple[CommandOutcome, ...]:
+        del plan_id
+        return ()
+
 
 def chat_planning() -> TurnPlanning:
     def planning(event: TranscriptEvent, reading: Reading, channel: Channel) -> PlannedTurn:
@@ -1134,3 +1146,291 @@ async def test_a_withdrawn_early_turn_keeps_the_earlier_answer_deduplicated(
     ]
     assert audio.spoken[0] == "Rani, what is the plan for the beta launch"
     await loop.actor.close()
+
+
+CHANGED = "Rani, please send the beta launch date in the meeting chat and add who owns QA."
+NEGATED = "Rani, please send the beta launch date in the meeting chat. Actually never mind."
+AGAIN = "Rani, could you post the beta date to the chat once more?"
+
+
+class GatedMeet:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self.sent: list[str] = []
+        self.dispatched = asyncio.Event()
+        self.release_dispatch = asyncio.Event()
+        self.release_dispatch.set()
+        self.counting = asyncio.Event()
+        self.release_count = asyncio.Event()
+        self.release_count.set()
+        self.lost_after_enter = False
+
+    async def send_chat(self, _page: object, text: str, *_args: object) -> MeetActionResult:
+        self.calls.append(text)
+        self.dispatched.set()
+        await self.release_dispatch.wait()
+        if self.lost_after_enter:
+            raise RuntimeError("page lost after enter")
+        self.sent.append(text)
+        return MeetActionResult("succeeded", "ok")
+
+    async def count_chat_echoes(self, _page: object, text: str, *_args: object) -> int:
+        if not self.counting.is_set():
+            self.counting.set()
+            await self.release_count.wait()
+        return self.sent.count(text)
+
+
+class StillClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    async def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+
+def requested(window: JudgeWindow) -> TurnJudgement:
+    if "never mind" in window.latest.text:
+        return judged("reply")
+    return judged("reply", requests_chat=True)
+
+
+class EffectHarness:
+    def __init__(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.journal = RecordingJournal("meeting-9")
+        self.meet = GatedMeet()
+        for name in ("send_chat", "count_chat_echoes"):
+            monkeypatch.setattr(runner_module, name, getattr(self.meet, name))
+        kernel = KernelPort.for_meeting("meeting-9")
+        kernel.call_state("in_call")
+        kernel.drain()
+        self.runner = CommandRunner(
+            tmp_path / "meeting-9" / "record.jsonl",
+            meeting_id="meeting-9",
+            kernel=kernel,
+            chat_per_minute=5,
+            journal=self.journal,
+        )
+        clock = StillClock()
+        self.runner.bind_page(
+            cast(Page, object()), sleep=clock.sleep, monotonic=clock.monotonic, stop=asyncio.Event()
+        )
+        self.responder = FakeResponder()
+        self.audio = FakeReplyAudio()
+        self.loop = build_meeting_turns(
+            self.responder,
+            interaction=TurnInteraction(
+                twin_names=["Rani"],
+                judge=ScriptedJudge(requested),
+                commands=self.runner,
+                planning=chat_planning(),
+            ),
+            diagnostics=Diagnostics(journal=self.journal),
+        )
+        self.loop.actor.bind(self.audio)
+        counter = iter(range(100))
+        self.loop.actor.configure_early(
+            EarlyOptions(
+                hold_seconds=0.0, build_event=lambda text: event(f"early-{next(counter)}", text)
+            )
+        )
+
+    async def commit_early(self, text: str = SEND) -> None:
+        await self.loop.actor.note_interim(text, history_seq=None)
+        self.loop.actor.note_speech(active=False)
+
+    async def resume(self) -> None:
+        await self.loop.actor.note_interim(SEND_IN_CHAT, history_seq=None)
+
+    async def final(self, transcript_id: str, text: str) -> None:
+        await answer_final(self.loop, event(transcript_id, text))
+
+    async def settle(self) -> None:
+        self.meet.release_dispatch.set()
+        self.meet.release_count.set()
+        await self.runner.close()
+        await asyncio.wait_for(self.loop.actor.wait_idle(), 2)
+        await self.loop.actor.close()
+
+    def states(self) -> list[str]:
+        return [row["state"] for row in self.journal.events("meet_action_finished")] + [
+            row["state"]
+            for row in (
+                *self.journal.events("meet_action_failed"),
+                *self.journal.events("meet_action_rejected"),
+            )
+        ]
+
+    def dropped(self) -> list[str]:
+        return [row["reason"] for row in self.journal.events("chat_reply_dropped")]
+
+
+async def test_a_turn_withdrawn_before_dispatch_sends_nothing_and_its_final_sends_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = EffectHarness(tmp_path, monkeypatch)
+    harness.meet.release_count.clear()
+    await harness.commit_early()
+    await asyncio.wait_for(harness.meet.counting.wait(), 2)
+
+    await harness.resume()
+    harness.meet.release_count.set()
+    await harness.final("final-1", SEND_IN_CHAT)
+    await harness.settle()
+
+    assert len(harness.meet.calls) == 1
+    assert [row["reason"] for row in harness.journal.events("meet_action_rejected")] == [
+        "turn_withdrawn"
+    ]
+    assert harness.states() == ["effect_observed", "cancelled_before_boundary"]
+    assert harness.dropped() == []
+
+
+async def test_a_turn_withdrawn_mid_dispatch_is_not_dispatched_again_for_its_final(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = EffectHarness(tmp_path, monkeypatch)
+    harness.meet.release_dispatch.clear()
+    await harness.commit_early()
+    await asyncio.wait_for(harness.meet.dispatched.wait(), 2)
+
+    await harness.resume()
+    await harness.final("final-1", SEND_IN_CHAT)
+    await harness.settle()
+
+    [cancelled] = harness.journal.events("early_turn_cancelled")
+    assert len(cancelled["dispatched"]) == 1
+    assert len(harness.meet.calls) == 1
+    assert harness.dropped() == ["already_dispatched"]
+    assert (
+        harness.journal.events("chat_reply_dropped")[0]["action_id"] == cancelled["dispatched"][0]
+    )
+
+
+async def test_an_effect_finishing_after_its_turn_is_cancelled_is_observed_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = EffectHarness(tmp_path, monkeypatch)
+    harness.meet.release_dispatch.clear()
+    await harness.commit_early()
+    await asyncio.wait_for(harness.meet.dispatched.wait(), 2)
+
+    await harness.resume()
+    harness.meet.release_dispatch.set()
+    await harness.runner.close()
+    await harness.final("final-1", SEND_IN_CHAT)
+    await harness.settle()
+
+    names = [row["event"] for row in harness.journal.events()]
+    assert names.index("agent_cancelled") < names.index("meet_action_finished")
+    assert harness.states() == ["effect_observed"]
+    assert len(harness.meet.sent) == 1
+
+
+async def test_an_unknown_effect_is_never_retried_for_the_final(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = EffectHarness(tmp_path, monkeypatch)
+    harness.meet.release_dispatch.clear()
+    harness.meet.lost_after_enter = True
+    await harness.commit_early()
+    await asyncio.wait_for(harness.meet.dispatched.wait(), 2)
+
+    await harness.resume()
+    await harness.final("final-1", SEND_IN_CHAT)
+    await harness.settle()
+
+    assert len(harness.meet.calls) == 1
+    assert harness.states() == ["unknown"]
+    assert harness.dropped() == ["already_dispatched"]
+
+
+async def test_a_final_that_confirms_the_dispatched_chat_sends_nothing_more(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = EffectHarness(tmp_path, monkeypatch)
+    harness.meet.release_dispatch.clear()
+    await harness.commit_early()
+    await asyncio.wait_for(harness.meet.dispatched.wait(), 2)
+
+    await harness.resume()
+    await harness.final("final-1", SEND_IN_CHAT)
+    await harness.settle()
+
+    assert harness.meet.sent == harness.meet.calls
+    assert len(harness.meet.sent) == 1
+    assert [row["transcript_id"] for row in harness.journal.events("policy_decided")] == [
+        "early-0",
+        "final-1",
+    ]
+
+
+async def test_a_final_that_changes_the_chat_neither_resends_nor_claims_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = EffectHarness(tmp_path, monkeypatch)
+    harness.meet.release_dispatch.clear()
+    await harness.commit_early()
+    await asyncio.wait_for(harness.meet.dispatched.wait(), 2)
+
+    await harness.resume()
+    await harness.final("final-1", CHANGED)
+    await harness.settle()
+
+    assert len(harness.meet.calls) == 1
+    assert harness.dropped() == ["already_dispatched"]
+    assert harness.audio.spoken == []
+
+
+async def test_a_final_that_takes_the_request_back_is_told_the_chat_may_be_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = EffectHarness(tmp_path, monkeypatch)
+    harness.meet.release_dispatch.clear()
+    await harness.commit_early()
+    await asyncio.wait_for(harness.meet.dispatched.wait(), 2)
+
+    await harness.resume()
+    await harness.final("final-1", NEGATED)
+    await harness.settle()
+
+    assert len(harness.meet.calls) == 1
+    replied = harness.responder.calls[-1][-1]
+    assert replied.id == "final-1"
+    assert "not sure it went through" in replied.text
+
+
+async def test_a_verified_early_chat_is_sent_once_for_its_final(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = EffectHarness(tmp_path, monkeypatch)
+    await harness.commit_early(SEND_IN_CHAT)
+    await asyncio.wait_for(harness.loop.actor.wait_idle(), 2)
+
+    await harness.final("final-1", SEND_IN_CHAT)
+    await harness.settle()
+
+    assert len(harness.meet.calls) == 1
+    assert harness.journal.events("early_turn_verified")
+    assert harness.dropped() == []
+
+
+async def test_a_later_independent_chat_request_is_still_sent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = EffectHarness(tmp_path, monkeypatch)
+    harness.meet.release_dispatch.clear()
+    await harness.commit_early()
+    await asyncio.wait_for(harness.meet.dispatched.wait(), 2)
+    await harness.resume()
+    await harness.final("final-1", SEND_IN_CHAT)
+    harness.meet.release_dispatch.set()
+
+    await harness.final("final-2", AGAIN)
+    await harness.settle()
+
+    assert len(harness.meet.calls) == 2
+    assert harness.dropped() == ["already_dispatched"]

@@ -71,6 +71,7 @@ from fakeyou.foundation.triggers import ReplyChannel
 from fakeyou.observability.faults import ConsumerSink, FaultReporter, capture_error, guard_observer
 from fakeyou.observability.journal import Journal, JournalSink
 from fakeyou.observability.provider_faults import classify_exception
+from fakeyou.session.commands import CommandOutcome
 from fakeyou.speech.contract import (
     PlaybackReceipt,
     PreparedSpeech,
@@ -87,6 +88,7 @@ _STOP_FILLER = frozenset(_STOP_DATA["filler"])
 _STOP_PHRASES = frozenset(_STOP_DATA["phrases"])
 _STOP_MAX_TOKENS = 6
 _OVERLAP_WINDOW_SECONDS = 20.0
+_CARRIED_EFFECTS = 8
 _RESUMED_MATCH = 0.7
 _EXTRA_WORDS_FOR_MORE = 3
 WAKEUP_FLOOR_SECONDS = 0.25
@@ -214,6 +216,8 @@ class _EarlyCommit:
     text: str
     resumed: bool = False
     displaced: _AdmittedFinal | None = None
+    plan_id: str | None = None
+    dispatched: tuple[CommandOutcome, ...] = ()
     settled: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
 
 
@@ -313,6 +317,7 @@ class FloorActor:
         self._judge_tasks: set[asyncio.Task[None]] = set()
         self._last_attention: str | None = None
         self._last_final: _AdmittedFinal | None = None
+        self._carried_effects: dict[str, tuple[CommandOutcome, ...]] = {}
         self._early_options: EarlyOptions | None = None
         self._early_answer: Callable[[TranscriptEvent], Awaitable[None]] | None = None
         self._early_text = ""
@@ -1164,6 +1169,7 @@ class FloorActor:
             ):
                 await self._cancel_early(commit, reason="final_says_more")
             if commit.resumed:
+                self._carry_effects(commit, final)
                 return False
             self._journal.record(
                 "early_turn_verified",
@@ -1176,6 +1182,21 @@ class FloorActor:
             return True
         finally:
             commit.settled.set()
+
+    def _carry_effects(self, commit: _EarlyCommit, final: TranscriptEvent) -> None:
+        if not commit.dispatched:
+            return
+        self._carried_effects[final.id] = commit.dispatched
+        for stale in list(self._carried_effects)[:-_CARRIED_EFFECTS]:
+            del self._carried_effects[stale]
+        self._journal.record(
+            "early_effects_bound",
+            source="agent",
+            transcript_id=final.id,
+            early_transcript_id=commit.event.id,
+            dispatched=[sent.command_id for sent in commit.dispatched],
+            states=[sent.state for sent in commit.dispatched],
+        )
 
     def _cancel_early_hold(self, *, declined: str | None = None, words: int | None = None) -> None:
         self._early_version += 1
@@ -1241,14 +1262,30 @@ class FloorActor:
     def early_gate(self, transcript_id: str) -> _EarlyCommit | None:
         return self._early_gates.pop(transcript_id, None)
 
+    def plan_recorded(self, transcript_id: str, plan_id: str) -> None:
+        commit = self._early_commit
+        if commit is None or commit.event.id != transcript_id:
+            return
+        commit.plan_id = plan_id
+
+    def prior_effects(self, transcript_id: str) -> tuple[CommandOutcome, ...]:
+        return self._carried_effects.get(transcript_id, ())
+
+    def _withdraw_effects(self, commit: _EarlyCommit) -> None:
+        commands = self.commands
+        if commit.plan_id is not None and commands is not None:
+            commit.dispatched = commands.withdraw(commit.plan_id)
+
     async def _cancel_early(self, commit: _EarlyCommit, *, reason: str) -> None:
         commit.resumed = True
         commit.settled.set()
+        self._withdraw_effects(commit)
         self._journal.record(
             "early_turn_cancelled",
             source="agent",
             transcript_id=commit.event.id,
             reason=reason,
+            dispatched=[sent.command_id for sent in commit.dispatched],
         )
         self._early_withdrawn.add(commit.event.id)
         self._queue.discard(commit.event.id)

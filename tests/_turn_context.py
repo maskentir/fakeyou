@@ -26,6 +26,7 @@ from fakeyou.conversation.turn_queue import AdmittedFinals, BargeLatch, PendingF
 from fakeyou.conversation.turn_recovery import RecoveryOptions, TurnRecovery
 from fakeyou.observability.faults import FaultReporter
 from fakeyou.observability.journal import JournalSink
+from fakeyou.session.commands import CommandOutcome
 
 
 @dataclass
@@ -53,6 +54,8 @@ class TurnTestContext:
     admitted: AdmittedFinals = field(default_factory=AdmittedFinals)
     barge: BargeLatch = field(default_factory=BargeLatch)
     plans: dict[str, PlannedTurn] = field(default_factory=dict)
+    plans_recorded: list[tuple[str, str]] = field(default_factory=list)
+    carried: dict[str, tuple[CommandOutcome, ...]] = field(default_factory=dict)
     moves: list[tuple[ConversationPhase, str]] = field(default_factory=list)
     failures: list[Exception] = field(default_factory=list)
     barge_in: bool = True
@@ -79,6 +82,12 @@ class TurnTestContext:
     def early_gate(self, transcript_id: str) -> None:
         del transcript_id
         return None
+
+    def plan_recorded(self, transcript_id: str, plan_id: str) -> None:
+        self.plans_recorded.append((transcript_id, plan_id))
+
+    def prior_effects(self, transcript_id: str) -> tuple[CommandOutcome, ...]:
+        return self.carried.get(transcript_id, ())
 
     def request_pending(self) -> None:
         self.requested = True

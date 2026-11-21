@@ -229,6 +229,8 @@ class CommandPort(Protocol):
         self, spec: CommandSpec, *, plan_id: str, ordinal: int, actor: str
     ) -> CommandOutcome: ...
 
+    def withdraw(self, plan_id: str) -> tuple[CommandOutcome, ...]: ...
+
 
 @dataclass(frozen=True, slots=True)
 class SentenceLimits:
@@ -309,6 +311,10 @@ class TurnContext(Protocol):
     def drafts(self) -> ReplyDrafts | None: ...
 
     def early_gate(self, transcript_id: str) -> EarlyGate | None: ...
+
+    def plan_recorded(self, transcript_id: str, plan_id: str) -> None: ...
+
+    def prior_effects(self, transcript_id: str) -> tuple[CommandOutcome, ...]: ...
 
     @property
     def faults(self) -> FaultReporter | None: ...
@@ -886,6 +892,7 @@ _OUTCOME_NOTES: dict[str, str] = {
         "{kind} was done but you could not see it take effect; do not say anyone saw it."
     ),
     "unknown": "It is not known whether {kind} happened; say you are not sure it went through.",
+    "dispatching": "It is not known whether {kind} happened; say you are not sure it went through.",
 }
 _REFUSAL_NOTES: dict[str, str] = {
     "unattributed_actor": (
@@ -1004,6 +1011,7 @@ async def _leave(runtime: TurnContext, planned: PlannedTurn) -> CommandOutcome |
 
 def _record_plan(runtime: TurnContext, event_id: str, planned: PlannedTurn) -> None:
     plan = planned.plan
+    runtime.plan_recorded(event_id, plan.plan_id)
     runtime.journal.record(
         "plan_selected",
         source="agent",
@@ -1109,7 +1117,7 @@ async def _answer_turn(
     if planned.plan.output == "chat":
         await _deliver_chat(runtime, final, planned, generation, outcome)
         return
-    reply_event = for_reply(final, planned, outcome)
+    reply_event = for_reply(final, planned, outcome or _dispatched_chat(runtime, final.id))
     if judged is None:
         reply_event = replace(reply_event, evidence_needs=UNJUDGED_EVIDENCE)
     farewell = Farewell()
@@ -1482,6 +1490,18 @@ async def _deliver_chat(
             "chat_reply_dropped", source="agent", transcript_id=event.id, reason="no_chat_channel"
         )
         return
+    sent_early = _dispatched_chat(runtime, event.id)
+    if sent_early is not None:
+        runtime.journal.record(
+            "chat_reply_dropped",
+            source="agent",
+            transcript_id=event.id,
+            reason="already_dispatched",
+            action_id=sent_early.command_id,
+            state=sent_early.state,
+        )
+        _move_phase(runtime, "waiting", event.id)
+        return
     hook = tool_start_hook(runtime, generation, None, event.id)
     reply_event = await with_evidence(runtime, event.text, for_reply(event, planned, outcome))
     reply = await _respond_within(
@@ -1509,6 +1529,12 @@ async def _deliver_chat(
     if sent is not None and not sent.not_done:
         await _leave(runtime, planned)
     _move_phase(runtime, "listening" if text else "waiting", event.id)
+
+
+def _dispatched_chat(runtime: TurnContext, transcript_id: str) -> CommandOutcome | None:
+    return next(
+        (sent for sent in runtime.prior_effects(transcript_id) if sent.kind == "send_chat"), None
+    )
 
 
 async def _run_chat_turn(runtime: TurnContext, event: TranscriptEvent, generation: int) -> None:
