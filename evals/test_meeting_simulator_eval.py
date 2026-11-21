@@ -421,22 +421,65 @@ async def test_the_twin_answers_chat_and_acts_on_the_meeting_when_asked(tmp_path
     require("turn_failed" not in meeting.events(), "behavioral_assertion_failure", "a turn failed")
 
 
+SLIDE_ONLY_TOKEN = "HARBOR-47"
+
+
+def _screen_question(rows: list[dict[str, Any]], after: int) -> dict[str, Any]:
+    decided = [
+        row for row in rows[after:] if row["event"] == "policy_decided" and "token" in row["heard"]
+    ]
+    require(
+        bool(decided), "behavioral_assertion_failure", "the review-token question was not judged"
+    )
+    return decided[-1]
+
+
+def _screen_looks(rows: list[dict[str, Any]], transcript_id: str) -> list[dict[str, Any]]:
+    return [
+        row
+        for row in rows
+        if row["event"] == "perception_evidence_resolved"
+        and row.get("transcript_id") == transcript_id
+        and row.get("evidence_kind") == "screen"
+        and row.get("resolution") != "unavailable"
+    ]
+
+
 async def test_the_twin_corrects_a_wrong_slide_and_reads_the_shared_screen(tmp_path: Path) -> None:
     async with _meeting(tmp_path, "sim-s3-screen") as meeting:
         await meeting.simulator.share(
-            HARUN, "Orchid Launch Plan", ["Beta launch: 21 October 2026", "Checklist: Rani"]
+            HARUN,
+            "Orchid Launch Plan",
+            [
+                "Beta launch: 21 October 2026",
+                f"Review token: {SLIDE_ONLY_TOKEN}",
+                "Checklist: Rani",
+            ],
         )
         await wait_for_event(meeting.journal, "screen_reading_finished", within=60)
         correction = await meeting.next_turn(0, within=90)
-        described = await meeting.ask("whats-on-screen.wav")
+        asked_at = len(journal_rows(meeting.journal))
+        read = await meeting.ask("review-token.wav")
 
+    rows = journal_rows(meeting.journal)
+    question = _screen_question(rows, asked_at)
     require(
         "14 october" in correction, "behavioral_assertion_failure", f"correction {correction!r}"
     )
     require(
-        "orchid" in described or "launch" in described,
+        question.get("state_question") == "none" and "screen" in question["evidence_needs"],
         "behavioral_assertion_failure",
-        f"described {described!r}",
+        f"the review-token question was not judged a screen look: {question}",
+    )
+    require(
+        bool(_screen_looks(rows, question["transcript_id"])),
+        "behavioral_assertion_failure",
+        "the review token was answered without inspecting the shared screen",
+    )
+    require(
+        SLIDE_ONLY_TOKEN.casefold().replace("-", " ") in read.replace("-", " "),
+        "behavioral_assertion_failure",
+        f"read {read!r}",
     )
     require("turn_failed" not in meeting.events(), "behavioral_assertion_failure", "a turn failed")
 
