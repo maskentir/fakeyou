@@ -1,6 +1,12 @@
+import hashlib
 import re
+from importlib import import_module
 from pathlib import Path
+from unittest.mock import patch
 
+import tiktoken
+
+from fakeyou.config.settings import EmbedderSettings
 from fakeyou.foundation.invariants import (
     AGENT_MIC_SOURCE_NAME,
     AGENT_SINK_NAME,
@@ -48,3 +54,28 @@ def test_dockerfile_installs_pulse_configs() -> None:
     dockerfile = _read("Dockerfile")
     assert "COPY docker/audio/default.pa /etc/fakeyou/default.pa" in dockerfile
     assert "COPY docker/audio/daemon.conf /etc/pulse/daemon.conf" in dockerfile
+
+
+def _cl100k_source() -> tuple[str, str]:
+    asked: dict[str, str] = {}
+
+    def capture(blobpath: str, expected_hash: str) -> dict[bytes, int]:
+        asked.update(blobpath=blobpath, expected_hash=expected_hash)
+        return {}
+
+    with patch("tiktoken_ext.openai_public.load_tiktoken_bpe", capture):
+        import_module("tiktoken_ext.openai_public").cl100k_base()
+    return asked["blobpath"], asked["expected_hash"]
+
+
+def test_the_image_bakes_the_encoding_the_embedder_counts_tokens_with() -> None:
+    dockerfile = _read("Dockerfile")
+    runtime = dockerfile[dockerfile.index("FROM base AS runtime") :]
+    blobpath, expected_hash = _cl100k_source()
+    cached = hashlib.sha1(blobpath.encode()).hexdigest()
+    encoding = tiktoken.encoding_name_for_model(EmbedderSettings().model)
+
+    assert encoding == "cl100k_base"
+    assert f"{expected_hash}  /workspace/tiktoken/{cached}" in dockerfile
+    assert "COPY --from=builder /workspace/tiktoken /opt/tiktoken" in runtime
+    assert "TIKTOKEN_CACHE_DIR=/opt/tiktoken" in runtime
