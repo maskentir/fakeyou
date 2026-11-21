@@ -269,10 +269,12 @@ class ProviderDoubles:
         if self.mode == "record":
             _require_google(settings)
             snapshot = _without_secrets(settings.model_dump(mode="json", exclude={"paths"}))
-            SNAPSHOT.write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n")
+            self.staged_snapshot.write_text(
+                json.dumps(snapshot, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
             self._stt_upstream = settings.stt.url
             return self._pointed(settings, None)
-        snapshot = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
+        snapshot = json.loads(self.snapshot.read_text(encoding="utf-8"))
         recorded = Settings.model_validate({**snapshot, "paths": settings.paths.model_dump()})
         _require_google(recorded)
         if self.mode == "replay":
@@ -654,6 +656,14 @@ class ProviderDoubles:
                 await socket.send_json(line.message)
 
     @property
+    def snapshot(self) -> Path:
+        return self.cassette.with_name(SNAPSHOT.name)
+
+    @property
+    def staged_snapshot(self) -> Path:
+        return self.cassette.with_name(f"{self.cassette.stem}.{SNAPSHOT.name}.candidate")
+
+    @property
     def reaches_providers(self) -> bool:
         return self._client is not None
 
@@ -719,6 +729,8 @@ class ProviderDoubles:
         failures = self.integrity_failures()
         if failures:
             raise CassetteError(f"{self.cassette.name} not promoted: {'; '.join(failures)}")
+        if self.mode == "record":
+            self.staged_snapshot.replace(self.snapshot)
         self.writer.path.replace(self.cassette)
 
     def finish_recording(self) -> None:
@@ -765,7 +777,7 @@ async def _started(server: uvicorn.Server, serving: asyncio.Future[None]) -> Non
 
 
 def recorded_judge(folder: Path = CASSETTES) -> TurnJudgeShape:
-    snapshot = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
+    snapshot = json.loads((folder / SNAPSHOT.name).read_text(encoding="utf-8"))
     role = snapshot["turn_judge"]["model"] or snapshot["reply"]
     exchanges = (
         line
@@ -789,6 +801,8 @@ def provider_doubles(scenario: str) -> ProviderDoubles:
         )
     if not path.exists():
         raise CassetteError(f"no cassette for {scenario} at {path}; record it before replaying")
+    if not (folder / SNAPSHOT.name).exists():
+        raise CassetteError(f"no settings snapshot in {folder}; record it before replaying")
     ledger = ReplayLedger.load(path, recorded_judge(folder))
     if mode == "replay":
         return ProviderDoubles(mode, path, ledger=ledger)

@@ -20,6 +20,7 @@ from evals import _provider_doubles as doubles_module
 from evals._lineage_classifier import Pricing
 from evals._provider_doubles import (
     CASSETTES,
+    SNAPSHOT,
     CassetteWriter,
     ProviderDoubles,
     _token_vector,
@@ -205,6 +206,7 @@ def test_replay_leaves_no_provider_endpoint_outside_the_doubles(
     monkeypatch.setenv("SIMULATOR_PROVIDERS", "replay")
     monkeypatch.setenv("SIMULATOR_CASSETTE_DIR", str(tmp_path))
     (tmp_path / "sim-s1.jsonl").write_bytes((CASSETTES / "sim-s1.jsonl").read_bytes())
+    (tmp_path / "settings.json").write_bytes(SNAPSHOT.read_bytes())
     doubles = provider_doubles("sim-s1")
     doubles.base_url = "http://127.0.0.1:9"
 
@@ -342,6 +344,7 @@ def test_recording_refuses_to_start_without_a_budget(
     monkeypatch.setenv("SIMULATOR_CASSETTE_DIR", str(tmp_path))
     monkeypatch.delenv("SIMULATOR_RECORDING_BUDGET", raising=False)
     (tmp_path / "sim-s1.jsonl").write_bytes((CASSETTES / "sim-s1.jsonl").read_bytes())
+    (tmp_path / "settings.json").write_bytes(SNAPSHOT.read_bytes())
 
     with pytest.raises(ValueError, match="SIMULATOR_RECORDING_BUDGET"):
         provider_doubles("sim-s1")
@@ -349,6 +352,7 @@ def test_recording_refuses_to_start_without_a_budget(
 
 def test_record_missing_refuses_to_start_without_gemini_keys(tmp_path: Path) -> None:
     path = _recorded(tmp_path / "scenario.jsonl", "hello")
+    (tmp_path / "settings.json").write_bytes(SNAPSHOT.read_bytes())
     doubles = ProviderDoubles(
         "record_missing",
         path,
@@ -425,6 +429,7 @@ CAPTURED_LATEST = "Rani Twin, can you"
 async def captured_judge_request(folder: str) -> dict[str, Any]:
     path = Path(folder) / "scenario.jsonl"
     path.write_text("", encoding="utf-8")
+    (Path(folder) / "settings.json").write_bytes(SNAPSHOT.read_bytes())
     doubles = ProviderDoubles("replay", path, ledger=ReplayLedger.load(path, JUDGE))
     asked: list[dict[str, Any]] = []
     respond = ReplayLedger.respond
@@ -971,6 +976,7 @@ def _recording(
     folder = tmp_path / "cassettes"
     folder.mkdir()
     (folder / "sim-s1.jsonl").write_bytes((CASSETTES / "sim-s1.jsonl").read_bytes())
+    (folder / "settings.json").write_bytes(SNAPSHOT.read_bytes())
     lines = [
         _recorded(tmp_path / f"{index}.jsonl", question).read_text(encoding="utf-8")
         for index, question in enumerate(["Twin, raise your hand", "Twin, stale question"])
@@ -1011,20 +1017,90 @@ async def test_record_missing_keeps_the_cassette_until_a_clean_run_promotes_it(
     assert not doubles.cassette.with_name("scenario.jsonl.candidate").exists()
 
 
-async def test_record_writes_only_a_candidate_until_it_is_promoted(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    doubles = _recording(tmp_path, monkeypatch, "record")
-    before = doubles.cassette.read_bytes()
+def _recorded_settings() -> Settings:
+    snapshot = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
+    snapshot["reply"]["timeout_seconds"] = 16.0
+    return Settings.model_validate(snapshot)
 
-    async with _upstream([]) as upstream:
+
+def _repository_snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    repository = tmp_path / "repository" / "settings.json"
+    repository.parent.mkdir()
+    repository.write_bytes(SNAPSHOT.read_bytes())
+    monkeypatch.setattr(doubles_module, "SNAPSHOT", repository)
+    return repository
+
+
+async def _record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, answer: int = 200
+) -> tuple[ProviderDoubles, dict[Path, bytes]]:
+    repository = _repository_snapshot(tmp_path, monkeypatch)
+    doubles = _recording(tmp_path, monkeypatch, "record")
+    doubles.base_url = "http://127.0.0.1:9"
+    originals = [
+        doubles.cassette,
+        doubles.cassette.with_name("settings.json"),
+        repository,
+        SNAPSHOT,
+    ]
+    before = {path: path.read_bytes() for path in originals}
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(answer, json=ANSWER)
+
+    doubles.settings(_recorded_settings())
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as upstream:
         monkeypatch.setattr(doubles, "_client", upstream)
         await _ask(doubles, "Twin, lower your hand")
+    return doubles, before
 
-    assert doubles.cassette.read_bytes() == before
+
+def _unchanged(before: dict[Path, bytes]) -> dict[str, bool]:
+    return {str(path): path.read_bytes() == data for path, data in before.items()}
+
+
+async def test_record_changes_neither_cassette_nor_snapshot_until_it_is_promoted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    doubles, before = await _record(tmp_path, monkeypatch)
+
+    assert all(_unchanged(before).values()), _unchanged(before)
     assert doubles.integrity_failures() == []
     doubles.promote()
+
+    promoted = json.loads(doubles.snapshot.read_text(encoding="utf-8"))
+    assert promoted["reply"]["timeout_seconds"] == 16.0
     assert _questions(doubles.cassette) == ["Twin, lower your hand"]
+    assert [path.read_bytes() == before[path] for path in list(before)[2:]] == [True, True]
+    assert not doubles.staged_snapshot.exists()
+    assert not doubles.cassette.with_name("scenario.jsonl.candidate").exists()
+
+
+async def test_a_behavioural_failure_leaves_the_cassette_and_snapshot_as_they_were(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    doubles, before = await _record(tmp_path, monkeypatch)
+
+    assert all(_unchanged(before).values()), _unchanged(before)
+    assert doubles.staged_snapshot.exists()
+    assert doubles.cassette.with_name("scenario.jsonl.candidate").exists()
+
+
+@pytest.mark.parametrize("failure", ["provider", "budget"])
+async def test_a_failed_record_run_promotes_neither_cassette_nor_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    doubles, before = await _record(
+        tmp_path, monkeypatch, answer=500 if failure == "provider" else 200
+    )
+    if failure == "budget":
+        _stop_the_budget(doubles)
+
+    assert doubles.integrity_failures()
+    with pytest.raises(CassetteError, match="not promoted"):
+        doubles.promote()
+    assert all(_unchanged(before).values()), _unchanged(before)
 
 
 async def test_replay_integrity_still_requires_a_closed_replay(
@@ -1141,3 +1217,27 @@ def test_every_scenario_promotes_its_recording_only_after_its_last_assertion() -
 
     assert len(scenarios) == 6
     assert promotions == {scenario.name: [len(scenario.body) - 1] for scenario in scenarios}
+
+
+def test_replay_reads_only_the_snapshot_beside_its_cassettes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(doubles_module, "SNAPSHOT", tmp_path / "absent" / "settings.json")
+    folder = tmp_path / "cassettes"
+    folder.mkdir()
+    (folder / "sim-s1.jsonl").write_bytes((CASSETTES / "sim-s1.jsonl").read_bytes())
+    snapshot = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
+    snapshot["reply"]["timeout_seconds"] = 16.0
+    (folder / "settings.json").write_text(json.dumps(snapshot), encoding="utf-8")
+    monkeypatch.setenv("SIMULATOR_PROVIDERS", "replay")
+    monkeypatch.setenv("SIMULATOR_CASSETTE_DIR", str(folder))
+
+    doubles = provider_doubles("sim-s1")
+    doubles.base_url = "http://127.0.0.1:9"
+    reply = doubles.settings(Settings()).reply
+    (folder / "settings.json").unlink()
+
+    assert reply is not None
+    assert reply.timeout_seconds == 16.0
+    with pytest.raises(CassetteError, match="no settings snapshot"):
+        provider_doubles("sim-s1")

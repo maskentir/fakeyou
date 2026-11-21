@@ -36,8 +36,9 @@ The modes that reach a provider also need `-v "$PWD/.env:/workspace/.env:ro"`.
 `SIMULATOR_PROVIDERS` picks where the providers come from:
 
 - `replay` (the default) needs no `.env` and contacts no provider. It rebuilds the settings from
-  the recorded snapshot, replays Muse and Gemini from the cassettes in
-  `evals/fixtures/simulator/cassettes/`, and speaks through a synthetic Cartesia. CI
+  the settings snapshot (`settings.json`) beside the cassettes, replays Muse and Gemini
+  from the cassettes in `evals/fixtures/simulator/cassettes/` (or `SIMULATOR_CASSETTE_DIR`,
+  which must hold its own `settings.json`), and speaks through a synthetic Cartesia. CI
   runs it on every pull request, with every provider host mapped to a refused address.
   Every provider endpoint, the memory model included, points at the doubles, and a
   request to a route no double serves fails the scenario.
@@ -149,9 +150,13 @@ cassette and leave the cassette itself untouched. When the meeting ends, a recor
 integrity failure fails the scenario: a refused or failed provider call, a replay miss, a
 stopped budget or a stopped speech session. Unused recordings are not a failure while
 recording, because they are pruned. The scenario's behavioural assertions then run, and
-its last statement, `meeting.promote()`, replaces the cassette with the candidate. A
-scenario that fails anywhere leaves the candidate behind for inspection and the cassette
-as it was. A meta-test checks that every scenario promotes only as its last statement.
+its last statement, `meeting.promote()`, replaces the cassette with the candidate.
+`record` also stages the settings snapshot as `<scenario>.settings.json.candidate` in the
+same folder and never writes `settings.json` directly; promotion replaces the snapshot
+first, then the cassette. Each replacement is atomic on its own, but the pair is not: an
+interruption between the two leaves the new snapshot with the old cassette, so re-run the
+recording. A scenario that fails anywhere leaves the candidates behind for inspection and
+the cassette and snapshot as they were. A meta-test checks that every scenario promotes only as its last statement.
 `replay` still requires a closed replay before the assertions run.
 
 Then run `replay` until every scenario is closed. Where a replay asks something the

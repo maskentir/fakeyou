@@ -24,7 +24,7 @@ from evals._meeting_simulator import (
     session_modes,
     wait_for_event,
 )
-from evals._provider_doubles import SNAPSHOT, ProviderDoubles, provider_doubles
+from evals._provider_doubles import ProviderDoubles, provider_doubles
 from evals._replay_cassette import CassetteError
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import PathSettings, Settings
@@ -259,7 +259,7 @@ def _report(
         "revision": os.environ.get("SIMULATOR_REVISION", "unknown"),
         "fixtures": {
             "cassette_sha256": provider.get("cassette_sha256"),
-            "settings_sha256": _digest(SNAPSHOT),
+            "settings_sha256": _digest(doubles.snapshot),
             "clips": {
                 action["clip"]: _digest(FIXTURES / action["clip"])
                 for action in actions
