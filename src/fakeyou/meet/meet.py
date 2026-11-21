@@ -11,12 +11,16 @@ from cloakbrowser.human.actionability import ActionabilityError
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Locator, Page
 
+from fakeyou.config.meeting_request import meeting_code
 from fakeyou.config.settings import DEFAULTS
 from fakeyou.foundation.invariants import POLL_TIMEOUT_MULTIPLIER
 
 JoinStatus = Literal["admitted", "denied", "blocked", "timeout", "aborted", "failed", "ended"]
 CallState = Literal["in_call", "removed", "ended", "lobby", "left", "unknown"]
 LeaveStatus = Literal["left", "failed"]
+Destination = Literal[
+    "the requested meeting", "the Meet home page", "a different Meet page", "another host"
+]
 
 EXPLICIT_DENIAL_MARKERS = (
     "denied your request",
@@ -38,6 +42,7 @@ WAITING_ROOM_MARKERS = (
 )
 
 _LOCATION_PROBE = "(() => location.href)()"
+HEADING_LIMIT = 80
 PREPARE_TIMEOUT_SECONDS = 120.0
 CALL_STATE_TIMEOUT_SECONDS = 5.0
 LOBBY_READ_FAILURE_LIMIT = 5
@@ -162,20 +167,44 @@ def _is_in_call(content: str, signals: MeetSignals) -> bool:
     return _admitted_marker(signals) in content and not _is_waiting(content)
 
 
-async def _page_host(page: Page, *, poll_interval_seconds: float) -> str | None:
+async def _page_location(page: Page, *, poll_interval_seconds: float) -> str | None:
     try:
         async with asyncio.timeout(POLL_TIMEOUT_MULTIPLIER * poll_interval_seconds):
             current = await page.evaluate(_LOCATION_PROBE)
     except (PlaywrightError, TimeoutError):
         return None
-    return urlparse(str(current)).hostname
+    return str(current)
 
 
-def _landed_host_failure(page: Page, link: str) -> str | None:
-    landed = urlparse(page.url).hostname
-    if landed == urlparse(link).hostname:
+def landed_destination(landed: str, link: str) -> Destination:
+    actual = urlparse(landed)
+    if actual.hostname != urlparse(link).hostname:
+        return "another host"
+    if actual.path in ("", "/"):
+        return "the Meet home page"
+    code = meeting_code(landed)
+    if code is not None and code == meeting_code(link):
+        return "the requested meeting"
+    return "a different Meet page"
+
+
+def _landed_failure(landed: str, link: str) -> str | None:
+    destination = landed_destination(landed, link)
+    if destination == "the requested meeting":
         return None
-    return f"navigation landed on an unexpected host: {landed or 'unknown'}"
+    if destination == "another host":
+        return f"navigation landed on an unexpected host: {urlparse(landed).hostname or 'unknown'}"
+    return f"navigation landed on {destination} instead of the requested meeting"
+
+
+async def _page_heading(page: Page) -> str:
+    try:
+        headings = await page.locator("h1, h2").evaluate_all(
+            "nodes => nodes.map(node => node.textContent.trim()).filter(Boolean)"
+        )
+    except PlaywrightError:
+        return "unknown"
+    return " | ".join(str(heading)[:HEADING_LIMIT] for heading in headings[:3]) or "none"
 
 
 async def _has_live_captcha(page: Page) -> bool:
@@ -200,14 +229,12 @@ async def _open_meeting_page(
     else:
         failed = response is not None and not response.ok
     if not failed:
-        return _landed_host_failure(page, link)
-    current_host = await _page_host(page, poll_interval_seconds=poll_interval_seconds)
-    if current_host is not None and current_host == urlparse(link).hostname:
+        return _landed_failure(page.url, link)
+    current = await _page_location(page, poll_interval_seconds=poll_interval_seconds)
+    if current is not None and _landed_failure(current, link) is None:
         return None
-    return (
-        f"navigation to the meeting link failed: {target}; "
-        f"current host: {current_host or 'unknown'}"
-    )
+    destination = landed_destination(current, link) if current is not None else "unknown"
+    return f"navigation to the meeting link failed; current destination: {destination}"
 
 
 async def click_when_ready(
@@ -252,9 +279,21 @@ async def _dismiss_media_dialog(
     )
 
 
+async def _name_field_failure(page: Page, link: str, failure: str) -> str:
+    landed = page.url
+    heading = await _page_heading(page)
+    navigation = _landed_failure(landed, link)
+    if navigation is not None:
+        return f"{navigation}; heading: {heading}"
+    return (
+        f"{failure}; destination: {landed_destination(landed, link)}; heading: {heading}; "
+        f"visible controls: {await visible_control_labels(page)}"
+    )
+
+
 async def _enter_twin_name(
     page: Page,
-    twin_name: str,
+    request: GuestJoinRequest,
     signals: MeetSignals,
     sleep: Callable[[float], Awaitable[None]],
 ) -> str | None:
@@ -264,9 +303,8 @@ async def _enter_twin_name(
     except PlaywrightError as error:
         return f"finding the name field failed: ({type(error).__name__})"
     if found == 0:
-        return (
-            f"name field {signals.name_field!r} not found on the lobby page; "
-            f"visible controls: {await visible_control_labels(page)}"
+        return await _name_field_failure(
+            page, request.link, f"name field {signals.name_field!r} not found on the lobby page"
         )
     failure = await click_when_ready(
         partial(page.get_by_placeholder, signals.name_field),
@@ -275,9 +313,9 @@ async def _enter_twin_name(
         NAME_FIELD_ATTEMPTS,
     )
     if failure is not None:
-        return f"{failure}; visible controls: {await visible_control_labels(page)}"
+        return await _name_field_failure(page, request.link, failure)
     try:
-        await page.keyboard.type(twin_name, delay=TYPE_DELAY_MS)
+        await page.keyboard.type(request.twin_name, delay=TYPE_DELAY_MS)
     except PlaywrightError as error:
         return f"typing the twin name failed: ({type(error).__name__})"
     return None
@@ -348,7 +386,7 @@ async def _prepare_lobby(
     failure = await _dismiss_media_dialog(page, signals, polling.sleep)
     if failure is not None:
         return failure
-    failure = await _enter_twin_name(page, request.twin_name, signals, polling.sleep)
+    failure = await _enter_twin_name(page, request, signals, polling.sleep)
     if failure is not None:
         return failure
     return await _click_join(

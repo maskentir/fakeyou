@@ -1,7 +1,7 @@
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import parse_qsl, urlparse
+from urllib.parse import parse_qsl, urlparse, urlsplit
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import parse_session_id
@@ -25,11 +25,18 @@ class MeetingRequest:
     twin_id: str | None = None
 
 
-_MEET_CODE_PATH = re.compile(r"/(?:meet/)?[a-z]{3}-[a-z]{4}-[a-z]{3}")
+_MEET_CODE = r"[a-z]{3}-[a-z]{4}-[a-z]{3}"
+_MEET_CODE_PATH = re.compile(rf"/(?:meet/)?{_MEET_CODE}")
+_LANDED_CODE_PATH = re.compile(rf"/(?:meet/)?({_MEET_CODE})/?", re.IGNORECASE)
 _ALLOWED_LINK_QUERY: dict[str, re.Pattern[str]] = {
     "authuser": re.compile(r"\d+"),
     "hl": re.compile(r"[a-zA-Z-]+"),
 }
+
+
+def meeting_code(link: str) -> str | None:
+    match = _LANDED_CODE_PATH.fullmatch(urlsplit(link).path)
+    return match.group(1).lower() if match else None
 
 
 def _check_link(link: str) -> None:
