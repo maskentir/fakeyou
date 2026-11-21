@@ -70,7 +70,7 @@ def _edges() -> dict[tuple[PublicPhase, str], _Transition]:
     add(("joining",), "denied", _Transition("ended", reason="denied_by_host"))
     add(("joining",), "lobby_timed_out", _Transition("ended", reason="lobby_timeout_reached"))
     add(("joining",), "participants_left", _Transition("ended", reason="alone_limit_reached"))
-    add(("joining",), "meeting_ended", _Transition("ended", reason="ended_by_host"))
+    add(("joining", "lobby"), "meeting_ended", _Transition("ended", reason="ended_by_host"))
     add(("joining",), "removed", _Transition("ended", reason="removed_by_host"))
     add(("joining",), "duration_reached", _Transition("ended", reason="duration_limit_reached"))
     leaving = _Transition("leaving", effect="leave_requested")

@@ -129,7 +129,7 @@ async def test_request_guest_join_reports_platform_block() -> None:
     assert "can't join this" in result.detail
 
 
-async def test_request_guest_join_reports_a_call_that_had_already_ended() -> None:
+async def test_request_guest_join_reports_a_meeting_that_ended_in_the_lobby() -> None:
     page = meet_page([ENDED])
     clock = FakeClock()
 
@@ -140,7 +140,8 @@ async def test_request_guest_join_reports_a_call_that_had_already_ended() -> Non
     )
 
     assert result.status == "ended"
-    assert "already ended" in result.detail
+    assert result.knocked
+    assert result.detail == "the meeting ended while the twin was waiting in the lobby"
 
 
 async def test_access_refusal_with_call_ended_button_does_not_mean_meeting_ended() -> None:
