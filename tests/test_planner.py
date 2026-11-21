@@ -4,6 +4,7 @@ from typing import override
 import pytest
 
 from fakeyou.conversation import turn_graph
+from fakeyou.conversation.reply_planner import SpokenChunk
 from fakeyou.conversation.turn_graph import (
     OWNER_CLAIM_NOTE,
     PlannedTurn,
@@ -15,6 +16,7 @@ from fakeyou.conversation.turn_graph import (
     plan_notes,
     with_evidence,
 )
+from fakeyou.conversation.turn_queue import PendingFinals
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.orchestration.kernel_port import KernelPort
 from fakeyou.perception.meet_protocol import MeetUser
@@ -42,6 +44,10 @@ class FakeCommands:
         self.ran.append((spec, ordinal))
         self.actors.append(actor)
         return CommandOutcome(f"{plan_id}:{ordinal}", spec.kind, self.state)
+
+    def withdraw(self, plan_id: str) -> tuple[CommandOutcome, ...]:
+        del plan_id
+        return ()
 
 
 class SilentSpeaker(PreparedSpeaker):
@@ -359,3 +365,81 @@ async def test_recovery_apology_is_declared_no_visual() -> None:
 
     assert speaker.declared == [recovery_runtime.recovery.failed_line]
     assert speaker.spoken == []
+
+
+async def test_a_chat_state_answer_is_withheld_when_its_utterance_already_sent_a_chat() -> None:
+    commands = FakeCommands()
+    planned = PlannedTurn(
+        TurnPlan("p", "chat_only", output="chat", state_question="participant_count")
+    )
+    state_runtime = TurnTestContext(
+        speaker=RecordingSpeaker(),
+        journal=RecordingJournal(),
+        commands=commands,
+        state_speech=lambda _question, _language: StateAnswer("2 people are here."),
+    )
+    bound = turn_graph.BoundEffects(
+        (CommandOutcome("c1", "send_chat", "dispatching"),),
+        revised=False,
+        early_transcript_id="early-1",
+    )
+
+    answered = await turn_graph.answer_state(
+        state_runtime, event("How many are here? Post it."), planned, 0, bound
+    )
+
+    assert answered is True
+    assert commands.ran == []
+
+
+class PostedReply:
+    async def respond(self, transcript: str) -> SpokenChunk:
+        return SpokenChunk(text=f"posted: {transcript}", language="en")
+
+
+def batch_runtime(owner: str, journal: RecordingJournal) -> TurnTestContext:
+    runtime = TurnTestContext(
+        speaker=RecordingSpeaker(),
+        journal=journal,
+        commands=FakeCommands(),
+        chat_turn=lambda _events, _hook: PostedReply(),
+    )
+    runtime.carried[owner] = turn_graph.BoundEffects(
+        (CommandOutcome("c1", "send_chat", "dispatching"),),
+        revised=False,
+        early_transcript_id="early-1",
+    )
+    runtime.plans["f2"] = PlannedTurn(TurnPlan("plan-f2", "chat_only", output="chat"))
+    return runtime
+
+
+async def drain_batch(runtime: TurnTestContext) -> None:
+    queue = PendingFinals()
+    queue.admit(replace(event("Rani, post the beta date in the chat."), id="f1"))
+    queue.admit(replace(event("Rani, also post the QA owner in the chat."), id="f2"))
+    await turn_graph.drain_turns(runtime, turn_graph.build_speech_graph(), queue)
+
+
+async def test_an_earlier_final_in_a_batch_does_not_withhold_a_distinct_chat_request() -> None:
+    journal = RecordingJournal()
+    runtime = batch_runtime("f1", journal)
+
+    await drain_batch(runtime)
+
+    assert isinstance(runtime.commands, FakeCommands)
+    assert [spec.kind for spec, _ordinal in runtime.commands.ran] == ["send_chat"]
+    assert journal.events("chat_reply_dropped") == []
+    assert runtime.carried == {}
+
+
+async def test_the_answered_final_of_a_batch_still_withholds_its_own_dispatched_chat() -> None:
+    journal = RecordingJournal()
+    runtime = batch_runtime("f2", journal)
+
+    await drain_batch(runtime)
+
+    assert isinstance(runtime.commands, FakeCommands)
+    assert runtime.commands.ran == []
+    [dropped] = journal.events("chat_reply_dropped")
+    assert (dropped["reason"], dropped["early_transcript_id"]) == ("already_dispatched", "early-1")
+    assert runtime.carried == {}

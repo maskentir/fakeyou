@@ -244,7 +244,7 @@ async def test_evidence_is_gathered_once_for_the_heard_question_before_the_reply
 
 def test_graph_drains_every_pending_final_into_one_respond_call() -> None:
     assert "batch = queue.take()" in GRAPH_SOURCE
-    assert "work = _run_turn(runtime, speech, batch, scope, generation)" in GRAPH_SOURCE
+    assert "work = _run_turn(runtime, speech, batch, (scope, generation), bound)" in GRAPH_SOURCE
     assert "return ReplierWholeResponder(replier, events, hook)" in TURNS_SOURCE
     assert "hook = tool_start_hook(runtime, generation, floor_generation, final.id)" in GRAPH_SOURCE
     assert "if _closed(runtime) or runtime.admitted.count != generation:" in (GRAPH_SOURCE)
@@ -260,6 +260,10 @@ class RecordingCommands:
         del actor
         self.kinds.append(spec.kind)
         return CommandOutcome(f"{plan_id}-{ordinal}", spec.kind, "effect_unobserved")
+
+    def withdraw(self, plan_id: str) -> tuple[CommandOutcome, ...]:
+        del plan_id
+        return ()
 
 
 def leave_planning(event: TranscriptEvent, reading: Reading, channel: Channel) -> PlannedTurn:

@@ -80,6 +80,7 @@ class CommandRunner:
         self._closed = False
         self._left = False
         self._inflight: set[asyncio.Task[CommandRecord]] = set()
+        self._withdrawn_plans: set[str] = set()
         self.on_settled: Callable[[CommandRecord], None] | None = None
         self.on_left: Callable[[], None] | None = None
 
@@ -131,6 +132,17 @@ class CommandRunner:
     def recent(self, limit: int = 5) -> tuple[CommandOutcome, ...]:
         records = sorted(self._ledger.records(), key=lambda record: record.updated_at)
         return tuple(_outcome(record) for record in records[-limit:])
+
+    def withdraw(self, plan_id: str) -> tuple[CommandOutcome, ...]:
+        self._withdrawn_plans.add(plan_id)
+        return tuple(
+            _outcome(record)
+            for record in self._ledger.records()
+            if record.plan_id == plan_id and record.dispatches
+        )
+
+    def _withdrawn(self, record: CommandRecord) -> bool:
+        return record.plan_id in self._withdrawn_plans and not record.dispatches
 
     async def run(
         self, spec: CommandSpec, *, plan_id: str, ordinal: int, actor: str
@@ -216,6 +228,8 @@ class CommandRunner:
         for attempt in range(MAX_TOGGLE_ATTEMPTS):
             if attempt and self._blocked(record) is not None:
                 return self._finish(record, "failed_after_boundary", "blocked_before_retry")
+            if self._withdrawn(record):
+                return self._finish(record, "cancelled_before_boundary", "turn_withdrawn")
             record = self._boundary(record)
             await capture_error(partial(self._act, record.spec, binding))
             reached, error = await capture_error(readback)
@@ -227,6 +241,8 @@ class CommandRunner:
 
     async def _once(self, record: CommandRecord, binding: _Binding) -> CommandRecord:
         before = await self._echo_count(record, binding)
+        if self._withdrawn(record):
+            return self._finish(record, "cancelled_before_boundary", "turn_withdrawn")
         record = self._boundary(record)
         result, error = await capture_error(partial(self._act, record.spec, binding))
         if error is not None:

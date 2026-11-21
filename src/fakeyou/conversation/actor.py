@@ -25,6 +25,7 @@ from fakeyou.conversation.session import (
 )
 from fakeyou.conversation.thinking_cue import ThinkingCue
 from fakeyou.conversation.turn_graph import (
+    BoundEffects,
     CommandPort,
     ConversationPhase,
     EvidencePort,
@@ -71,6 +72,7 @@ from fakeyou.foundation.triggers import ReplyChannel
 from fakeyou.observability.faults import ConsumerSink, FaultReporter, capture_error, guard_observer
 from fakeyou.observability.journal import Journal, JournalSink
 from fakeyou.observability.provider_faults import classify_exception
+from fakeyou.session.commands import CommandOutcome
 from fakeyou.speech.contract import (
     PlaybackReceipt,
     PreparedSpeech,
@@ -118,6 +120,10 @@ def _tokens(text: str) -> list[str]:
 
 def _early_words(text: str) -> list[str]:
     return "".join(ch for ch in text.casefold() if ch.isalnum() or ch.isspace()).split()
+
+
+def _confirms(committed: str, final: str) -> bool:
+    return _early_words(committed) == _early_words(final)
 
 
 def says_more(text: str, committed: str) -> bool:
@@ -200,11 +206,22 @@ class EarlyOptions:
     prosody_wait_seconds: float = 0.25
 
 
+@dataclass(frozen=True, slots=True)
+class _AdmittedFinal:
+    transcript_id: str
+    participant_id: str
+    words: str
+    admitted_at: float
+
+
 @dataclass(slots=True)
 class _EarlyCommit:
     event: TranscriptEvent
     text: str
     resumed: bool = False
+    displaced: _AdmittedFinal | None = None
+    plan_id: str | None = None
+    dispatched: tuple[CommandOutcome, ...] = ()
     settled: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
 
 
@@ -303,7 +320,8 @@ class FloorActor:
         self._in_flight = False
         self._judge_tasks: set[asyncio.Task[None]] = set()
         self._last_attention: str | None = None
-        self._last_final: tuple[str, str, float] | None = None
+        self._last_final: _AdmittedFinal | None = None
+        self._carried_effects: dict[str, BoundEffects] = {}
         self._early_options: EarlyOptions | None = None
         self._early_answer: Callable[[TranscriptEvent], Awaitable[None]] | None = None
         self._early_text = ""
@@ -831,6 +849,7 @@ class FloorActor:
         self._closed = True
         self._admitted.advance()
         self._queue.clear()
+        self._carried_effects.clear()
         self._deferred.clear()
         early_tasks = [
             task
@@ -882,22 +901,30 @@ class FloorActor:
             self._early_withdrawn.discard(event.id)
             return None
         if self._open_final(event) is None:
+            self._carried_effects.pop(event.id, None)
             return None
         output = await self._invoke_final(event)
+        if not self._queue.holds(event):
+            self._carried_effects.pop(event.id, None)
         if event.id in self._early_withdrawn:
             self._early_withdrawn.discard(event.id)
             self._queue.discard(event.id)
         self.start_requested()
         decision: ParticipationDecision | None = output["participation"]
         if decision is not None and decision.decision in _ADMITTED:
-            self._last_final = (
-                event.participant_id,
-                " ".join(_tokens(event.text)),
-                self._clock(),
-            )
+            self._admit_final(event)
         if decision is not None and decision.decision not in _ADMITTED:
             await self._yield_floor(event.text, decision)
         return decision
+
+    def _admit_final(self, event: TranscriptEvent) -> None:
+        admitted = _AdmittedFinal(
+            event.id, event.participant_id, " ".join(_tokens(event.text)), self._clock()
+        )
+        commit = self._early_commit
+        if commit is not None and commit.event.id == event.id:
+            commit.displaced = self._last_final
+        self._last_final = admitted
 
     def receive_chat(self, event: TranscriptEvent) -> bool:
         if not event.text.strip():
@@ -1150,6 +1177,7 @@ class FloorActor:
             ):
                 await self._cancel_early(commit, reason="final_says_more")
             if commit.resumed:
+                self._carry_effects(commit, final)
                 return False
             self._journal.record(
                 "early_turn_verified",
@@ -1162,6 +1190,30 @@ class FloorActor:
             return True
         finally:
             commit.settled.set()
+
+    def _carry_effects(self, commit: _EarlyCommit, final: TranscriptEvent) -> None:
+        if not commit.dispatched:
+            return
+        if final.participant_id != commit.event.participant_id:
+            self._journal.record(
+                "early_effects_dropped",
+                source="agent",
+                transcript_id=final.id,
+                early_transcript_id=commit.event.id,
+                reason="other_participant",
+            )
+            return
+        revised = not _confirms(commit.text, final.text)
+        self._carried_effects[final.id] = BoundEffects(commit.dispatched, revised, commit.event.id)
+        self._journal.record(
+            "early_effects_bound",
+            source="agent",
+            transcript_id=final.id,
+            early_transcript_id=commit.event.id,
+            dispatched=[sent.command_id for sent in commit.dispatched],
+            states=[sent.state for sent in commit.dispatched],
+            revised=revised,
+        )
 
     def _cancel_early_hold(self, *, declined: str | None = None, words: int | None = None) -> None:
         self._early_version += 1
@@ -1227,17 +1279,40 @@ class FloorActor:
     def early_gate(self, transcript_id: str) -> _EarlyCommit | None:
         return self._early_gates.pop(transcript_id, None)
 
+    def plan_recorded(self, transcript_id: str, plan_id: str) -> None:
+        commit = self._early_commit
+        if commit is None or commit.event.id != transcript_id:
+            return
+        commit.plan_id = plan_id
+
+    def take_bound_effects(self, transcript_ids: Sequence[str]) -> dict[str, BoundEffects]:
+        return {
+            transcript_id: effects
+            for transcript_id in transcript_ids
+            if (effects := self._carried_effects.pop(transcript_id, None)) is not None
+        }
+
+    def _withdraw_effects(self, commit: _EarlyCommit) -> None:
+        commands = self.commands
+        if commit.plan_id is not None and commands is not None:
+            commit.dispatched = commands.withdraw(commit.plan_id)
+
     async def _cancel_early(self, commit: _EarlyCommit, *, reason: str) -> None:
         commit.resumed = True
         commit.settled.set()
+        self._withdraw_effects(commit)
         self._journal.record(
             "early_turn_cancelled",
             source="agent",
             transcript_id=commit.event.id,
             reason=reason,
+            dispatched=[sent.command_id for sent in commit.dispatched],
         )
         self._early_withdrawn.add(commit.event.id)
         self._queue.discard(commit.event.id)
+        last = self._last_final
+        if last is not None and last.transcript_id == commit.event.id:
+            self._last_final = commit.displaced
         active = self._floor.active
         if active is not None and active.transcript_id == commit.event.id:
             await cancel_speech(self._floor, self._journal, reason=reason)
@@ -1281,10 +1356,9 @@ class FloorActor:
         last = self._last_final
         if last is None:
             return False
-        _participant, previous, admitted_at = last
-        if self._clock() - admitted_at > _OVERLAP_WINDOW_SECONDS:
+        if self._clock() - last.admitted_at > _OVERLAP_WINDOW_SECONDS:
             return False
-        before = previous.split()
+        before = last.words.split()
         after = _tokens(text)
         if not before or not after:
             return False
@@ -1358,13 +1432,12 @@ class FloorActor:
         await cancel_speech(self._floor, self._journal, reason="interim")
 
     def _is_overlap_duplicate(self, event: TranscriptEvent) -> bool:
-        if self._last_final is None:
+        last = self._last_final
+        if last is None or last.participant_id != event.participant_id:
             return False
-        participant_id, previous, admitted_at = self._last_final
-        if participant_id != event.participant_id:
+        if self._clock() - last.admitted_at > _OVERLAP_WINDOW_SECONDS:
             return False
-        if self._clock() - admitted_at > _OVERLAP_WINDOW_SECONDS:
-            return False
+        previous = last.words
         current = " ".join(_tokens(event.text))
         if current == previous:
             return False

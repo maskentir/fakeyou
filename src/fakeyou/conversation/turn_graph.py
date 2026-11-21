@@ -1,10 +1,12 @@
 import asyncio
+import json
 from collections.abc import (
     AsyncIterator,
     Awaitable,
     Callable,
     Coroutine,
     Mapping,
+    Sequence,
 )
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -73,6 +75,7 @@ from fakeyou.foundation.language import spoken_language
 from fakeyou.foundation.participation import ParticipationContext
 from fakeyou.foundation.protocols import SupportsAclose
 from fakeyou.foundation.publication import SentenceBinding, StateProvenance, sentence_digest
+from fakeyou.foundation.resources import read_package_text
 from fakeyou.foundation.transcript import TranscriptEvent, spoken_part, with_system_notes
 from fakeyou.foundation.triggers import ReplyChannel
 from fakeyou.observability.cleanup import close_safely
@@ -224,10 +227,28 @@ StateSpeech = Callable[[StateQuestion, str | None], StateAnswer | None]
 EvidencePort = Callable[[str, tuple[str, ...], str | None], Awaitable[Mapping[str, object]]]
 
 
+@dataclass(frozen=True, slots=True)
+class BoundEffects:
+    dispatched: tuple[CommandOutcome, ...]
+    revised: bool
+    early_transcript_id: str
+
+    @property
+    def chat(self) -> CommandOutcome | None:
+        return next((sent for sent in self.dispatched if sent.kind == "send_chat"), None)
+
+
+CHAT_ALREADY_SENT_LINES: dict[str, str] = json.loads(read_package_text("spoken_lines.json"))[
+    "chat_already_sent"
+]
+
+
 class CommandPort(Protocol):
     async def run(
         self, spec: CommandSpec, *, plan_id: str, ordinal: int, actor: str
     ) -> CommandOutcome: ...
+
+    def withdraw(self, plan_id: str) -> tuple[CommandOutcome, ...]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -309,6 +330,10 @@ class TurnContext(Protocol):
     def drafts(self) -> ReplyDrafts | None: ...
 
     def early_gate(self, transcript_id: str) -> EarlyGate | None: ...
+
+    def plan_recorded(self, transcript_id: str, plan_id: str) -> None: ...
+
+    def take_bound_effects(self, transcript_ids: Sequence[str]) -> dict[str, BoundEffects]: ...
 
     @property
     def faults(self) -> FaultReporter | None: ...
@@ -886,6 +911,7 @@ _OUTCOME_NOTES: dict[str, str] = {
         "{kind} was done but you could not see it take effect; do not say anyone saw it."
     ),
     "unknown": "It is not known whether {kind} happened; say you are not sure it went through.",
+    "dispatching": "It is not known whether {kind} happened; say you are not sure it went through.",
 }
 _REFUSAL_NOTES: dict[str, str] = {
     "unattributed_actor": (
@@ -1004,6 +1030,7 @@ async def _leave(runtime: TurnContext, planned: PlannedTurn) -> CommandOutcome |
 
 def _record_plan(runtime: TurnContext, event_id: str, planned: PlannedTurn) -> None:
     plan = planned.plan
+    runtime.plan_recorded(event_id, plan.plan_id)
     runtime.journal.record(
         "plan_selected",
         source="agent",
@@ -1035,11 +1062,18 @@ async def act_first(
 
 
 async def answer_state(
-    runtime: TurnContext, final: TranscriptEvent, planned: PlannedTurn, generation: int
+    runtime: TurnContext,
+    final: TranscriptEvent,
+    planned: PlannedTurn,
+    generation: int,
+    bound: BoundEffects | None = None,
 ) -> bool:
     question = planned.plan.state_question
     if question is None or runtime.state_speech is None:
         return False
+    if planned.plan.output == "chat" and bound is not None and bound.chat is not None:
+        await _withhold_chat(runtime, final, planned, generation, bound)
+        return True
     answer = runtime.state_speech(question, planned.plan.language)
     if answer is None:
         return False
@@ -1078,11 +1112,11 @@ async def _run_turn(
     runtime: TurnContext,
     speech: SpeechGraph,
     batch: tuple[TranscriptEvent, ...],
-    scope: TurnScope,
-    generation: int,
+    turn: tuple[TurnScope, int],
+    bound: BoundEffects | None = None,
 ) -> None:
     try:
-        await _answer_turn(runtime, speech, batch, scope, generation)
+        await _answer_turn(runtime, speech, batch, turn, bound)
     finally:
         _drop_draft(runtime, batch, "unused")
 
@@ -1091,9 +1125,10 @@ async def _answer_turn(
     runtime: TurnContext,
     speech: SpeechGraph,
     batch: tuple[TranscriptEvent, ...],
-    scope: TurnScope,
-    generation: int,
+    turn: tuple[TurnScope, int],
+    bound: BoundEffects | None,
 ) -> None:
+    scope, generation = turn
     final = batch[-1]
     judged = runtime.plans.pop(final.id, None)
     planned = judged or plan_for(
@@ -1104,12 +1139,15 @@ async def _answer_turn(
         if _admission_current(runtime, generation):
             _move_phase(runtime, "waiting", final.id)
         return
-    if await answer_state(runtime, final, planned, generation):
+    if await answer_state(runtime, final, planned, generation, bound):
         return
     if planned.plan.output == "chat":
+        if bound is not None and bound.chat is not None:
+            await _withhold_chat(runtime, final, planned, generation, bound)
+            return
         await _deliver_chat(runtime, final, planned, generation, outcome)
         return
-    reply_event = for_reply(final, planned, outcome)
+    reply_event = for_reply(final, planned, outcome or (bound.chat if bound else None))
     if judged is None:
         reply_event = replace(reply_event, evidence_needs=UNJUDGED_EVIDENCE)
     farewell = Farewell()
@@ -1430,6 +1468,7 @@ async def _settle_outcome(
 async def _drain_pending(runtime: TurnContext, speech: SpeechGraph, queue: PendingFinals) -> None:
     while queue.pending and not _closed(runtime):
         batch = queue.take()
+        bound = runtime.take_bound_effects([event.id for event in batch]).get(batch[-1].id)
         generation = _admitted_count(runtime)
         transcript_id = batch[-1].id
         _move_phase(runtime, "weighing", transcript_id)
@@ -1437,7 +1476,7 @@ async def _drain_pending(runtime: TurnContext, speech: SpeechGraph, queue: Pendi
         scope = _turn_scope(runtime, transcript_id, generation)
         record_agent_started(runtime.journal, scope)
         runtime.barge.interrupted = False
-        work = _run_turn(runtime, speech, batch, scope, generation)
+        work = _run_turn(runtime, speech, batch, (scope, generation), bound)
         outcome = await capture_error(partial(_held, runtime, work, scope, "voice"))
         await _settle_outcome(runtime, outcome, generation, transcript_id)
 
@@ -1511,6 +1550,35 @@ async def _deliver_chat(
     _move_phase(runtime, "listening" if text else "waiting", event.id)
 
 
+async def _withhold_chat(
+    runtime: TurnContext,
+    event: TranscriptEvent,
+    planned: PlannedTurn,
+    generation: int,
+    bound: BoundEffects,
+) -> None:
+    sent = bound.chat
+    assert sent is not None
+    runtime.journal.record(
+        "chat_reply_dropped",
+        source="agent",
+        transcript_id=event.id,
+        reason="already_dispatched",
+        action_id=sent.command_id,
+        state=sent.state,
+        revised=bound.revised,
+        early_transcript_id=bound.early_transcript_id,
+    )
+    if not bound.revised or not _admission_current(runtime, generation):
+        _move_phase(runtime, "waiting", event.id)
+        return
+    language = planned.plan.language or DEFAULTS.speech.language
+    line = CHAT_ALREADY_SENT_LINES.get(language, CHAT_ALREADY_SENT_LINES[DEFAULTS.speech.language])
+    _move_phase(runtime, "queued", event.id)
+    await runtime.speaker.speak(line, transcript_id=event.id, language=language)
+    _move_phase(runtime, "listening", event.id)
+
+
 async def _run_chat_turn(runtime: TurnContext, event: TranscriptEvent, generation: int) -> None:
     reading, owner_claim = await _chat_reading(runtime, event)
     planned = plan_for(runtime, event, reading, "chat", owner_claim=owner_claim)
@@ -1536,7 +1604,7 @@ async def run_deferred_turn(runtime: TurnContext, speech: SpeechGraph, turn: Def
     if turn.channel == "chat":
         work = _run_chat_turn(runtime, event, generation)
     else:
-        work = _run_turn(runtime, speech, (event,), scope, generation)
+        work = _run_turn(runtime, speech, (event,), (scope, generation))
     completed, error = await capture_error(partial(_held, runtime, work, scope, turn.channel))
     if isinstance(error, FloorHeld):
         raise error

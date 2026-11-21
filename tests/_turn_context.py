@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 from fakeyou.config.settings import DEFAULTS
@@ -7,6 +7,7 @@ from fakeyou.conversation.participation_graph import TurnJudging
 from fakeyou.conversation.reply_draft import ReplyDrafts
 from fakeyou.conversation.thinking_cue import ThinkingCue
 from fakeyou.conversation.turn_graph import (
+    BoundEffects,
     CommandPort,
     ConversationPhase,
     EvidencePort,
@@ -53,6 +54,8 @@ class TurnTestContext:
     admitted: AdmittedFinals = field(default_factory=AdmittedFinals)
     barge: BargeLatch = field(default_factory=BargeLatch)
     plans: dict[str, PlannedTurn] = field(default_factory=dict)
+    plans_recorded: list[tuple[str, str]] = field(default_factory=list)
+    carried: dict[str, BoundEffects] = field(default_factory=dict)
     moves: list[tuple[ConversationPhase, str]] = field(default_factory=list)
     failures: list[Exception] = field(default_factory=list)
     barge_in: bool = True
@@ -79,6 +82,12 @@ class TurnTestContext:
     def early_gate(self, transcript_id: str) -> None:
         del transcript_id
         return None
+
+    def plan_recorded(self, transcript_id: str, plan_id: str) -> None:
+        self.plans_recorded.append((transcript_id, plan_id))
+
+    def take_bound_effects(self, transcript_ids: Sequence[str]) -> dict[str, BoundEffects]:
+        return {each: self.carried.pop(each) for each in transcript_ids if each in self.carried}
 
     def request_pending(self) -> None:
         self.requested = True
