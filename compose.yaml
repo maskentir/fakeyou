@@ -57,6 +57,7 @@ x-worker-runtime: &worker-runtime
 
 services:
   redis:
+    restart: unless-stopped
     image: redis:7.4-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
     logging: *default-logging
     command: ["redis-server", "--appendonly", "no", "--save", ""]
@@ -76,6 +77,7 @@ services:
       retries: 12
 
   api:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: docker/audio/Dockerfile
@@ -141,6 +143,7 @@ services:
     cpus: ${FAKEYOU_COMPOSE_WORKER_REEMBED_CPUS:-1}
 
   neo4j:
+    restart: unless-stopped
     image: neo4j:5.26.31-community@sha256:c7d25c0eeebfe125718d58b72ed5d663c85d0479047733845eb2237c67ce8069
     logging: *default-logging
     environment:
@@ -158,6 +161,7 @@ services:
       start_period: 30s
 
   embeddings:
+    restart: unless-stopped
     image: ${FAKEYOU_COMPOSE_EMBEDDINGS_IMAGE:-ghcr.io/huggingface/text-embeddings-inference:cpu-arm64-1.9@sha256:798cd7615e060a72ccbdf19aa0ada52289c6a0147490195bafaece6ce04d70f1}
     profiles: ["embeddings"]
     logging: *default-logging
@@ -180,6 +184,7 @@ services:
       start_period: 30s
 
   postgres:
+    restart: unless-stopped
     image: postgres:17.11-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
     logging: *default-logging
     environment:
@@ -197,6 +202,7 @@ services:
       retries: 6
 
   rustfs:
+    restart: unless-stopped
     image: rustfs/rustfs:1.0.0-alpha.81@sha256:4ee605dfe7c6548d1fa1856357e8a1eccd929e3176acf933fafeba3ce09a69f9
     logging: *default-logging
     environment:

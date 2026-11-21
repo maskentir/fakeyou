@@ -147,6 +147,15 @@ def test_every_worker_role_service_restarts_on_its_own(compose: dict[str, Any]) 
     assert all(services[name]["restart"] == "unless-stopped" for name in WORKER_ROLE_SERVICES)
 
 
+def test_the_whole_stack_comes_back_after_the_docker_daemon_restarts(
+    compose: dict[str, Any],
+) -> None:
+    policies = {name: service.get("restart") for name, service in compose["services"].items()}
+
+    assert {"postgres", "redis", "neo4j", "rustfs", "api"} <= set(policies)
+    assert set(policies.values()) == {"unless-stopped"}, policies
+
+
 def test_every_worker_role_service_has_its_own_resource_knob() -> None:
     source = (ROOT / "compose.yaml").read_text(encoding="utf-8")
 
