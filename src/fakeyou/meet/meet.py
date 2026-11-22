@@ -54,6 +54,13 @@ HEADING_CATEGORIES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("sign-in", ("sign in",)),
     ("invalid meeting code", ("check your meeting code", "invalid video call name")),
 )
+DENIAL_REASONS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("call-ended marker", ('data-call-ended="true"', "call has ended", "meeting has ended")),
+    ("host admission required", ("unless invited or admitted", "admitted by the host")),
+    ("meeting full", ("meeting is full", "participant limit")),
+    ("sign-in required", ("sign in to join", "use your google account")),
+    ("organization restricted", ("outside your organization", "only people in")),
+)
 CONTROL_CATEGORIES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("leave call", ("leave call",)),
     (
@@ -521,13 +528,14 @@ async def _poll_content(
         )
 
 
-def _page_phrase(content: str, marker: str, limit: int = 400) -> str:
-    lowered = content.lower()
-    index = lowered.find(marker.lower())
-    if index < 0:
-        return "marker not found"
-    start = max(index - 60, 0)
-    return " ".join(content[start : start + limit].split())
+def denial_summary(content: str) -> str:
+    headings, _buttons = call_markers(content)
+    lowered = content.casefold()
+    reasons = [
+        reason for reason, markers in DENIAL_REASONS if any(marker in lowered for marker in markers)
+    ]
+    heading = heading_category(headings) if headings.strip() else "none"
+    return f"{heading} ({', '.join(reasons) or 'unrecognised'})"
 
 
 def _classify_denial(content: str, signals: MeetSignals) -> JoinResult | None:
@@ -668,7 +676,7 @@ async def _await_admission(
                 continue
             return JoinResult(
                 status=outcome.status,
-                detail=f"{outcome.detail}; page says: {_page_phrase(content, signals.denied)}; "
+                detail=f"{outcome.detail}; page says: {denial_summary(content)}; "
                 f"visible controls: {await visible_control_categories(page)}",
             )
         if _is_in_call(content, signals):

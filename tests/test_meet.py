@@ -127,7 +127,7 @@ async def test_request_guest_join_reports_platform_block() -> None:
 
     assert result.status == "blocked"
     assert "blocked" in result.detail
-    assert "can't join this" in result.detail
+    assert "page says: access refused (unrecognised)" in result.detail
 
 
 async def test_request_guest_join_reports_a_meeting_that_ended_in_the_lobby() -> None:
@@ -152,7 +152,7 @@ async def test_access_refusal_with_call_ended_button_does_not_mean_meeting_ended
         page, _request(), polling=JoinPolling(clock.sleep, clock.monotonic)
     )
     assert result.status == "blocked"
-    assert "can't join this" in result.detail
+    assert "page says: access refused (call-ended marker)" in result.detail
 
 
 async def test_request_guest_join_waits_out_captcha_grace_then_reports_block() -> None:
