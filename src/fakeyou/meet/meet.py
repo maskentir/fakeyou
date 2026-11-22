@@ -283,16 +283,29 @@ async def _open_meeting_page(
     return f"navigation to the meeting link failed; current destination: {destination}"
 
 
+async def _first_match(locator: Locator) -> Locator:
+    return locator.first
+
+
+async def _first_visible_match(locator: Locator) -> Locator:
+    for index in range(await locator.count()):
+        candidate = locator.nth(index)
+        if await candidate.is_visible():
+            return candidate
+    return locator.first
+
+
 async def click_when_ready(
     locate: Callable[[], Locator],
     label: str,
     sleep: Callable[[float], Awaitable[None]],
     attempts: int = _CLICK_ATTEMPTS,
+    choose: Callable[[Locator], Awaitable[Locator]] = _first_match,
 ) -> str | None:
     last_error = "locator never became visible"
     for _ in range(attempts):
         try:
-            target = locate().first
+            target = await choose(locate())
             await target.wait_for(state="visible", timeout=_CLICK_WAIT_MS)
         except (PlaywrightError, ActionabilityError):
             await sleep(_CLICK_RETRY_DELAY_SECONDS)
@@ -860,7 +873,10 @@ async def toggle_control(
     except PlaywrightError as error:
         raise RuntimeError(f"checking {control} state failed: {error}") from error
     failure = await click_when_ready(
-        lambda: page.locator(selectors.toggle).filter(visible=True), f"{control} button", sleep
+        partial(page.locator, selectors.toggle),
+        f"{control} button",
+        sleep,
+        choose=_first_visible_match,
     )
     if failure is not None:
         raise RuntimeError(f"{failure}; visible controls: {await visible_control_labels(page)}")

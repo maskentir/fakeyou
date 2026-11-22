@@ -1,6 +1,7 @@
 import asyncio
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, override
 
@@ -10,6 +11,7 @@ from playwright.async_api import Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 import fakeyou.meet.meet as meet
+from fakeyou.meet.browser import BrowserLaunch, open_direct_page
 from fakeyou.meet.meet import (
     CALL_CONTROLS_TIMEOUT_SECONDS,
     MIC_CONTROL_SELECTOR,
@@ -22,6 +24,7 @@ from fakeyou.meet.meet import (
 )
 from tests._fakes_common import FakeClock
 from tests._meet_browser_fakes import LEAVE_SELECTOR, FakeLocator, FakePage
+from tests._meet_support import FIXTURE_URL
 
 LEAK = "Harun Rasyid ai2@example.com abc-defg-hij"
 MIC_STATES = (MIC_ENABLED_SELECTOR, MIC_DISABLED_SELECTOR)
@@ -275,22 +278,24 @@ def _late_button_page(label: str, after_ms: int) -> str:
     )
 
 
-async def _real_wait(html: str, monkeypatch: pytest.MonkeyPatch) -> tuple[str, float]:
-    from playwright.async_api import async_playwright
+@asynccontextmanager
+async def _fixture_page(html: str) -> AsyncIterator[Page]:
+    async with open_direct_page(launch=BrowserLaunch(headless=True)) as page:
+        await page.route(
+            FIXTURE_URL, lambda route: route.fulfill(body=html, content_type="text/html")
+        )
+        await page.goto(FIXTURE_URL, wait_until="domcontentloaded")
+        yield page
 
+
+async def _real_wait(html: str, monkeypatch: pytest.MonkeyPatch) -> tuple[str, float]:
     monkeypatch.setattr(meet, "PROBE_TIMEOUT_SECONDS", 0.5)
-    async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=True)
-        try:
-            page = await browser.new_page()
-            await page.set_content(html)
-            clock = ControlsClock(asyncio.sleep, time.monotonic, lambda: False, 0.5, 2.0)
-            started = time.monotonic()
-            async with asyncio.timeout(5):
-                wait = await wait_for_mic_control(page, clock)
-            return wait.outcome, time.monotonic() - started
-        finally:
-            await browser.close()
+    async with _fixture_page(html) as page:
+        clock = ControlsClock(asyncio.sleep, time.monotonic, lambda: False, 0.5, 2.0)
+        started = time.monotonic()
+        async with asyncio.timeout(5):
+            wait = await wait_for_mic_control(page, clock)
+        return wait.outcome, time.monotonic() - started
 
 
 @pytest.mark.browser
@@ -340,28 +345,23 @@ def _duplicate_page(case: MicDuplicate) -> str:
 
 async def _real_readiness_and_enable(
     case: MicDuplicate, monkeypatch: pytest.MonkeyPatch
-) -> tuple[str, bool]:
-    from playwright.async_api import async_playwright
-
+) -> tuple[str, bool | str]:
     monkeypatch.setattr(meet, "PROBE_TIMEOUT_SECONDS", 0.5)
-    async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=True)
-        try:
-            page = await browser.new_page()
-            await page.set_content(_duplicate_page(case))
-            clock = ControlsClock(asyncio.sleep, time.monotonic, lambda: False, 0.5, 2.0)
-            async with asyncio.timeout(5):
-                wait = await wait_for_mic_control(page, clock)
-            if wait.outcome != "ready":
-                return wait.outcome, False
-            try:
-                async with asyncio.timeout(30):
-                    enabled = await enable_meeting_microphone(page)
-            except RuntimeError:
-                enabled = False
-            return wait.outcome, enabled
-        finally:
-            await browser.close()
+    async with _fixture_page(_duplicate_page(case)) as page:
+        clock = ControlsClock(asyncio.sleep, time.monotonic, lambda: False, 0.5, 2.0)
+        async with asyncio.timeout(5):
+            wait = await wait_for_mic_control(page, clock)
+        if wait.outcome != "ready":
+            return wait.outcome, False
+        return wait.outcome, await _enabled(page)
+
+
+async def _enabled(page: Page) -> bool | str:
+    try:
+        async with asyncio.timeout(30):
+            return await enable_meeting_microphone(page)
+    except RuntimeError as error:
+        return f"{type(error).__name__}: {error}"
 
 
 @pytest.mark.browser
@@ -388,12 +388,10 @@ async def test_a_visible_mic_control_wins_over_hidden_duplicates_in_any_order(
 async def test_d_only_hidden_mic_controls_time_out_at_the_deadline(
     hidden: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    started = time.monotonic()
-
-    outcome, _ = await _real_readiness_and_enable(MicDuplicate(hidden, None), monkeypatch)
+    outcome, elapsed = await _real_wait(_duplicate_page(MicDuplicate(hidden, None)), monkeypatch)
 
     assert outcome == "mic_control_missing"
-    assert 2.0 <= time.monotonic() - started < 4.0
+    assert 2.0 <= elapsed < 2.5
 
 
 @pytest.mark.browser
@@ -410,40 +408,20 @@ async def test_d_only_hidden_mic_controls_time_out_at_the_deadline(
 async def test_enabling_the_mic_clicks_the_visible_control_among_hidden_duplicates(
     case: MicDuplicate,
 ) -> None:
-    from playwright.async_api import async_playwright
-
-    async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=True)
-        try:
-            page = await browser.new_page()
-            await page.set_content(_duplicate_page(case))
-            await page.get_by_role("button", name=case.visible).last.wait_for(state="attached")
-            try:
-                async with asyncio.timeout(30):
-                    enabled = await enable_meeting_microphone(page)
-            except RuntimeError:
-                enabled = False
-            visible_labels = await page.locator("button:visible").evaluate_all(
-                "nodes => nodes.map(node => node.getAttribute('aria-label'))"
-            )
-        finally:
-            await browser.close()
+    async with _fixture_page(_duplicate_page(case)) as page:
+        await page.get_by_role("button", name=case.visible).last.wait_for(state="attached")
+        enabled = await _enabled(page)
+        visible_labels = await page.locator("button:visible").evaluate_all(
+            "nodes => nodes.map(node => node.getAttribute('aria-label'))"
+        )
 
     assert enabled is True
     assert TURN_OFF in visible_labels
 
 
 async def _on_static_page(html: str, check: Callable[[Page], Awaitable[None]]) -> None:
-    from playwright.async_api import async_playwright
-
-    async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=True)
-        try:
-            page = await browser.new_page()
-            await page.set_content(html)
-            await check(page)
-        finally:
-            await browser.close()
+    async with _fixture_page(html) as page:
+        await check(page)
 
 
 @pytest.mark.browser

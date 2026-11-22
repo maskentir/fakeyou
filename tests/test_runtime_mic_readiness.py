@@ -38,6 +38,11 @@ class TimedLocator(FakeLocator):
         super().__init__(page, selector)
         self._toolbar = page
 
+    @override
+    def nth(self, index: int) -> "TimedLocator":
+        del index
+        return self
+
     def _appears(self) -> float:
         parts = (
             (MIC_ON_SELECTOR, MIC_OFF_SELECTOR)
