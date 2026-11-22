@@ -37,6 +37,7 @@ class FakeDialog:
     visible: bool = True
     click_error: Exception | None = None
     open: bool = True
+    press_seconds: float = 0.0
     pressed: list[str] = field(default_factory=list)
     clicks: int = 0
 
@@ -80,6 +81,8 @@ class FakeDialogHandle:
 
     async def press(self, key: str, **_kwargs: Any) -> None:
         self._dialog.pressed.append(key)
+        if self._dialog.press_seconds:
+            await asyncio.sleep(self._dialog.press_seconds)
         if key == "Escape" and self._dialog.closes_on_escape:
             self._dialog.open = False
 
@@ -447,3 +450,49 @@ async def test_typing_into_an_escalated_form_keeps_its_deadline() -> None:
 
     assert [event.kind for event in escalated.events] == ["manual_action_required"]
     assert [event.kind for event in expired.events] == ["manual_action_expired"]
+
+
+REAL_TIMEOUT = asyncio.timeout
+
+
+def _tenth_of_every_timeout(seconds: float | None) -> Any:
+    return REAL_TIMEOUT(None if seconds is None else seconds / 10)
+
+
+async def test_slow_modal_dismissals_keep_their_events_and_never_fail_observation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(asyncio, "timeout", _tenth_of_every_timeout)
+    dialogs = [
+        FakeDialog(f"Notice {index} Got it", roles, closes_on_escape=True, press_seconds=0.2)
+        for index, roles in enumerate([["button"], ["img", "button"], ["heading", "button"]])
+    ]
+    watchdog = watchdog_for(FakeDialogPage(*dialogs))
+
+    await watchdog.check()
+    handled = await watchdog.check()
+
+    assert handled.observation_failed is False
+    assert [event.kind for event in handled.events] == ["modal_dismissed"] * 3
+    assert [dialog.open for dialog in dialogs] == [False, False, False]
+
+
+async def test_a_modal_that_cannot_be_closed_in_time_is_observed_and_the_rest_are_dismissed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(asyncio, "timeout", _tenth_of_every_timeout)
+    stuck = FakeDialog("Stuck notice Got it", ["button"], closes_on_escape=True, press_seconds=30.0)
+    quick = FakeDialog("Quick notice Got it", ["img", "button"], closes_on_escape=True)
+    watchdog = watchdog_for(FakeDialogPage(stuck, quick))
+
+    await watchdog.check()
+    handled = await watchdog.check()
+    again = await watchdog.check()
+
+    assert handled.observation_failed is False
+    assert [(event.kind, event.detail) for event in handled.events] == [
+        ("modal_observed", "Stuck notice Got it"),
+        ("modal_dismissed", "Quick notice Got it"),
+    ]
+    assert again.events == ()
+    assert stuck.pressed == ["Escape"]
