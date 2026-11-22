@@ -1,10 +1,12 @@
 import asyncio
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, override
 
 import pytest
 from playwright.async_api import Error as PlaywrightError
+from playwright.async_api import Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 import fakeyou.meet.meet as meet
@@ -429,3 +431,48 @@ async def test_enabling_the_mic_clicks_the_visible_control_among_hidden_duplicat
 
     assert enabled is True
     assert TURN_OFF in visible_labels
+
+
+async def _on_static_page(html: str, check: Callable[[Page], Awaitable[None]]) -> None:
+    from playwright.async_api import async_playwright
+
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(headless=True)
+        try:
+            page = await browser.new_page()
+            await page.set_content(html)
+            await check(page)
+        finally:
+            await browser.close()
+
+
+@pytest.mark.browser
+async def test_an_enabled_mic_behind_a_hidden_duplicate_needs_no_click() -> None:
+    html = (
+        f'<button aria-label="{TURN_OFF}" style="display:none"></button>'
+        f'<button aria-label="{TURN_OFF}" onclick="this.dataset.clicked = 1"></button>'
+    )
+
+    async def check(page: Page) -> None:
+        assert await enable_meeting_microphone(page) is True
+        assert await page.locator("[data-clicked]").count() == 0
+
+    await _on_static_page(html, check)
+
+
+@pytest.mark.browser
+async def test_a_visible_leave_behind_a_hidden_duplicate_is_toolbar_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(meet, "PROBE_TIMEOUT_SECONDS", 0.5)
+    html = '<button aria-label="Leave call" style="display:none"></button>' + (
+        '<button aria-label="Leave call"></button>'
+    )
+
+    async def check(page: Page) -> None:
+        clock = ControlsClock(asyncio.sleep, time.monotonic, lambda: False, 0.5, 1.0)
+        async with asyncio.timeout(5):
+            wait = await wait_for_mic_control(page, clock)
+        assert wait.outcome == "mic_control_missing"
+
+    await _on_static_page(html, check)
