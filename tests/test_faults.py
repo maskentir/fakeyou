@@ -7,6 +7,8 @@ from typing import Any, cast
 
 import pytest
 
+from fakeyou.catalog.errors import FakeYouError
+from fakeyou.config.identifiers import parse_session_id
 from fakeyou.observability.faults import (
     TRACEBACK_MAX_CHARS,
     ConsumerSink,
@@ -520,7 +522,8 @@ def test_bounded_traceback_keeps_only_innermost_frames() -> None:
     except RuntimeError as error:
         rendered = bounded_traceback(error)
 
-    assert rendered.startswith("RuntimeError: deep bug")
+    assert rendered.splitlines()[0] == "RuntimeError"
+    assert "deep bug" not in rendered
     assert "outer" not in rendered
 
 
@@ -538,7 +541,7 @@ def test_bounded_traceback_renders_unraised_errors() -> None:
 
     rendered = bounded_traceback(RuntimeError("fresh"))
 
-    assert "RuntimeError: fresh" in rendered
+    assert rendered == "RuntimeError"
 
 
 async def test_create_poll_guard_falls_back_to_journal_without_reporter(
@@ -570,3 +573,25 @@ def test_a_fault_the_reporter_cannot_record_is_traced_in_the_journal(
     [event] = journal.events("fault_report_failed")
     assert event["operation"] == "record"
     assert event["error_type"] == "AttributeError"
+
+
+SENSITIVE = ("Rani Wijaya", "rani.wijaya@example.com", "xqz-mnop-rst")
+
+
+def test_bounded_traceback_keeps_types_and_frames_but_never_messages_or_causes() -> None:
+    try:
+        try:
+            parse_session_id("Rani Wijaya xqz-mnop-rst", field="meeting_id")
+        except FakeYouError as cause:
+            raise RuntimeError("join for Rani Wijaya <rani.wijaya@example.com> failed") from cause
+    except RuntimeError as error:
+        rendered = bounded_traceback(error)
+        cause_rendered = bounded_traceback(cast(BaseException, error.__cause__))
+
+    assert [part for part in SENSITIVE if part in rendered + cause_rendered] == []
+    assert rendered.splitlines()[0] == "RuntimeError"
+    assert cause_rendered.splitlines()[0] == "FakeYouError"
+    assert '  File "src/fakeyou/config/identifiers.py", line ' in cause_rendered
+    assert ", in parse_session_id" in cause_rendered
+    assert '  File "test_faults.py", line ' in cause_rendered
+    assert "/" not in cause_rendered.splitlines()[-1].split('"')[1]

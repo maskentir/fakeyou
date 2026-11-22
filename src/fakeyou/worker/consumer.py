@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from functools import partial
-from typing import Protocol, cast
+from typing import Protocol
 from uuid import uuid4
 
 from pydantic import SecretStr
@@ -456,10 +456,13 @@ class WorkerConsumer:
             elif isinstance(error, _RETRYABLE):
                 logger.warning("join for meeting %s will be retried: %s", meeting_id, error)
             elif isinstance(error, FakeYouError):
-                await self._settle_failed(meeting_id, error)
+                await self._settle_failed(meeting_id, type(error).__name__, str(error))
             else:
                 logger.error("join for meeting %s failed unexpectedly", meeting_id, exc_info=error)
-                await self._settle_failed(meeting_id, cast(Exception, error))
+                failure = type(error).__name__
+                await self._settle_failed(
+                    meeting_id, failure, f"join failed unexpectedly ({failure})"
+                )
         finally:
             watcher.cancel()
             pusher.cancel()
@@ -472,8 +475,7 @@ class WorkerConsumer:
             if writer is not None and writer.persisted in TERMINAL_PHASES:
                 await self._release(claim)
 
-    async def _settle_failed(self, meeting_id: str, error: Exception) -> None:
-        detail = str(error)
+    async def _settle_failed(self, meeting_id: str, error_type: str, detail: str) -> None:
         logger.error("join for meeting %s failed: %s", meeting_id, detail)
         journal = Journal(
             meeting_id,
@@ -490,7 +492,7 @@ class WorkerConsumer:
             source="runtime",
             phase="failed",
             terminal_reason="infra_failure",
-            error_type=type(error).__name__,
+            error_type=error_type,
             detail=detail,
         )
         await self._apply_phase(meeting_id, "failed", "infra_failure", detail)

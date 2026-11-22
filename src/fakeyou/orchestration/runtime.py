@@ -1441,7 +1441,6 @@ async def _record_conversation_failure(
     journal.record(
         "conversation_error_recorded",
         source="runtime",
-        error=str(error),
         error_type=type(error).__name__,
         traceback=bounded_traceback(error),
     )
@@ -1456,7 +1455,6 @@ async def _record_browser_failure(
     journal.record(
         "browser_error_recorded",
         source="runtime",
-        error=str(error),
         error_type=type(error).__name__,
         traceback=bounded_traceback(error),
     )
@@ -1554,7 +1552,6 @@ async def _settle_failure(drive: _Drive, error: Exception) -> str:
         journal.record(
             "browser_error_recorded",
             source="runtime",
-            error=str(error),
             error_type=type(error).__name__,
             detail="during owner-requested teardown",
         )
