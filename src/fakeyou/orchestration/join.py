@@ -551,7 +551,7 @@ async def _drive_join_session(
         result = SessionResult(
             "ended",
             ("infra_failure" if error.exit_code is ExitCode.INFRA_FAILURE else "browser_failure"),
-            str(error),
+            error.code.value,
             run.faults.report(),
         )
     run.session_result = result

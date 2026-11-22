@@ -319,6 +319,7 @@ class SessionDouble:
         self.started = asyncio.Event()
         self.release = asyncio.Event()
         self.crash = False
+        self.failure: Exception | None = None
         self.live_phases: list[PublicPhase] = []
 
     async def run(self, config: SessionConfig, wiring: SessionWiring) -> SessionResult:
@@ -333,6 +334,8 @@ class SessionDouble:
         if self.crash:
             self.crash = False
             raise OSError("session crashed")
+        if self.failure is not None:
+            raise self.failure
         if wiring.on_phase is not None:
             for phase in self.live_phases:
                 wiring.on_phase(phase)
@@ -571,6 +574,96 @@ async def test_an_unexpected_join_failure_reaches_status_events_journal_and_api_
     assert response.json()["detail"] == expected
     written = journal_text + response.text + str(harness.events)
     assert [part for part in JOIN_SECRETS if part in written] == []
+
+
+CATALOG_SECRET_VALUE = "Rani Wijaya rani.wijaya@example.com xqz-mnop-rst"
+
+
+async def _api_detail(harness: Harness, settings: Settings, meeting_id: str) -> tuple[str, str]:
+    settings.api.owner_token = SecretStr("owner-secret")
+    settings.identity.owner_id = SessionId("owner-1")
+    app = create_app(
+        settings,
+        ApiDeps(
+            transport=lambda: harness.transport,
+            snapshot_store=lambda: harness.session_store,
+            now_iso=lambda: "2026-11-23T00:00:00+00:00",
+        ),
+    )
+    app.dependency_overrides[session_status] = lambda: harness.status
+    async with httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.get(
+            f"/v1/sessions/{meeting_id}", headers={"Authorization": "Bearer owner-secret"}
+        )
+    assert response.status_code == 200
+    return response.json()["detail"], response.text
+
+
+def _journal_rows(settings: Settings, meeting_id: str) -> tuple[list[dict[str, Any]], str]:
+    text = journal_path(settings.paths.journal_dir, SessionId(meeting_id)).read_text()
+    return [json.loads(line) for line in text.splitlines()], text
+
+
+def _leaks(*written: str) -> list[str]:
+    parts = ("Rani Wijaya", "rani.wijaya@example.com", "xqz-mnop-rst")
+    return [part for part in parts if any(part in text for text in written)]
+
+
+async def test_a_catalog_join_failure_persists_its_stable_code_not_its_field_values(
+    harness: Harness, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fail_with_catalog_error(*_args: object) -> JoinOutcome:
+        raise FakeYouError(
+            ErrorCode.SESSION_ID_INVALID, field="meeting_id", value=CATALOG_SECRET_VALUE
+        )
+
+    monkeypatch.setattr("fakeyou.worker.consumer.run_join_session", fail_with_catalog_error)
+    await harness.enqueue("m-1", "join")
+    assert await harness.consumer.run_once() is None
+
+    code = ErrorCode.SESSION_ID_INVALID.value
+    status = await harness.status.get("m-1")
+    assert status is not None
+    assert (status.phase, status.terminal_reason, status.detail) == (
+        "failed",
+        "infra_failure",
+        code,
+    )
+    assert harness.events[-1]["detail"] == code
+    rows, journal_text = _journal_rows(settings, "m-1")
+    [failed] = [row for row in rows if row["event"] == "session_failed"]
+    assert (failed["error_type"], failed["detail"]) == ("FakeYouError", code)
+    api_detail, api_text = await _api_detail(harness, settings, "m-1")
+    assert api_detail == code
+    assert _leaks(journal_text, api_text, str(harness.events)) == []
+
+
+async def test_a_catalog_session_failure_reaches_status_and_api_as_its_stable_code(
+    harness: Harness, settings: Settings
+) -> None:
+    harness.double.failure = FakeYouError(
+        ErrorCode.SESSION_ID_INVALID, field="meeting_id", value=CATALOG_SECRET_VALUE
+    )
+    await harness.enqueue("m-1", "join")
+    assert await harness.consumer.run_once() == "m-1"
+    await harness.double.started.wait()
+    harness.double.release.set()
+    await harness.consumer.wait_session()
+
+    code = ErrorCode.SESSION_ID_INVALID.value
+    status = await harness.status.get("m-1")
+    assert status is not None
+    assert status.detail == code
+    assert harness.events[-1]["type"] == "session_ended"
+    assert "detail" not in harness.events[-1]
+    rows, journal_text = _journal_rows(settings, "m-1")
+    [finished] = [row for row in rows if row["event"] == "session_finished"]
+    assert finished["detail"] == code
+    api_detail, api_text = await _api_detail(harness, settings, "m-1")
+    assert api_detail == code
+    assert _leaks(journal_text, api_text, str(harness.events)) == []
 
 
 async def test_second_worker_cannot_claim_the_same_meeting(harness: Harness) -> None:
