@@ -560,7 +560,7 @@ async def test_a_notice_hiding_the_toolbar_is_dismissed_before_the_controls_wait
     assert not run.events("call_controls_wait_expired")
     assert [row["waited_ms"] for row in run.events("call_controls_detected")] == [0.0]
     assert page.clicked.count(MIC_OFF_SELECTOR) == 1
-    assert notice.calls == 2
+    assert notice.calls == 1
     events = [row["event"] for row in run.journal.events()]
     assert events.index("modal_dismissed") < events.index("call_controls_wait_started")
 
@@ -607,5 +607,5 @@ async def test_a_hanging_notice_dismissal_stays_bounded_and_readiness_continues(
         run = await _run(session, open_audio, monkeypatch, Scenario(page))
 
     assert run.result.terminal_reason != "browser_failure", run.result.detail
-    assert len(run.events("modal_dismiss_expired")) == 2
+    assert len(run.events("modal_dismiss_expired")) == 1
     assert page.clicked.count(MIC_OFF_SELECTOR) == 1

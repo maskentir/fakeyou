@@ -452,7 +452,6 @@ class MeetingWorker:
                 f"call controls not ready after {CALL_CONTROLS_TIMEOUT_SECONDS} seconds: "
                 f"{controls.outcome}; heading: {controls.heading}",
             )
-        await self.dismiss_notices_best_effort()
         await self.disable_camera_best_effort()
         if self.stop.is_set():
             return await self._stopped_microphone_startup()
