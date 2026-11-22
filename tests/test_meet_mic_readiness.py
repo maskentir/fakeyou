@@ -3,8 +3,10 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any, override
 
+import cloakbrowser.human as humanized
 import pytest
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page
@@ -278,11 +280,15 @@ def _late_button_page(label: str, after_ms: int) -> str:
     )
 
 
+MEET_SIZED_CONTROLS = "<style>button { width: 48px; height: 48px; }</style>"
+
+
 @asynccontextmanager
 async def _fixture_page(html: str) -> AsyncIterator[Page]:
     async with open_direct_page(launch=BrowserLaunch(headless=True)) as page:
+        body = MEET_SIZED_CONTROLS + html
         await page.route(
-            FIXTURE_URL, lambda route: route.fulfill(body=html, content_type="text/html")
+            FIXTURE_URL, lambda route: route.fulfill(body=body, content_type="text/html")
         )
         await page.goto(FIXTURE_URL, wait_until="domcontentloaded")
         yield page
@@ -454,3 +460,31 @@ async def test_a_visible_leave_behind_a_hidden_duplicate_is_toolbar_evidence(
         assert wait.outcome == "mic_control_missing"
 
     await _on_static_page(html, check)
+
+
+def _lowest_click_target(box: dict[str, float], *_aim: object) -> SimpleNamespace:
+    return SimpleNamespace(
+        x=round(box["x"] + box["width"] * 0.5), y=round(box["y"] + box["height"] * 0.65)
+    )
+
+
+@pytest.mark.browser
+async def test_fixture_mic_controls_survive_the_worst_humanized_click_jitter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    move = vars(humanized)["async_human_move"]
+
+    async def move_then_max_jitter(raw: Any, *path: Any) -> None:
+        await move(raw, *path)
+        _start_x, _start_y, end_x, end_y, _cfg = path
+        await raw.move(round(end_x), round(end_y + 2))
+
+    monkeypatch.setattr(humanized, "click_target", _lowest_click_target)
+    monkeypatch.setattr(humanized, "async_human_move", move_then_max_jitter)
+    case = MicDuplicate(hidden=TURN_ON, visible=TURN_ON, visible_first=True)
+
+    async with _fixture_page(_duplicate_page(case)) as page:
+        await page.get_by_role("button", name=TURN_ON).last.wait_for(state="attached")
+        enabled = await _enabled(page)
+
+    assert enabled is True
