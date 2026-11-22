@@ -54,6 +54,20 @@ HEADING_CATEGORIES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("sign-in", ("sign in",)),
     ("invalid meeting code", ("check your meeting code", "invalid video call name")),
 )
+DENIAL_REASONS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("call-ended marker", ("call has ended", "meeting has ended")),
+    ("host admission required", ("unless invited or admitted", "admitted by the host")),
+    ("meeting full", ("meeting is full", "participant limit")),
+    ("sign-in required", ("sign in to join", "use your google account")),
+    (
+        "organization restricted",
+        (
+            "outside your organization",
+            "only people in your organization",
+            "only people from your organization",
+        ),
+    ),
+)
 CONTROL_CATEGORIES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("leave call", ("leave call",)),
     (
@@ -149,6 +163,7 @@ class MeetSignals:
 
 DEFAULT_MEET_SIGNALS = MeetSignals()
 _HEADING_TAGS = frozenset({"h1", "h2", "h3"})
+_NON_TEXT_TAGS = frozenset({"script", "style", "template", "head", "title"})
 _VOID_TAGS = frozenset(
     {
         "area",
@@ -521,13 +536,18 @@ async def _poll_content(
         )
 
 
-def _page_phrase(content: str, marker: str, limit: int = 400) -> str:
-    lowered = content.lower()
-    index = lowered.find(marker.lower())
-    if index < 0:
-        return "marker not found"
-    start = max(index - 60, 0)
-    return " ".join(content[start : start + limit].split())
+def denial_summary(content: str) -> str:
+    parsed = _parsed_markers(content)
+    headings = " ".join(parsed.headings)
+    message = " ".join(parsed.text).casefold()
+    reasons = [
+        reason
+        for reason, markers in DENIAL_REASONS
+        if any(marker in message for marker in markers)
+        or (reason == "call-ended marker" and parsed.call_ended)
+    ]
+    heading = heading_category(headings) if headings.strip() else "none"
+    return f"{heading} ({', '.join(reasons) or 'unrecognised'})"
 
 
 def _classify_denial(content: str, signals: MeetSignals) -> JoinResult | None:
@@ -668,7 +688,7 @@ async def _await_admission(
                 continue
             return JoinResult(
                 status=outcome.status,
-                detail=f"{outcome.detail}; page says: {_page_phrase(content, signals.denied)}; "
+                detail=f"{outcome.detail}; page says: {denial_summary(content)}; "
                 f"visible controls: {await visible_control_categories(page)}",
             )
         if _is_in_call(content, signals):
@@ -685,11 +705,15 @@ class _CallMarkers(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.headings: list[str] = []
         self.buttons: set[str] = set()
-        self._open: list[tuple[str, str | None, list[str]]] = []
+        self.text: list[str] = []
+        self.call_ended = False
+        self._open: list[tuple[str, str | None, list[str], bool]] = []
 
     @override
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         values = {name: value or "" for name, value in attrs}
+        if values.get("data-call-ended") == "true":
+            self.call_ended = True
         role = values.get("role", "")
         marker: str | None = None
         if tag in _HEADING_TAGS or role == "heading":
@@ -699,13 +723,14 @@ class _CallMarkers(HTMLParser):
             if values.get("aria-label"):
                 self.buttons.add(values["aria-label"].strip().lower())
         if tag not in _VOID_TAGS:
-            self._open.append((tag, marker, []))
+            concealed = tag in _NON_TEXT_TAGS or "hidden" in values
+            self._open.append((tag, marker, [], concealed))
 
     @override
     def handle_endtag(self, tag: str) -> None:
         for index in range(len(self._open) - 1, -1, -1):
             if self._open[index][0] == tag:
-                for _tag, marker, texts in reversed(self._open[index:]):
+                for _tag, marker, texts, _concealed in reversed(self._open[index:]):
                     self._settle(marker, texts)
                 del self._open[index:]
                 return
@@ -715,7 +740,9 @@ class _CallMarkers(HTMLParser):
         text = data.strip()
         if not text:
             return
-        for _tag, marker, texts in reversed(self._open):
+        if not any(concealed for _tag, _marker, _texts, concealed in self._open):
+            self.text.append(text)
+        for _tag, marker, texts, _concealed in reversed(self._open):
             if marker is not None:
                 texts.append(text)
                 return
@@ -723,7 +750,7 @@ class _CallMarkers(HTMLParser):
     @override
     def close(self) -> None:
         super().close()
-        for _tag, marker, texts in reversed(self._open):
+        for _tag, marker, texts, _concealed in reversed(self._open):
             self._settle(marker, texts)
         self._open.clear()
 
@@ -737,10 +764,15 @@ class _CallMarkers(HTMLParser):
             self.buttons.add(text)
 
 
-def call_markers(content: str) -> tuple[str, frozenset[str]]:
+def _parsed_markers(content: str) -> _CallMarkers:
     parser = _CallMarkers()
     parser.feed(content)
     parser.close()
+    return parser
+
+
+def call_markers(content: str) -> tuple[str, frozenset[str]]:
+    parser = _parsed_markers(content)
     return " ".join(parser.headings), frozenset(parser.buttons)
 
 
