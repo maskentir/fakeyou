@@ -12,6 +12,7 @@ from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.identifiers import parse_session_id
 from fakeyou.observability.faults import (
     TRACEBACK_MAX_CHARS,
+    TRACEBACK_MAX_FRAMES,
     ConsumerSink,
     Fault,
     FaultReporter,
@@ -524,6 +525,7 @@ def test_bounded_traceback_keeps_only_innermost_frames() -> None:
         rendered = bounded_traceback(error)
 
     assert rendered.splitlines()[0] == "RuntimeError"
+    assert len(rendered.splitlines()) == 1 + TRACEBACK_MAX_FRAMES
     assert "deep bug" not in rendered
     assert "outer" not in rendered
 
@@ -631,8 +633,18 @@ def test_a_synthetic_frame_needs_no_filesystem_even_without_a_working_directory(
     gone.mkdir()
     monkeypatch.chdir(gone)
     gone.rmdir()
+    resolved: list[str] = []
+    resolve = Path.resolve
+
+    def recording_resolve(path: Path, *, strict: bool = False) -> Path:
+        resolved.append(str(path))
+        return resolve(path, strict=strict)
+
+    monkeypatch.setattr(Path, "resolve", recording_resolve)
 
     rendered = bounded_traceback(error)
+
+    assert "<synthetic>" not in resolved
 
     assert '  File "<synthetic>", line 1, in <module>' in rendered
     assert "Rani Wijaya" not in rendered
