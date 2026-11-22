@@ -582,6 +582,7 @@ async def test_owner_stop_during_notice_dismissal_skips_the_controls_wait_and_th
     run = await _run(session, open_audio, monkeypatch, Scenario(page))
 
     assert run.result.terminal_reason == "stopped_by_owner", run.result.detail
+    assert not run.events("call_controls_wait_started")
     assert not page.probes
     assert MIC_OFF_SELECTOR not in page.clicked
     assert session.events.count("audio_stopped") == 1
