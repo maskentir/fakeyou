@@ -11,6 +11,7 @@ from fakeyou.meet.meet import (
     LOBBY_READ_FAILURE_LIMIT,
     GuestJoinRequest,
     JoinPolling,
+    JoinResult,
     call_markers,
     click_when_ready,
     disable_meeting_camera,
@@ -1102,3 +1103,242 @@ def test_call_markers_read_only_headings_and_buttons(
     content: str, headings: str, buttons: frozenset[str]
 ) -> None:
     assert call_markers(content) == (headings, buttons)
+
+
+async def _join(page: FakePage, link: str = LINK) -> JoinResult:
+    clock = FakeClock()
+    return await request_guest_join(
+        page, _request(link=link), polling=JoinPolling(clock.sleep, clock.monotonic)
+    )
+
+
+async def test_a_redirect_to_the_meet_home_page_is_not_the_requested_meeting() -> None:
+    page = meet_page([IN_CALL], final_url="https://meet.google.com/")
+
+    result = await _join(page)
+
+    assert result.status == "failed"
+    assert "Meet home page instead of the requested meeting" in result.detail
+    assert "abc-defg-hij" not in result.detail
+    assert page.typed == []
+
+
+async def test_a_redirect_to_another_meeting_is_not_the_requested_meeting() -> None:
+    page = meet_page([IN_CALL], final_url="https://meet.google.com/xyz-wxyz-xyz?hl=en")
+
+    result = await _join(page)
+
+    assert result.status == "failed"
+    assert "different Meet page instead of the requested meeting" in result.detail
+    assert "xyz-wxyz-xyz" not in result.detail
+    assert page.typed == []
+
+
+@pytest.mark.parametrize(
+    ("link", "landed"),
+    [
+        (LINK, f"{LINK}?hl=en"),
+        (LINK, f"{LINK}?authuser=0&hl=en&pli=1"),
+        (LINK, f"{LINK}/"),
+        (f"{LINK}?authuser=1", f"{LINK}?authuser=1&hl=en"),
+        ("https://meet.google.com/meet/abc-defg-hij", f"{LINK}?hl=en"),
+        (LINK, "https://meet.google.com/ABC-DEFG-HIJ?hl=en"),
+    ],
+    ids=["pinned_locale", "extra_query", "trailing_slash", "authuser", "meet_prefix", "case"],
+)
+async def test_a_normalised_meeting_url_is_the_requested_meeting(link: str, landed: str) -> None:
+    page = meet_page([IN_CALL], final_url=landed)
+
+    result = await _join(page, link)
+
+    assert result.status == "admitted"
+
+
+class _RedirectingPage(FakePage):
+    def __init__(self, urls: list[str], **script: Any) -> None:
+        super().__init__([], [], **script)
+        self.urls = urls
+
+    @property
+    @override
+    def url(self) -> str:
+        return self.urls.pop(0) if len(self.urls) > 1 else self.urls[0]
+
+
+async def test_a_late_redirect_to_the_home_page_is_a_navigation_failure_not_a_missing_field() -> (
+    None
+):
+    page = _RedirectingPage(
+        [f"{LINK}?hl=en", "https://meet.google.com/"],
+        counts={NAME_SELECTOR: [0], DIALOG_SELECTOR: [0]},
+        labels={"h1, h2": ["Video calls and meetings for everyone"]},
+    )
+
+    result = await _join(page)
+
+    assert result.status == "failed"
+    assert "Meet home page instead of the requested meeting" in result.detail
+    assert "name field" not in result.detail
+    assert "heading: Meet home" in result.detail
+
+
+async def test_a_missing_name_field_on_the_meeting_page_names_its_destination_and_heading() -> None:
+    page = meet_page(
+        [],
+        counts={NAME_SELECTOR: [0]},
+        labels={"h1, h2": ["Getting ready..."]},
+        final_url=f"{LINK}?hl=en",
+    )
+
+    result = await _join(page)
+
+    assert result.status == "failed"
+    assert "name field" in result.detail
+    assert "destination: the requested meeting" in result.detail
+    assert "heading: getting ready" in result.detail
+    assert "abc-defg-hij" not in result.detail
+
+
+async def test_a_failed_navigation_never_writes_the_meeting_link() -> None:
+    page = meet_page([IN_CALL], ["about:blank"], goto_failures=1)
+
+    result = await _join(page)
+
+    assert result.status == "failed"
+    assert "navigation" in result.detail
+    assert "abc-defg-hij" not in result.detail
+
+
+@pytest.mark.parametrize(
+    ("landed", "destination"),
+    [
+        (f"{LINK}?hl=en", "the requested meeting"),
+        ("https://meet.google.com/meet/abc-defg-hij", "the requested meeting"),
+        ("https://meet.google.com/", "the Meet home page"),
+        ("https://meet.google.com", "the Meet home page"),
+        ("https://meet.google.com/?hl=en&authuser=0", "the Meet home page"),
+        ("https://meet.google.com/landing", "a different Meet page"),
+        ("https://meet.google.com/xyz-wxyz-xyz", "a different Meet page"),
+        ("https://meet.google.com/abc-defg-hij/extra", "a different Meet page"),
+        ("https://accounts.google.com/ServiceLogin", "another origin"),
+        ("about:blank", "another origin"),
+    ],
+)
+def test_a_landed_url_is_classified_against_the_requested_meeting(
+    landed: str, destination: str
+) -> None:
+    assert meet_module.landed_destination(landed, LINK) == destination
+
+
+async def test_a_redirect_to_another_meeting_before_the_name_is_entered_is_never_joined() -> None:
+    page = _RedirectingPage(
+        [f"{LINK}?hl=en", "https://meet.google.com/xyz-wxyz-xyz?hl=en"],
+        counts={NAME_SELECTOR: [1], ASK_SELECTOR: [1], DIALOG_SELECTOR: [0]},
+    )
+
+    result = await _join(page)
+
+    assert result.status == "failed"
+    assert "a different Meet page instead of the requested meeting" in result.detail
+    assert page.typed == []
+    assert NAME_SELECTOR not in page.clicked
+    assert ASK_SELECTOR not in page.clicked
+
+
+async def test_a_redirect_after_the_name_is_entered_never_submits_the_join_request() -> None:
+    page = _RedirectingPage(
+        [f"{LINK}?hl=en", f"{LINK}?hl=en", "https://meet.google.com/xyz-wxyz-xyz?hl=en"],
+        counts={NAME_SELECTOR: [1], ASK_SELECTOR: [1], DIALOG_SELECTOR: [0]},
+    )
+
+    result = await _join(page)
+
+    assert result.status == "failed"
+    assert "a different Meet page instead of the requested meeting" in result.detail
+    assert ASK_SELECTOR not in page.clicked
+
+
+@pytest.mark.parametrize(
+    "landed",
+    [
+        "http://meet.google.com/abc-defg-hij",
+        "https://meet.google.com:8443/abc-defg-hij",
+        "https://meet.google.com.evil.example/abc-defg-hij",
+        "javascript:alert(1)",
+        "data:text/html,meet.google.com/abc-defg-hij",
+    ],
+    ids=["http", "port", "lookalike_host", "javascript", "data"],
+)
+async def test_only_the_expected_meet_origin_is_the_requested_meeting(landed: str) -> None:
+    page = meet_page([IN_CALL], final_url=landed)
+
+    result = await _join(page)
+
+    assert meet_module.landed_destination(landed, LINK) == "another origin"
+    assert result.status == "failed"
+    assert page.typed == []
+
+
+SENSITIVE_HEADING = (
+    "Harun Rasyid 1:1 salary review with ai2@example.com "
+    "https://meet.google.com/abc-defg-hij?pli=1&token=s3cr3t"
+)
+SENSITIVE_PARTS = ("Harun", "salary", "ai2@example.com", "abc-defg-hij", "token", "s3cr3t")
+
+
+@pytest.mark.parametrize(
+    ("landed", "name_fields"),
+    [("https://meet.google.com/", 1), (f"{LINK}?hl=en", 0)],
+    ids=["wrong_destination", "missing_name_field"],
+)
+async def test_navigation_evidence_never_repeats_a_sensitive_heading(
+    landed: str, name_fields: int
+) -> None:
+    page = meet_page(
+        [],
+        counts={NAME_SELECTOR: [name_fields]},
+        labels={"h1, h2": [SENSITIVE_HEADING, "You can't join this video call"]},
+        final_url=landed,
+    )
+
+    result = await _join(page)
+
+    assert result.status == "failed"
+    assert "heading: unrecognised, access refused" in result.detail
+    assert not [part for part in SENSITIVE_PARTS if part in result.detail]
+
+
+@pytest.mark.parametrize(
+    ("heading", "category"),
+    [
+        ("Video calls and meetings for everyone", "Meet home"),
+        ("Ready to join?", "pre-join"),
+        ("What's your name?", "pre-join"),
+        ("Getting ready...", "getting ready"),
+        ("You can't join this video call", "access refused"),
+        ("The call has ended", "call ended"),
+        ("You left the meeting", "call ended"),
+        ("Sign in", "sign-in"),
+        ("Check your meeting code", "invalid meeting code"),
+        ("Invalid video call name.", "invalid meeting code"),
+        ("Weekly sync with Rani", "unrecognised"),
+    ],
+)
+def test_a_heading_is_reported_only_as_a_known_category(heading: str, category: str) -> None:
+    assert meet_module.heading_category(heading) == category
+
+
+async def test_a_redirect_while_the_name_field_is_sought_is_a_navigation_failure() -> None:
+    page = _RedirectingPage(
+        [f"{LINK}?hl=en", f"{LINK}?hl=en", "https://meet.google.com/"],
+        counts={NAME_SELECTOR: [0], DIALOG_SELECTOR: [0]},
+        labels={"h1, h2": ["Video calls and meetings for everyone"]},
+    )
+
+    result = await _join(page)
+
+    assert result.status == "failed"
+    assert result.detail == (
+        "navigation landed on the Meet home page instead of the requested meeting; "
+        "heading: Meet home"
+    )

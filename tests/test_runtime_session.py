@@ -29,7 +29,7 @@ from fakeyou.orchestration.runtime import (
 from tests._audio_fakes import FakeAudio
 from tests._conversation_fakes import FakeConversation
 from tests._error_support import message_pattern
-from tests._fakes_common import FakeClock
+from tests._fakes_common import LINK, FakeClock
 from tests._meet_browser_fakes import (
     ASK_SELECTOR,
     CALL_ENDED,
@@ -971,3 +971,51 @@ async def test_a_call_that_ends_while_the_twin_knocks_ends_by_its_own_reason(
     assert journal.events("browser_error_recorded") == []
     assert journal.events("browser_rejoined") == []
     assert (browser.opened, browser.closed) == (1, 1)
+
+
+@pytest.mark.parametrize(
+    ("landed", "name_fields", "expected"),
+    [
+        ("https://meet.google.com/", [1], "the Meet home page instead of the requested meeting"),
+        (f"{LINK}?hl=en", [0], "destination: the requested meeting"),
+    ],
+    ids=["wrong_destination", "missing_name_field"],
+)
+async def test_navigation_failures_never_journal_a_sensitive_heading(
+    landed: str, name_fields: list[int], expected: str
+) -> None:
+    sensitive = (
+        "Harun Rasyid 1:1 salary review with ai2@example.com "
+        "https://meet.google.com/abc-defg-hij?pli=1&token=s3cr3t"
+    )
+    browser = FakePageSession(
+        meet_page(
+            [],
+            final_url=landed,
+            counts={NAME_SELECTOR: name_fields},
+            labels={"h1, h2": [sensitive]},
+        )
+    )
+    journal = RecordingJournal()
+    clock = FakeClock()
+
+    result = await run_meeting_session(
+        session_config(),
+        SessionWiring(
+            open_page=browser.open,
+            sleep=clock.sleep,
+            monotonic=clock.monotonic,
+            journal=journal,
+        ),
+    )
+
+    written = "\n".join(journal.lines) + result.detail
+    finished = journal.events("join_finished")
+    assert (result.phase, result.terminal_reason) == ("ended", "browser_failure")
+    assert expected in finished[-1]["detail"]
+    assert "heading: unrecognised" in finished[-1]["detail"]
+    assert not [
+        part
+        for part in ("Harun", "salary", "ai2@example.com", "abc-defg-hij", "s3cr3t", "token=")
+        if part in written
+    ]

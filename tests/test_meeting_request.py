@@ -4,7 +4,11 @@ from typing import Any
 import pytest
 
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
-from fakeyou.config.meeting_request import MeetingRequest, validate_meeting_request
+from fakeyou.config.meeting_request import (
+    MeetingRequest,
+    meeting_code,
+    validate_meeting_request,
+)
 from tests._error_support import message_pattern
 
 LINK = "https://meet.google.com/abc-defg-hij"
@@ -216,3 +220,18 @@ def test_meeting_owner_and_twin_ids_are_validated(overrides: dict[str, Any], fie
 
 def test_valid_owner_and_twin_ids_pass_the_request_check() -> None:
     validate_meeting_request(MeetingRequest(**request(owner_id="owner-9", twin_id="twin_9")))
+
+
+@pytest.mark.parametrize(
+    ("link", "code"),
+    [
+        ("https://meet.google.com/abc-defg-hij", "abc-defg-hij"),
+        ("https://meet.google.com/meet/abc-defg-hij?hl=en", "abc-defg-hij"),
+        ("https://meet.google.com/ABC-DEFG-HIJ/", "abc-defg-hij"),
+        ("https://meet.google.com/", None),
+        ("https://meet.google.com/landing", None),
+        ("https://meet.google.com/abc-defg-hij/extra", None),
+    ],
+)
+def test_the_meeting_code_survives_meet_url_normalisation(link: str, code: str | None) -> None:
+    assert meeting_code(link) == code
