@@ -4,10 +4,12 @@ from typing import Any, override
 
 import pytest
 from playwright.async_api import Error as PlaywrightError
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 import fakeyou.meet.meet as meet
 from fakeyou.meet.meet import (
     CALL_CONTROLS_TIMEOUT_SECONDS,
+    MIC_CONTROL_SELECTOR,
     MIC_DISABLED_SELECTOR,
     MIC_ENABLED_SELECTOR,
     PROBE_TIMEOUT_SECONDS,
@@ -18,7 +20,8 @@ from tests._fakes_common import FakeClock
 from tests._meet_browser_fakes import LEAVE_SELECTOR, FakeLocator, FakePage
 
 LEAK = "Harun Rasyid ai2@example.com abc-defg-hij"
-TOOLBAR_PROBES = (MIC_ENABLED_SELECTOR, MIC_DISABLED_SELECTOR, LEAVE_SELECTOR)
+MIC_STATES = (MIC_ENABLED_SELECTOR, MIC_DISABLED_SELECTOR)
+TOOLBAR_PROBES = (*MIC_STATES, LEAVE_SELECTOR)
 
 
 class BoundedClock(FakeClock):
@@ -41,11 +44,14 @@ class ProbeLocator(FakeLocator):
         super().__init__(page, selector)
         self._probe_page = page
 
-    @override
-    async def is_visible(self) -> bool:
+    def _parts(self) -> tuple[str, ...]:
+        return MIC_STATES if self.selector == MIC_CONTROL_SELECTOR else (self.selector,)
+
+    async def _observe(self) -> bool:
         page = self._probe_page
         page.probes.append((self.selector, page.fake_clock.now))
-        behaviour = page.behaviour.get(self.selector)
+        behaviours = [page.behaviour[part] for part in self._parts() if part in page.behaviour]
+        behaviour = behaviours[0] if behaviours else None
         if behaviour == "hang":
             await asyncio.Event().wait()
         if behaviour == "raise":
@@ -53,7 +59,26 @@ class ProbeLocator(FakeLocator):
         if behaviour == "stop":
             page.fake_clock.stop_at = page.fake_clock.now
             return True
-        return page.fake_clock.now >= page.appears.get(self.selector, float("inf"))
+        return page.fake_clock.now >= self._appears()
+
+    def _appears(self) -> float:
+        return min(self._probe_page.appears.get(part, float("inf")) for part in self._parts())
+
+    @override
+    async def is_visible(self) -> bool:
+        return await self._observe()
+
+    @override
+    async def wait_for(self, **kwargs: Any) -> None:
+        assert kwargs.get("state") == "visible"
+        if await self._observe():
+            return
+        clock = self._probe_page.fake_clock
+        window = float(kwargs["timeout"]) / 1000
+        appears = self._appears()
+        await clock.sleep(min(window, appears - clock.now))
+        if clock.now < appears:
+            raise PlaywrightTimeoutError(LEAK)
 
 
 class ProbePage(FakePage):
@@ -91,6 +116,7 @@ def test_t7_readiness_bounds_and_mic_selectors_are_fixed() -> None:
     assert MIC_DISABLED_SELECTOR == (
         'button[aria-label^="Turn on microphone" i],button[aria-label^="Unmute microphone" i]'
     )
+    assert MIC_CONTROL_SELECTOR == f"{MIC_ENABLED_SELECTOR},{MIC_DISABLED_SELECTOR}"
 
 
 async def test_t7_the_deadline_is_the_controls_timeout_from_the_wait_start() -> None:
@@ -187,9 +213,27 @@ async def test_t10_probe_errors_count_as_not_visible_and_never_leak_page_text() 
     assert LEAK not in repr(wait)
 
 
-async def test_t11_polling_never_probes_or_sleeps_past_the_deadline() -> None:
+async def test_t11_a_mic_in_the_last_window_before_the_deadline_is_readiness() -> None:
     clock = BoundedClock()
     page = ProbePage(clock, {MIC_DISABLED_SELECTOR: 19.5, LEAVE_SELECTOR: 0.0})
+
+    wait = await wait_for_mic_control(page, _clock(clock))
+
+    assert (wait.outcome, wait.waited_seconds) == ("ready", 19.5)
+
+
+async def test_readiness_is_reported_when_the_mic_appears_not_at_the_next_poll() -> None:
+    clock = BoundedClock()
+    page = ProbePage(clock, {MIC_ENABLED_SELECTOR: 13.25})
+
+    wait = await wait_for_mic_control(page, _clock(clock))
+
+    assert (wait.outcome, wait.waited_seconds) == ("ready", 13.25)
+
+
+async def test_t11_a_mic_after_the_deadline_is_never_observed() -> None:
+    clock = BoundedClock()
+    page = ProbePage(clock, {MIC_DISABLED_SELECTOR: 20.5, LEAVE_SELECTOR: 0.0})
 
     wait = await wait_for_mic_control(page, _clock(clock))
 
@@ -215,3 +259,51 @@ async def test_the_controls_timeout_reports_only_a_heading_category() -> None:
     wait = await wait_for_mic_control(page, _clock(clock))
 
     assert wait.heading == "getting ready"
+
+
+def _late_button_page(label: str, after_ms: int) -> str:
+    return (
+        '<button aria-label="Leave call"></button><script>setTimeout(() => {'
+        "const button = document.createElement('button');"
+        f"button.setAttribute('aria-label', '{label}');"
+        "document.body.appendChild(button);"
+        f"}}, {after_ms});</script>"
+    )
+
+
+async def _real_wait(html: str, monkeypatch: pytest.MonkeyPatch) -> tuple[str, float]:
+    from playwright.async_api import async_playwright
+
+    monkeypatch.setattr(meet, "PROBE_TIMEOUT_SECONDS", 0.5)
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(headless=True)
+        try:
+            page = await browser.new_page()
+            await page.set_content(html)
+            clock = ControlsClock(asyncio.sleep, time.monotonic, lambda: False, 0.5, 2.0)
+            started = time.monotonic()
+            async with asyncio.timeout(5):
+                wait = await wait_for_mic_control(page, clock)
+            return wait.outcome, time.monotonic() - started
+        finally:
+            await browser.close()
+
+
+@pytest.mark.browser
+async def test_a_real_mic_control_in_the_last_window_is_readiness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    outcome, elapsed = await _real_wait(_late_button_page("Turn on microphone", 1750), monkeypatch)
+
+    assert outcome == "ready"
+    assert 1.5 < elapsed < 2.0
+
+
+@pytest.mark.browser
+async def test_a_real_mic_control_after_the_deadline_is_a_bounded_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    outcome, elapsed = await _real_wait(_late_button_page("Turn on microphone", 2600), monkeypatch)
+
+    assert outcome == "mic_control_missing"
+    assert 2.0 <= elapsed < 2.5

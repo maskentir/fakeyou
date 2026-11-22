@@ -10,7 +10,7 @@ import pytest
 from playwright.async_api import Error as PlaywrightError
 
 import fakeyou.orchestration.runtime as runtime
-from fakeyou.meet.meet import JoinResult, enable_meeting_microphone
+from fakeyou.meet.meet import MIC_CONTROL_SELECTOR, JoinResult, enable_meeting_microphone
 from tests._audio_fakes import FakeAudio
 from tests._fakes_common import FakeClock
 from tests._meet_browser_fakes import (
@@ -29,7 +29,7 @@ ROSTER_ADMISSION = JoinResult(
 DOM_ADMISSION = JoinResult("admitted", "guest admitted to the call", admission="dom")
 NEVER = float("inf")
 SENSITIVE = ("Harun Rasyid", "ai2@example.com", "abc-defg-hij")
-TOOLBAR_PROBES = (MIC_ON_SELECTOR, MIC_OFF_SELECTOR, LEAVE_SELECTOR)
+TOOLBAR_PROBES = (MIC_ON_SELECTOR, MIC_OFF_SELECTOR, LEAVE_SELECTOR, MIC_CONTROL_SELECTOR)
 RUNTIME_RELEASE = ["audio_started", "admitted", "audio_stopped", "browser_closed"]
 
 
@@ -38,8 +38,16 @@ class TimedLocator(FakeLocator):
         super().__init__(page, selector)
         self._toolbar = page
 
+    def _appears(self) -> float:
+        parts = (
+            (MIC_ON_SELECTOR, MIC_OFF_SELECTOR)
+            if self.selector == MIC_CONTROL_SELECTOR
+            else (self.selector,)
+        )
+        return min(self._toolbar.appears.get(part, NEVER) for part in parts)
+
     def _shown(self) -> bool:
-        return self._toolbar.fake_clock.now >= self._toolbar.appears.get(self.selector, NEVER)
+        return self._toolbar.fake_clock.now >= self._appears()
 
     @override
     async def count(self) -> int:
@@ -52,10 +60,13 @@ class TimedLocator(FakeLocator):
 
     @override
     async def wait_for(self, **kwargs: Any) -> None:
-        if self._shown():
+        clock = self._toolbar.fake_clock
+        self._toolbar.probes.append((self.selector, clock.now))
+        window = float(kwargs.get("timeout", 30000)) / 1000
+        appears = self._appears()
+        if appears <= clock.now:
             return
-        await self._toolbar.fake_clock.sleep(float(kwargs.get("timeout", 30000)) / 1000)
-        await asyncio.sleep(0)
+        await self._toolbar.advance(min(window, appears - clock.now))
         if not self._shown():
             raise PlaywrightError(f"not visible yet: {self.selector}")
 
@@ -83,6 +94,14 @@ class ToolbarPage(FakePage):
         self.appears = dict(appears)
         self.mic_switches = mic_switches
         self.probes: list[tuple[str, float]] = []
+        self.stop_at = NEVER
+        self.stop: asyncio.Event | None = None
+
+    async def advance(self, seconds: float) -> None:
+        await self.fake_clock.sleep(seconds)
+        if self.stop is not None and self.fake_clock.now >= self.stop_at:
+            self.stop.set()
+        await asyncio.sleep(0)
 
     @override
     def locator(self, selector: str, **kwargs: Any) -> Any:
@@ -169,6 +188,8 @@ async def _run(
 
     sleep = clock.sleep
     if stop_at is not None:
+        page.stop_at = stop_at
+        page.stop = session.stop
 
         async def stopping_sleep(seconds: float) -> None:
             await clock.sleep(seconds)
@@ -407,7 +428,7 @@ async def test_t9_owner_stop_at_the_deadline_wins_over_the_timeout(
     assert session.events.count("audio_stopped") == 1
 
 
-async def test_t11_controls_after_the_last_probe_are_never_probed_past_the_deadline(
+async def test_t11_controls_in_the_last_window_before_the_deadline_enable_the_mic(
     open_audio: Callable[..., AbstractAsyncContextManager[FakeAudio]],
     session: SimpleNamespace,
     monkeypatch: pytest.MonkeyPatch,
@@ -416,10 +437,27 @@ async def test_t11_controls_after_the_last_probe_are_never_probed_past_the_deadl
 
     run = await _run(session, open_audio, monkeypatch, Scenario(page))
 
+    assert run.result.terminal_reason != "browser_failure", run.result.detail
+    assert [row["waited_ms"] for row in run.events("call_controls_detected")] == [19500.0]
+    assert not run.events("call_controls_wait_expired")
+    assert page.clicked.count(MIC_OFF_SELECTOR) == 1
+    assert run.events("microphone_enabled")
+
+
+async def test_t11_controls_after_the_deadline_are_never_observed(
+    open_audio: Callable[..., AbstractAsyncContextManager[FakeAudio]],
+    session: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = ToolbarPage(FakeClock(), _toolbar(mic_off_at=20.5, leave_at=20.5))
+
+    run = await _run(session, open_audio, monkeypatch, Scenario(page))
+
     assert run.result.terminal_reason == "browser_failure", run.result.detail
     wait_probes = [at for selector, at in page.probes if selector in TOOLBAR_PROBES]
     assert max(wait_probes) < 20.0
     assert [row["waited_ms"] for row in run.events("call_controls_wait_expired")] == [20000.0]
+    assert not run.events("call_controls_detected")
     assert MIC_OFF_SELECTOR not in page.clicked
 
 
@@ -487,3 +525,86 @@ async def test_t13_prepared_audio_is_torn_down_exactly_once_on_every_terminal_pa
     assert run.result.terminal_reason == path.reason, run.result.detail
     assert session.events.count("audio_stopped") == 1
     assert run.audio.stopped
+
+
+class BlockingNotice:
+    def __init__(self, page: ToolbarPage, hides: dict[str, float]) -> None:
+        self.page = page
+        self.hides = hides
+        self.open = True
+        self.calls = 0
+
+    async def dismiss(self, page: Any) -> tuple[str, ...]:
+        del page
+        self.calls += 1
+        if not self.open:
+            return ()
+        self.open = False
+        now = self.page.fake_clock.now
+        self.page.appears.update({selector: now for selector in self.hides})
+        return ("Notice",)
+
+
+async def test_a_notice_hiding_the_toolbar_is_dismissed_before_the_controls_wait(
+    open_audio: Callable[..., AbstractAsyncContextManager[FakeAudio]],
+    session: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = ToolbarPage(FakeClock(), _toolbar())
+    notice = BlockingNotice(page, _toolbar(mic_off_at=0.0, leave_at=0.0))
+    monkeypatch.setattr(runtime, "dismiss_notices", notice.dismiss)
+
+    run = await _run(session, open_audio, monkeypatch, Scenario(page))
+
+    assert run.result.terminal_reason != "browser_failure", run.result.detail
+    assert not run.events("call_controls_wait_expired")
+    assert [row["waited_ms"] for row in run.events("call_controls_detected")] == [0.0]
+    assert page.clicked.count(MIC_OFF_SELECTOR) == 1
+    assert notice.calls == 2
+    events = [row["event"] for row in run.journal.events()]
+    assert events.index("modal_dismissed") < events.index("call_controls_wait_started")
+
+
+async def test_owner_stop_during_notice_dismissal_skips_the_controls_wait_and_the_mic(
+    open_audio: Callable[..., AbstractAsyncContextManager[FakeAudio]],
+    session: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = ToolbarPage(FakeClock(), _toolbar(mic_off_at=0.0, leave_at=0.0))
+
+    async def stopping_dismissal(page: Any) -> tuple[str, ...]:
+        del page
+        session.stop.set()
+        return ()
+
+    monkeypatch.setattr(runtime, "dismiss_notices", stopping_dismissal)
+
+    run = await _run(session, open_audio, monkeypatch, Scenario(page))
+
+    assert run.result.terminal_reason == "stopped_by_owner", run.result.detail
+    assert not page.probes
+    assert MIC_OFF_SELECTOR not in page.clicked
+    assert session.events.count("audio_stopped") == 1
+
+
+async def test_a_hanging_notice_dismissal_stays_bounded_and_readiness_continues(
+    open_audio: Callable[..., AbstractAsyncContextManager[FakeAudio]],
+    session: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page = ToolbarPage(FakeClock(), _toolbar(mic_off_at=0.0, leave_at=0.0))
+
+    async def hanging_dismissal(page: Any) -> tuple[str, ...]:
+        del page
+        await asyncio.Event().wait()
+        return ()
+
+    monkeypatch.setattr(runtime, "dismiss_notices", hanging_dismissal)
+    monkeypatch.setattr(runtime, "NOTICE_DISMISS_SECONDS", 0.01)
+
+    async with asyncio.timeout(5):
+        run = await _run(session, open_audio, monkeypatch, Scenario(page))
+
+    assert run.result.terminal_reason != "browser_failure", run.result.detail
+    assert len(run.events("modal_dismiss_expired")) == 2
+    assert page.clicked.count(MIC_OFF_SELECTOR) == 1

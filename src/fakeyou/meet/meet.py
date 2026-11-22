@@ -87,6 +87,7 @@ MIC_ENABLED_SELECTOR = (
 MIC_DISABLED_SELECTOR = (
     'button[aria-label^="Turn on microphone" i],button[aria-label^="Unmute microphone" i]'
 )
+MIC_CONTROL_SELECTOR = f"{MIC_ENABLED_SELECTOR},{MIC_DISABLED_SELECTOR}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -759,11 +760,13 @@ async def _bounded_heading(page: Page) -> str:
         return "unknown"
 
 
-async def _mic_control_visible(page: Page, deadline: float, clock: ControlsClock) -> bool:
-    for selector in (MIC_ENABLED_SELECTOR, MIC_DISABLED_SELECTOR):
-        if await _visible_before(page, selector, deadline, clock.monotonic()):
-            return True
-    return False
+async def _appears_within(page: Page, selector: str, window: float) -> bool:
+    try:
+        async with asyncio.timeout(window):
+            await page.locator(selector).first.wait_for(state="visible", timeout=window * 1000)
+    except (PlaywrightError, TimeoutError):
+        return False
+    return True
 
 
 async def wait_for_mic_control(
@@ -774,18 +777,22 @@ async def wait_for_mic_control(
     leave = f'button[aria-label="{signals.leave_call}"]'
     toolbar_seen = False
     while not clock.stopped():
-        if clock.monotonic() >= deadline:
+        window_start = clock.monotonic()
+        remaining = deadline - window_start
+        if remaining <= 0:
             outcome: ControlsOutcome = "mic_control_missing" if toolbar_seen else "toolbar_missing"
-            waited = clock.monotonic() - started
-            return ControlsWait(outcome, waited, await _bounded_heading(page))
-        if await _mic_control_visible(page, deadline, clock):
+            return ControlsWait(outcome, window_start - started, await _bounded_heading(page))
+        window = min(PROBE_TIMEOUT_SECONDS, remaining)
+        if await _appears_within(page, MIC_CONTROL_SELECTOR, window):
             if clock.stopped():
                 break
             return ControlsWait("ready", clock.monotonic() - started)
-        toolbar_seen = await _visible_before(page, leave, deadline, clock.monotonic())
-        remaining = deadline - clock.monotonic()
-        if remaining > 0:
-            await clock.sleep(min(clock.poll_seconds, remaining))
+        toolbar_seen = toolbar_seen or await _visible_before(
+            page, leave, deadline, clock.monotonic()
+        )
+        pause = window_start + min(clock.poll_seconds, remaining) - clock.monotonic()
+        if pause > 0:
+            await clock.sleep(pause)
     return ControlsWait("stopped", clock.monotonic() - started)
 
 

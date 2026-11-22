@@ -440,6 +440,9 @@ class MeetingWorker:
         return self._commit()
 
     async def _prepare_microphone(self) -> LifecycleUpdate | None:
+        await self.dismiss_notices_best_effort()
+        if self.stop.is_set():
+            return await self._stopped_microphone_startup()
         controls = await self._await_mic_control()
         if self.stop.is_set() or controls is None or controls.outcome == "stopped":
             return await self._stopped_microphone_startup()
