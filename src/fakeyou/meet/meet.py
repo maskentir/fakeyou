@@ -21,6 +21,8 @@ LeaveStatus = Literal["left", "failed"]
 Destination = Literal[
     "the requested meeting", "the Meet home page", "a different Meet page", "another origin"
 ]
+Admission = Literal["protocol", "dom"]
+ControlsOutcome = Literal["ready", "toolbar_missing", "mic_control_missing", "stopped"]
 
 EXPLICIT_DENIAL_MARKERS = (
     "denied your request",
@@ -77,6 +79,15 @@ NAME_FIELD_ATTEMPTS = 25
 _CLICK_TIMEOUT_MS = 5000
 _CLICK_WAIT_MS = 2000
 _CLICK_RETRY_DELAY_SECONDS = 1.0
+CALL_CONTROLS_TIMEOUT_SECONDS = 20.0
+PROBE_TIMEOUT_SECONDS = 2.0
+MIC_ENABLED_SELECTOR = (
+    'button[aria-label^="Turn off microphone" i],button[aria-label^="Mute microphone" i]'
+)
+MIC_DISABLED_SELECTOR = (
+    'button[aria-label^="Turn on microphone" i],button[aria-label^="Unmute microphone" i]'
+)
+MIC_CONTROL_SELECTOR = f"{MIC_ENABLED_SELECTOR},{MIC_DISABLED_SELECTOR}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +139,7 @@ class JoinResult:
     status: JoinStatus
     detail: str
     knocked: bool = False
+    admission: Admission | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -271,16 +283,29 @@ async def _open_meeting_page(
     return f"navigation to the meeting link failed; current destination: {destination}"
 
 
+async def _first_match(locator: Locator) -> Locator:
+    return locator.first
+
+
+async def _first_visible_match(locator: Locator) -> Locator:
+    for index in range(await locator.count()):
+        candidate = locator.nth(index)
+        if await candidate.is_visible():
+            return candidate
+    return locator.first
+
+
 async def click_when_ready(
     locate: Callable[[], Locator],
     label: str,
     sleep: Callable[[float], Awaitable[None]],
     attempts: int = _CLICK_ATTEMPTS,
+    choose: Callable[[Locator], Awaitable[Locator]] = _first_match,
 ) -> str | None:
     last_error = "locator never became visible"
     for _ in range(attempts):
         try:
-            target = locate().first
+            target = await choose(locate())
             await target.wait_for(state="visible", timeout=_CLICK_WAIT_MS)
         except (PlaywrightError, ActionabilityError):
             await sleep(_CLICK_RETRY_DELAY_SECONDS)
@@ -510,7 +535,7 @@ async def _timeout_outcome(
     except (PlaywrightError, TimeoutError):
         return JoinResult(status="timeout", detail=detail)
     if _is_in_call(rechecked, signals):
-        return JoinResult(status="admitted", detail="guest admitted to the call")
+        return JoinResult(status="admitted", detail="guest admitted to the call", admission="dom")
     return JoinResult(status="timeout", detail=detail)
 
 
@@ -572,7 +597,11 @@ async def _await_admission(
     unreadable = 0
     while True:
         if polling.admitted is not None and polling.admitted():
-            return JoinResult(status="admitted", detail="own device was admitted to the meeting")
+            return JoinResult(
+                status="admitted",
+                detail="own device was admitted to the meeting",
+                admission="protocol",
+            )
         content = await _poll_content(
             page, polling.abort, poll_interval_seconds=request.poll_interval_seconds
         )
@@ -599,7 +628,9 @@ async def _await_admission(
                 f"visible controls: {await visible_control_labels(page)}",
             )
         if _is_in_call(content, signals):
-            return JoinResult(status="admitted", detail="guest admitted to the call")
+            return JoinResult(
+                status="admitted", detail="guest admitted to the call", admission="dom"
+            )
         if polling.monotonic() >= deadline:
             return await _timeout_outcome(page, content, signals, request)
         await polling.sleep(request.poll_interval_seconds)
@@ -698,13 +729,88 @@ async def observe_call_state(
 async def enable_meeting_microphone(
     page: Page, sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
 ) -> bool:
-    enabled = 'button[aria-label^="Turn off microphone" i],button[aria-label^="Mute microphone" i]'
-    disabled = (
-        'button[aria-label^="Turn on microphone" i],button[aria-label^="Unmute microphone" i]'
-    )
     return await toggle_control(
-        page, ToggleSelectors(enabled, disabled), "microphone", "enabled", sleep
+        page,
+        ToggleSelectors(MIC_ENABLED_SELECTOR, MIC_DISABLED_SELECTOR),
+        "microphone",
+        "enabled",
+        sleep,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class ControlsClock:
+    sleep: Callable[[float], Awaitable[None]]
+    monotonic: Callable[[], float]
+    stopped: Callable[[], bool]
+    poll_seconds: float
+    timeout_seconds: float = CALL_CONTROLS_TIMEOUT_SECONDS
+
+
+@dataclass(frozen=True, slots=True)
+class ControlsWait:
+    outcome: ControlsOutcome
+    waited_seconds: float
+    heading: str = ""
+
+
+async def _visible_before(page: Page, selector: str, deadline: float, now: float) -> bool:
+    remaining = deadline - now
+    if remaining <= 0:
+        return False
+    try:
+        async with asyncio.timeout(min(PROBE_TIMEOUT_SECONDS, remaining)):
+            return await page.locator(selector).filter(visible=True).first.is_visible()
+    except (PlaywrightError, TimeoutError):
+        return False
+
+
+async def _bounded_heading(page: Page) -> str:
+    try:
+        async with asyncio.timeout(PROBE_TIMEOUT_SECONDS):
+            return await _page_heading(page)
+    except TimeoutError:
+        return "unknown"
+
+
+async def _appears_within(page: Page, selector: str, window: float) -> bool:
+    try:
+        async with asyncio.timeout(window):
+            await (
+                page.locator(selector)
+                .filter(visible=True)
+                .first.wait_for(state="visible", timeout=window * 1000)
+            )
+    except (PlaywrightError, TimeoutError):
+        return False
+    return True
+
+
+async def wait_for_mic_control(
+    page: Page, clock: ControlsClock, signals: MeetSignals = DEFAULT_MEET_SIGNALS
+) -> ControlsWait:
+    started = clock.monotonic()
+    deadline = started + clock.timeout_seconds
+    leave = f'button[aria-label="{signals.leave_call}"]'
+    toolbar_seen = False
+    while not clock.stopped():
+        window_start = clock.monotonic()
+        remaining = deadline - window_start
+        if remaining <= 0:
+            outcome: ControlsOutcome = "mic_control_missing" if toolbar_seen else "toolbar_missing"
+            return ControlsWait(outcome, window_start - started, await _bounded_heading(page))
+        window = min(PROBE_TIMEOUT_SECONDS, remaining)
+        if await _appears_within(page, MIC_CONTROL_SELECTOR, window):
+            if clock.stopped():
+                break
+            return ControlsWait("ready", clock.monotonic() - started)
+        toolbar_seen = toolbar_seen or await _visible_before(
+            page, leave, deadline, clock.monotonic()
+        )
+        pause = window_start + min(clock.poll_seconds, remaining) - clock.monotonic()
+        if pause > 0:
+            await clock.sleep(pause)
+    return ControlsWait("stopped", clock.monotonic() - started)
 
 
 CAMERA_DEVICE_PROBE = (
@@ -762,17 +868,24 @@ async def toggle_control(
     sleep: Callable[[float], Awaitable[None]],
 ) -> bool:
     try:
-        if await page.locator(selectors.desired).first.is_visible():
+        if await page.locator(selectors.desired).filter(visible=True).first.is_visible():
             return True
     except PlaywrightError as error:
         raise RuntimeError(f"checking {control} state failed: {error}") from error
     failure = await click_when_ready(
-        partial(page.locator, selectors.toggle), f"{control} button", sleep
+        partial(page.locator, selectors.toggle),
+        f"{control} button",
+        sleep,
+        choose=_first_visible_match,
     )
     if failure is not None:
         raise RuntimeError(f"{failure}; visible controls: {await visible_control_labels(page)}")
     try:
-        await page.locator(selectors.desired).first.wait_for(state="visible", timeout=10000)
+        await (
+            page.locator(selectors.desired)
+            .filter(visible=True)
+            .first.wait_for(state="visible", timeout=10000)
+        )
     except PlaywrightError as error:
         raise RuntimeError(f"waiting for {state} {control} failed: {error}") from error
     return True
