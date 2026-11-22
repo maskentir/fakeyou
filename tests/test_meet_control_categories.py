@@ -214,6 +214,7 @@ async def test_a_session_join_failure_never_journals_or_returns_raw_labels() -> 
         ("xqz-mnop-rst", "unrecognised"),
         ("Copy passcode 48213-SECRET-7731", "unrecognised"),
         ("Rani Wijaya (Presentation)", "unrecognised"),
+        ("Notes from Rani Wijaya: close the loop", "unrecognised"),
         ("", "unrecognised"),
     ],
 )
