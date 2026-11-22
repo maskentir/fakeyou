@@ -3,6 +3,7 @@ import traceback
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, replace
 from functools import partial
+from pathlib import Path
 from typing import Any
 
 from fakeyou.foundation.polling import PollGuard
@@ -144,14 +145,29 @@ async def capture_error[T](
 
 TRACEBACK_MAX_FRAMES = 5
 TRACEBACK_MAX_CHARS = 2000
+PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _frame_path(filename: str) -> str:
+    if filename.startswith("<") and filename.endswith(">"):
+        return "<synthetic>"
+    path = Path(filename)
+    try:
+        resolved = path.resolve()
+    except (OSError, RuntimeError):
+        return path.name or "<unresolved>"
+    if resolved.is_relative_to(PACKAGE_ROOT):
+        return f"src/{PACKAGE_ROOT.name}/{resolved.relative_to(PACKAGE_ROOT).as_posix()}"
+    return resolved.name or "<unresolved>"
 
 
 def bounded_traceback(error: BaseException) -> str:
-    footer = "".join(traceback.format_exception_only(error)).strip()
     tail = traceback.extract_tb(error.__traceback__)[-TRACEBACK_MAX_FRAMES:]
-    lines = [footer]
+    lines = [type(error).__name__]
     for frame in reversed(tail):
-        lines.append(f'  File "{frame.filename}", line {frame.lineno}, in {frame.name}')
+        lines.append(
+            f'  File "{_frame_path(frame.filename)}", line {frame.lineno}, in {frame.name}'
+        )
     return "\n".join(lines)[:TRACEBACK_MAX_CHARS]
 
 

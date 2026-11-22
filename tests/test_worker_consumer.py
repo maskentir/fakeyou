@@ -1,4 +1,5 @@
 import asyncio
+import json
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
@@ -7,15 +8,19 @@ from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any, Protocol, cast
 
+import httpx2
 import pytest
 from procrastinate import RetryStrategy
 from procrastinate.testing import InMemoryConnector
+from pydantic import SecretStr
 from redis.asyncio import Redis
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import ResponseError
 
+from fakeyou.api.app import ApiDeps, create_app
 from fakeyou.api.schemas import BriefDocument, SessionCreate, SessionSnapshot, build_snapshot
 from fakeyou.api.sessions import SessionStore
+from fakeyou.api.status import session_status
 from fakeyou.catalog.errors import ErrorCode, FakeYouError
 from fakeyou.config.identifiers import SessionId
 from fakeyou.config.settings import Settings
@@ -511,6 +516,61 @@ async def test_a_join_that_fails_before_the_session_starts_settles_as_failed(
     }
     assert "persona" in harness.events[-1]["detail"]
     assert harness.status.leases == {}
+
+
+JOIN_SECRETS = ("Rani Wijaya", "rani.wijaya@example.com", "xqz-mnop-rst")
+
+
+async def test_an_unexpected_join_failure_reaches_status_events_journal_and_api_by_type_only(
+    harness: Harness, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fail_unexpectedly(*_args: object) -> JoinOutcome:
+        try:
+            raise ValueError("meeting xqz-mnop-rst hosted by rani.wijaya@example.com")
+        except ValueError as cause:
+            raise RuntimeError("Rani Wijaya could not be reached") from cause
+
+    monkeypatch.setattr("fakeyou.worker.consumer.run_join_session", fail_unexpectedly)
+    await harness.enqueue("m-1", "join")
+    assert await harness.consumer.run_once() is None
+
+    expected = "join failed unexpectedly (RuntimeError)"
+    status = await harness.status.get("m-1")
+    assert status is not None
+    assert (status.phase, status.terminal_reason, status.detail) == (
+        "failed",
+        "infra_failure",
+        expected,
+    )
+    assert harness.events[-1]["detail"] == expected
+    journal_text = journal_path(settings.paths.journal_dir, SessionId("m-1")).read_text()
+    [failed] = [
+        row
+        for row in map(json.loads, journal_text.splitlines())
+        if row["event"] == "session_failed"
+    ]
+    assert (failed["error_type"], failed["detail"]) == ("RuntimeError", expected)
+    settings.api.owner_token = SecretStr("owner-secret")
+    settings.identity.owner_id = SessionId("owner-1")
+    app = create_app(
+        settings,
+        ApiDeps(
+            transport=lambda: harness.transport,
+            snapshot_store=lambda: harness.session_store,
+            now_iso=lambda: "2026-11-23T00:00:00+00:00",
+        ),
+    )
+    app.dependency_overrides[session_status] = lambda: harness.status
+    async with httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.get(
+            "/v1/sessions/m-1", headers={"Authorization": "Bearer owner-secret"}
+        )
+    assert response.status_code == 200
+    assert response.json()["detail"] == expected
+    written = journal_text + response.text + str(harness.events)
+    assert [part for part in JOIN_SECRETS if part in written] == []
 
 
 async def test_second_worker_cannot_claim_the_same_meeting(harness: Harness) -> None:

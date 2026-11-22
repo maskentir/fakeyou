@@ -17,6 +17,7 @@ from fakeyou.config.settings import (
 from fakeyou.conversation.session import ConversationError, SessionResult
 from fakeyou.meet.meet import CallObservation
 from fakeyou.observability.journal import Journal
+from fakeyou.orchestration.lifecycle import SessionLifecycle
 from fakeyou.orchestration.runtime import (
     BLOCKED_REJOIN_SECONDS,
     OBSERVATION_GRACE_SECONDS,
@@ -218,8 +219,9 @@ async def test_run_meeting_session_sanitizes_browser_failure_detail() -> None:
     rows = [json.loads(line) for line in events]
     details = [row for row in rows if row["event"] == "browser_error_recorded"]
     assert len(details) == 1
-    assert details[0]["error"] == "boom secret-token"
+    assert "error" not in details[0]
     assert details[0]["error_type"] == "RuntimeError"
+    assert not [line for line in events if "secret-token" in line]
     assert not [row for row in rows if row["event"] == "browser_rejoined"]
 
 
@@ -1019,3 +1021,142 @@ async def test_navigation_failures_never_journal_a_sensitive_heading(
         for part in ("Harun", "salary", "ai2@example.com", "abc-defg-hij", "s3cr3t", "token=")
         if part in written
     ]
+
+
+EXCEPTION_SECRETS = ("Rani Wijaya", "rani.wijaya@example.com", "xqz-mnop-rst")
+
+
+def _sensitive_failure(error_type: type[Exception]) -> Exception:
+    try:
+        try:
+            raise ValueError("meeting xqz-mnop-rst hosted by rani.wijaya@example.com")
+        except ValueError as cause:
+            raise error_type("Rani Wijaya could not be reached") from cause
+    except error_type as error:
+        return error
+
+
+@pytest.mark.parametrize(
+    ("error_type", "event"),
+    [(RuntimeError, "browser_error_recorded"), (ConversationError, "conversation_error_recorded")],
+    ids=["browser", "conversation"],
+)
+async def test_a_session_failure_journals_types_and_frames_but_no_exception_text(
+    error_type: type[Exception], event: str
+) -> None:
+    lines: list[str] = []
+    journal = Journal("meeting-1", emit=lines.append, echo=False)
+    clock = FakeClock()
+    failure = _sensitive_failure(error_type)
+
+    def failing_open(*args: object, **kwargs: object) -> NoReturn:
+        del args
+        del kwargs
+        raise failure
+
+    result = await run_meeting_session(
+        session_config(),
+        SessionWiring(
+            open_page=failing_open, sleep=clock.sleep, monotonic=clock.monotonic, journal=journal
+        ),
+    )
+
+    assert not [part for part in EXCEPTION_SECRETS for line in lines if part in line]
+    assert not [part for part in EXCEPTION_SECRETS if part in result.detail]
+    [row] = [json.loads(line) for line in lines if json.loads(line)["event"] == event]
+    assert row["error_type"] == error_type.__name__
+    assert row["traceback"].splitlines()[0] == error_type.__name__
+    assert '  File "test_runtime_session.py", line ' in row["traceback"]
+
+
+async def test_a_teardown_failure_journals_its_type_but_no_exception_text() -> None:
+    lines: list[str] = []
+    journal = Journal("meeting-1", emit=lines.append, echo=False)
+    clock = FakeClock()
+    stop = asyncio.Event()
+    failure = _sensitive_failure(RuntimeError)
+
+    def failing_open(*args: object, **kwargs: object) -> NoReturn:
+        del args
+        del kwargs
+        stop.set()
+        raise failure
+
+    result = await run_meeting_session(
+        session_config(),
+        SessionWiring(
+            open_page=failing_open,
+            sleep=clock.sleep,
+            monotonic=clock.monotonic,
+            journal=journal,
+            stop=stop,
+        ),
+    )
+
+    assert result.terminal_reason == "stopped_by_owner"
+    [row] = [
+        json.loads(line) for line in lines if json.loads(line)["event"] == "browser_error_recorded"
+    ]
+    assert row["detail"] == "during owner-requested teardown"
+    assert row["error_type"] == "RuntimeError"
+    assert not [part for part in EXCEPTION_SECRETS for line in lines if part in line]
+
+
+@pytest.mark.parametrize("source", ["synthetic_without_cwd", "looping_symlink"])
+async def test_an_unresolvable_frame_path_still_journals_and_fails_the_browser(
+    source: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lines: list[str] = []
+    journal = Journal("meeting-1", emit=lines.append, echo=False)
+    clock = FakeClock()
+    sent: list[str] = []
+    send = SessionLifecycle.send
+
+    def recording_send(lifecycle: SessionLifecycle, kind: Any, attribution: Any) -> None:
+        sent.append(kind)
+        send(lifecycle, kind, attribution)
+
+    monkeypatch.setattr(SessionLifecycle, "send", recording_send)
+    filename = "<synthetic>"
+    if source == "looping_symlink":
+        first, second = tmp_path / "loop_a.py", tmp_path / "loop_b.py"
+        first.symlink_to(second)
+        second.symlink_to(first)
+        filename = str(first)
+    cause = ValueError("meeting xqz-mnop-rst hosted by rani.wijaya@example.com")
+    code = compile(
+        "raise LookupError('Rani Wijaya could not be reached') from cause", filename, "exec"
+    )
+
+    def failing_open(*args: object, **kwargs: object) -> NoReturn:
+        del args
+        del kwargs
+        if source == "synthetic_without_cwd":
+            gone = tmp_path / "gone"
+            gone.mkdir()
+            monkeypatch.chdir(gone)
+            gone.rmdir()
+        exec(code, {"cause": cause})
+        raise AssertionError("unreachable")
+
+    result = await run_meeting_session(
+        session_config(),
+        SessionWiring(
+            open_page=failing_open,
+            sleep=clock.sleep,
+            monotonic=clock.monotonic,
+            journal=journal,
+        ),
+    )
+
+    assert (result.terminal_reason, result.detail) == (
+        "browser_failure",
+        "browser session failed (LookupError)",
+    )
+    [row] = [
+        json.loads(line) for line in lines if json.loads(line)["event"] == "browser_error_recorded"
+    ]
+    assert row["error_type"] == "LookupError"
+    assert row["traceback"].splitlines()[0] == "LookupError"
+    assert not [part for part in EXCEPTION_SECRETS for line in lines if part in line]
+    assert "browser_failed" in sent
