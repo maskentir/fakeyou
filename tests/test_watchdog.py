@@ -1,5 +1,6 @@
 import asyncio
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -38,6 +39,7 @@ class FakeDialog:
     click_error: Exception | None = None
     open: bool = True
     press_seconds: float = 0.0
+    press_started: asyncio.Event = field(default_factory=asyncio.Event)
     pressed: list[str] = field(default_factory=list)
     clicks: int = 0
 
@@ -81,6 +83,7 @@ class FakeDialogHandle:
 
     async def press(self, key: str, **_kwargs: Any) -> None:
         self._dialog.pressed.append(key)
+        self._dialog.press_started.set()
         if self._dialog.press_seconds:
             await asyncio.sleep(self._dialog.press_seconds)
         if key == "Escape" and self._dialog.closes_on_escape:
@@ -496,3 +499,66 @@ async def test_a_modal_that_cannot_be_closed_in_time_is_observed_and_the_rest_ar
     ]
     assert again.events == ()
     assert stuck.pressed == ["Escape"]
+
+
+async def test_the_action_phase_has_a_total_budget_and_pending_dialogs_get_the_next_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(asyncio, "timeout", _tenth_of_every_timeout)
+    roles = [
+        ["button"],
+        ["img", "button"],
+        ["heading", "button"],
+        ["link", "button"],
+        ["list", "button"],
+    ]
+    dialogs = [
+        FakeDialog(f"Slow notice {index} Got it", shape, closes_on_escape=True, press_seconds=0.3)
+        for index, shape in enumerate(roles)
+    ]
+    watchdog = watchdog_for(FakeDialogPage(*dialogs))
+    await watchdog.check()
+
+    started = time.monotonic()
+    budgeted = await watchdog.check()
+    elapsed = time.monotonic() - started
+    pending_presses = [list(dialogs[3].pressed), list(dialogs[4].pressed)]
+    next_turn = await watchdog.check()
+
+    assert elapsed < 1.0
+    assert budgeted.observation_failed is False
+    assert budgeted.observation.state == "in_call"
+    assert [(event.kind, event.detail) for event in budgeted.events] == [
+        ("modal_dismissed", "Slow notice 0 Got it"),
+        ("modal_dismissed", "Slow notice 1 Got it"),
+        ("modal_observed", "Slow notice 2 Got it"),
+    ]
+    assert pending_presses == [[], []]
+    assert [(event.kind, event.detail) for event in next_turn.events] == [
+        ("modal_dismissed", "Slow notice 3 Got it"),
+        ("modal_dismissed", "Slow notice 4 Got it"),
+    ]
+    assert dialogs[2].pressed == ["Escape"]
+
+
+async def test_an_external_cancel_during_a_modal_action_propagates_and_releases_the_lock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(asyncio, "timeout", _tenth_of_every_timeout)
+    stuck = FakeDialog("Stuck notice Got it", ["button"], closes_on_escape=True, press_seconds=30.0)
+    watchdog = watchdog_for(FakeDialogPage(stuck))
+    await watchdog.check()
+
+    task = asyncio.create_task(watchdog.check())
+    await stuck.press_started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    async with REAL_TIMEOUT(2):
+        after = await watchdog.check()
+    assert after.observation_failed is False
+    assert [(event.kind, event.detail) for event in after.events] == [
+        ("modal_observed", "Stuck notice Got it")
+    ]
+    assert stuck.pressed == ["Escape", "Escape"]
