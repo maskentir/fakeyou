@@ -27,6 +27,9 @@ WatchdogEventKind = Literal[
 ]
 
 DIALOG_SELECTOR = '[role="dialog"], [role="alertdialog"], dialog[open]'
+OBSERVATION_TIMEOUT_SECONDS = 5.0
+MODAL_ACTION_TIMEOUT_SECONDS = 6.0
+MODAL_ACTIONS_BUDGET_SECONDS = 8.0
 _PEOPLE_COUNT = re.compile(r"People\s*[-–:]\s*(\d+)\s+participants?", re.IGNORECASE)
 _DIALOG_XPATH = '(//*[@role="dialog" or @role="alertdialog"] | //dialog[@open])'
 _SNAPSHOT_ROLE = re.compile(r"^\s*-\s+([a-z]+)")
@@ -158,6 +161,15 @@ async def dismiss_notices(page: Page) -> tuple[str, ...]:
     return tuple(dismissed)
 
 
+@dataclass(frozen=True, slots=True)
+class _ObservedUI:
+    observation: CallObservation
+    modals: list[_Modal]
+    events: list[WatchdogEvent]
+    now: float
+    participant_count: int | None
+
+
 class UIWatchdog:
     def __init__(
         self,
@@ -188,8 +200,8 @@ class UIWatchdog:
     async def check(self) -> WatchdogCheck:
         async with self._lock:
             try:
-                async with asyncio.timeout(5):
-                    return await self._check()
+                async with asyncio.timeout(OBSERVATION_TIMEOUT_SECONDS):
+                    observed = await self._observe_ui()
             except TimeoutError:
                 self._quiet_checks = 0
                 return WatchdogCheck(
@@ -198,6 +210,22 @@ class UIWatchdog:
                     5.0,
                     observation_failed=True,
                 )
+            if isinstance(observed, WatchdogCheck):
+                return observed
+            return await self._act_on_modals(observed)
+
+    async def _attempt_modal(
+        self, modal: _Modal, observed: _ObservedUI, events: list[WatchdogEvent]
+    ) -> None:
+        try:
+            async with asyncio.timeout(MODAL_ACTION_TIMEOUT_SECONDS):
+                await self._handle_modal(modal, observed.observation, observed.now, events)
+        except TimeoutError:
+            self._unconfirmed(modal, events)
+
+    def _unconfirmed(self, modal: _Modal, events: list[WatchdogEvent]) -> None:
+        self._handled.add(modal.fingerprint)
+        events.append(WatchdogEvent("modal_observed", modal.fingerprint, modal.text))
 
     def _sweep_expired(self, now: float, events: list[WatchdogEvent]) -> None:
         for fingerprint, deadline in self._manual.items():
@@ -245,7 +273,7 @@ class UIWatchdog:
             )
         )
 
-    async def _check(self) -> WatchdogCheck:
+    async def _observe_ui(self) -> _ObservedUI | WatchdogCheck:
         events: list[WatchdogEvent] = []
         now = self._monotonic()
         self._sweep_expired(now, events)
@@ -277,12 +305,24 @@ class UIWatchdog:
         }
         self._sweep_cleared(visible, events)
         self._handled.intersection_update(visible)
-        for modal in modals:
-            await self._handle_modal(modal, observation, now, events)
-        self._quiet_checks = 0 if modals else self._quiet_checks + 1
-        delay = 20.0 if self._quiet_checks >= 3 else 5.0
         count = await read_participant_count(self._page) if observation.state == "in_call" else None
-        return WatchdogCheck(observation, tuple(events), delay, count)
+        return _ObservedUI(observation, modals, events, now, count)
+
+    async def _act_on_modals(self, observed: _ObservedUI) -> WatchdogCheck:
+        events = observed.events
+        attempting: _Modal | None = None
+        try:
+            async with asyncio.timeout(MODAL_ACTIONS_BUDGET_SECONDS):
+                for modal in observed.modals:
+                    attempting = modal
+                    await self._attempt_modal(modal, observed, events)
+                    attempting = None
+        except TimeoutError:
+            if attempting is not None:
+                self._unconfirmed(attempting, events)
+        self._quiet_checks = 0 if observed.modals else self._quiet_checks + 1
+        delay = 20.0 if self._quiet_checks >= 3 else 5.0
+        return WatchdogCheck(observed.observation, tuple(events), delay, observed.participant_count)
 
     def _debounce_lobby(self, observation: CallObservation) -> CallObservation:
         if observation.state != "lobby":
