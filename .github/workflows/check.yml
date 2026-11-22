@@ -45,7 +45,7 @@ jobs:
       - run: uv run --no-sync mypy
       - run: uv run --no-sync lint-imports
       - run: uv run --no-sync deptry .
-      - run: uv run --no-sync pytest
+      - run: uv run --no-sync pytest -o faulthandler_timeout=120
       - run: uv build
       - name: Provide a harness env file for Compose
         run: cp .env.example .env
