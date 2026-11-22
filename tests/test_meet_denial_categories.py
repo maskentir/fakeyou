@@ -2,7 +2,13 @@ from typing import Any
 
 import pytest
 
-from fakeyou.meet.meet import GuestJoinRequest, JoinPolling, denial_summary, request_guest_join
+from fakeyou.meet.meet import (
+    GuestJoinRequest,
+    JoinPolling,
+    call_markers,
+    denial_summary,
+    request_guest_join,
+)
 from fakeyou.orchestration.runtime import SessionWiring, run_meeting_session
 from tests._fakes_common import LINK, FakeClock
 from tests._meet_browser_fakes import (
@@ -163,6 +169,25 @@ def test_a_reason_counts_only_in_the_refusal_message_not_in_a_comment() -> None:
             "access refused (unrecognised)",
         ),
         (REFUSAL + "<style>/* This meeting is full */</style>", "access refused (unrecognised)"),
+        (
+            REFUSAL + "<template><p>This meeting is full</p></template>",
+            "access refused (unrecognised)",
+        ),
+        (
+            REFUSAL + "<div hidden><section><p>This meeting is full</p></section></div>",
+            "access refused (unrecognised)",
+        ),
+        (
+            "<html><head><title>This meeting is full</title></head><body>"
+            + REFUSAL
+            + "</body></html>",
+            "access refused (unrecognised)",
+        ),
+        (
+            REFUSAL
+            + "<div hidden><p>Sign in to join this call</p></div><p>This meeting is full</p>",
+            "access refused (meeting full)",
+        ),
         (REFUSAL + '<div title="This meeting is full"></div>', "access refused (unrecognised)"),
         (REFUSAL + '<div aria-label="Sign in to join"></div>', "access refused (unrecognised)"),
         (
@@ -195,3 +220,12 @@ def test_a_reason_counts_only_in_the_refusal_message_not_in_a_comment() -> None:
 )
 def test_denial_pages_map_to_fixed_categories(content: str, summary: str) -> None:
     assert denial_summary(content) == summary
+
+
+def test_call_markers_still_read_headings_and_buttons_inside_concealed_subtrees() -> None:
+    content = (
+        "<head><title>Meet</title></head><div hidden><h1>Getting ready</h1></div>"
+        '<template><button aria-label="Leave call"></button></template>'
+    )
+
+    assert call_markers(content) == ("getting ready", frozenset({"leave call"}))

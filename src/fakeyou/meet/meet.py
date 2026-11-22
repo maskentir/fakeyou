@@ -163,7 +163,7 @@ class MeetSignals:
 
 DEFAULT_MEET_SIGNALS = MeetSignals()
 _HEADING_TAGS = frozenset({"h1", "h2", "h3"})
-_NON_TEXT_TAGS = frozenset({"script", "style"})
+_NON_TEXT_TAGS = frozenset({"script", "style", "template", "head", "title"})
 _VOID_TAGS = frozenset(
     {
         "area",
@@ -707,7 +707,7 @@ class _CallMarkers(HTMLParser):
         self.buttons: set[str] = set()
         self.text: list[str] = []
         self.call_ended = False
-        self._open: list[tuple[str, str | None, list[str]]] = []
+        self._open: list[tuple[str, str | None, list[str], bool]] = []
 
     @override
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
@@ -723,13 +723,14 @@ class _CallMarkers(HTMLParser):
             if values.get("aria-label"):
                 self.buttons.add(values["aria-label"].strip().lower())
         if tag not in _VOID_TAGS:
-            self._open.append((tag, marker, []))
+            concealed = tag in _NON_TEXT_TAGS or "hidden" in values
+            self._open.append((tag, marker, [], concealed))
 
     @override
     def handle_endtag(self, tag: str) -> None:
         for index in range(len(self._open) - 1, -1, -1):
             if self._open[index][0] == tag:
-                for _tag, marker, texts in reversed(self._open[index:]):
+                for _tag, marker, texts, _concealed in reversed(self._open[index:]):
                     self._settle(marker, texts)
                 del self._open[index:]
                 return
@@ -739,9 +740,9 @@ class _CallMarkers(HTMLParser):
         text = data.strip()
         if not text:
             return
-        if not any(tag in _NON_TEXT_TAGS for tag, _marker, _texts in self._open):
+        if not any(concealed for _tag, _marker, _texts, concealed in self._open):
             self.text.append(text)
-        for _tag, marker, texts in reversed(self._open):
+        for _tag, marker, texts, _concealed in reversed(self._open):
             if marker is not None:
                 texts.append(text)
                 return
@@ -749,7 +750,7 @@ class _CallMarkers(HTMLParser):
     @override
     def close(self) -> None:
         super().close()
-        for _tag, marker, texts in reversed(self._open):
+        for _tag, marker, texts, _concealed in reversed(self._open):
             self._settle(marker, texts)
         self._open.clear()
 
