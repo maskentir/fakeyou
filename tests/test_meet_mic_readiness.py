@@ -1,5 +1,6 @@
 import asyncio
 import time
+from dataclasses import dataclass
 from typing import Any, override
 
 import pytest
@@ -14,6 +15,7 @@ from fakeyou.meet.meet import (
     MIC_ENABLED_SELECTOR,
     PROBE_TIMEOUT_SECONDS,
     ControlsClock,
+    enable_meeting_microphone,
     wait_for_mic_control,
 )
 from tests._fakes_common import FakeClock
@@ -307,3 +309,123 @@ async def test_a_real_mic_control_after_the_deadline_is_a_bounded_timeout(
 
     assert outcome == "mic_control_missing"
     assert 2.0 <= elapsed < 2.5
+
+
+TURN_ON = "Turn on microphone"
+TURN_OFF = "Turn off microphone"
+
+
+@dataclass(frozen=True, slots=True)
+class MicDuplicate:
+    hidden: str
+    visible: str | None
+    visible_first: bool = False
+
+
+def _duplicate_page(case: MicDuplicate) -> str:
+    hidden = f'<button aria-label="{case.hidden}" style="display:none"></button>'
+    if case.visible is None:
+        return f'<button aria-label="Leave call"></button>{hidden}'
+    insert = "prepend" if case.visible_first else "append"
+    return (
+        f'<button aria-label="Leave call"></button><div id="bar">{hidden}</div>'
+        "<script>setTimeout(() => {const button = document.createElement('button');"
+        f"button.setAttribute('aria-label', '{case.visible}');"
+        f"button.onclick = () => button.setAttribute('aria-label', '{TURN_OFF}');"
+        f"document.getElementById('bar').{insert}(button);}}, 300);</script>"
+    )
+
+
+async def _real_readiness_and_enable(
+    case: MicDuplicate, monkeypatch: pytest.MonkeyPatch
+) -> tuple[str, bool]:
+    from playwright.async_api import async_playwright
+
+    monkeypatch.setattr(meet, "PROBE_TIMEOUT_SECONDS", 0.5)
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(headless=True)
+        try:
+            page = await browser.new_page()
+            await page.set_content(_duplicate_page(case))
+            clock = ControlsClock(asyncio.sleep, time.monotonic, lambda: False, 0.5, 2.0)
+            async with asyncio.timeout(5):
+                wait = await wait_for_mic_control(page, clock)
+            if wait.outcome != "ready":
+                return wait.outcome, False
+            try:
+                async with asyncio.timeout(30):
+                    enabled = await enable_meeting_microphone(page)
+            except RuntimeError:
+                enabled = False
+            return wait.outcome, enabled
+        finally:
+            await browser.close()
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize(
+    "case",
+    [
+        MicDuplicate(hidden=TURN_OFF, visible=TURN_ON),
+        MicDuplicate(hidden=TURN_ON, visible=TURN_ON),
+        MicDuplicate(hidden=TURN_OFF, visible=TURN_ON, visible_first=True),
+        MicDuplicate(hidden=TURN_ON, visible=TURN_ON, visible_first=True),
+    ],
+    ids=["a-hidden-enabled-first", "b-hidden-disabled-first", "c-reverse-a", "c-reverse-b"],
+)
+async def test_a_visible_mic_control_wins_over_hidden_duplicates_in_any_order(
+    case: MicDuplicate, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    outcome, enabled = await _real_readiness_and_enable(case, monkeypatch)
+
+    assert (outcome, enabled) == ("ready", True)
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("hidden", [TURN_ON, TURN_OFF])
+async def test_d_only_hidden_mic_controls_time_out_at_the_deadline(
+    hidden: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started = time.monotonic()
+
+    outcome, _ = await _real_readiness_and_enable(MicDuplicate(hidden, None), monkeypatch)
+
+    assert outcome == "mic_control_missing"
+    assert 2.0 <= time.monotonic() - started < 4.0
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize(
+    "case",
+    [
+        MicDuplicate(hidden=TURN_OFF, visible=TURN_ON),
+        MicDuplicate(hidden=TURN_ON, visible=TURN_ON),
+        MicDuplicate(hidden=TURN_OFF, visible=TURN_ON, visible_first=True),
+        MicDuplicate(hidden=TURN_ON, visible=TURN_ON, visible_first=True),
+    ],
+    ids=["a-hidden-enabled-first", "b-hidden-disabled-first", "c-reverse-a", "c-reverse-b"],
+)
+async def test_enabling_the_mic_clicks_the_visible_control_among_hidden_duplicates(
+    case: MicDuplicate,
+) -> None:
+    from playwright.async_api import async_playwright
+
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(headless=True)
+        try:
+            page = await browser.new_page()
+            await page.set_content(_duplicate_page(case))
+            await page.get_by_role("button", name=case.visible).last.wait_for(state="attached")
+            try:
+                async with asyncio.timeout(30):
+                    enabled = await enable_meeting_microphone(page)
+            except RuntimeError:
+                enabled = False
+            visible_labels = await page.locator("button:visible").evaluate_all(
+                "nodes => nodes.map(node => node.getAttribute('aria-label'))"
+            )
+        finally:
+            await browser.close()
+
+    assert enabled is True
+    assert TURN_OFF in visible_labels

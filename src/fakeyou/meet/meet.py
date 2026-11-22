@@ -747,7 +747,7 @@ async def _visible_before(page: Page, selector: str, deadline: float, now: float
         return False
     try:
         async with asyncio.timeout(min(PROBE_TIMEOUT_SECONDS, remaining)):
-            return await page.locator(selector).first.is_visible()
+            return await page.locator(selector).filter(visible=True).first.is_visible()
     except (PlaywrightError, TimeoutError):
         return False
 
@@ -763,7 +763,11 @@ async def _bounded_heading(page: Page) -> str:
 async def _appears_within(page: Page, selector: str, window: float) -> bool:
     try:
         async with asyncio.timeout(window):
-            await page.locator(selector).first.wait_for(state="visible", timeout=window * 1000)
+            await (
+                page.locator(selector)
+                .filter(visible=True)
+                .first.wait_for(state="visible", timeout=window * 1000)
+            )
     except (PlaywrightError, TimeoutError):
         return False
     return True
@@ -851,17 +855,21 @@ async def toggle_control(
     sleep: Callable[[float], Awaitable[None]],
 ) -> bool:
     try:
-        if await page.locator(selectors.desired).first.is_visible():
+        if await page.locator(selectors.desired).filter(visible=True).first.is_visible():
             return True
     except PlaywrightError as error:
         raise RuntimeError(f"checking {control} state failed: {error}") from error
     failure = await click_when_ready(
-        partial(page.locator, selectors.toggle), f"{control} button", sleep
+        lambda: page.locator(selectors.toggle).filter(visible=True), f"{control} button", sleep
     )
     if failure is not None:
         raise RuntimeError(f"{failure}; visible controls: {await visible_control_labels(page)}")
     try:
-        await page.locator(selectors.desired).first.wait_for(state="visible", timeout=10000)
+        await (
+            page.locator(selectors.desired)
+            .filter(visible=True)
+            .first.wait_for(state="visible", timeout=10000)
+        )
     except PlaywrightError as error:
         raise RuntimeError(f"waiting for {state} {control} failed: {error}") from error
     return True

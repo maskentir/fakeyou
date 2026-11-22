@@ -62,6 +62,10 @@ class FakeLocator:
     def first(self) -> FakeLocator:
         return self
 
+    def filter(self, **kwargs: Any) -> FakeLocator:
+        del kwargs
+        return self
+
     def nth(self, index: int) -> FakeLocator:
         del index
         return FakeLocator(self._page, self.selector)
