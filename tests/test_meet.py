@@ -398,7 +398,7 @@ async def test_a_missing_name_field_names_the_controls_the_page_showed() -> None
     )
 
     assert result.status == "failed"
-    assert "Return to home screen" in result.detail
+    assert "visible controls: return to home screen, submit feedback" in result.detail
 
 
 async def test_request_guest_join_waits_out_meet_getting_ready() -> None:
@@ -843,7 +843,7 @@ async def test_a_failed_media_toggle_names_the_controls_it_found() -> None:
     )
     clock = FakeClock()
 
-    with pytest.raises(RuntimeError, match="Turn on your microphone"):
+    with pytest.raises(RuntimeError, match="visible controls: leave call, microphone toggle$"):
         await enable_meeting_microphone(page, clock.sleep)
 
 

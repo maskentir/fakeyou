@@ -54,6 +54,50 @@ HEADING_CATEGORIES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("sign-in", ("sign in",)),
     ("invalid meeting code", ("check your meeting code", "invalid video call name")),
 )
+CONTROL_CATEGORIES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("leave call", ("leave call",)),
+    (
+        "microphone toggle",
+        (
+            "turn on microphone",
+            "turn off microphone",
+            "turn on your microphone",
+            "turn off your microphone",
+            "mute microphone",
+            "unmute microphone",
+        ),
+    ),
+    (
+        "camera toggle",
+        ("turn on camera", "turn off camera", "turn on your camera", "turn off your camera"),
+    ),
+    ("ask to join", ("ask to join",)),
+    ("join now", ("join now",)),
+    ("return to home screen", ("return to home screen",)),
+    ("submit feedback", ("submit feedback",)),
+    ("notice dismiss", ("got it", "dismiss", "close")),
+    ("sign-in or sign-up", ("sign in", "sign up", "get started", "learn more")),
+    ("participant tile action", ("pin ", "unpin ", "more options for ", "remove ", "mute ")),
+    (
+        "call toolbar",
+        (
+            "chat with everyone",
+            "show everyone",
+            "people",
+            "raise hand",
+            "lower hand",
+            "send a reaction",
+            "present now",
+            "share screen",
+            "more options",
+            "meeting details",
+            "activities",
+            "turn on captions",
+            "turn off captions",
+        ),
+    ),
+)
+CONTROL_LABEL_LIMIT = 40
 PREPARE_TIMEOUT_SECONDS = 120.0
 CALL_STATE_TIMEOUT_SECONDS = 5.0
 LOBBY_READ_FAILURE_LIMIT = 5
@@ -344,7 +388,7 @@ async def _name_field_failure(page: Page, link: str, failure: str) -> str:
         return navigation
     return (
         f"{failure}; destination: the requested meeting; heading: {await _page_heading(page)}; "
-        f"visible controls: {await visible_control_labels(page)}"
+        f"visible controls: {await visible_control_categories(page)}"
     )
 
 
@@ -625,7 +669,7 @@ async def _await_admission(
             return JoinResult(
                 status=outcome.status,
                 detail=f"{outcome.detail}; page says: {_page_phrase(content, signals.denied)}; "
-                f"visible controls: {await visible_control_labels(page)}",
+                f"visible controls: {await visible_control_categories(page)}",
             )
         if _is_in_call(content, signals):
             return JoinResult(
@@ -844,14 +888,27 @@ async def disable_meeting_camera(
     return await toggle_control(page, ToggleSelectors(off, on), "camera", "disabled", sleep)
 
 
-async def visible_control_labels(page: Page) -> str:
+def control_category(label: str) -> str:
+    lowered = label.casefold().strip()
+    for category, markers in CONTROL_CATEGORIES:
+        if lowered.startswith(markers):
+            return category
+    return "unrecognised"
+
+
+async def visible_control_categories(page: Page) -> str:
     try:
         labels = await page.locator("button[aria-label]").evaluate_all(
             "nodes => nodes.map(node => node.getAttribute('aria-label')).filter(Boolean)"
         )
     except PlaywrightError:
         return "unknown"
-    return ", ".join(str(label) for label in labels[:40]) or "none"
+    found = [control_category(str(label)) for label in labels[:CONTROL_LABEL_LIMIT]]
+    known = [category for category, _markers in CONTROL_CATEGORIES if category in found]
+    unknown = found.count("unrecognised")
+    if unknown:
+        known.append(f"unrecognised ({unknown})")
+    return ", ".join(known) or "none"
 
 
 @dataclass(frozen=True, slots=True)
@@ -871,7 +928,7 @@ async def toggle_control(
         if await page.locator(selectors.desired).filter(visible=True).first.is_visible():
             return True
     except PlaywrightError as error:
-        raise RuntimeError(f"checking {control} state failed: {error}") from error
+        raise RuntimeError(f"checking {control} state failed: ({type(error).__name__})") from error
     failure = await click_when_ready(
         partial(page.locator, selectors.toggle),
         f"{control} button",
@@ -879,7 +936,7 @@ async def toggle_control(
         choose=_first_visible_match,
     )
     if failure is not None:
-        raise RuntimeError(f"{failure}; visible controls: {await visible_control_labels(page)}")
+        raise RuntimeError(f"{failure}; visible controls: {await visible_control_categories(page)}")
     try:
         await (
             page.locator(selectors.desired)
@@ -887,7 +944,9 @@ async def toggle_control(
             .first.wait_for(state="visible", timeout=10000)
         )
     except PlaywrightError as error:
-        raise RuntimeError(f"waiting for {state} {control} failed: {error}") from error
+        raise RuntimeError(
+            f"waiting for {state} {control} failed: ({type(error).__name__})"
+        ) from error
     return True
 
 
@@ -919,7 +978,7 @@ async def leave_meeting(
         return LeaveResult(
             status="failed",
             detail=f"leave button not found on the page; visible controls: "
-            f"{await visible_control_labels(page)}",
+            f"{await visible_control_categories(page)}",
         )
     failure = await click_when_ready(
         partial(page.locator, f'button[aria-label="{signals.leave_call}"]'),
