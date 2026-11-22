@@ -176,6 +176,10 @@ def test_a_reason_counts_only_in_the_refusal_message_not_in_a_comment() -> None:
             "access refused (call-ended marker, meeting full)",
         ),
         (
+            REFUSAL + "<p>Sign in to join this call</p><p>This meeting is full</p>",
+            "access refused (meeting full, sign-in required)",
+        ),
+        (
             REFUSAL + "<p>This meeting is <b>full</b></p>",
             "access refused (meeting full)",
         ),
