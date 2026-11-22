@@ -7,6 +7,7 @@ from typing import Any, cast
 
 import pytest
 
+import fakeyou.observability.faults as faults_module
 from fakeyou.catalog.errors import FakeYouError
 from fakeyou.config.identifiers import parse_session_id
 from fakeyou.observability.faults import (
@@ -527,14 +528,31 @@ def test_bounded_traceback_keeps_only_innermost_frames() -> None:
     assert "outer" not in rendered
 
 
-def test_bounded_traceback_caps_characters() -> None:
+def test_bounded_traceback_caps_characters(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(faults_module, "TRACEBACK_MAX_CHARS", 40)
 
     try:
         raise RuntimeError("x" * 5000)
     except RuntimeError as error:
         rendered = bounded_traceback(error)
 
-    assert len(rendered) <= TRACEBACK_MAX_CHARS
+    assert len(rendered) == 40
+    assert rendered.startswith("RuntimeError\n  File ")
+
+
+def test_the_default_character_cap_holds_for_long_frame_metadata() -> None:
+    namespace: dict[str, Any] = {}
+    exec(
+        compile(f"def {'f' * 3000}():\n    raise RuntimeError('x')", "<synthetic>", "exec"),
+        namespace,
+    )
+
+    try:
+        namespace["f" * 3000]()
+    except RuntimeError as error:
+        rendered = bounded_traceback(error)
+
+    assert len(rendered) == TRACEBACK_MAX_CHARS
 
 
 def test_bounded_traceback_renders_unraised_errors() -> None:
@@ -595,3 +613,37 @@ def test_bounded_traceback_keeps_types_and_frames_but_never_messages_or_causes()
     assert ", in parse_session_id" in cause_rendered
     assert '  File "test_faults.py", line ' in cause_rendered
     assert "/" not in cause_rendered.splitlines()[-1].split('"')[1]
+
+
+def _raised_from(filename: str) -> RuntimeError:
+    try:
+        exec(compile("raise RuntimeError('Rani Wijaya')", filename, "exec"), {})
+    except RuntimeError as error:
+        return error
+    raise AssertionError("unreachable")
+
+
+def test_a_synthetic_frame_needs_no_filesystem_even_without_a_working_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    error = _raised_from("<synthetic>")
+    gone = tmp_path / "gone"
+    gone.mkdir()
+    monkeypatch.chdir(gone)
+    gone.rmdir()
+
+    rendered = bounded_traceback(error)
+
+    assert '  File "<synthetic>", line 1, in <module>' in rendered
+    assert "Rani Wijaya" not in rendered
+
+
+def test_a_frame_whose_source_path_loops_falls_back_to_its_basename(tmp_path: Path) -> None:
+    first, second = tmp_path / "loop_a.py", tmp_path / "loop_b.py"
+    first.symlink_to(second)
+    second.symlink_to(first)
+
+    rendered = bounded_traceback(_raised_from(str(first)))
+
+    assert '  File "loop_a.py", line 1, in <module>' in rendered
+    assert str(tmp_path) not in rendered

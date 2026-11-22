@@ -149,10 +149,16 @@ PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _frame_path(filename: str) -> str:
-    path = Path(filename).resolve()
-    if path.is_relative_to(PACKAGE_ROOT):
-        return f"src/{PACKAGE_ROOT.name}/{path.relative_to(PACKAGE_ROOT).as_posix()}"
-    return path.name
+    if filename.startswith("<") and filename.endswith(">"):
+        return "<synthetic>"
+    path = Path(filename)
+    try:
+        resolved = path.resolve()
+    except (OSError, RuntimeError):
+        return path.name or "<unresolved>"
+    if resolved.is_relative_to(PACKAGE_ROOT):
+        return f"src/{PACKAGE_ROOT.name}/{resolved.relative_to(PACKAGE_ROOT).as_posix()}"
+    return resolved.name or "<unresolved>"
 
 
 def bounded_traceback(error: BaseException) -> str:
