@@ -149,6 +149,10 @@ async def test_a_refused_session_never_journals_or_returns_page_text(
             "<h1>You can't join this video call</h1><p>Only people in Rani Wijaya's team</p>",
             "access refused (organization restricted)",
         ),
+        (
+            CALL_ENDED + "<p>This meeting is full</p>",
+            "access refused (call-ended marker, meeting full)",
+        ),
         (SENSITIVE_DENIAL, "access refused (unrecognised)"),
         ("<p>Rani Wijaya can't join this right now</p>", "none (unrecognised)"),
         ("<h1>Rani Wijaya's meeting xqz-mnop-rst</h1>", "unrecognised (unrecognised)"),
