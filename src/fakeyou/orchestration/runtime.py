@@ -468,7 +468,7 @@ class MeetingWorker:
 
     async def _await_mic_control(self) -> ControlsWait | None:
         admission = self.admission.admission if self.admission is not None else None
-        self.record("call_controls_waiting", source="runtime", admission=admission)
+        self.record("call_controls_wait_started", source="runtime", admission=admission)
         controls = await until_stopped(
             wait_for_mic_control(
                 self.page,
@@ -487,11 +487,11 @@ class MeetingWorker:
         waited_ms = controls.waited_seconds * 1000
         if controls.outcome == "ready":
             self.record(
-                "call_controls_ready", source="runtime", admission=admission, waited_ms=waited_ms
+                "call_controls_detected", source="runtime", admission=admission, waited_ms=waited_ms
             )
         else:
             self.record(
-                "call_controls_timeout",
+                "call_controls_wait_expired",
                 source="runtime",
                 admission=admission,
                 outcome=controls.outcome,

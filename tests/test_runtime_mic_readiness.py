@@ -205,7 +205,7 @@ async def test_t1_roster_admission_before_the_toolbar_enables_the_mic_once_it_ap
 
     assert run.result.terminal_reason != "audio_failure", run.result.detail
     assert MIC_OFF_SELECTOR in page.clicked
-    assert [row["waited_ms"] for row in run.events("call_controls_ready")] == [12000.0]
+    assert [row["waited_ms"] for row in run.events("call_controls_detected")] == [12000.0]
     assert run.events("microphone_enabled")
 
 
@@ -220,7 +220,7 @@ async def test_t1b_controls_ready_at_the_last_probe_before_the_deadline_still_en
 
     assert run.result.terminal_reason != "audio_failure", run.result.detail
     assert MIC_OFF_SELECTOR in page.clicked
-    assert [row["waited_ms"] for row in run.events("call_controls_ready")] == [18000.0]
+    assert [row["waited_ms"] for row in run.events("call_controls_detected")] == [18000.0]
 
 
 async def test_t2_absent_controls_at_the_deadline_are_a_browser_failure_with_audio_stopped_once(
@@ -235,7 +235,9 @@ async def test_t2_absent_controls_at_the_deadline_are_a_browser_failure_with_aud
     assert run.result.terminal_reason == "browser_failure", run.result.detail
     assert session.events.count("audio_stopped") == 1
     assert session.events == RUNTIME_RELEASE
-    assert [row["outcome"] for row in run.events("call_controls_timeout")] == ["toolbar_missing"]
+    assert [row["outcome"] for row in run.events("call_controls_wait_expired")] == [
+        "toolbar_missing"
+    ]
     assert MIC_OFF_SELECTOR not in page.clicked
     assert not run.events("microphone_enabled")
 
@@ -251,10 +253,10 @@ async def test_t2b_a_visible_leave_button_without_a_mic_control_is_not_mic_readi
 
     assert run.result.terminal_reason == "browser_failure", run.result.detail
     assert session.events.count("audio_stopped") == 1
-    assert [row["outcome"] for row in run.events("call_controls_timeout")] == [
+    assert [row["outcome"] for row in run.events("call_controls_wait_expired")] == [
         "mic_control_missing"
     ]
-    assert not run.events("call_controls_ready")
+    assert not run.events("call_controls_detected")
 
 
 async def test_t3_a_visible_mic_that_cannot_be_enabled_stays_an_audio_failure(
@@ -269,8 +271,8 @@ async def test_t3_a_visible_mic_that_cannot_be_enabled_stays_an_audio_failure(
     assert run.result.terminal_reason == "audio_failure", run.result.detail
     assert session.events.count("audio_stopped") == 1
     assert "playback_stopped" not in session.events
-    assert run.events("call_controls_ready")
-    assert not run.events("call_controls_timeout")
+    assert run.events("call_controls_detected")
+    assert not run.events("call_controls_wait_expired")
     assert page.clicked.count(MIC_OFF_SELECTOR) == 1
 
 
@@ -285,7 +287,7 @@ async def test_t4_dom_admission_with_a_ready_toolbar_enables_the_mic(
 
     assert run.result.terminal_reason != "audio_failure", run.result.detail
     assert MIC_OFF_SELECTOR in page.clicked
-    ready = run.events("call_controls_ready")
+    ready = run.events("call_controls_detected")
     assert [(row["admission"], row["waited_ms"]) for row in ready] == [("dom", 0.0)]
 
 
@@ -301,9 +303,9 @@ async def test_t5_owner_stop_during_the_wait_stops_the_session_without_a_mic_cli
     assert run.result.terminal_reason == "stopped_by_owner", run.result.detail
     assert MIC_OFF_SELECTOR not in page.clicked
     assert session.events.count("audio_stopped") == 1
-    assert run.events("call_controls_waiting")
-    assert not run.events("call_controls_ready")
-    assert not run.events("call_controls_timeout")
+    assert run.events("call_controls_wait_started")
+    assert not run.events("call_controls_detected")
+    assert not run.events("call_controls_wait_expired")
 
 
 async def test_t5_owner_stop_after_readiness_prevents_the_mic_click(
@@ -323,7 +325,7 @@ async def test_t5_owner_stop_after_readiness_prevents_the_mic_click(
     run = await _run(session, open_audio, monkeypatch, Scenario(page))
 
     assert run.result.terminal_reason == "stopped_by_owner", run.result.detail
-    assert run.events("call_controls_ready")
+    assert run.events("call_controls_detected")
     assert MIC_OFF_SELECTOR not in page.clicked
     assert session.events.count("audio_stopped") == 1
 
@@ -350,7 +352,7 @@ async def test_t6_a_controls_timeout_never_journals_sensitive_control_labels(
 
     written = "\n".join(run.journal.lines) + run.result.detail
     assert not [part for part in SENSITIVE if part in written]
-    assert [row["heading"] for row in run.events("call_controls_timeout")] == ["unrecognised"]
+    assert [row["heading"] for row in run.events("call_controls_wait_expired")] == ["unrecognised"]
 
 
 async def test_t8_a_session_without_audio_activates_without_waiting_for_controls(
@@ -386,7 +388,7 @@ async def test_t8_a_session_without_audio_activates_without_waiting_for_controls
     assert result.terminal_reason == "stopped_by_owner", result.detail
     assert MIC_OFF_SELECTOR not in page.clicked
     assert clock.now < 1.0
-    assert not journal.events("call_controls_waiting")
+    assert not journal.events("call_controls_wait_started")
     assert not [selector for selector, _ in page.probes if selector != LEAVE_SELECTOR]
 
 
@@ -400,7 +402,7 @@ async def test_t9_owner_stop_at_the_deadline_wins_over_the_timeout(
     run = await _run(session, open_audio, monkeypatch, Scenario(page, stop_at=20.0))
 
     assert run.result.terminal_reason == "stopped_by_owner", run.result.detail
-    assert not run.events("call_controls_timeout")
+    assert not run.events("call_controls_wait_expired")
     assert MIC_OFF_SELECTOR not in page.clicked
     assert session.events.count("audio_stopped") == 1
 
@@ -417,7 +419,7 @@ async def test_t11_controls_after_the_last_probe_are_never_probed_past_the_deadl
     assert run.result.terminal_reason == "browser_failure", run.result.detail
     wait_probes = [at for selector, at in page.probes if selector in TOOLBAR_PROBES]
     assert max(wait_probes) < 20.0
-    assert [row["waited_ms"] for row in run.events("call_controls_timeout")] == [20000.0]
+    assert [row["waited_ms"] for row in run.events("call_controls_wait_expired")] == [20000.0]
     assert MIC_OFF_SELECTOR not in page.clicked
 
 
@@ -430,14 +432,14 @@ async def test_t12_journal_separates_controls_wait_from_time_since_admission(
 
     run = await _run(session, open_audio, monkeypatch, Scenario(page, admit_delay=3.0))
 
-    waiting = run.events("call_controls_waiting")
-    ready = run.events("call_controls_ready")
+    waiting = run.events("call_controls_wait_started")
+    ready = run.events("call_controls_detected")
     enabled = run.events("microphone_enabled")
     assert [row["admission"] for row in waiting] == ["protocol"]
     assert [(row["admission"], row["waited_ms"]) for row in ready] == [("protocol", 10000.0)]
     assert [row["since_admitted_ms"] for row in enabled] == [13000.0]
     events = [row["event"] for row in run.journal.events()]
-    assert events.index("call_controls_ready") < events.index("microphone_enabled")
+    assert events.index("call_controls_detected") < events.index("microphone_enabled")
 
 
 async def test_t12_journal_provenance_comes_from_the_typed_field_not_the_detail(
@@ -450,8 +452,8 @@ async def test_t12_journal_provenance_comes_from_the_typed_field_not_the_detail(
 
     run = await _run(session, open_audio, monkeypatch, Scenario(page, admission=admission))
 
-    assert [row["admission"] for row in run.events("call_controls_waiting")] == ["dom"]
-    assert [row["admission"] for row in run.events("call_controls_ready")] == ["dom"]
+    assert [row["admission"] for row in run.events("call_controls_wait_started")] == ["dom"]
+    assert [row["admission"] for row in run.events("call_controls_detected")] == ["dom"]
 
 
 @dataclass(frozen=True, slots=True)
