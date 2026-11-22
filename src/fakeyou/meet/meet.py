@@ -55,11 +55,18 @@ HEADING_CATEGORIES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("invalid meeting code", ("check your meeting code", "invalid video call name")),
 )
 DENIAL_REASONS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("call-ended marker", ('data-call-ended="true"', "call has ended", "meeting has ended")),
+    ("call-ended marker", ("call has ended", "meeting has ended")),
     ("host admission required", ("unless invited or admitted", "admitted by the host")),
     ("meeting full", ("meeting is full", "participant limit")),
     ("sign-in required", ("sign in to join", "use your google account")),
-    ("organization restricted", ("outside your organization", "only people in")),
+    (
+        "organization restricted",
+        (
+            "outside your organization",
+            "only people in your organization",
+            "only people from your organization",
+        ),
+    ),
 )
 CONTROL_CATEGORIES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("leave call", ("leave call",)),
@@ -156,6 +163,7 @@ class MeetSignals:
 
 DEFAULT_MEET_SIGNALS = MeetSignals()
 _HEADING_TAGS = frozenset({"h1", "h2", "h3"})
+_NON_TEXT_TAGS = frozenset({"script", "style"})
 _VOID_TAGS = frozenset(
     {
         "area",
@@ -529,10 +537,14 @@ async def _poll_content(
 
 
 def denial_summary(content: str) -> str:
-    headings, _buttons = call_markers(content)
-    lowered = content.casefold()
+    parsed = _parsed_markers(content)
+    headings = " ".join(parsed.headings)
+    message = " ".join(parsed.text).casefold()
     reasons = [
-        reason for reason, markers in DENIAL_REASONS if any(marker in lowered for marker in markers)
+        reason
+        for reason, markers in DENIAL_REASONS
+        if any(marker in message for marker in markers)
+        or (reason == "call-ended marker" and parsed.call_ended)
     ]
     heading = heading_category(headings) if headings.strip() else "none"
     return f"{heading} ({', '.join(reasons) or 'unrecognised'})"
@@ -693,11 +705,15 @@ class _CallMarkers(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.headings: list[str] = []
         self.buttons: set[str] = set()
+        self.text: list[str] = []
+        self.call_ended = False
         self._open: list[tuple[str, str | None, list[str]]] = []
 
     @override
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         values = {name: value or "" for name, value in attrs}
+        if values.get("data-call-ended") == "true":
+            self.call_ended = True
         role = values.get("role", "")
         marker: str | None = None
         if tag in _HEADING_TAGS or role == "heading":
@@ -723,6 +739,8 @@ class _CallMarkers(HTMLParser):
         text = data.strip()
         if not text:
             return
+        if not any(tag in _NON_TEXT_TAGS for tag, _marker, _texts in self._open):
+            self.text.append(text)
         for _tag, marker, texts in reversed(self._open):
             if marker is not None:
                 texts.append(text)
@@ -745,10 +763,15 @@ class _CallMarkers(HTMLParser):
             self.buttons.add(text)
 
 
-def call_markers(content: str) -> tuple[str, frozenset[str]]:
+def _parsed_markers(content: str) -> _CallMarkers:
     parser = _CallMarkers()
     parser.feed(content)
     parser.close()
+    return parser
+
+
+def call_markers(content: str) -> tuple[str, frozenset[str]]:
+    parser = _parsed_markers(content)
     return " ".join(parser.headings), frozenset(parser.buttons)
 
 
