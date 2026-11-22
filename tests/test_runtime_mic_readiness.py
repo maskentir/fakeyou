@@ -302,6 +302,49 @@ async def test_t3_a_visible_mic_that_cannot_be_enabled_stays_an_audio_failure(
     assert page.clicked.count(MIC_OFF_SELECTOR) == 1
 
 
+class StuckMicLocator(TimedLocator):
+    @override
+    async def click(self, **kwargs: Any) -> None:
+        del kwargs
+        self._toolbar.clicked.append(self.selector)
+        raise PlaywrightError(f'click intercepted by <button aria-label="{SENSITIVE[0]}">')
+
+
+class StuckMicPage(ToolbarPage):
+    @override
+    def locator(self, selector: str, **kwargs: Any) -> Any:
+        del kwargs
+        if selector in TOOLBAR_PROBES:
+            return StuckMicLocator(self, selector)
+        return FakeLocator(self, selector)
+
+
+async def test_a_mic_that_cannot_be_clicked_never_journals_or_returns_raw_labels(
+    open_audio: Callable[..., AbstractAsyncContextManager[FakeAudio]],
+    session: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    labels = {
+        "button[aria-label]": [
+            "Leave call",
+            "Turn on microphone",
+            "Pin Harun Rasyid's tile",
+            "More options for ai2@example.com",
+            "abc-defg-hij",
+        ]
+    }
+    page = StuckMicPage(FakeClock(), _toolbar(mic_off_at=0.0, leave_at=0.0), labels=labels)
+
+    run = await _run(session, open_audio, monkeypatch, Scenario(page))
+
+    assert run.result.terminal_reason == "audio_failure", run.result.detail
+    written = "\n".join(run.journal.lines) + run.result.detail
+    assert not [part for part in SENSITIVE if part in written]
+    assert "visible controls: leave call, microphone toggle, participant tile action" in (
+        run.result.detail
+    )
+
+
 async def test_t4_dom_admission_with_a_ready_toolbar_enables_the_mic(
     open_audio: Callable[..., AbstractAsyncContextManager[FakeAudio]],
     session: SimpleNamespace,
