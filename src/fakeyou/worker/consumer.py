@@ -456,7 +456,7 @@ class WorkerConsumer:
             elif isinstance(error, _RETRYABLE):
                 logger.warning("join for meeting %s will be retried: %s", meeting_id, error)
             elif isinstance(error, FakeYouError):
-                await self._settle_failed(meeting_id, type(error).__name__, str(error))
+                await self._settle_failed(meeting_id, type(error).__name__, error.code.value)
             else:
                 logger.error("join for meeting %s failed unexpectedly", meeting_id, exc_info=error)
                 failure = type(error).__name__

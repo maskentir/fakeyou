@@ -161,7 +161,7 @@ async def test_join_preserves_infra_catalog_error_from_session(
     printed = printed_join_summary(capsys)
     assert printed["error_code"] == ErrorCode.DATABASE_UNREACHABLE.value
     assert printed["terminal_reason"] == "infra_failure"
-    assert printed["detail"] == str(FakeYouError(ErrorCode.DATABASE_UNREACHABLE))
+    assert printed["detail"] == ErrorCode.DATABASE_UNREACHABLE.value
     assert printed["session_outcome"] == "failed"
 
 
@@ -181,7 +181,7 @@ async def test_join_preserves_failure_catalog_error_from_session(
     printed = printed_join_summary(capsys)
     assert printed["error_code"] == ErrorCode.OPERATION_INTERRUPTED.value
     assert printed["terminal_reason"] == "browser_failure"
-    assert printed["detail"] == str(FakeYouError(ErrorCode.OPERATION_INTERRUPTED))
+    assert printed["detail"] == ErrorCode.OPERATION_INTERRUPTED.value
     assert printed["session_outcome"] == "failed"
 
 
