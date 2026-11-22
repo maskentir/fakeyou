@@ -10,6 +10,8 @@ from typing import Any, TypedDict, Unpack, override
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page
 
+from fakeyou.meet.meet import MIC_DISABLED_SELECTOR, MIC_ENABLED_SELECTOR
+
 LOBBY = '<input placeholder="Your name"><button>Ask to join</button>'
 IN_CALL = '<button aria-label="Leave call"></button><button>Mute microphone</button>'
 DENIED = "<h1>You can't join this video call</h1>"
@@ -25,12 +27,8 @@ NAME_SELECTOR = "placeholder:Your name"
 ASK_SELECTOR = 'text="Ask to join"'
 JOIN_NOW_SELECTOR = 'text="Join now"'
 LEAVE_SELECTOR = 'button[aria-label="Leave call"]'
-MIC_ON_SELECTOR = (
-    'button[aria-label^="Turn off microphone" i],button[aria-label^="Mute microphone" i]'
-)
-MIC_OFF_SELECTOR = (
-    'button[aria-label^="Turn on microphone" i],button[aria-label^="Unmute microphone" i]'
-)
+MIC_ON_SELECTOR = MIC_ENABLED_SELECTOR
+MIC_OFF_SELECTOR = MIC_DISABLED_SELECTOR
 CAM_ON_SELECTOR = 'button[aria-label^="Turn off camera" i]'
 CAM_OFF_SELECTOR = 'button[aria-label^="Turn on camera" i]'
 

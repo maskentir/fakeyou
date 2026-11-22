@@ -44,8 +44,11 @@ from fakeyou.foundation.taxonomy import PublicPhase, TerminalReason
 from fakeyou.foundation.transcript import TranscriptEvent
 from fakeyou.meet.browser import BrowserLaunch, open_direct_page, stable_fingerprint_seed
 from fakeyou.meet.meet import (
+    CALL_CONTROLS_TIMEOUT_SECONDS,
     DEFAULT_MEET_SIGNALS,
     CallObservation,
+    ControlsClock,
+    ControlsWait,
     GuestJoinRequest,
     JoinPolling,
     JoinResult,
@@ -56,6 +59,7 @@ from fakeyou.meet.meet import (
     leave_meeting,
     observe_call_state,
     request_guest_join,
+    wait_for_mic_control,
 )
 from fakeyou.meet.participant_observer import (
     DEFAULT_PARTICIPANT_SCHEDULE,
@@ -234,6 +238,7 @@ class MeetingWorker:
     origin_kind: LifecycleEventKind | None = None
     origin_attribution: LifecycleAttribution | None = None
     admission: JoinResult | None = None
+    admission_detected_at: float | None = None
     join_started: float | None = None
     presence: AloneClock = field(init=False)
     end_screen: str | None = None
@@ -360,6 +365,7 @@ class MeetingWorker:
         )
         if result.status == "admitted":
             self.admission = result
+            self.admission_detected_at = self.monotonic()
         else:
             kind, attribution = _JOIN_EVENTS[result.status]
             self._send(kind, attribution, result.detail)
@@ -398,8 +404,9 @@ class MeetingWorker:
         audio.raise_if_failed()
         if isinstance(audio, SupportsAdmission):
             audio.mark_admitted()
-        await self.dismiss_notices_best_effort()
-        await self.disable_camera_best_effort()
+        blocked = await self._prepare_microphone()
+        if blocked is not None:
+            return blocked
         try:
             enabled = await until_stopped(
                 enable_meeting_microphone(self.page, self.sleep), self.stop
@@ -407,10 +414,10 @@ class MeetingWorker:
         except RuntimeError as error:
             raise MeetingAudioError(f"meeting microphone could not be enabled: {error}") from error
         if enabled is None or self.stop.is_set():
-            return await self._finish_commit(
-                "owner_stopped", "owner_action", "owner stopped microphone startup"
-            )
-        self.record("microphone_enabled", source="runtime")
+            return await self._stopped_microphone_startup()
+        self.record(
+            "microphone_enabled", source="runtime", since_admitted_ms=self._since_admitted_ms()
+        )
         audio.raise_if_failed()
         await self._start_capture_guarded(enabled=self.config.conversation.per_stream_enabled)
         if self.initial_speech:
@@ -431,6 +438,67 @@ class MeetingWorker:
                 self.record("conversation_bound", source="runtime")
         self._send("activated", "policy", "guest admitted and audio live")
         return self._commit()
+
+    async def _prepare_microphone(self) -> LifecycleUpdate | None:
+        controls = await self._await_mic_control()
+        if self.stop.is_set() or controls is None or controls.outcome == "stopped":
+            return await self._stopped_microphone_startup()
+        if controls.outcome != "ready":
+            return await self._finish_audio_failure(
+                "browser_failed",
+                f"call controls not ready after {CALL_CONTROLS_TIMEOUT_SECONDS} seconds: "
+                f"{controls.outcome}; heading: {controls.heading}",
+            )
+        await self.dismiss_notices_best_effort()
+        await self.disable_camera_best_effort()
+        if self.stop.is_set():
+            return await self._stopped_microphone_startup()
+        return None
+
+    async def _stopped_microphone_startup(self) -> LifecycleUpdate:
+        return await self._finish_commit(
+            "owner_stopped", "owner_action", "owner stopped microphone startup"
+        )
+
+    def _since_admitted_ms(self) -> float:
+        detected = self.admission_detected_at
+        if detected is None:
+            detected = self.admitted_at if self.admitted_at is not None else self.monotonic()
+        return (self.monotonic() - detected) * 1000
+
+    async def _await_mic_control(self) -> ControlsWait | None:
+        admission = self.admission.admission if self.admission is not None else None
+        self.record("call_controls_waiting", source="runtime", admission=admission)
+        controls = await until_stopped(
+            wait_for_mic_control(
+                self.page,
+                ControlsClock(
+                    self.sleep,
+                    self.monotonic,
+                    self.stop.is_set,
+                    self.config.meeting.join_poll_seconds,
+                ),
+                self.signals,
+            ),
+            self.stop,
+        )
+        if controls is None or controls.outcome == "stopped":
+            return controls
+        waited_ms = controls.waited_seconds * 1000
+        if controls.outcome == "ready":
+            self.record(
+                "call_controls_ready", source="runtime", admission=admission, waited_ms=waited_ms
+            )
+        else:
+            self.record(
+                "call_controls_timeout",
+                source="runtime",
+                admission=admission,
+                outcome=controls.outcome,
+                waited_ms=waited_ms,
+                heading=controls.heading,
+            )
+        return controls
 
     async def _finish_commit(
         self, kind: LifecycleEventKind, attribution: LifecycleAttribution, detail: str
