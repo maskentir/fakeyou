@@ -10,7 +10,13 @@ from typing import Any, TypedDict, Unpack, override
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page
 
-from fakeyou.meet.meet import MIC_DISABLED_SELECTOR, MIC_ENABLED_SELECTOR
+from fakeyou.meet.meet import (
+    DEFAULT_MEET_SIGNALS,
+    MIC_DISABLED_SELECTOR,
+    MIC_ENABLED_SELECTOR,
+    guest_mode_selector,
+    submit_selectors,
+)
 
 LOBBY = '<input placeholder="Your name"><button>Ask to join</button>'
 IN_CALL = '<button aria-label="Leave call"></button><button>Mute microphone</button>'
@@ -26,6 +32,9 @@ DIALOG_SELECTOR = "text=Continue without microphone"
 NAME_SELECTOR = "placeholder:Your name"
 ASK_SELECTOR = 'text="Ask to join"'
 JOIN_NOW_SELECTOR = 'text="Join now"'
+GUEST_MODE_SELECTOR = guest_mode_selector(DEFAULT_MEET_SIGNALS)
+NAMED_ASK_SELECTOR = submit_selectors("Ask to join")[1]
+NAMED_JOIN_NOW_SELECTOR = submit_selectors("Join now")[1]
 LEAVE_SELECTOR = 'button[aria-label="Leave call"]'
 MIC_ON_SELECTOR = MIC_ENABLED_SELECTOR
 MIC_OFF_SELECTOR = MIC_DISABLED_SELECTOR
@@ -106,6 +115,12 @@ class FakeLocator:
             raise value
         return value
 
+    async def is_editable(self) -> bool:
+        return self.selector not in self._page.read_only
+
+    async def is_enabled(self) -> bool:
+        return self.selector not in self._page.disabled
+
     async def evaluate_all(self, expression: str) -> list[Any]:
         del expression
         return self._page.labels.get(self.selector, [])
@@ -137,6 +152,8 @@ class PageScript(TypedDict, total=False):
     visible: dict[str, bool | Exception]
     reveal_on_click: dict[str, str]
     wait_failures: Iterable[str]
+    read_only: Iterable[str]
+    disabled: Iterable[str]
     on_content: Callable[[int], None]
 
 
@@ -163,6 +180,8 @@ class FakePage(Page):
         self.labels = dict(script.get("labels", {}))
         self.reveal_on_click = dict(script.get("reveal_on_click", {}))
         self.wait_failures = set(script.get("wait_failures", ()))
+        self.read_only = set(script.get("read_only", ()))
+        self.disabled = set(script.get("disabled", ()))
         self.type_failures = set(script.get("type_failures", ()))
         self._goto_failures = script.get("goto_failures", 0)
         self._final_url = script.get("final_url")
@@ -400,6 +419,9 @@ def meet_page(
         WATCHDOG_DIALOG_SELECTOR: [0],
         NAME_SELECTOR: [1],
         ASK_SELECTOR: [1],
+        GUEST_MODE_SELECTOR: [0],
+        NAMED_ASK_SELECTOR: [0],
+        NAMED_JOIN_NOW_SELECTOR: [0],
     }
     counts.update(script.get("counts", {}))
     script["counts"] = counts

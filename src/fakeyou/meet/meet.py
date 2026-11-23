@@ -159,6 +159,7 @@ class MeetSignals:
     ended: str = "ended"
     left: str = "left the meeting"
     continue_without_media: str = "Continue without microphone"
+    join_as_guest: str = "Join as guest"
 
 
 DEFAULT_MEET_SIGNALS = MeetSignals()
@@ -346,6 +347,18 @@ async def _first_match(locator: Locator) -> Locator:
     return locator.first
 
 
+async def _usable_match(locator: Locator) -> Locator | None:
+    for index in range(await locator.count()):
+        candidate = locator.nth(index)
+        if await candidate.is_visible() and await candidate.is_editable():
+            return candidate
+    return None
+
+
+async def _first_usable_match(locator: Locator) -> Locator:
+    return await _usable_match(locator) or locator.first
+
+
 async def _first_visible_match(locator: Locator) -> Locator:
     for index in range(await locator.count()):
         candidate = locator.nth(index)
@@ -407,29 +420,90 @@ async def _name_field_failure(page: Page, link: str, failure: str) -> str:
     )
 
 
+_UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+_LOWER = "abcdefghijklmnopqrstuvwxyz"
+
+
+def _button_named_xpath(prefix: str) -> str:
+    wanted = prefix.casefold()
+    label = f"translate(normalize-space(@aria-label), '{_UPPER}', '{_LOWER}')"
+    text = f"translate(normalize-space(.), '{_UPPER}', '{_LOWER}')"
+    return (
+        "xpath=//*[self::button or @role='button']"
+        f"[starts-with({label}, '{wanted}') or starts-with({text}, '{wanted}')]"
+    )
+
+
+def guest_mode_selector(signals: MeetSignals) -> str:
+    return _button_named_xpath(signals.join_as_guest)
+
+
+def submit_selectors(label: str) -> tuple[str, str]:
+    return f'text="{label}"', _button_named_xpath(label)
+
+
+async def _choose_guest_mode(page: Page, signals: MeetSignals) -> str | None:
+    choices = page.locator(guest_mode_selector(signals))
+    for index in range(await choices.count()):
+        choice = choices.nth(index)
+        if await choice.is_visible() and await choice.is_enabled():
+            try:
+                await choice.click(timeout=_CLICK_TIMEOUT_MS)
+            except (PlaywrightError, ActionabilityError) as error:
+                return f"click failed ({type(error).__name__})"
+            return "chosen"
+    return None
+
+
 async def _enter_twin_name(
     page: Page,
     request: GuestJoinRequest,
     signals: MeetSignals,
     sleep: Callable[[float], Awaitable[None]],
 ) -> str | None:
-    field = page.get_by_placeholder(signals.name_field)
-    try:
-        found = await field.count()
-    except PlaywrightError as error:
-        return f"finding the name field failed: ({type(error).__name__})"
-    if found == 0:
-        return await _name_field_failure(
-            page, request.link, f"name field {signals.name_field!r} not found on the lobby page"
-        )
+    guest_mode: str | None = None
+    for waited in range(NAME_FIELD_ATTEMPTS):
+        failure = await _destination_failure(page, request.link)
+        if failure is not None:
+            return failure
+        try:
+            usable = await _usable_match(page.get_by_placeholder(signals.name_field))
+            if usable is None and guest_mode is None:
+                guest_mode = await _choose_guest_mode(page, signals)
+        except PlaywrightError as error:
+            return f"finding the name field failed: ({type(error).__name__})"
+        if usable is not None:
+            return await _type_twin_name(
+                page, request, signals, sleep, NAME_FIELD_ATTEMPTS - waited
+            )
+        await sleep(_CLICK_RETRY_DELAY_SECONDS)
+    return await _name_field_failure(
+        page,
+        request.link,
+        f"name field {signals.name_field!r} not usable on the lobby page; "
+        f"guest mode: {guest_mode or 'not offered'}",
+    )
+
+
+async def _type_twin_name(
+    page: Page,
+    request: GuestJoinRequest,
+    signals: MeetSignals,
+    sleep: Callable[[float], Awaitable[None]],
+    attempts: int,
+) -> str | None:
     failure = await click_when_ready(
         partial(page.get_by_placeholder, signals.name_field),
         "name field",
         sleep,
-        NAME_FIELD_ATTEMPTS,
+        attempts,
+        choose=_first_usable_match,
     )
     if failure is not None:
         return await _name_field_failure(page, request.link, failure)
+    failure = await _destination_failure(page, request.link)
+    if failure is not None:
+        return failure
     try:
         await page.keyboard.type(request.twin_name, delay=TYPE_DELAY_MS)
     except PlaywrightError as error:
@@ -446,6 +520,13 @@ async def _knock_landed(page: Page) -> bool:
     return _is_waiting(content)
 
 
+def _submit_candidates(signals: MeetSignals) -> list[tuple[str, str]]:
+    labels = (signals.ask_to_join, signals.join_now)
+    exact = [(submit_selectors(label)[0], label) for label in labels]
+    named = [(submit_selectors(label)[1], label) for label in labels]
+    return exact + named
+
+
 async def _click_join(
     page: Page,
     signals: MeetSignals,
@@ -455,8 +536,8 @@ async def _click_join(
 ) -> str | None:
     deadline = monotonic() + timeout_seconds
     while True:
-        for label in (signals.ask_to_join, signals.join_now):
-            locator = page.locator(f'text="{label}"')
+        for selector, label in _submit_candidates(signals):
+            locator = page.locator(selector)
             try:
                 found = await locator.count()
             except PlaywrightError:
@@ -464,9 +545,10 @@ async def _click_join(
             if found == 0:
                 continue
             failure = await click_when_ready(
-                partial(page.locator, f'text="{label}"'),
+                partial(page.locator, selector),
                 label,
                 sleep,
+                choose=_first_visible_match,
             )
             if failure is not None and not await _knock_landed(page):
                 return failure
