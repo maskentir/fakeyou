@@ -48,12 +48,7 @@ const field = (placeholder, hidden) => {
   document.body.appendChild(input);
   return input;
 };
-const submit = (label, text, hidden) => {
-  const button = document.createElement('button');
-  button.id = 'submit';
-  if (hidden) button.style.display = 'none';
-  if (label) button.setAttribute('aria-label', label);
-  button.textContent = text;
+const arm = (button) => {
   button.onclick = () => {
     const typed = [...document.querySelectorAll('input')].map((node) => node.value).filter(Boolean);
     effect('submit', {names: typed});
@@ -65,7 +60,30 @@ const submit = (label, text, hidden) => {
       document.body.replaceChildren(leave);
     }, 300);
   };
+};
+const submit = (label, text, hidden) => {
+  const button = document.createElement('button');
+  button.id = 'submit';
+  if (hidden) button.style.display = 'none';
+  if (label) button.setAttribute('aria-label', label);
+  button.textContent = text;
+  arm(button);
   document.body.appendChild(button);
+};
+const cover = (target, onHover) => {
+  const rect = target.getBoundingClientRect();
+  const shield = document.createElement('div');
+  shield.id = 'shield';
+  Object.assign(shield.style, {position: 'absolute', left: rect.left + 'px', top: rect.top + 'px',
+    width: rect.width + 'px', height: rect.height + 'px', zIndex: 10});
+  let fired = false;
+  shield.addEventListener('pointermove', () => {
+    if (fired) return;
+    fired = true;
+    onHover();
+    setTimeout(() => shield.remove(), 900);
+  });
+  document.body.appendChild(shield);
 };
 const chooser = (disabled) => {
   const button = document.createElement('button');
@@ -130,6 +148,34 @@ HIDDEN_ASK_VISIBLE_VARIANT = Layout(
     "<script>field('Your name', false); helper('stale', 'Ask to join');"
     "document.getElementById('stale').style.display = 'none';"
     "submit(null, 'Ask to join without camera');</script>"
+)
+RETRY_HELP = Layout(
+    "<script>field('Your name', false); submit(null, 'Ask to join');"
+    "cover(document.getElementById('submit'), () => {"
+    "const help = document.createElement('button'); help.id = 'help';"
+    "help.textContent = 'Ask to join instructions'; document.body.prepend(help); });</script>"
+)
+RETRY_GONE = Layout(
+    "<script>field('Your name', false); submit(null, 'Ask to join');"
+    "cover(document.getElementById('submit'), () => {"
+    "document.getElementById('submit').remove();"
+    "const help = document.createElement('button'); help.id = 'help';"
+    "help.textContent = 'Ask to join instructions'; document.body.prepend(help); });</script>"
+)
+LABELLED_SUBMIT = Layout(
+    "<span id='help-name'>Ask to join instructions</span>"
+    "<button id='help' aria-labelledby='help-name'>Ask to join</button>"
+    "<span id='submit-name'>Ask to join</span>"
+    "<button id='submit' aria-labelledby='submit-name'><svg width='20' height='20'></svg></button>"
+    "<script>field('Your name', false); arm(document.getElementById('submit'));</script>"
+)
+LABELLED_CHOOSER = Layout(
+    "<span id='help-name'>Join as guest help</span>"
+    "<button id='help' aria-labelledby='help-name'>Join as guest</button>"
+    "<span id='chooser-name'>Join as guest</span>"
+    "<script>field('Enter your name', true); chooser(false);"
+    "const official = document.getElementById('chooser'); official.textContent = '';"
+    "official.setAttribute('aria-labelledby', 'chooser-name');</script>"
 )
 REFUSED = Layout("<h1>You can’t join this video call</h1><button>Return to home screen</button>")
 SIGN_IN_ONLY = Layout("<h1>Sign in to join</h1><button>Sign in</button>")
@@ -266,6 +312,46 @@ async def test_only_the_visible_official_submit_is_clicked_once(layout: Layout) 
 
     assert (result.status, result.knocked) == ("admitted", True)
     assert _clicked(effects) == ["submit"]
+    assert _submitted_names(effects) == [[TWIN]]
+
+
+@pytest.mark.browser
+async def test_a_retry_reselects_the_official_submit_after_a_help_control_appears() -> None:
+    async with _meeting(RETRY_HELP) as page:
+        result = await _join(page)
+        effects = await _effects(page)
+
+    assert (result.status, result.knocked) == ("admitted", True)
+    assert _clicked(effects) == ["submit"]
+    assert _submitted_names(effects) == [[TWIN]]
+
+
+@pytest.mark.browser
+async def test_a_submit_gone_during_the_retry_is_a_failure_before_the_knock() -> None:
+    async with _meeting(RETRY_GONE) as page:
+        result = await _join(page)
+        effects = await _effects(page)
+
+    assert (result.status, result.knocked) == ("failed", False)
+    assert _clicked(effects) == []
+    assert "submit" not in _kinds(effects)
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize(
+    ("layout", "clicked"),
+    [(LABELLED_SUBMIT, ["submit"]), (LABELLED_CHOOSER, ["chooser", "submit"])],
+    ids=["submit", "chooser"],
+)
+async def test_aria_labelledby_names_decide_which_control_is_clicked(
+    layout: Layout, clicked: list[str]
+) -> None:
+    async with _meeting(layout) as page:
+        result = await _join(page)
+        effects = await _effects(page)
+
+    assert (result.status, result.knocked) == ("admitted", True)
+    assert _clicked(effects) == clicked
     assert _submitted_names(effects) == [[TWIN]]
 
 

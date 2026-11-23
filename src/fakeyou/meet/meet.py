@@ -425,6 +425,10 @@ _UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 _LOWER = "abcdefghijklmnopqrstuvwxyz"
 _APOSTROPHES = str.maketrans({"\u2019": "'", "\u2018": "'", "\u02bc": "'"})
 ACCESSIBLE_NAME_PROBE = """node => {
+  const referenced = (node.getAttribute('aria-labelledby') || '').split(/\\s+/)
+    .map((id) => id && document.getElementById(id)).filter(Boolean)
+    .map((element) => element.textContent).join(' ').trim();
+  if (referenced) return referenced;
   const label = (node.getAttribute('aria-label') || '').trim();
   if (label) return label;
   const shown = (element) => element.getAttribute('aria-hidden') !== 'true'
@@ -444,39 +448,42 @@ def plain_text(text: str) -> str:
 
 def control_selector(name: str) -> str:
     wanted = plain_text(name)
-    label = f"translate(normalize-space(@aria-label), '{_UPPER}', '{_LOWER}')"
-    text = f"translate(normalize-space(.), '{_UPPER}', '{_LOWER}')"
-    return (
-        "xpath=//*[self::button or @role='button']"
-        f"[contains({label}, '{wanted}') or contains({text}, '{wanted}')]"
+    names = (
+        f"translate(normalize-space({source}), '{_UPPER}', '{_LOWER}')"
+        for source in ("id(@aria-labelledby)", "@aria-label", ".")
     )
+    matches = " or ".join(f"contains({name}, '{wanted}')" for name in names)
+    return f"xpath=//*[self::button or @role='button'][{matches}]"
 
 
-async def _actionable_index(page: Page, name: str) -> int | None:
-    candidates = page.locator(control_selector(name))
-    for index in range(await candidates.count()):
-        candidate = candidates.nth(index)
+async def _official(locator: Locator, name: str) -> Locator | None:
+    for index in range(await locator.count()):
+        candidate = locator.nth(index)
         if not (await candidate.is_visible() and await candidate.is_enabled()):
             continue
         if plain_text(str(await candidate.evaluate(ACCESSIBLE_NAME_PROBE))) == plain_text(name):
-            return index
+            return candidate
     return None
 
 
-async def _itself(locator: Locator) -> Locator:
-    return locator
+def _official_choice(name: str) -> Callable[[Locator], Awaitable[Locator]]:
+    async def choose(locator: Locator) -> Locator:
+        found = await _official(locator, name)
+        if found is None:
+            raise PlaywrightError(f"no visible, enabled control named {name!r}")
+        return found
+
+    return choose
 
 
 async def _choose_guest_mode(page: Page, signals: MeetSignals) -> str | None:
-    index = await _actionable_index(page, signals.join_as_guest)
-    if index is None:
+    choice = await _official(
+        page.locator(control_selector(signals.join_as_guest)), signals.join_as_guest
+    )
+    if choice is None:
         return None
     try:
-        await (
-            page.locator(control_selector(signals.join_as_guest))
-            .nth(index)
-            .click(timeout=_CLICK_TIMEOUT_MS)
-        )
+        await choice.click(timeout=_CLICK_TIMEOUT_MS)
     except (PlaywrightError, ActionabilityError) as error:
         return f"click failed ({type(error).__name__})"
     return "chosen"
@@ -547,10 +554,6 @@ async def _knock_landed(page: Page) -> bool:
     return _is_waiting(content)
 
 
-def _nth_control(page: Page, name: str, index: int) -> Locator:
-    return page.locator(control_selector(name)).nth(index)
-
-
 def submit_names(signals: MeetSignals) -> tuple[str, ...]:
     return (signals.ask_to_join, *signals.submit_variants, signals.join_now)
 
@@ -566,13 +569,16 @@ async def _click_join(
     while True:
         for name in submit_names(signals):
             try:
-                index = await _actionable_index(page, name)
+                offered = await _official(page.locator(control_selector(name)), name)
             except PlaywrightError:
-                index = None
-            if index is None:
+                offered = None
+            if offered is None:
                 continue
             failure = await click_when_ready(
-                partial(_nth_control, page, name, index), name, sleep, choose=_itself
+                partial(page.locator, control_selector(name)),
+                name,
+                sleep,
+                choose=_official_choice(name),
             )
             if failure is not None and not await _knock_landed(page):
                 return failure
