@@ -118,7 +118,7 @@ async def _meeting(layout: Layout) -> AsyncIterator[Page]:
     async def serve(route: Route) -> None:
         host = route.request.url.split("/")[2]
         if host == "meet.google.com":
-            await route.fulfill(body=page_html, content_type="text/html")
+            await route.fulfill(body=page_html, content_type="text/html; charset=utf-8")
         elif route.request.url.startswith(ELSEWHERE):
             await route.fulfill(body="<h1>Google Meet</h1>", content_type="text/html")
         else:
