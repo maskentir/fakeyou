@@ -167,11 +167,23 @@ DEFAULT_MEET_SIGNALS = MeetSignals()
 _APOSTROPHES = str.maketrans({"\u2019": "'", "\u2018": "'", "\u02bc": "'"})
 VISIBLE_BODY_SELECTOR = "body"
 VISIBLE_CONTROLS_SELECTOR = "button, [role='button']"
-_VISIBLE_TEXT_PROBE = "nodes => nodes.map(node => node.innerText || '')"
-_VISIBLE_CONTROLS_PROBE = (
-    "nodes => nodes.filter(node => node.getClientRects().length > 0)"
-    ".map(node => (node.getAttribute('aria-label') || node.innerText || '').trim())"
-)
+_VISIBLE_TEXT_PROBE = """nodes => nodes.flatMap((root) => {
+  const chunks = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  while (walker.nextNode()) {
+    const parent = walker.currentNode.parentElement;
+    const text = walker.currentNode.textContent.trim();
+    if (!text || !parent) continue;
+    if (parent.closest('[aria-hidden="true"], script, style, template, noscript')) continue;
+    if (!parent.checkVisibility({ checkVisibilityCSS: true })) continue;
+    chunks.push(text);
+  }
+  return chunks;
+})"""
+_VISIBLE_CONTROLS_PROBE = """nodes => nodes
+  .filter((node) => node.checkVisibility({ checkVisibilityCSS: true }))
+  .filter((node) => !node.closest('[aria-hidden="true"]'))
+  .map((node) => (node.getAttribute('aria-label') || node.innerText || '').trim())"""
 _HEADING_TAGS = frozenset({"h1", "h2", "h3"})
 _NON_TEXT_TAGS = frozenset({"script", "style", "template", "head", "title"})
 _VOID_TAGS = frozenset(
@@ -556,71 +568,142 @@ async def _choose_guest_mode(page: Page, signals: MeetSignals) -> str | None:
     return "chosen"
 
 
-def refusal_in(text: str, controls: Iterable[str], signals: MeetSignals) -> bool:
-    if plain_text(signals.denied) not in plain_text(text):
+def _lines(chunks: Iterable[object]) -> list[str]:
+    return [
+        plain_text(line) for chunk in chunks for line in str(chunk).splitlines() if line.strip()
+    ]
+
+
+def refusal_in(chunks: Iterable[object], controls: Iterable[object], signals: MeetSignals) -> bool:
+    lines = _lines(chunks)
+    if any(_is_waiting(line) for line in lines):
+        return False
+    phrase = plain_text(signals.denied)
+    if not any(line.removeprefix("you ").startswith(phrase) for line in lines):
         return False
     normal = tuple(
         plain_text(label) for label in (signals.leave_call, signals.ask_to_join, signals.join_now)
     )
-    return not any(plain_text(control).startswith(normal) for control in controls)
+    return not any(line.startswith(normal) for line in _lines(controls))
 
 
-def _shows_refusal(content: str, signals: MeetSignals) -> bool:
-    parsed = _parsed_markers(content)
-    return refusal_in(" ".join(parsed.text), parsed.buttons, signals)
-
-
-async def _refusal_before_knock(page: Page, link: str, signals: MeetSignals) -> JoinResult | None:
-    if _landed_failure(page.url, link) is not None:
-        return None
+async def _page_refusal(page: Page, signals: MeetSignals) -> bool:
     try:
         async with asyncio.timeout(CALL_STATE_TIMEOUT_SECONDS):
-            texts = await page.locator(VISIBLE_BODY_SELECTOR).evaluate_all(_VISIBLE_TEXT_PROBE)
+            chunks = await page.locator(VISIBLE_BODY_SELECTOR).evaluate_all(_VISIBLE_TEXT_PROBE)
             controls = await page.locator(VISIBLE_CONTROLS_SELECTOR).evaluate_all(
                 _VISIBLE_CONTROLS_PROBE
             )
     except (PlaywrightError, TimeoutError):
-        return None
-    if not refusal_in(" ".join(map(str, texts)), map(str, controls), signals):
-        return None
-    if await _has_live_captcha(page):
-        return None
+        return False
+    return refusal_in(chunks, controls, signals)
+
+
+async def _page_says(page: Page) -> str:
     try:
         async with asyncio.timeout(CALL_STATE_TIMEOUT_SECONDS):
-            summary = denial_summary(await page.content())
+            return denial_summary(await page.content())
     except (PlaywrightError, TimeoutError):
-        summary = "unknown"
-    return JoinResult(
-        status="blocked",
-        detail=f"platform refused the guest before the knock; page says: {summary}",
-    )
+        return "unknown"
+
+
+@dataclass(frozen=True, slots=True)
+class JoinPolling:
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
+    monotonic: Callable[[], float] = time.monotonic
+    abort: Callable[[], bool] | None = None
+    admitted: Callable[[], bool] | None = None
+
+
+DEFAULT_JOIN_POLLING = JoinPolling()
+
+
+@dataclass(slots=True)
+class _BeforeKnock:
+    page: Page
+    request: GuestJoinRequest
+    signals: MeetSignals
+    polling: JoinPolling
+    captcha_since: float | None = None
+
+    async def verdict(self) -> JoinResult | None:
+        if _landed_failure(self.page.url, self.request.link) is not None or not (
+            await _page_refusal(self.page, self.signals)
+        ):
+            self.captcha_since = None
+            return None
+        if not await _has_live_captcha(self.page):
+            self.captcha_since = None
+            return JoinResult(
+                status="blocked",
+                detail="platform refused the guest before the knock; "
+                f"page says: {await _page_says(self.page)}",
+            )
+        now = self.polling.monotonic()
+        if self.captcha_since is None:
+            self.captcha_since = now
+        if now - self.captcha_since >= self.request.captcha_grace_seconds:
+            return await self.unsolved_captcha()
+        return None
+
+    async def unsolved_captcha(self) -> JoinResult:
+        return JoinResult(
+            status="blocked",
+            detail="captcha challenge went unsolved; platform blocked the guest before the knock; "
+            f"page says: {await _page_says(self.page)}",
+        )
+
+
+async def _await_name_field(
+    page: Page, request: GuestJoinRequest, signals: MeetSignals, watch: _BeforeKnock
+) -> str | JoinResult | None:
+    field = page.get_by_placeholder(signals.name_field)
+    while True:
+        try:
+            if await field.count():
+                return None
+        except PlaywrightError as error:
+            return f"finding the name field failed: ({type(error).__name__})"
+        refusal = await watch.verdict()
+        if refusal is not None:
+            return refusal
+        if watch.captcha_since is None:
+            return await _name_field_failure(
+                page, request.link, f"name field {signals.name_field!r} not found on the lobby page"
+            )
+        await watch.polling.sleep(request.poll_interval_seconds)
 
 
 async def _enter_twin_name(
     page: Page,
     request: GuestJoinRequest,
     signals: MeetSignals,
-    sleep: Callable[[float], Awaitable[None]],
+    watch: _BeforeKnock,
 ) -> str | JoinResult | None:
     guest_mode: str | None = None
-    for waited in range(NAME_FIELD_ATTEMPTS):
+    waited = 0
+    while waited < NAME_FIELD_ATTEMPTS:
         failure = await _destination_failure(page, request.link)
         if failure is not None:
             return failure
-        refusal = await _refusal_before_knock(page, request.link, signals)
+        refusal = await watch.verdict()
         if refusal is not None:
             return refusal
         try:
             usable = await _usable_match(page.get_by_placeholder(signals.name_field))
-            if usable is None and guest_mode is None:
+            if usable is None and guest_mode is None and watch.captcha_since is None:
                 guest_mode = await _choose_guest_mode(page, signals)
         except PlaywrightError as error:
             return f"finding the name field failed: ({type(error).__name__})"
-        if usable is not None:
+        if usable is not None and watch.captcha_since is None:
             return await _type_twin_name(
-                page, request, signals, sleep, NAME_FIELD_ATTEMPTS - waited
+                page, request, signals, watch, NAME_FIELD_ATTEMPTS - waited
             )
-        await sleep(_CLICK_RETRY_DELAY_SECONDS)
+        if watch.captcha_since is None:
+            waited += 1
+            await watch.polling.sleep(_CLICK_RETRY_DELAY_SECONDS)
+        else:
+            await watch.polling.sleep(request.poll_interval_seconds)
     return await _name_field_failure(
         page,
         request.link,
@@ -633,11 +716,11 @@ async def _type_twin_name(
     page: Page,
     request: GuestJoinRequest,
     signals: MeetSignals,
-    sleep: Callable[[float], Awaitable[None]],
+    watch: _BeforeKnock,
     attempts: int,
 ) -> str | JoinResult | None:
     async def usable_unless_refused(locator: Locator) -> Locator:
-        refusal = await _refusal_before_knock(page, request.link, signals)
+        refusal = await watch.verdict()
         if refusal is not None:
             raise _GuestRefusedError(refusal)
         return await _first_usable_match(locator)
@@ -646,13 +729,15 @@ async def _type_twin_name(
         failure = await click_when_ready(
             partial(page.get_by_placeholder, signals.name_field),
             "name field",
-            sleep,
+            watch.polling.sleep,
             attempts,
             choose=usable_unless_refused,
         )
     except _GuestRefusedError as refused:
         return refused.result
     if failure is not None:
+        if watch.captcha_since is not None:
+            return await watch.unsolved_captcha()
         return await _name_field_failure(page, request.link, failure)
     failure = await _destination_failure(page, request.link)
     if failure is not None:
@@ -702,24 +787,13 @@ async def _click_join(
         await sleep(1.0)
 
 
-@dataclass(frozen=True, slots=True)
-class JoinPolling:
-    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
-    monotonic: Callable[[], float] = time.monotonic
-    abort: Callable[[], bool] | None = None
-    admitted: Callable[[], bool] | None = None
-
-
-DEFAULT_JOIN_POLLING = JoinPolling()
-
-
 async def _prepare_lobby(
     page: Page,
-    request: GuestJoinRequest,
     signals: MeetSignals,
-    polling: JoinPolling,
+    watch: _BeforeKnock,
     init_scripts: Sequence[str],
 ) -> str | JoinResult | None:
+    request, polling = watch.request, watch.polling
     failure = await _open_meeting_page(
         page, request.link, init_scripts, poll_interval_seconds=request.poll_interval_seconds
     )
@@ -731,7 +805,7 @@ async def _prepare_lobby(
     failure = await _destination_failure(page, request.link)
     if failure is not None:
         return failure
-    entered = await _enter_twin_name(page, request, signals, polling.sleep)
+    entered = await _enter_twin_name(page, request, signals, watch)
     if entered is not None:
         return entered
     failure = await _destination_failure(page, request.link)
@@ -780,7 +854,7 @@ def _classify_denial(content: str, signals: MeetSignals) -> JoinResult | None:
     if _is_explicit_denial(content):
         return JoinResult(status="denied", detail="guest request to join was denied")
     headings, _buttons = call_markers(content)
-    if signals.denied in headings:
+    if plain_text(signals.denied) in plain_text(headings):
         return None
     if signals.ended in headings:
         return JoinResult(
@@ -843,10 +917,13 @@ async def request_guest_join(
     )
     try:
         async with asyncio.timeout(attempt_timeout):
+            watch = _BeforeKnock(page, request, signals, polling)
             try:
                 async with asyncio.timeout(PREPARE_TIMEOUT_SECONDS):
-                    failure = await _prepare_lobby(page, request, signals, polling, init_scripts)
+                    failure = await _prepare_lobby(page, signals, watch, init_scripts)
             except TimeoutError:
+                if watch.captcha_since is not None:
+                    return await watch.unsolved_captcha()
                 return JoinResult(
                     status="failed",
                     detail=(
@@ -910,7 +987,7 @@ async def _await_admission(
         denial = _classify_denial(content, signals)
         if denial is not None:
             return denial
-        if _shows_refusal(content, signals):
+        if await _page_refusal(page, signals):
             outcome, captcha_since = await _poll_captcha(page, polling, captcha_since, request)
             if outcome is None:
                 continue

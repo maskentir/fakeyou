@@ -5,6 +5,7 @@ import inspect
 import re
 from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from contextlib import asynccontextmanager
+from html.parser import HTMLParser
 from typing import Any, TypedDict, Unpack, override
 
 from playwright.async_api import Error as PlaywrightError
@@ -14,6 +15,8 @@ from fakeyou.meet.meet import (
     ACCESSIBLE_NAME_PROBE,
     MIC_DISABLED_SELECTOR,
     MIC_ENABLED_SELECTOR,
+    VISIBLE_BODY_SELECTOR,
+    VISIBLE_CONTROLS_SELECTOR,
     control_selector,
 )
 
@@ -47,6 +50,81 @@ CAM_OFF_SELECTOR = 'button[aria-label^="Turn on camera" i]'
 
 NO_CAPTCHA = False
 LIVE_CAPTCHA = True
+
+
+_INVISIBLE_TAGS = frozenset({"script", "style", "template", "head", "title", "noscript"})
+_VOID = frozenset(
+    {
+        "area",
+        "base",
+        "br",
+        "col",
+        "embed",
+        "hr",
+        "img",
+        "input",
+        "link",
+        "meta",
+        "source",
+        "track",
+        "wbr",
+    }
+)
+
+
+class RenderedDom(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.chunks: list[str] = []
+        self.controls: list[str] = []
+        self._stack: list[tuple[str, bool, list[str] | None, str]] = []
+
+    def _hidden(self) -> bool:
+        return any(hidden for _tag, hidden, _texts, _label in self._stack)
+
+    @override
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in _VOID:
+            return
+        values = {name: value or "" for name, value in attrs}
+        style = "".join(values.get("style", "").casefold().split())
+        hidden = (
+            tag in _INVISIBLE_TAGS
+            or "hidden" in values
+            or values.get("aria-hidden", "").casefold() == "true"
+            or "display:none" in style
+            or "visibility:hidden" in style
+        )
+        control = tag == "button" or values.get("role") == "button"
+        self._stack.append((tag, hidden, [] if control else None, values.get("aria-label", "")))
+
+    @override
+    def handle_endtag(self, tag: str) -> None:
+        for index in range(len(self._stack) - 1, -1, -1):
+            if self._stack[index][0] == tag:
+                hidden_above = any(entry[1] for entry in self._stack[: index + 1])
+                _tag, _hidden, texts, label = self._stack[index]
+                if texts is not None and not hidden_above:
+                    self.controls.append((label or " ".join(texts)).strip())
+                del self._stack[index:]
+                return
+
+    @override
+    def handle_data(self, data: str) -> None:
+        text = data.strip()
+        if not text or self._hidden():
+            return
+        self.chunks.append(text)
+        for _tag, _hidden, texts, _label in self._stack:
+            if texts is not None:
+                texts.append(text)
+
+
+def rendered(content: str | None) -> RenderedDom:
+    dom = RenderedDom()
+    dom.feed(content or "")
+    dom.close()
+    return dom
 
 
 class FakeKeyboard:
@@ -212,7 +290,16 @@ class FakeLocator:
 
     async def evaluate_all(self, expression: str) -> list[Any]:
         del expression
-        return self._page.labels.get(self.selector, [])
+        scripted = self._page.label_script.get(self.selector)
+        if scripted:
+            return scripted.pop(0) if len(scripted) > 1 else scripted[0]
+        if self.selector in self._page.labels:
+            return self._page.labels[self.selector]
+        if self.selector == VISIBLE_BODY_SELECTOR:
+            return rendered(self._page.last_content).chunks
+        if self.selector == VISIBLE_CONTROLS_SELECTOR:
+            return rendered(self._page.last_content).controls
+        return []
 
     async def click(self, **kwargs: Any) -> None:
         del kwargs
@@ -226,6 +313,7 @@ class PageScript(TypedDict, total=False):
     counts: dict[str, list[int]]
     locator_evaluates: dict[str, list[Any]]
     labels: dict[str, list[str]]
+    label_script: dict[str, list[list[str]]]
     click_failures: Iterable[str]
     click_flaky: dict[str, int]
     wait_flaky: dict[str, int]
@@ -252,6 +340,7 @@ class FakePage(Page):
         self._on_content = script.get("on_content")
         self._reads = 0
         self._contents = list(contents)
+        self.last_content: str | None = None
         self._evaluates = list(evaluates)
         self.counts = {key: list(value) for key, value in script.get("counts", {}).items()}
         self.locator_evaluates = {
@@ -263,6 +352,10 @@ class FakePage(Page):
         self.wait_flaky = dict(script.get("wait_flaky", {}))
         self.visible = dict(script.get("visible", {}))
         self.labels = dict(script.get("labels", {}))
+        self.label_script = {
+            key: [list(value) for value in values]
+            for key, values in script.get("label_script", {}).items()
+        }
         self.reveal_on_click = dict(script.get("reveal_on_click", {}))
         self.wait_failures = set(script.get("wait_failures", ()))
         self.read_only = set(script.get("read_only", ()))
@@ -377,6 +470,8 @@ class FakePage(Page):
             raise AssertionError("page content read more times than scripted")
         result = self._contents.pop(0)
         self._reads += 1
+        if isinstance(result, str):
+            self.last_content = result
         if self._on_content is not None:
             self._on_content(self._reads)
         if isinstance(result, Exception):
