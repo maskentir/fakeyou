@@ -14,8 +14,10 @@ from fakeyou.meet.meet import GuestJoinRequest, JoinPolling, JoinResult, request
 from tests._fakes_common import LINK, FakeClock
 from tests._meet_browser_fakes import (
     ASK_SELECTOR,
+    ASK_WITHOUT_CAMERA_SELECTOR,
     GUEST_MODE_SELECTOR,
     IN_CALL,
+    JOIN_NOW_SELECTOR,
     NAME_SELECTOR,
     FakePage,
     meet_page,
@@ -27,6 +29,16 @@ SIZED = "<style>button, input { width: 220px; height: 48px; display: block; marg
 RECORDER = """<script>
 window.__effects = [];
 const effect = (kind, extra) => window.__effects.push(Object.assign({kind}, extra || {}));
+document.addEventListener('click', (event) => {
+  const button = event.target.closest('button');
+  if (button) effect('click', {id: button.id || button.textContent.trim()});
+}, true);
+const helper = (id, text) => {
+  const button = document.createElement('button');
+  button.id = id;
+  button.textContent = text;
+  document.body.appendChild(button);
+};
 const field = (placeholder, hidden) => {
   const input = document.createElement('input');
   input.placeholder = placeholder;
@@ -36,8 +48,10 @@ const field = (placeholder, hidden) => {
   document.body.appendChild(input);
   return input;
 };
-const submit = (label, text) => {
+const submit = (label, text, hidden) => {
   const button = document.createElement('button');
+  button.id = 'submit';
+  if (hidden) button.style.display = 'none';
   if (label) button.setAttribute('aria-label', label);
   button.textContent = text;
   button.onclick = () => {
@@ -55,6 +69,7 @@ const submit = (label, text) => {
 };
 const chooser = (disabled) => {
   const button = document.createElement('button');
+  button.id = 'chooser';
   button.textContent = 'Join as guest';
   button.disabled = !!disabled;
   button.onclick = () => {
@@ -99,6 +114,22 @@ LATE_RENDER = Layout(
 VISIBLE_FIELD_AND_CHOOSER = Layout(
     "<script>field('Your name', false); chooser(false);"
     "submit('Ask to join without camera', 'Ask to join');</script>"
+)
+HELP_BEFORE_CHOOSER = Layout(
+    "<script>field('Enter your name', true); helper('help', 'Join as guest help');"
+    "chooser(false);</script>"
+)
+HELP_BEFORE_SUBMIT = Layout(
+    "<script>field('Your name', false); helper('help', 'Ask to join instructions');"
+    "submit(null, 'Ask to join without camera');</script>"
+)
+HELP_ONLY_SUBMIT = Layout(
+    "<script>field('Your name', false); helper('help', 'Ask to join instructions');</script>"
+)
+HIDDEN_ASK_VISIBLE_VARIANT = Layout(
+    "<script>field('Your name', false); helper('stale', 'Ask to join');"
+    "document.getElementById('stale').style.display = 'none';"
+    "submit(null, 'Ask to join without camera');</script>"
 )
 REFUSED = Layout("<h1>You can’t join this video call</h1><button>Return to home screen</button>")
 SIGN_IN_ONLY = Layout("<h1>Sign in to join</h1><button>Sign in</button>")
@@ -146,7 +177,11 @@ async def _join(page: Page, *, lobby_timeout: float = 5.0) -> JoinResult:
 
 
 def _kinds(effects: list[dict[str, object]]) -> list[object]:
-    return [effect["kind"] for effect in effects]
+    return [effect["kind"] for effect in effects if effect["kind"] != "click"]
+
+
+def _clicked(effects: list[dict[str, object]]) -> list[object]:
+    return [effect["id"] for effect in effects if effect["kind"] == "click"]
 
 
 def _submitted_names(effects: list[dict[str, object]]) -> list[object]:
@@ -206,6 +241,43 @@ async def test_a_usable_field_is_found_behind_a_hidden_duplicate_or_a_late_rende
     assert (result.status, result.knocked) == ("admitted", True)
     assert _kinds(effects) == ["name_focus", "submit"]
     assert _submitted_names(effects) == [[TWIN]]
+
+
+@pytest.mark.browser
+async def test_a_help_control_before_the_official_guest_chooser_is_never_clicked() -> None:
+    async with _meeting(HELP_BEFORE_CHOOSER) as page:
+        result = await _join(page)
+        effects = await _effects(page)
+
+    assert (result.status, result.knocked) == ("admitted", True)
+    assert _clicked(effects) == ["chooser", "submit"]
+    assert _kinds(effects) == ["guest_mode", "name_focus", "submit"]
+    assert _submitted_names(effects) == [[TWIN]]
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize(
+    "layout", [HELP_BEFORE_SUBMIT, HIDDEN_ASK_VISIBLE_VARIANT], ids=["help-first", "hidden-ask"]
+)
+async def test_only_the_visible_official_submit_is_clicked_once(layout: Layout) -> None:
+    async with _meeting(layout) as page:
+        result = await _join(page)
+        effects = await _effects(page)
+
+    assert (result.status, result.knocked) == ("admitted", True)
+    assert _clicked(effects) == ["submit"]
+    assert _submitted_names(effects) == [[TWIN]]
+
+
+@pytest.mark.browser
+async def test_a_help_control_alone_is_not_a_knock() -> None:
+    async with _meeting(HELP_ONLY_SUBMIT) as page:
+        result = await _join(page)
+        effects = await _effects(page)
+
+    assert (result.status, result.knocked) == ("failed", False)
+    assert _clicked(effects) == []
+    assert "submit" not in _kinds(effects)
 
 
 @pytest.mark.browser
@@ -371,3 +443,44 @@ async def test_a_destination_change_while_waiting_stops_before_any_typing() -> N
     assert (result.status, result.knocked) == ("failed", False)
     assert result.detail.startswith("navigation landed on an unexpected host: workspace.google.com")
     assert page.typed == []
+
+
+async def test_a_control_whose_name_only_starts_like_the_chooser_is_never_clicked() -> None:
+    page = meet_page(
+        [],
+        counts={GUEST_MODE_SELECTOR: [1], NAME_SELECTOR: [0]},
+        names={GUEST_MODE_SELECTOR: "Join as guest help"},
+    )
+
+    result, _clock = await _fake_join(page)
+
+    assert (result.status, result.knocked) == ("failed", False)
+    assert page.clicked == []
+    assert "guest mode: not offered" in result.detail
+
+
+async def test_a_hidden_configured_submit_falls_through_to_the_visible_variant() -> None:
+    page = meet_page(
+        [IN_CALL],
+        counts={ASK_WITHOUT_CAMERA_SELECTOR: [1]},
+        visible={ASK_SELECTOR: False},
+    )
+
+    result, _clock = await _fake_join(page)
+
+    assert (result.status, result.knocked) == ("admitted", True)
+    assert page.clicked == [NAME_SELECTOR, ASK_WITHOUT_CAMERA_SELECTOR]
+
+
+async def test_a_submit_whose_name_only_starts_like_ask_to_join_is_not_a_knock() -> None:
+    page = meet_page(
+        [],
+        counts={JOIN_NOW_SELECTOR: [0]},
+        names={ASK_SELECTOR: "Ask to join instructions"},
+    )
+
+    result, _clock = await _fake_join(page)
+
+    assert (result.status, result.knocked) == ("failed", False)
+    assert ASK_SELECTOR not in page.clicked
+    assert result.detail == "join button did not become available on the lobby page"

@@ -160,6 +160,7 @@ class MeetSignals:
     left: str = "left the meeting"
     continue_without_media: str = "Continue without microphone"
     join_as_guest: str = "Join as guest"
+    submit_variants: tuple[str, ...] = ("Ask to join without camera",)
 
 
 DEFAULT_MEET_SIGNALS = MeetSignals()
@@ -422,37 +423,63 @@ async def _name_field_failure(page: Page, link: str, failure: str) -> str:
 
 _UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 _LOWER = "abcdefghijklmnopqrstuvwxyz"
+_APOSTROPHES = str.maketrans({"\u2019": "'", "\u2018": "'", "\u02bc": "'"})
+ACCESSIBLE_NAME_PROBE = """node => {
+  const label = (node.getAttribute('aria-label') || '').trim();
+  if (label) return label;
+  const shown = (element) => element.getAttribute('aria-hidden') !== 'true'
+    && getComputedStyle(element).display !== 'none';
+  const walk = (element) => [...element.childNodes].map((child) => {
+    if (child.nodeType === Node.TEXT_NODE) return child.textContent;
+    if (child.nodeType === Node.ELEMENT_NODE && shown(child)) return walk(child);
+    return '';
+  }).join(' ');
+  return walk(node);
+}"""
 
 
-def _button_named_xpath(prefix: str) -> str:
-    wanted = prefix.casefold()
+def plain_text(text: str) -> str:
+    return " ".join(text.translate(_APOSTROPHES).casefold().split())
+
+
+def control_selector(name: str) -> str:
+    wanted = plain_text(name)
     label = f"translate(normalize-space(@aria-label), '{_UPPER}', '{_LOWER}')"
     text = f"translate(normalize-space(.), '{_UPPER}', '{_LOWER}')"
     return (
         "xpath=//*[self::button or @role='button']"
-        f"[starts-with({label}, '{wanted}') or starts-with({text}, '{wanted}')]"
+        f"[contains({label}, '{wanted}') or contains({text}, '{wanted}')]"
     )
 
 
-def guest_mode_selector(signals: MeetSignals) -> str:
-    return _button_named_xpath(signals.join_as_guest)
+async def _actionable_index(page: Page, name: str) -> int | None:
+    candidates = page.locator(control_selector(name))
+    for index in range(await candidates.count()):
+        candidate = candidates.nth(index)
+        if not (await candidate.is_visible() and await candidate.is_enabled()):
+            continue
+        if plain_text(str(await candidate.evaluate(ACCESSIBLE_NAME_PROBE))) == plain_text(name):
+            return index
+    return None
 
 
-def submit_selectors(label: str) -> tuple[str, str]:
-    return f'text="{label}"', _button_named_xpath(label)
+async def _itself(locator: Locator) -> Locator:
+    return locator
 
 
 async def _choose_guest_mode(page: Page, signals: MeetSignals) -> str | None:
-    choices = page.locator(guest_mode_selector(signals))
-    for index in range(await choices.count()):
-        choice = choices.nth(index)
-        if await choice.is_visible() and await choice.is_enabled():
-            try:
-                await choice.click(timeout=_CLICK_TIMEOUT_MS)
-            except (PlaywrightError, ActionabilityError) as error:
-                return f"click failed ({type(error).__name__})"
-            return "chosen"
-    return None
+    index = await _actionable_index(page, signals.join_as_guest)
+    if index is None:
+        return None
+    try:
+        await (
+            page.locator(control_selector(signals.join_as_guest))
+            .nth(index)
+            .click(timeout=_CLICK_TIMEOUT_MS)
+        )
+    except (PlaywrightError, ActionabilityError) as error:
+        return f"click failed ({type(error).__name__})"
+    return "chosen"
 
 
 async def _enter_twin_name(
@@ -520,11 +547,12 @@ async def _knock_landed(page: Page) -> bool:
     return _is_waiting(content)
 
 
-def _submit_candidates(signals: MeetSignals) -> list[tuple[str, str]]:
-    labels = (signals.ask_to_join, signals.join_now)
-    exact = [(submit_selectors(label)[0], label) for label in labels]
-    named = [(submit_selectors(label)[1], label) for label in labels]
-    return exact + named
+def _nth_control(page: Page, name: str, index: int) -> Locator:
+    return page.locator(control_selector(name)).nth(index)
+
+
+def submit_names(signals: MeetSignals) -> tuple[str, ...]:
+    return (signals.ask_to_join, *signals.submit_variants, signals.join_now)
 
 
 async def _click_join(
@@ -536,19 +564,15 @@ async def _click_join(
 ) -> str | None:
     deadline = monotonic() + timeout_seconds
     while True:
-        for selector, label in _submit_candidates(signals):
-            locator = page.locator(selector)
+        for name in submit_names(signals):
             try:
-                found = await locator.count()
+                index = await _actionable_index(page, name)
             except PlaywrightError:
-                found = 0
-            if found == 0:
+                index = None
+            if index is None:
                 continue
             failure = await click_when_ready(
-                partial(page.locator, selector),
-                label,
-                sleep,
-                choose=_first_visible_match,
+                partial(_nth_control, page, name, index), name, sleep, choose=_itself
             )
             if failure is not None and not await _knock_landed(page):
                 return failure

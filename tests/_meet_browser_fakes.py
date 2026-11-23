@@ -11,11 +11,10 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page
 
 from fakeyou.meet.meet import (
-    DEFAULT_MEET_SIGNALS,
+    ACCESSIBLE_NAME_PROBE,
     MIC_DISABLED_SELECTOR,
     MIC_ENABLED_SELECTOR,
-    guest_mode_selector,
-    submit_selectors,
+    control_selector,
 )
 
 LOBBY = '<input placeholder="Your name"><button>Ask to join</button>'
@@ -30,11 +29,16 @@ LEAVE_AND_WAITING = IN_CALL + "<div>Asking to be let in...</div>"
 
 DIALOG_SELECTOR = "text=Continue without microphone"
 NAME_SELECTOR = "placeholder:Your name"
-ASK_SELECTOR = 'text="Ask to join"'
-JOIN_NOW_SELECTOR = 'text="Join now"'
-GUEST_MODE_SELECTOR = guest_mode_selector(DEFAULT_MEET_SIGNALS)
-NAMED_ASK_SELECTOR = submit_selectors("Ask to join")[1]
-NAMED_JOIN_NOW_SELECTOR = submit_selectors("Join now")[1]
+ASK_SELECTOR = control_selector("Ask to join")
+JOIN_NOW_SELECTOR = control_selector("Join now")
+GUEST_MODE_SELECTOR = control_selector("Join as guest")
+ASK_WITHOUT_CAMERA_SELECTOR = control_selector("Ask to join without camera")
+CONTROL_NAMES = {
+    ASK_SELECTOR: "Ask to join",
+    JOIN_NOW_SELECTOR: "Join now",
+    GUEST_MODE_SELECTOR: "Join as guest",
+    ASK_WITHOUT_CAMERA_SELECTOR: "Ask to join without camera",
+}
 LEAVE_SELECTOR = 'button[aria-label="Leave call"]'
 MIC_ON_SELECTOR = MIC_ENABLED_SELECTOR
 MIC_OFF_SELECTOR = MIC_DISABLED_SELECTOR
@@ -87,8 +91,9 @@ class FakeLocator:
 
     async def evaluate(self, expression: str, arg: Any = None, **kwargs: Any) -> Any:
         del arg
-        del expression
         del kwargs
+        if expression == ACCESSIBLE_NAME_PROBE:
+            return self._page.names.get(self.selector, CONTROL_NAMES.get(self.selector, ""))
         self._page.locator_evaluated.append(self.selector)
         scripted = self._page.locator_evaluates.get(self.selector, [""])
         if len(scripted) > 1:
@@ -153,6 +158,7 @@ class PageScript(TypedDict, total=False):
     reveal_on_click: dict[str, str]
     wait_failures: Iterable[str]
     read_only: Iterable[str]
+    names: dict[str, str]
     disabled: Iterable[str]
     on_content: Callable[[int], None]
 
@@ -181,6 +187,7 @@ class FakePage(Page):
         self.reveal_on_click = dict(script.get("reveal_on_click", {}))
         self.wait_failures = set(script.get("wait_failures", ()))
         self.read_only = set(script.get("read_only", ()))
+        self.names = dict(script.get("names", {}))
         self.disabled = set(script.get("disabled", ()))
         self.type_failures = set(script.get("type_failures", ()))
         self._goto_failures = script.get("goto_failures", 0)
@@ -420,8 +427,7 @@ def meet_page(
         NAME_SELECTOR: [1],
         ASK_SELECTOR: [1],
         GUEST_MODE_SELECTOR: [0],
-        NAMED_ASK_SELECTOR: [0],
-        NAMED_JOIN_NOW_SELECTOR: [0],
+        ASK_WITHOUT_CAMERA_SELECTOR: [0],
     }
     counts.update(script.get("counts", {}))
     script["counts"] = counts
