@@ -65,12 +65,14 @@ def _leaked(*written: str) -> list[str]:
     return [part for part in LEAK if part in text]
 
 
-async def _join(page: Any, request: GuestJoinRequest | None = None, **signals: str) -> Any:
+async def _join(
+    page: Any, request: GuestJoinRequest | None = None, signals: MeetSignals | None = None
+) -> Any:
     clock = FakeClock()
     return await request_guest_join(
         page,
         request or _request(),
-        MeetSignals(**signals),
+        signals or MeetSignals(),
         polling=JoinPolling(clock.sleep, clock.monotonic),
     )
 
@@ -172,8 +174,8 @@ async def test_configured_signals_decide_what_a_refusal_is() -> None:
     page = meet_page(["<h1>Access is not possible here</h1>" + HOME], evaluates=[NO_CAPTCHA])
     default_page = meet_page([_heading("can’t")] * 8, evaluates=[NO_CAPTCHA] * 8)
 
-    custom = await _join(page, denied="access is not possible")
-    ignored = await _join(default_page, denied="access is not possible")
+    custom = await _join(page, signals=MeetSignals(denied="access is not possible"))
+    ignored = await _join(default_page, signals=MeetSignals(denied="access is not possible"))
 
     assert custom.status == "blocked"
     assert ignored.status == "timeout"
