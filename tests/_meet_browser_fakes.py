@@ -72,18 +72,63 @@ _VOID = frozenset(
 )
 
 
+_BLOCKS = frozenset(
+    {
+        "address",
+        "article",
+        "aside",
+        "blockquote",
+        "button",
+        "div",
+        "dl",
+        "dt",
+        "dd",
+        "fieldset",
+        "figure",
+        "footer",
+        "form",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "header",
+        "li",
+        "main",
+        "nav",
+        "ol",
+        "p",
+        "pre",
+        "section",
+        "table",
+        "tr",
+        "td",
+        "ul",
+    }
+)
+
+
 class RenderedDom(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.chunks: list[str] = []
         self.controls: list[str] = []
+        self._line: list[str] = []
         self._stack: list[tuple[str, bool, list[str] | None, str]] = []
 
     def _hidden(self) -> bool:
         return any(hidden for _tag, hidden, _texts, _label in self._stack)
 
+    def _flush(self) -> None:
+        if self._line:
+            self.chunks.append(" ".join(self._line))
+            self._line = []
+
     @override
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in _BLOCKS:
+            self._flush()
         if tag in _VOID:
             return
         values = {name: value or "" for name, value in attrs}
@@ -91,7 +136,6 @@ class RenderedDom(HTMLParser):
         hidden = (
             tag in _INVISIBLE_TAGS
             or "hidden" in values
-            or values.get("aria-hidden", "").casefold() == "true"
             or "display:none" in style
             or "visibility:hidden" in style
         )
@@ -100,6 +144,8 @@ class RenderedDom(HTMLParser):
 
     @override
     def handle_endtag(self, tag: str) -> None:
+        if tag in _BLOCKS:
+            self._flush()
         for index in range(len(self._stack) - 1, -1, -1):
             if self._stack[index][0] == tag:
                 hidden_above = any(entry[1] for entry in self._stack[: index + 1])
@@ -114,10 +160,15 @@ class RenderedDom(HTMLParser):
         text = data.strip()
         if not text or self._hidden():
             return
-        self.chunks.append(text)
+        self._line.append(text)
         for _tag, _hidden, texts, _label in self._stack:
             if texts is not None:
                 texts.append(text)
+
+    @override
+    def close(self) -> None:
+        super().close()
+        self._flush()
 
 
 def rendered(content: str | None) -> RenderedDom:

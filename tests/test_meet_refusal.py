@@ -521,3 +521,111 @@ async def test_a_prepare_deadline_during_a_captcha_refusal_is_terminal_before_th
     assert (result.status, result.knocked) == ("blocked", False)
     assert result.detail.startswith("captcha challenge went unsolved")
     assert page.typed == []
+
+
+INLINE_REFUSAL = "<h1>You can’t <span>join</span> this video call</h1>"
+INLINE_HELP = "<p>If <strong>you can’t join this video call</strong>, ask the host.</p>"
+
+
+async def test_a_refusal_split_by_inline_markup_after_the_knock_is_blocked() -> None:
+    page = meet_page([INLINE_REFUSAL + HOME], evaluates=[NO_CAPTCHA])
+
+    result = await _join(page)
+
+    assert (result.status, result.knocked) == ("blocked", True)
+
+
+async def test_an_inline_emphasised_help_sentence_after_the_knock_keeps_waiting() -> None:
+    page = meet_page([INLINE_HELP] * 8, evaluates=[NO_CAPTCHA] * 8)
+
+    result = await _join(page)
+
+    assert (result.status, result.knocked) == ("timeout", True)
+
+
+async def test_a_help_control_named_like_ask_to_join_does_not_cancel_a_refusal() -> None:
+    page = meet_page(
+        [_plain("can’t") + "<button>Ask to join instructions</button>"], evaluates=[NO_CAPTCHA]
+    )
+
+    result = await _join(page)
+
+    assert (result.status, result.knocked) == ("blocked", True)
+
+
+async def test_a_full_sentence_signal_recognises_the_same_refusal() -> None:
+    page = meet_page([_heading("can’t")], evaluates=[NO_CAPTCHA])
+
+    result = await _join(page, signals=MeetSignals(denied="You can't join this video call"))
+
+    assert (result.status, result.knocked) == ("blocked", True)
+
+
+@pytest.mark.parametrize("field", ["editable", "hidden"])
+async def test_a_lasting_captcha_refusal_never_types_and_ends_at_the_grace(field: str) -> None:
+    script: dict[str, Any] = {"wait_flaky": {NAME_SELECTOR: 1000}} if field == "hidden" else {}
+    page = _captcha_refusal([LIVE_CAPTCHA] * 200, [1], **script)
+    clock = FakeClock()
+
+    result = await request_guest_join(
+        page,
+        _request(captcha_grace_seconds=120.0, poll_interval_seconds=2.0),
+        polling=JoinPolling(clock.sleep, clock.monotonic),
+    )
+
+    assert (result.status, result.knocked) == ("blocked", False)
+    assert result.detail.startswith("captcha challenge went unsolved")
+    assert page.typed == []
+    assert page.clicked == []
+    assert clock.monotonic() >= 120.0
+
+
+async def test_a_captcha_that_clears_beside_an_editable_field_types_once_and_knocks_once() -> None:
+    page = meet_page(
+        [IN_CALL],
+        evaluates=[LIVE_CAPTCHA],
+        counts={NAME_SELECTOR: [1]},
+        label_script={
+            VISIBLE_BODY_SELECTOR: [["You can’t join this video call"], ["Ask to join"]],
+            VISIBLE_CONTROLS_SELECTOR: [["Return to home screen"], ["Ask to join"]],
+        },
+    )
+    clock = FakeClock()
+
+    result = await request_guest_join(
+        page,
+        _request(captcha_grace_seconds=6.0, poll_interval_seconds=2.0),
+        polling=JoinPolling(clock.sleep, clock.monotonic),
+    )
+
+    assert (result.status, result.knocked) == ("admitted", True)
+    assert page.typed == ["Twin"]
+    assert page.clicked.count(ASK_SELECTOR) == 1
+
+
+@pytest.mark.browser
+@pytest.mark.parametrize("stage", ["before", "after"])
+async def test_a_real_refusal_split_by_inline_markup_is_blocked(stage: str) -> None:
+    message = "You can’t <span>join</span> this video call"
+    body = (
+        _browser_refusal("can’t", "h1").replace("You can’t join this video call", message)
+        if stage == "before"
+        else _browser_after_knock("can’t").replace("You can’t join this video call", message)
+    )
+    async with _browser_meeting(body) as page:
+        result = await _browser_join(page)
+
+    assert (result.status, result.knocked) == ("blocked", stage == "after")
+
+
+@pytest.mark.browser
+async def test_a_real_emphasised_help_sentence_before_the_knock_is_not_a_refusal() -> None:
+    body = (
+        "<input placeholder='Your name' style='display:none'>"
+        + INLINE_HELP
+        + "<button>Join as guest</button><button>Sign in</button>"
+    )
+    async with _browser_meeting(body) as page:
+        result = await _browser_join(page)
+
+    assert (result.status, result.knocked) == ("failed", False)

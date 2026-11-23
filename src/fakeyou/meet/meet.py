@@ -167,23 +167,16 @@ DEFAULT_MEET_SIGNALS = MeetSignals()
 _APOSTROPHES = str.maketrans({"\u2019": "'", "\u2018": "'", "\u02bc": "'"})
 VISIBLE_BODY_SELECTOR = "body"
 VISIBLE_CONTROLS_SELECTOR = "button, [role='button']"
-_VISIBLE_TEXT_PROBE = """nodes => nodes.flatMap((root) => {
-  const chunks = [];
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  while (walker.nextNode()) {
-    const parent = walker.currentNode.parentElement;
-    const text = walker.currentNode.textContent.trim();
-    if (!text || !parent) continue;
-    if (parent.closest('[aria-hidden="true"], script, style, template, noscript')) continue;
-    if (!parent.checkVisibility({ checkVisibilityCSS: true })) continue;
-    chunks.push(text);
-  }
-  return chunks;
-})"""
+_VISIBLE_TEXT_PROBE = "nodes => nodes.flatMap((node) => (node.innerText || '').split('\\n'))"
 _VISIBLE_CONTROLS_PROBE = """nodes => nodes
   .filter((node) => node.checkVisibility({ checkVisibilityCSS: true }))
-  .filter((node) => !node.closest('[aria-hidden="true"]'))
-  .map((node) => (node.getAttribute('aria-label') || node.innerText || '').trim())"""
+  .map((node) => {
+    const referenced = (node.getAttribute('aria-labelledby') || '').split(/\\s+/)
+      .map((id) => id && document.getElementById(id)).filter(Boolean)
+      .map((element) => element.textContent).join(' ').trim();
+    return referenced || (node.getAttribute('aria-label') || '').trim()
+      || (node.innerText || '').trim();
+  })"""
 _HEADING_TAGS = frozenset({"h1", "h2", "h3"})
 _NON_TEXT_TAGS = frozenset({"script", "style", "template", "head", "title"})
 _VOID_TAGS = frozenset(
@@ -578,13 +571,13 @@ def refusal_in(chunks: Iterable[object], controls: Iterable[object], signals: Me
     lines = _lines(chunks)
     if any(_is_waiting(line) for line in lines):
         return False
-    phrase = plain_text(signals.denied)
+    phrase = plain_text(signals.denied).removeprefix("you ")
     if not any(line.removeprefix("you ").startswith(phrase) for line in lines):
         return False
-    normal = tuple(
+    official = {
         plain_text(label) for label in (signals.leave_call, signals.ask_to_join, signals.join_now)
-    )
-    return not any(line.startswith(normal) for line in _lines(controls))
+    }
+    return not official.intersection(_lines(controls))
 
 
 async def _page_refusal(page: Page, signals: MeetSignals) -> bool:
@@ -645,6 +638,13 @@ class _BeforeKnock:
         if now - self.captcha_since >= self.request.captcha_grace_seconds:
             return await self.unsolved_captcha()
         return None
+
+    async def settled(self) -> JoinResult | None:
+        while True:
+            refusal = await self.verdict()
+            if refusal is not None or self.captcha_since is None:
+                return refusal
+            await self.polling.sleep(self.request.poll_interval_seconds)
 
     async def unsolved_captcha(self) -> JoinResult:
         return JoinResult(
@@ -711,7 +711,6 @@ async def _enter_twin_name(
         f"guest mode: {guest_mode or 'not offered'}",
     )
 
-
 async def _type_twin_name(
     page: Page,
     request: GuestJoinRequest,
@@ -720,7 +719,7 @@ async def _type_twin_name(
     attempts: int,
 ) -> str | JoinResult | None:
     async def usable_unless_refused(locator: Locator) -> Locator:
-        refusal = await watch.verdict()
+        refusal = await watch.settled()
         if refusal is not None:
             raise _GuestRefusedError(refusal)
         return await _first_usable_match(locator)
@@ -811,6 +810,9 @@ async def _prepare_lobby(
     failure = await _destination_failure(page, request.link)
     if failure is not None:
         return failure
+    refusal = await watch.settled()
+    if refusal is not None:
+        return refusal
     return await _click_join(
         page, signals, request.button_timeout_seconds, polling.sleep, polling.monotonic
     )
