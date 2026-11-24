@@ -579,26 +579,6 @@ async def _choose_guest_mode(page: Page, signals: MeetSignals) -> str | None:
     return "chosen"
 
 
-async def _official(locator: Locator, name: str) -> Locator | None:
-    for index in range(await locator.count()):
-        candidate = locator.nth(index)
-        if not (await candidate.is_visible() and await candidate.is_enabled()):
-            continue
-        if plain_text(str(await candidate.evaluate(ACCESSIBLE_NAME_PROBE))) == plain_text(name):
-            return candidate
-    return None
-
-
-def _official_choice(name: str) -> Callable[[Locator], Awaitable[Locator]]:
-    async def choose(locator: Locator) -> Locator:
-        found = await _official(locator, name)
-        if found is None:
-            raise PlaywrightError(f"no visible, enabled control named {name!r}")
-        return found
-
-    return choose
-
-
 def _lines(chunks: Iterable[object]) -> list[str]:
     return [
         plain_text(line) for chunk in chunks for line in str(chunk).splitlines() if line.strip()
@@ -750,6 +730,7 @@ async def _enter_twin_name(
         f"guest mode: {guest_mode or 'not offered'}",
     )
 
+
 async def _type_twin_name(
     page: Page,
     request: GuestJoinRequest,
@@ -817,17 +798,12 @@ async def _click_join(
             continue
         for label in (signals.ask_to_join, signals.join_now):
             try:
-                offered = await _official(page.locator(control_selector(label)), label)
+                offered = await _official_handle(page, label)
             except PlaywrightError:
                 offered = None
             if offered is None:
                 continue
-            failure = await click_when_ready(
-                partial(page.locator, control_selector(label)),
-                label,
-                polling.sleep,
-                choose=_official_choice(label),
-            )
+            failure = await click_official_when_ready(page, label, polling.sleep)
             if failure is not None and not await _knock_landed(page):
                 return failure
             return None

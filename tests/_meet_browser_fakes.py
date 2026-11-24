@@ -374,6 +374,7 @@ class PageScript(TypedDict, total=False):
     final_url: str
     visible: dict[str, bool | Exception]
     names: dict[str, str]
+    nodes: dict[str, list[str]]
     disabled: Iterable[str]
     reveal_on_click: dict[str, str]
     wait_failures: Iterable[str]
@@ -406,6 +407,10 @@ class FakePage(Page):
         self.wait_flaky = dict(script.get("wait_flaky", {}))
         self.visible = dict(script.get("visible", {}))
         self.names = dict(script.get("names", {}))
+        self.nodes: dict[str, list[FakeNode]] = {}
+        self._node_counter = 0
+        for selector, names in script.get("nodes", {}).items():
+            self.nodes[selector] = [self._next_node(selector, name) for name in names]
         self.disabled = set(script.get("disabled", ()))
         self.labels = dict(script.get("labels", {}))
         self.label_script = {
