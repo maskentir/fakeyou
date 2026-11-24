@@ -536,9 +536,14 @@ async def click_official_when_ready(
     name: str,
     sleep: Callable[[float], Awaitable[None]],
     attempts: int = _CLICK_ATTEMPTS,
-) -> str | None:
+    guard: Callable[[], Awaitable[JoinResult | None]] | None = None,
+) -> str | JoinResult | None:
     last_error = "locator never became visible"
     for _ in range(attempts):
+        if guard is not None:
+            held = await guard()
+            if held is not None:
+                return held
         try:
             handle = await _official_handle(page, name)
         except PlaywrightError as error:
@@ -550,6 +555,10 @@ async def click_official_when_ready(
             continue
         try:
             await handle.hover(timeout=_CLICK_WAIT_MS, force=True)
+            if guard is not None:
+                held = await guard()
+                if held is not None:
+                    return held
             if not await _handle_is_official(handle, name):
                 await sleep(_CLICK_RETRY_DELAY_SECONDS)
                 continue
@@ -592,9 +601,7 @@ def refusal_in(chunks: Iterable[object], controls: Iterable[object], signals: Me
     phrase = plain_text(signals.denied).removeprefix("you ")
     if not any(line.removeprefix("you ").startswith(phrase) for line in lines):
         return False
-    official = {
-        plain_text(label) for label in (signals.leave_call, signals.ask_to_join, signals.join_now)
-    }
+    official = {plain_text(label) for label in (signals.leave_call, *submit_names(signals))}
     return not official.intersection(_lines(controls))
 
 
@@ -781,6 +788,30 @@ def submit_names(signals: MeetSignals) -> tuple[str, ...]:
     return (signals.ask_to_join, *signals.submit_variants, signals.join_now)
 
 
+async def _poll_official_submit(
+    page: Page,
+    signals: MeetSignals,
+    watch: _BeforeKnock,
+    hold_or_refuse: Callable[[], Awaitable[JoinResult | None]],
+) -> tuple[bool, str | JoinResult | None]:
+    for name in submit_names(signals):
+        try:
+            offered = await _official_handle(page, name)
+        except PlaywrightError:
+            continue
+        if offered is None:
+            continue
+        failure = await click_official_when_ready(
+            page, name, watch.polling.sleep, guard=hold_or_refuse
+        )
+        if isinstance(failure, JoinResult):
+            return True, failure
+        if failure is not None and not await _knock_landed(page):
+            return True, failure
+        return True, None
+    return False, None
+
+
 async def _click_join(
     page: Page,
     signals: MeetSignals,
@@ -789,6 +820,15 @@ async def _click_join(
 ) -> str | JoinResult | None:
     polling = watch.polling
     deadline = polling.monotonic() + timeout_seconds
+
+    async def hold_or_refuse() -> JoinResult | None:
+        refusal = await watch.verdict()
+        if refusal is not None:
+            return refusal
+        if watch.captcha_since is not None:
+            return await watch.settled()
+        return None
+
     while True:
         refusal = await watch.verdict()
         if refusal is not None:
@@ -796,17 +836,9 @@ async def _click_join(
         if watch.captcha_since is not None:
             await polling.sleep(watch.request.poll_interval_seconds)
             continue
-        for label in (signals.ask_to_join, signals.join_now):
-            try:
-                offered = await _official_handle(page, label)
-            except PlaywrightError:
-                offered = None
-            if offered is None:
-                continue
-            failure = await click_official_when_ready(page, label, polling.sleep)
-            if failure is not None and not await _knock_landed(page):
-                return failure
-            return None
+        handled, outcome = await _poll_official_submit(page, signals, watch, hold_or_refuse)
+        if handled:
+            return outcome
         if polling.monotonic() >= deadline:
             return "join button did not become available on the lobby page"
         await polling.sleep(1.0)

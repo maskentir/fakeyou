@@ -423,12 +423,18 @@ async def test_a_visible_field_wins_over_an_offered_guest_mode() -> None:
 
 @pytest.mark.browser
 @pytest.mark.parametrize(
-    "layout",
-    [REFUSED, SIGN_IN_ONLY, LEAVES_WHILE_WAITING, DISABLED_CHOOSER],
+    ("layout", "status"),
+    [
+        (REFUSED, "blocked"),
+        (SIGN_IN_ONLY, "failed"),
+        (LEAVES_WHILE_WAITING, "failed"),
+        (DISABLED_CHOOSER, "failed"),
+    ],
     ids=["refused", "sign-in-only", "destination-moved", "disabled-chooser"],
 )
 async def test_no_name_is_typed_and_nothing_is_submitted_without_a_usable_form(
     layout: Layout,
+    status: str,
 ) -> None:
     async with _meeting(layout) as page:
         result = await _join(page)
@@ -437,7 +443,7 @@ async def test_no_name_is_typed_and_nothing_is_submitted_without_a_usable_form(
             "() => [...document.querySelectorAll('input')].map((n) => n.value)"
         )
 
-    assert (result.status, result.knocked) == ("failed", False)
+    assert (result.status, result.knocked) == (status, False)
     assert "name_focus" not in _kinds(effects)
     assert "submit" not in _kinds(effects)
     assert "guest_mode" not in _kinds(effects)

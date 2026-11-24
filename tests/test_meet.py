@@ -116,7 +116,7 @@ async def test_request_guest_join_reports_denial() -> None:
 
     assert result.status == "denied"
     assert "denied" in result.detail
-    assert len(page.evaluate_calls) == 5
+    assert len(page.evaluate_calls) == 7
     assert all("recaptcha" in call for call in page.evaluate_calls)
 
 
@@ -231,15 +231,7 @@ async def test_request_guest_join_bounds_a_hung_join_attempt() -> None:
 async def test_request_guest_join_proceeds_when_captcha_is_solved() -> None:
     page = meet_page(
         [DENIED, IN_CALL],
-        evaluates=[
-            LIVE_CAPTCHA,
-            NO_CAPTCHA,
-            NO_CAPTCHA,
-            NO_CAPTCHA,
-            NO_CAPTCHA,
-            NO_CAPTCHA,
-            LIVE_CAPTCHA,
-        ],
+        evaluates=[LIVE_CAPTCHA] + [NO_CAPTCHA] * 7 + [LIVE_CAPTCHA] + [NO_CAPTCHA] * 20,
     )
     clock = FakeClock()
 
@@ -386,7 +378,7 @@ async def test_request_guest_join_accepts_loaded_page_after_navigation_error() -
 
     assert result.status == "admitted"
     assert page.evaluate_calls[0] == "(() => location.href)()"
-    assert len(page.evaluate_calls) == 6
+    assert len(page.evaluate_calls) == 8
     assert all("recaptcha" in call for call in page.evaluate_calls[1:])
 
 

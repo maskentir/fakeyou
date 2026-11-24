@@ -634,6 +634,58 @@ async def test_a_refusal_surfacing_while_waiting_for_the_submit_button_blocks_wi
     assert JOIN_NOW_SELECTOR not in page.clicked
 
 
+async def test_a_captcha_appearing_during_submit_retry_holds_to_the_grace_without_submits() -> None:
+    page = meet_page(
+        [LOBBY] * 4,
+        evaluates=[NO_CAPTCHA] * 7 + [LIVE_CAPTCHA] * 60,
+        counts={NAME_SELECTOR: [1]},
+        labels={
+            VISIBLE_BODY_SELECTOR: ["Your name\nAsk to join"],
+            VISIBLE_CONTROLS_SELECTOR: ["Ask to join"],
+        },
+        click_failures={ASK_SELECTOR},
+    )
+    clock = FakeClock()
+
+    result = await request_guest_join(
+        page,
+        _request(captcha_grace_seconds=6.0, poll_interval_seconds=2.0),
+        polling=JoinPolling(clock.sleep, clock.monotonic),
+    )
+
+    assert (result.status, result.knocked) == ("blocked", False)
+    assert result.detail.startswith("captcha challenge went unsolved")
+    assert page.typed == ["Twin"]
+    assert page.clicked == [NAME_SELECTOR, ASK_SELECTOR]
+    assert clock.sleeps[-3:] == [2.0, 2.0, 2.0]
+
+
+async def test_a_refusal_replacing_the_submit_during_retry_blocks_without_submits() -> None:
+    page = meet_page(
+        [LOBBY] * 4,
+        evaluates=[NO_CAPTCHA] * 16,
+        counts={NAME_SELECTOR: [1]},
+        label_script={
+            VISIBLE_BODY_SELECTOR: [["Your name\nAsk to join"]] * 7
+            + [["You can’t join this video call\nReturn to home screen"]] * 7,
+            VISIBLE_CONTROLS_SELECTOR: [["Ask to join"]] * 7 + [["Return to home screen"]] * 7,
+        },
+        click_failures={ASK_SELECTOR},
+    )
+    clock = FakeClock()
+
+    result = await request_guest_join(
+        page,
+        _request(captcha_grace_seconds=6.0, poll_interval_seconds=2.0),
+        polling=JoinPolling(clock.sleep, clock.monotonic),
+    )
+
+    assert (result.status, result.knocked) == ("blocked", False)
+    assert result.detail.startswith("platform refused the guest before the knock")
+    assert page.typed == ["Twin"]
+    assert page.clicked == [NAME_SELECTOR, ASK_SELECTOR]
+
+
 async def test_a_captcha_that_clears_beside_an_editable_field_types_once_and_knocks_once() -> None:
     page = meet_page(
         [IN_CALL],
@@ -683,3 +735,30 @@ async def test_a_real_emphasised_help_sentence_before_the_knock_is_not_a_refusal
         result = await _browser_join(page)
 
     assert (result.status, result.knocked) == ("failed", False)
+
+
+CAMERA_VARIANT_SUBMIT = (
+    "<input placeholder='Your name'>"
+    "<button id='submit'>Ask to join without camera</button>"
+    "<h1>You can’t join this video call with a camera</h1>"
+    "<script>window.__submittedNames = [];"
+    "document.querySelector('#submit').onclick = () => {"
+    "window.__submittedNames.push(document.querySelector('#name, input').value);"
+    "document.body.innerHTML = '<div>Asking to be let in...</div>';"
+    "setTimeout(() => {"
+    "const leave = document.createElement('button');"
+    "leave.setAttribute('aria-label', 'Leave call');"
+    "leave.textContent = 'Leave';"
+    "document.body.replaceChildren(leave);"
+    "}, 300);};</script>"
+)
+
+
+@pytest.mark.browser
+async def test_a_real_camera_variant_submit_survives_its_own_refusal_sentence() -> None:
+    async with _browser_meeting(CAMERA_VARIANT_SUBMIT) as page:
+        result = await _browser_join(page)
+        submitted = await page.evaluate("() => window.__submittedNames")
+
+    assert (result.status, result.knocked) == ("admitted", True)
+    assert submitted == ["Twin"]
