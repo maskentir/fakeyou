@@ -260,6 +260,7 @@ class BrowserLaunch:
     fingerprint_seed: int | None = None
     profile_dir: str | Path | None = None
     warmup: bool = False
+    timezone: str | None = None
     extra_args: tuple[str, ...] = ()
 
 
@@ -295,6 +296,7 @@ async def _prepared_browser_context(
                 headless=launch_profile.headless,
                 license_key=launch_profile.license_key or None,
                 locale="en-US",
+                timezone=launch_profile.timezone,
                 args=launch_args,
                 humanize=humanize,
                 env=browser_environment(environment),

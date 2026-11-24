@@ -29,6 +29,7 @@ async def show_browser_tools(settings: Settings) -> None:
                 license_key=settings.browser.license_key.get_secret_value()
                 if settings.browser.license_key
                 else None,
+                timezone=settings.browser.timezone,
             ),
             output_dir=settings.paths.browser_output_dir,
         ) as tools:

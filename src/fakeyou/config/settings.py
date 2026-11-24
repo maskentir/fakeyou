@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal, Self, get_args, get_origin, override
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import dotenv_values
 from pydantic import (
@@ -421,6 +422,17 @@ class BrowserSettings(Section):
     headless: bool = False
     warmup: bool = True
     license_key: SecretStr | None = None
+    timezone: str | None = None
+
+    @model_validator(mode="after")
+    def known_timezone(self) -> Self:
+        if self.timezone is None:
+            return self
+        try:
+            ZoneInfo(self.timezone)
+        except (ZoneInfoNotFoundError, ValueError) as error:
+            raise ValueError(f"unknown browser timezone {self.timezone!r}") from error
+        return self
 
 
 class AudioSettings(Section):

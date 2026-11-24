@@ -300,6 +300,27 @@ def test_browser_launch_hides_license_key_in_repr() -> None:
     assert "sekret-license" not in repr(BrowserLaunch(license_key="sekret-license"))
 
 
+async def test_direct_page_forwards_timezone_to_launch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[Any] = []
+
+    async def launch(*_args: Any, **kwargs: Any) -> FakeBrowserContext:
+        seen.append(kwargs.get("timezone"))
+        return FakeBrowserContext()
+
+    monkeypatch.setattr(browser_module, "launch_persistent_context_async", launch)
+
+    async with open_direct_page(
+        launch=BrowserLaunch(profile_dir=tmp_path, timezone="Asia/Jakarta")
+    ):
+        pass
+    async with open_direct_page(launch=BrowserLaunch(profile_dir=tmp_path)):
+        pass
+
+    assert seen == ["Asia/Jakarta", None]
+
+
 def test_launch_args_omit_remote_debugging_by_default() -> None:
     assert not any("remote-debugging" in arg for arg in BROWSER_LAUNCH_ARGS)
     assert "--remote-debugging-address=127.0.0.1" in BROWSER_DEVTOOLS_ARGS
