@@ -66,10 +66,65 @@ class FakeKeyboard:
         self._page.typed.append(f"key:{key}")
 
 
+class FakeNode:
+    def __init__(self, key: str, name: str) -> None:
+        self.key = key
+        self.name = name
+
+
+class FakeElementHandle:
+    def __init__(self, page: FakePage, selector: str, node: FakeNode | None) -> None:
+        self._page = page
+        self._selector = selector
+        self._node = node
+
+    @property
+    def node_key(self) -> str:
+        return self._node.key if self._node is not None else ""
+
+    def _detached(self) -> bool:
+        if self._node is None:
+            return False
+        current = self._page.nodes.get(self._selector, [])
+        return not any(entry is self._node for entry in current)
+
+    async def evaluate(self, expression: str, arg: Any = None, **kwargs: Any) -> Any:
+        if expression == ACCESSIBLE_NAME_PROBE:
+            if self._node is not None:
+                return self._node.name
+            return self._page.names.get(self._selector, CONTROL_NAMES.get(self._selector, ""))
+        return await FakeLocator(self._page, self._selector).evaluate(expression, arg, **kwargs)
+
+    async def is_visible(self) -> bool:
+        if self._detached():
+            return False
+        value = self._page.visible.get(self._selector, True)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    async def is_enabled(self) -> bool:
+        if self._detached():
+            return False
+        return self._selector not in self._page.disabled
+
+    async def click(self, **kwargs: Any) -> None:
+        del kwargs
+        if self._detached():
+            raise PlaywrightError(f"element is not attached: {self._selector}")
+        self._page.record_click(self._selector, self.node_key)
+
+    async def hover(self, **kwargs: Any) -> None:
+        del kwargs
+        if self._detached():
+            raise PlaywrightError(f"element is not attached: {self._selector}")
+
+
 class FakeLocator:
-    def __init__(self, page: FakePage, selector: str) -> None:
+    def __init__(self, page: FakePage, selector: str, index: int | None = None) -> None:
         self._page = page
         self.selector = selector
+        self._index = index
 
     @property
     def first(self) -> FakeLocator:
@@ -80,10 +135,32 @@ class FakeLocator:
         return self
 
     def nth(self, index: int) -> FakeLocator:
-        del index
-        return FakeLocator(self._page, self.selector)
+        return FakeLocator(self._page, self.selector, index)
+
+    def _attached_node(self) -> FakeNode | None:
+        if self._index is None:
+            return None
+        nodes = self._page.nodes.get(self.selector)
+        if nodes is None or not 0 <= self._index < len(nodes):
+            return None
+        return nodes[self._index]
+
+    async def element_handle(self) -> FakeElementHandle | None:
+        node = self._attached_node()
+        if node is not None:
+            return FakeElementHandle(self._page, self.selector, node)
+        if self.selector in self._page.nodes:
+            return None
+        return FakeElementHandle(self._page, self.selector, None)
 
     async def count(self) -> int:
+        if self._index is not None:
+            if self.selector in self._page.nodes:
+                return 1 if self._attached_node() is not None else 0
+            return 1
+        nodes = self._page.nodes.get(self.selector)
+        if nodes is not None:
+            return len(nodes)
         scripted = self._page.counts.get(self.selector, [1])
         if len(scripted) > 1:
             return scripted.pop(0)
@@ -93,6 +170,9 @@ class FakeLocator:
         del arg
         del kwargs
         if expression == ACCESSIBLE_NAME_PROBE:
+            node = self._attached_node()
+            if node is not None:
+                return node.name
             return self._page.names.get(self.selector, CONTROL_NAMES.get(self.selector, ""))
         self._page.locator_evaluated.append(self.selector)
         scripted = self._page.locator_evaluates.get(self.selector, [""])
@@ -118,12 +198,16 @@ class FakeLocator:
         value = self._page.visible.get(self.selector, True)
         if isinstance(value, Exception):
             raise value
+        if self._index is not None and self.selector in self._page.nodes:
+            return bool(value) and self._attached_node() is not None
         return value
 
     async def is_editable(self) -> bool:
         return self.selector not in self._page.read_only
 
     async def is_enabled(self) -> bool:
+        if self._index is not None and self.selector in self._page.nodes:
+            return self._attached_node() is not None and self.selector not in self._page.disabled
         return self.selector not in self._page.disabled
 
     async def evaluate_all(self, expression: str) -> list[Any]:
@@ -132,16 +216,10 @@ class FakeLocator:
 
     async def click(self, **kwargs: Any) -> None:
         del kwargs
-        self._page.clicked.append(self.selector)
-        remaining = self._page.click_flaky.get(self.selector, 0)
-        if remaining > 0:
-            self._page.click_flaky[self.selector] = remaining - 1
-            raise PlaywrightError(f"click failed: {self.selector}")
-        if self.selector in self._page.click_failures:
-            raise PlaywrightError(f"click failed: {self.selector}")
-        revealed = self._page.reveal_on_click.get(self.selector)
-        if revealed is not None:
-            self._page.visible[revealed] = True
+        node = self._attached_node()
+        if self._index is not None and self.selector in self._page.nodes and node is None:
+            raise PlaywrightError(f"no element at index: {self.selector}")
+        self._page.record_click(self.selector, node.key if node is not None else "")
 
 
 class PageScript(TypedDict, total=False):
@@ -159,6 +237,7 @@ class PageScript(TypedDict, total=False):
     wait_failures: Iterable[str]
     read_only: Iterable[str]
     names: dict[str, str]
+    nodes: dict[str, list[str]]
     disabled: Iterable[str]
     on_content: Callable[[int], None]
 
@@ -188,6 +267,10 @@ class FakePage(Page):
         self.wait_failures = set(script.get("wait_failures", ()))
         self.read_only = set(script.get("read_only", ()))
         self.names = dict(script.get("names", {}))
+        self.nodes: dict[str, list[FakeNode]] = {}
+        self._node_counter = 0
+        for selector, names in script.get("nodes", {}).items():
+            self.nodes[selector] = [self._next_node(selector, name) for name in names]
         self.disabled = set(script.get("disabled", ()))
         self.type_failures = set(script.get("type_failures", ()))
         self._goto_failures = script.get("goto_failures", 0)
@@ -195,12 +278,39 @@ class FakePage(Page):
         self.visited: list[str] = []
         self.init_scripts: list[str] = []
         self.clicked: list[str] = []
+        self.clicked_nodes: list[tuple[str, str]] = []
         self.typed: list[str] = []
         self.waited: list[str] = []
         self.evaluate_calls: list[str] = []
         self.listeners: dict[str, list[Any]] = {}
         self.page_closed = False
         self._keyboard: Any = FakeKeyboard(self)
+
+    def _next_node(self, selector: str, name: str) -> FakeNode:
+        node = FakeNode(f"{selector}#{self._node_counter}", name)
+        self._node_counter += 1
+        return node
+
+    def dom_insert(self, selector: str, position: int, name: str) -> str:
+        node = self._next_node(selector, name)
+        self.nodes.setdefault(selector, []).insert(position, node)
+        return node.key
+
+    def dom_remove(self, selector: str, key: str) -> None:
+        self.nodes[selector] = [entry for entry in self.nodes.get(selector, []) if entry.key != key]
+
+    def record_click(self, selector: str, node_key: str) -> None:
+        self.clicked.append(selector)
+        self.clicked_nodes.append((selector, node_key))
+        remaining = self.click_flaky.get(selector, 0)
+        if remaining > 0:
+            self.click_flaky[selector] = remaining - 1
+            raise PlaywrightError(f"click failed: {selector}")
+        if selector in self.click_failures:
+            raise PlaywrightError(f"click failed: {selector}")
+        revealed = self.reveal_on_click.get(selector)
+        if revealed is not None:
+            self.visible[revealed] = True
 
     @override
     def on(self, event: Any, f: Any) -> None:

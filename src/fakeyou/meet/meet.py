@@ -8,8 +8,8 @@ from typing import Literal, override
 from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 
 from cloakbrowser.human.actionability import ActionabilityError
+from playwright.async_api import ElementHandle, Locator, Page
 from playwright.async_api import Error as PlaywrightError
-from playwright.async_api import Locator, Page
 
 from fakeyou.config.meeting_request import meeting_code
 from fakeyou.config.settings import DEFAULTS
@@ -446,44 +446,97 @@ def plain_text(text: str) -> str:
     return " ".join(text.translate(_APOSTROPHES).casefold().split())
 
 
+def _xpath_literal(word: str) -> str:
+    if "'" not in word:
+        return f"'{word}'"
+    if '"' not in word:
+        return f'"{word}"'
+    return "concat('" + "', \"'\", '".join(word.split("'")) + "')"
+
+
 def control_selector(name: str) -> str:
-    wanted = plain_text(name)
-    names = (
+    words = plain_text(name).split() or [""]
+    lowered = [
         f"translate(normalize-space({source}), '{_UPPER}', '{_LOWER}')"
-        for source in ("id(@aria-labelledby)", "@aria-label", ".")
+        for source in (
+            *(f"id(@aria-labelledby)[{position}]" for position in range(1, 5)),
+            "@aria-label",
+            ".",
+        )
+    ]
+    matches = " and ".join(
+        "(" + " or ".join(f"contains({source}, {_xpath_literal(word)})" for source in lowered) + ")"
+        for word in words
     )
-    matches = " or ".join(f"contains({name}, '{wanted}')" for name in names)
     return f"xpath=//*[self::button or @role='button'][{matches}]"
 
 
-async def _official(locator: Locator, name: str) -> Locator | None:
+async def _official_handle(page: Page, name: str) -> ElementHandle | None:
+    locator = page.locator(control_selector(name))
     for index in range(await locator.count()):
-        candidate = locator.nth(index)
-        if not (await candidate.is_visible() and await candidate.is_enabled()):
+        try:
+            handle = await locator.nth(index).element_handle()
+        except PlaywrightError:
             continue
-        if plain_text(str(await candidate.evaluate(ACCESSIBLE_NAME_PROBE))) == plain_text(name):
-            return candidate
+        if handle is None:
+            continue
+        if await _handle_is_official(handle, name):
+            return handle
     return None
 
 
-def _official_choice(name: str) -> Callable[[Locator], Awaitable[Locator]]:
-    async def choose(locator: Locator) -> Locator:
-        found = await _official(locator, name)
-        if found is None:
-            raise PlaywrightError(f"no visible, enabled control named {name!r}")
-        return found
+async def _handle_is_official(handle: ElementHandle, name: str) -> bool:
+    try:
+        if not (await handle.is_visible() and await handle.is_enabled()):
+            return False
+        return plain_text(str(await handle.evaluate(ACCESSIBLE_NAME_PROBE))) == plain_text(name)
+    except PlaywrightError:
+        return False
 
-    return choose
+
+async def click_official_when_ready(
+    page: Page,
+    name: str,
+    sleep: Callable[[float], Awaitable[None]],
+    attempts: int = _CLICK_ATTEMPTS,
+) -> str | None:
+    last_error = "locator never became visible"
+    for _ in range(attempts):
+        try:
+            handle = await _official_handle(page, name)
+        except PlaywrightError as error:
+            last_error = type(error).__name__
+            await sleep(_CLICK_RETRY_DELAY_SECONDS)
+            continue
+        if handle is None or not await _handle_is_official(handle, name):
+            await sleep(_CLICK_RETRY_DELAY_SECONDS)
+            continue
+        try:
+            await handle.hover(timeout=_CLICK_WAIT_MS, force=True)
+            if not await _handle_is_official(handle, name):
+                await sleep(_CLICK_RETRY_DELAY_SECONDS)
+                continue
+            await handle.click(timeout=_CLICK_TIMEOUT_MS)
+        except (PlaywrightError, ActionabilityError) as error:
+            last_error = type(error).__name__
+            await sleep(_CLICK_RETRY_DELAY_SECONDS)
+            continue
+        return None
+    return f"clicking {name!r} failed after {attempts} attempts: {last_error}"
 
 
 async def _choose_guest_mode(page: Page, signals: MeetSignals) -> str | None:
-    choice = await _official(
-        page.locator(control_selector(signals.join_as_guest)), signals.join_as_guest
-    )
-    if choice is None:
+    try:
+        handle = await _official_handle(page, signals.join_as_guest)
+    except PlaywrightError:
+        return None
+    if handle is None or not await _handle_is_official(handle, signals.join_as_guest):
         return None
     try:
-        await choice.click(timeout=_CLICK_TIMEOUT_MS)
+        await handle.hover(timeout=_CLICK_WAIT_MS, force=True)
+        if not await _handle_is_official(handle, signals.join_as_guest):
+            return None
+        await handle.click(timeout=_CLICK_TIMEOUT_MS)
     except (PlaywrightError, ActionabilityError) as error:
         return f"click failed ({type(error).__name__})"
     return "chosen"
@@ -569,17 +622,12 @@ async def _click_join(
     while True:
         for name in submit_names(signals):
             try:
-                offered = await _official(page.locator(control_selector(name)), name)
+                offered = await _official_handle(page, name)
             except PlaywrightError:
                 offered = None
             if offered is None:
                 continue
-            failure = await click_when_ready(
-                partial(page.locator, control_selector(name)),
-                name,
-                sleep,
-                choose=_official_choice(name),
-            )
+            failure = await click_official_when_ready(page, name, sleep)
             if failure is not None and not await _knock_landed(page):
                 return failure
             return None

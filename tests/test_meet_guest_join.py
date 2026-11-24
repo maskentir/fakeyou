@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import cast
 
 import pytest
+from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page, Route
 
 import fakeyou.meet.meet as meet
@@ -176,6 +177,28 @@ LABELLED_CHOOSER = Layout(
     "<script>field('Enter your name', true); chooser(false);"
     "const official = document.getElementById('chooser'); official.textContent = '';"
     "official.setAttribute('aria-labelledby', 'chooser-name');</script>"
+)
+SPLIT_SUBMIT = Layout(
+    "<span id='ask-a'>Ask to</span>"
+    "<span id='ask-b'>join</span>"
+    "<span id='help-name'>Ask to join instructions</span>"
+    "<button id='help' aria-labelledby='help-name'>Ask to join</button>"
+    "<button id='submit' aria-labelledby='ask-a ask-b'>"
+    "<svg width='20' height='20'></svg></button>"
+    "<script>field('Your name', false); arm(document.getElementById('submit'));</script>"
+)
+HELP_RACE = Layout(
+    "<script>field('Your name', false);"
+    "const official = document.createElement('button'); official.id = 'submit';"
+    "official.textContent = 'Ask to join'; arm(official);"
+    "document.body.appendChild(official);"
+    "official.addEventListener('pointermove', () => {"
+    "if (document.getElementById('help')) return;"
+    "const help = document.createElement('button'); help.id = 'help';"
+    "help.textContent = 'Ask to join instructions';"
+    "official.remove(); document.body.prepend(help);"
+    "setTimeout(() => document.body.appendChild(official), 400);"
+    "});</script>"
 )
 REFUSED = Layout("<h1>You can’t join this video call</h1><button>Return to home screen</button>")
 SIGN_IN_ONLY = Layout("<h1>Sign in to join</h1><button>Sign in</button>")
@@ -352,6 +375,28 @@ async def test_aria_labelledby_names_decide_which_control_is_clicked(
 
     assert (result.status, result.knocked) == ("admitted", True)
     assert _clicked(effects) == clicked
+    assert _submitted_names(effects) == [[TWIN]]
+
+
+@pytest.mark.browser
+async def test_a_submit_named_across_two_labelledby_refs_is_clicked_once() -> None:
+    async with _meeting(SPLIT_SUBMIT) as page:
+        result = await _join(page)
+        effects = await _effects(page)
+
+    assert (result.status, result.knocked) == ("admitted", True)
+    assert _clicked(effects) == ["submit"]
+    assert _submitted_names(effects) == [[TWIN]]
+
+
+@pytest.mark.browser
+async def test_a_help_inserted_mid_click_never_receives_the_official_submit_click() -> None:
+    async with _meeting(HELP_RACE) as page:
+        result = await _join(page)
+        effects = await _effects(page)
+
+    assert (result.status, result.knocked) == ("admitted", True)
+    assert _clicked(effects) == ["submit"]
     assert _submitted_names(effects) == [[TWIN]]
 
 
@@ -570,3 +615,104 @@ async def test_a_submit_whose_name_only_starts_like_ask_to_join_is_not_a_knock()
     assert (result.status, result.knocked) == ("failed", False)
     assert ASK_SELECTOR not in page.clicked
     assert result.detail == "join button did not become available on the lobby page"
+
+
+async def test_a_rebuilt_nth_locator_clicks_the_inserted_help_button() -> None:
+    page = meet_page([], nodes={ASK_SELECTOR: ["Ask to join"]})
+    candidate = page.locator(ASK_SELECTOR).nth(0)
+
+    assert await candidate.evaluate(meet.ACCESSIBLE_NAME_PROBE) == "Ask to join"
+
+    help_key = page.dom_insert(ASK_SELECTOR, 0, "Ask to join instructions")
+    await candidate.click()
+
+    assert page.clicked == [ASK_SELECTOR]
+    assert page.clicked_nodes == [(ASK_SELECTOR, help_key)]
+
+
+async def test_the_verified_handle_clicks_the_official_submit_after_a_help_insert() -> None:
+    page = meet_page([], nodes={ASK_SELECTOR: ["Ask to join"]})
+    official_key = page.nodes[ASK_SELECTOR][0].key
+    handle = await page.locator(ASK_SELECTOR).nth(0).element_handle()
+
+    assert handle is not None
+    assert await handle.evaluate(meet.ACCESSIBLE_NAME_PROBE) == "Ask to join"
+
+    page.dom_insert(ASK_SELECTOR, 0, "Ask to join instructions")
+
+    assert await handle.is_visible()
+    assert await handle.is_enabled()
+    await handle.click(timeout=5000)
+
+    assert page.clicked == [ASK_SELECTOR]
+    assert page.clicked_nodes == [(ASK_SELECTOR, official_key)]
+
+
+async def test_a_detached_handle_click_fails_instead_of_clicking_help() -> None:
+    page = meet_page([], nodes={ASK_SELECTOR: ["Ask to join"]})
+    official_key = page.nodes[ASK_SELECTOR][0].key
+    handle = await page.locator(ASK_SELECTOR).nth(0).element_handle()
+
+    assert handle is not None
+
+    page.dom_remove(ASK_SELECTOR, official_key)
+    page.dom_insert(ASK_SELECTOR, 0, "Ask to join instructions")
+
+    assert not await handle.is_visible()
+    with pytest.raises(PlaywrightError):
+        await handle.click(timeout=5000)
+
+    assert page.clicked == []
+    assert page.clicked_nodes == []
+
+
+async def test_only_a_help_submit_in_the_dom_is_not_a_knock() -> None:
+    page = meet_page(
+        [], counts={JOIN_NOW_SELECTOR: [0]}, nodes={ASK_SELECTOR: ["Ask to join instructions"]}
+    )
+
+    result, _clock = await _fake_join(page)
+
+    assert (result.status, result.knocked) == ("failed", False)
+    assert ASK_SELECTOR not in page.clicked
+    assert page.clicked_nodes == [(NAME_SELECTOR, "")]
+    assert result.detail == "join button did not become available on the lobby page"
+
+
+async def test_a_dom_modelled_official_submit_knocks_once() -> None:
+    page = meet_page([IN_CALL], nodes={ASK_SELECTOR: ["Ask to join"]})
+    official_key = page.nodes[ASK_SELECTOR][0].key
+
+    result, _clock = await _fake_join(page)
+
+    assert (result.status, result.knocked) == ("admitted", True)
+    assert page.clicked == [NAME_SELECTOR, ASK_SELECTOR]
+    assert page.clicked_nodes == [(NAME_SELECTOR, ""), (ASK_SELECTOR, official_key)]
+    assert page.typed == [TWIN]
+
+
+async def test_guest_mode_through_dom_nodes_chooses_once_before_the_submit() -> None:
+    page = meet_page(
+        [IN_CALL],
+        nodes={GUEST_MODE_SELECTOR: ["Join as guest"]},
+        visible={NAME_SELECTOR: False},
+        reveal_on_click={GUEST_MODE_SELECTOR: NAME_SELECTOR},
+    )
+    guest_key = page.nodes[GUEST_MODE_SELECTOR][0].key
+
+    result, _clock = await _fake_join(page)
+
+    assert result.status == "admitted"
+    assert page.clicked == [GUEST_MODE_SELECTOR, NAME_SELECTOR, ASK_SELECTOR]
+    assert page.clicked_nodes[0] == (GUEST_MODE_SELECTOR, guest_key)
+    assert page.typed == [TWIN]
+
+
+def test_control_selector_covers_every_labelledby_word() -> None:
+    selector = meet.control_selector("Ask to join")
+
+    assert selector.startswith("xpath=")
+    for position in range(1, 5):
+        assert f"id(@aria-labelledby)[{position}]" in selector
+    for word in ("ask", "to", "join"):
+        assert selector.count(f"'{word}'") == 6
