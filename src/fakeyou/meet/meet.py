@@ -990,6 +990,40 @@ async def _timeout_outcome(
     return JoinResult(status="timeout", detail=detail)
 
 
+_PLATFORM_RETRY_ATTEMPTS = 3
+
+
+async def _guest_join_attempt(
+    page: Page,
+    request: GuestJoinRequest,
+    signals: MeetSignals,
+    polling: JoinPolling,
+    init_scripts: Sequence[str],
+) -> tuple[JoinResult, bool]:
+    watch = _BeforeKnock(page, request, signals, polling)
+    try:
+        async with asyncio.timeout(PREPARE_TIMEOUT_SECONDS):
+            failure = await _prepare_lobby(page, signals, watch, init_scripts)
+    except TimeoutError:
+        if watch.captcha_since is not None:
+            return await watch.unsolved_captcha(), True
+        return (
+            JoinResult(
+                status="failed",
+                detail=(
+                    f"lobby preparation did not finish within {PREPARE_TIMEOUT_SECONDS} seconds"
+                ),
+            ),
+            False,
+        )
+    if isinstance(failure, JoinResult):
+        return failure, watch.captcha_since is not None
+    if failure is not None:
+        return JoinResult(status="failed", detail=failure), watch.captcha_since is not None
+    result = replace(await _await_admission(page, request, signals, polling), knocked=True)
+    return result, result.detail.startswith("captcha challenge went unsolved")
+
+
 async def request_guest_join(
     page: Page,
     request: GuestJoinRequest,
@@ -1002,26 +1036,25 @@ async def request_guest_join(
         + request.lobby_timeout_seconds
         + 4 * POLL_TIMEOUT_MULTIPLIER * request.poll_interval_seconds
     )
+    knocked = False
+    post_knock_blocked: JoinResult | None = None
     try:
         async with asyncio.timeout(attempt_timeout):
-            watch = _BeforeKnock(page, request, signals, polling)
-            try:
-                async with asyncio.timeout(PREPARE_TIMEOUT_SECONDS):
-                    failure = await _prepare_lobby(page, signals, watch, init_scripts)
-            except TimeoutError:
-                if watch.captcha_since is not None:
-                    return await watch.unsolved_captcha()
-                return JoinResult(
-                    status="failed",
-                    detail=(
-                        f"lobby preparation did not finish within {PREPARE_TIMEOUT_SECONDS} seconds"
-                    ),
+            for attempt in range(1 + _PLATFORM_RETRY_ATTEMPTS):
+                result, captcha_involved = await _guest_join_attempt(
+                    page, request, signals, polling, init_scripts
                 )
-            if isinstance(failure, JoinResult):
-                return failure
-            if failure is not None:
-                return JoinResult(status="failed", detail=failure)
-            return replace(await _await_admission(page, request, signals, polling), knocked=True)
+                knocked = knocked or result.knocked
+                if result.status != "blocked" or captcha_involved:
+                    return replace(result, knocked=knocked)
+                if result.knocked:
+                    if post_knock_blocked is None:
+                        post_knock_blocked = result
+                elif attempt == 0:
+                    return result
+                if attempt < _PLATFORM_RETRY_ATTEMPTS:
+                    await polling.sleep(request.poll_interval_seconds)
+            return post_knock_blocked or replace(result, knocked=knocked)
     except TimeoutError:
         return JoinResult(
             status="timeout",

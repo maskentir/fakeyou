@@ -523,7 +523,12 @@ class FakePage(Page):
     @override
     async def content(self) -> str:
         if not self._contents:
-            raise AssertionError("page content read more times than scripted")
+            if self.last_content is None:
+                raise AssertionError("page content read more times than scripted")
+            self._reads += 1
+            if self._on_content is not None:
+                self._on_content(self._reads)
+            return self.last_content
         result = self._contents.pop(0)
         self._reads += 1
         if isinstance(result, str):
