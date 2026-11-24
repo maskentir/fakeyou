@@ -8,8 +8,8 @@ from typing import Literal, override
 from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 
 from cloakbrowser.human.actionability import ActionabilityError
+from playwright.async_api import ElementHandle, Locator, Page
 from playwright.async_api import Error as PlaywrightError
-from playwright.async_api import Locator, Page
 
 from fakeyou.config.meeting_request import meeting_code
 from fakeyou.config.settings import DEFAULTS
@@ -159,6 +159,8 @@ class MeetSignals:
     ended: str = "ended"
     left: str = "left the meeting"
     continue_without_media: str = "Continue without microphone"
+    join_as_guest: str = "Join as guest"
+    submit_variants: tuple[str, ...] = ("Ask to join without camera",)
 
 
 DEFAULT_MEET_SIGNALS = MeetSignals()
@@ -346,6 +348,18 @@ async def _first_match(locator: Locator) -> Locator:
     return locator.first
 
 
+async def _usable_match(locator: Locator) -> Locator | None:
+    for index in range(await locator.count()):
+        candidate = locator.nth(index)
+        if await candidate.is_visible() and await candidate.is_editable():
+            return candidate
+    return None
+
+
+async def _first_usable_match(locator: Locator) -> Locator:
+    return await _usable_match(locator) or locator.first
+
+
 async def _first_visible_match(locator: Locator) -> Locator:
     for index in range(await locator.count()):
         candidate = locator.nth(index)
@@ -407,29 +421,176 @@ async def _name_field_failure(page: Page, link: str, failure: str) -> str:
     )
 
 
+_UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+_LOWER = "abcdefghijklmnopqrstuvwxyz"
+_APOSTROPHES = str.maketrans({"\u2019": "'", "\u2018": "'", "\u02bc": "'"})
+ACCESSIBLE_NAME_PROBE = """node => {
+  const referenced = (node.getAttribute('aria-labelledby') || '').split(/\\s+/)
+    .map((id) => id && document.getElementById(id)).filter(Boolean)
+    .map((element) => element.textContent).join(' ').trim();
+  if (referenced) return referenced;
+  const label = (node.getAttribute('aria-label') || '').trim();
+  if (label) return label;
+  const shown = (element) => element.getAttribute('aria-hidden') !== 'true'
+    && getComputedStyle(element).display !== 'none';
+  const walk = (element) => [...element.childNodes].map((child) => {
+    if (child.nodeType === Node.TEXT_NODE) return child.textContent;
+    if (child.nodeType === Node.ELEMENT_NODE && shown(child)) return walk(child);
+    return '';
+  }).join(' ');
+  return walk(node);
+}"""
+
+
+def plain_text(text: str) -> str:
+    return " ".join(text.translate(_APOSTROPHES).casefold().split())
+
+
+def _xpath_literal(word: str) -> str:
+    if "'" not in word:
+        return f"'{word}'"
+    if '"' not in word:
+        return f'"{word}"'
+    return "concat('" + "', \"'\", '".join(word.split("'")) + "')"
+
+
+def control_selector(name: str) -> str:
+    words = plain_text(name).split() or [""]
+    lowered = [
+        f"translate(normalize-space({source}), '{_UPPER}', '{_LOWER}')"
+        for source in (
+            *(f"id(@aria-labelledby)[{position}]" for position in range(1, 5)),
+            "@aria-label",
+            ".",
+        )
+    ]
+    matches = " and ".join(
+        "(" + " or ".join(f"contains({source}, {_xpath_literal(word)})" for source in lowered) + ")"
+        for word in words
+    )
+    return f"xpath=//*[self::button or @role='button'][{matches}]"
+
+
+async def _official_handle(page: Page, name: str) -> ElementHandle | None:
+    locator = page.locator(control_selector(name))
+    for index in range(await locator.count()):
+        try:
+            handle = await locator.nth(index).element_handle()
+        except PlaywrightError:
+            continue
+        if handle is None:
+            continue
+        if await _handle_is_official(handle, name):
+            return handle
+    return None
+
+
+async def _handle_is_official(handle: ElementHandle, name: str) -> bool:
+    try:
+        if not (await handle.is_visible() and await handle.is_enabled()):
+            return False
+        return plain_text(str(await handle.evaluate(ACCESSIBLE_NAME_PROBE))) == plain_text(name)
+    except PlaywrightError:
+        return False
+
+
+async def click_official_when_ready(
+    page: Page,
+    name: str,
+    sleep: Callable[[float], Awaitable[None]],
+    attempts: int = _CLICK_ATTEMPTS,
+) -> str | None:
+    last_error = "locator never became visible"
+    for _ in range(attempts):
+        try:
+            handle = await _official_handle(page, name)
+        except PlaywrightError as error:
+            last_error = type(error).__name__
+            await sleep(_CLICK_RETRY_DELAY_SECONDS)
+            continue
+        if handle is None or not await _handle_is_official(handle, name):
+            await sleep(_CLICK_RETRY_DELAY_SECONDS)
+            continue
+        try:
+            await handle.hover(timeout=_CLICK_WAIT_MS, force=True)
+            if not await _handle_is_official(handle, name):
+                await sleep(_CLICK_RETRY_DELAY_SECONDS)
+                continue
+            await handle.click(timeout=_CLICK_TIMEOUT_MS)
+        except (PlaywrightError, ActionabilityError) as error:
+            last_error = type(error).__name__
+            await sleep(_CLICK_RETRY_DELAY_SECONDS)
+            continue
+        return None
+    return f"clicking {name!r} failed after {attempts} attempts: {last_error}"
+
+
+async def _choose_guest_mode(page: Page, signals: MeetSignals) -> str | None:
+    try:
+        handle = await _official_handle(page, signals.join_as_guest)
+    except PlaywrightError:
+        return None
+    if handle is None or not await _handle_is_official(handle, signals.join_as_guest):
+        return None
+    try:
+        await handle.hover(timeout=_CLICK_WAIT_MS, force=True)
+        if not await _handle_is_official(handle, signals.join_as_guest):
+            return None
+        await handle.click(timeout=_CLICK_TIMEOUT_MS)
+    except (PlaywrightError, ActionabilityError) as error:
+        return f"click failed ({type(error).__name__})"
+    return "chosen"
+
+
 async def _enter_twin_name(
     page: Page,
     request: GuestJoinRequest,
     signals: MeetSignals,
     sleep: Callable[[float], Awaitable[None]],
 ) -> str | None:
-    field = page.get_by_placeholder(signals.name_field)
-    try:
-        found = await field.count()
-    except PlaywrightError as error:
-        return f"finding the name field failed: ({type(error).__name__})"
-    if found == 0:
-        return await _name_field_failure(
-            page, request.link, f"name field {signals.name_field!r} not found on the lobby page"
-        )
+    guest_mode: str | None = None
+    for waited in range(NAME_FIELD_ATTEMPTS):
+        failure = await _destination_failure(page, request.link)
+        if failure is not None:
+            return failure
+        try:
+            usable = await _usable_match(page.get_by_placeholder(signals.name_field))
+            if usable is None and guest_mode is None:
+                guest_mode = await _choose_guest_mode(page, signals)
+        except PlaywrightError as error:
+            return f"finding the name field failed: ({type(error).__name__})"
+        if usable is not None:
+            return await _type_twin_name(
+                page, request, signals, sleep, NAME_FIELD_ATTEMPTS - waited
+            )
+        await sleep(_CLICK_RETRY_DELAY_SECONDS)
+    return await _name_field_failure(
+        page,
+        request.link,
+        f"name field {signals.name_field!r} not usable on the lobby page; "
+        f"guest mode: {guest_mode or 'not offered'}",
+    )
+
+
+async def _type_twin_name(
+    page: Page,
+    request: GuestJoinRequest,
+    signals: MeetSignals,
+    sleep: Callable[[float], Awaitable[None]],
+    attempts: int,
+) -> str | None:
     failure = await click_when_ready(
         partial(page.get_by_placeholder, signals.name_field),
         "name field",
         sleep,
-        NAME_FIELD_ATTEMPTS,
+        attempts,
+        choose=_first_usable_match,
     )
     if failure is not None:
         return await _name_field_failure(page, request.link, failure)
+    failure = await _destination_failure(page, request.link)
+    if failure is not None:
+        return failure
     try:
         await page.keyboard.type(request.twin_name, delay=TYPE_DELAY_MS)
     except PlaywrightError as error:
@@ -446,6 +607,10 @@ async def _knock_landed(page: Page) -> bool:
     return _is_waiting(content)
 
 
+def submit_names(signals: MeetSignals) -> tuple[str, ...]:
+    return (signals.ask_to_join, *signals.submit_variants, signals.join_now)
+
+
 async def _click_join(
     page: Page,
     signals: MeetSignals,
@@ -455,19 +620,14 @@ async def _click_join(
 ) -> str | None:
     deadline = monotonic() + timeout_seconds
     while True:
-        for label in (signals.ask_to_join, signals.join_now):
-            locator = page.locator(f'text="{label}"')
+        for name in submit_names(signals):
             try:
-                found = await locator.count()
+                offered = await _official_handle(page, name)
             except PlaywrightError:
-                found = 0
-            if found == 0:
+                offered = None
+            if offered is None:
                 continue
-            failure = await click_when_ready(
-                partial(page.locator, f'text="{label}"'),
-                label,
-                sleep,
-            )
+            failure = await click_official_when_ready(page, name, sleep)
             if failure is not None and not await _knock_landed(page):
                 return failure
             return None
