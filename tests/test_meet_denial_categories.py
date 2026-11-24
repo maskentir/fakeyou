@@ -52,7 +52,7 @@ def _request(**overrides: Any) -> GuestJoinRequest:
 
 
 async def test_a_platform_block_reports_a_denial_category_without_page_text() -> None:
-    page = meet_page([SENSITIVE_DENIAL], evaluates=[NO_CAPTCHA])
+    page = meet_page([SENSITIVE_DENIAL], evaluates=[NO_CAPTCHA] * 8)
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -83,7 +83,7 @@ async def test_an_unsolved_captcha_reports_a_denial_category_without_page_text()
 
 
 async def test_a_call_ended_marker_is_reported_as_a_denial_reason() -> None:
-    page = meet_page([CALL_ENDED], evaluates=[NO_CAPTCHA])
+    page = meet_page([CALL_ENDED], evaluates=[NO_CAPTCHA] * 8)
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -95,7 +95,7 @@ async def test_a_call_ended_marker_is_reported_as_a_denial_reason() -> None:
 
 
 async def test_a_host_denial_keeps_its_fixed_detail() -> None:
-    page = meet_page([EXPLICIT_DENIED])
+    page = meet_page([EXPLICIT_DENIED], evaluates=[NO_CAPTCHA] * 8)
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -108,8 +108,8 @@ async def test_a_host_denial_keeps_its_fixed_detail() -> None:
 @pytest.mark.parametrize(
     ("ending", "evaluates", "expected"),
     [
-        (SENSITIVE_DENIAL, [NO_CAPTCHA], "blocked_by_platform"),
-        (EXPLICIT_DENIED + SENSITIVE_DENIAL, [], "denied_by_host"),
+        (SENSITIVE_DENIAL, [NO_CAPTCHA] * 8, "blocked_by_platform"),
+        (EXPLICIT_DENIED + SENSITIVE_DENIAL, [NO_CAPTCHA] * 8, "denied_by_host"),
     ],
     ids=["platform_block", "host_denial"],
 )

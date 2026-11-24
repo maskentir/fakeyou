@@ -74,7 +74,7 @@ async def test_run_meeting_session_installs_voice_script_and_starts_drain() -> N
     page = meet_page(
         [IN_CALL, IN_CALL, IN_CALL],
         on_content=lambda reads: stop.set() if reads >= 2 else None,
-        evaluates=[batch(0.0, [])] * 8,
+        evaluates=[batch(0.0, [])] * 16,
     )
     tracker = VoiceActivityTracker(monotonic=clock.monotonic)
     config = SessionConfig(
