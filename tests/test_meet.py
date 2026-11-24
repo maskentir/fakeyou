@@ -121,7 +121,7 @@ async def test_request_guest_join_reports_denial() -> None:
 
 
 async def test_request_guest_join_reports_platform_block() -> None:
-    page = meet_page([DENIED], evaluates=[NO_CAPTCHA] * 8)
+    page = meet_page([DENIED] * 8, evaluates=[NO_CAPTCHA] * 8)
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -133,6 +133,21 @@ async def test_request_guest_join_reports_platform_block() -> None:
     assert result.status == "blocked"
     assert "blocked" in result.detail
     assert "page says: access refused (unrecognised)" in result.detail
+
+
+async def test_request_guest_join_retries_after_a_platform_block_and_is_admitted() -> None:
+    page = meet_page([DENIED, DENIED, IN_CALL, IN_CALL], evaluates=[NO_CAPTCHA] * 8)
+    clock = FakeClock()
+
+    result = await request_guest_join(
+        page,
+        _request(),
+        polling=JoinPolling(clock.sleep, clock.monotonic),
+    )
+
+    assert (result.status, result.knocked) == ("admitted", True)
+    assert page.clicked.count(ASK_SELECTOR) == 2
+    assert page.typed == ["Twin", "Twin"]
 
 
 async def test_request_guest_join_reports_a_meeting_that_ended_in_the_lobby() -> None:

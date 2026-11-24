@@ -136,6 +136,20 @@ def test_meet_chat_rate_defaults_small_and_reads_env(monkeypatch: pytest.MonkeyP
     assert Settings(**env_file_opt(None)).conversation.meet_chat_per_minute == 5
 
 
+def test_browser_timezone_unset_by_default_and_reads_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert Settings(**env_file_opt(None)).browser.timezone is None
+    monkeypatch.setenv("FAKEYOU_BROWSER__TIMEZONE", "Asia/Jakarta")
+    assert Settings(**env_file_opt(None)).browser.timezone == "Asia/Jakarta"
+
+
+def test_unknown_browser_timezone_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FAKEYOU_BROWSER__TIMEZONE", "Mars/Olympus_Mons")
+    with pytest.raises(ValueError, match="unknown browser timezone"):
+        Settings(**env_file_opt(None))
+
+
 def test_retired_browser_sandbox_setting_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FAKEYOU_BROWSER__SANDBOX", "true")
     with pytest.raises(FakeYouError, match="Unknown configuration key"):

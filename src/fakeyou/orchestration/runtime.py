@@ -1259,6 +1259,7 @@ async def _open_session_page(
                     fingerprint_seed=stable_fingerprint_seed(config.twin_id),
                     profile_dir=config.browser_profile_dir,
                     warmup=config.browser.warmup,
+                    timezone=config.browser.timezone,
                 ),
                 **(
                     {

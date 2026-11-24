@@ -150,7 +150,7 @@ MIC_CONTROL_SELECTOR = f"{MIC_ENABLED_SELECTOR},{MIC_DISABLED_SELECTOR}"
 
 @dataclass(frozen=True, slots=True)
 class MeetSignals:
-    name_field: str = "Your name"
+    name_field_labels: tuple[str, ...] = ("Your name", "Enter your name")
     ask_to_join: str = "Ask to join"
     join_now: str = "Join now"
     leave_call: str = "Leave call"
@@ -159,7 +159,7 @@ class MeetSignals:
     ended: str = "ended"
     left: str = "left the meeting"
     continue_without_media: str = "Continue without microphone"
-    join_as_guest: str = "Join as guest"
+    guest_mode_labels: tuple[str, ...] = ("Join as guest", "Continue as guest")
     submit_variants: tuple[str, ...] = ("Ask to join without camera",)
 
 
@@ -391,6 +391,26 @@ async def _first_usable_match(locator: Locator) -> Locator:
     return await _usable_match(locator) or locator.first
 
 
+async def _find_name_field(page: Page, signals: MeetSignals) -> Locator | None:
+    for name in signals.name_field_labels:
+        usable = await _usable_match(page.get_by_placeholder(name))
+        if usable is not None:
+            return usable
+    try:
+        frames = page.frames[1:]
+    except (PlaywrightError, AttributeError):
+        frames = []
+    for frame in frames:
+        for name in signals.name_field_labels:
+            try:
+                usable = await _usable_match(frame.get_by_placeholder(name))
+            except PlaywrightError:
+                continue
+            if usable is not None:
+                return usable
+    return None
+
+
 async def _first_visible_match(locator: Locator) -> Locator:
     for index in range(await locator.count()):
         candidate = locator.nth(index)
@@ -572,20 +592,22 @@ async def click_official_when_ready(
 
 
 async def _choose_guest_mode(page: Page, signals: MeetSignals) -> str | None:
-    try:
-        handle = await _official_handle(page, signals.join_as_guest)
-    except PlaywrightError:
-        return None
-    if handle is None or not await _handle_is_official(handle, signals.join_as_guest):
-        return None
-    try:
-        await handle.hover(timeout=_CLICK_WAIT_MS, force=True)
-        if not await _handle_is_official(handle, signals.join_as_guest):
-            return None
-        await handle.click(timeout=_CLICK_TIMEOUT_MS)
-    except (PlaywrightError, ActionabilityError) as error:
-        return f"click failed ({type(error).__name__})"
-    return "chosen"
+    for name in signals.guest_mode_labels:
+        try:
+            handle = await _official_handle(page, name)
+        except PlaywrightError:
+            continue
+        if handle is None or not await _handle_is_official(handle, name):
+            continue
+        try:
+            await handle.hover(timeout=_CLICK_WAIT_MS, force=True)
+            if not await _handle_is_official(handle, name):
+                continue
+            await handle.click(timeout=_CLICK_TIMEOUT_MS)
+        except (PlaywrightError, ActionabilityError) as error:
+            return f"click failed ({type(error).__name__})"
+        return "chosen"
+    return None
 
 
 def _lines(chunks: Iterable[object]) -> list[str]:
@@ -682,7 +704,6 @@ class _BeforeKnock:
 async def _await_name_field(
     page: Page, request: GuestJoinRequest, signals: MeetSignals, watch: _BeforeKnock
 ) -> str | JoinResult | None:
-    field = page.get_by_placeholder(signals.name_field)
     while True:
         refusal = await watch.verdict()
         if refusal is not None:
@@ -691,12 +712,14 @@ async def _await_name_field(
             await watch.polling.sleep(request.poll_interval_seconds)
             continue
         try:
-            if await field.count():
+            if await _find_name_field(page, signals) is not None:
                 return None
         except PlaywrightError as error:
             return f"finding the name field failed: ({type(error).__name__})"
         return await _name_field_failure(
-            page, request.link, f"name field {signals.name_field!r} not found on the lobby page"
+            page,
+            request.link,
+            f"name field {signals.name_field_labels!r} not found on the lobby page",
         )
 
 
@@ -716,7 +739,7 @@ async def _enter_twin_name(
         if refusal is not None:
             return refusal
         try:
-            usable = await _usable_match(page.get_by_placeholder(signals.name_field))
+            usable = await _find_name_field(page, signals)
             if usable is None and guest_mode is None and watch.captcha_since is None:
                 guest_mode = await _choose_guest_mode(page, signals)
         except PlaywrightError as error:
@@ -733,7 +756,7 @@ async def _enter_twin_name(
     return await _name_field_failure(
         page,
         request.link,
-        f"name field {signals.name_field!r} not usable on the lobby page; "
+        f"name field {signals.name_field_labels!r} not usable on the lobby page; "
         f"guest mode: {guest_mode or 'not offered'}",
     )
 
@@ -749,11 +772,14 @@ async def _type_twin_name(
         refusal = await watch.settled()
         if refusal is not None:
             raise _GuestRefusedError(refusal)
+        found = await _find_name_field(page, signals)
+        if found is not None:
+            return found
         return await _first_usable_match(locator)
 
     try:
         failure = await click_when_ready(
-            partial(page.get_by_placeholder, signals.name_field),
+            partial(page.get_by_placeholder, signals.name_field_labels[0]),
             "name field",
             watch.polling.sleep,
             attempts,
@@ -964,6 +990,40 @@ async def _timeout_outcome(
     return JoinResult(status="timeout", detail=detail)
 
 
+_PLATFORM_RETRY_ATTEMPTS = 3
+
+
+async def _guest_join_attempt(
+    page: Page,
+    request: GuestJoinRequest,
+    signals: MeetSignals,
+    polling: JoinPolling,
+    init_scripts: Sequence[str],
+) -> tuple[JoinResult, bool]:
+    watch = _BeforeKnock(page, request, signals, polling)
+    try:
+        async with asyncio.timeout(PREPARE_TIMEOUT_SECONDS):
+            failure = await _prepare_lobby(page, signals, watch, init_scripts)
+    except TimeoutError:
+        if watch.captcha_since is not None:
+            return await watch.unsolved_captcha(), True
+        return (
+            JoinResult(
+                status="failed",
+                detail=(
+                    f"lobby preparation did not finish within {PREPARE_TIMEOUT_SECONDS} seconds"
+                ),
+            ),
+            False,
+        )
+    if isinstance(failure, JoinResult):
+        return failure, watch.captcha_since is not None
+    if failure is not None:
+        return JoinResult(status="failed", detail=failure), watch.captcha_since is not None
+    result = replace(await _await_admission(page, request, signals, polling), knocked=True)
+    return result, result.detail.startswith("captcha challenge went unsolved")
+
+
 async def request_guest_join(
     page: Page,
     request: GuestJoinRequest,
@@ -976,26 +1036,25 @@ async def request_guest_join(
         + request.lobby_timeout_seconds
         + 4 * POLL_TIMEOUT_MULTIPLIER * request.poll_interval_seconds
     )
+    knocked = False
+    post_knock_blocked: JoinResult | None = None
     try:
         async with asyncio.timeout(attempt_timeout):
-            watch = _BeforeKnock(page, request, signals, polling)
-            try:
-                async with asyncio.timeout(PREPARE_TIMEOUT_SECONDS):
-                    failure = await _prepare_lobby(page, signals, watch, init_scripts)
-            except TimeoutError:
-                if watch.captcha_since is not None:
-                    return await watch.unsolved_captcha()
-                return JoinResult(
-                    status="failed",
-                    detail=(
-                        f"lobby preparation did not finish within {PREPARE_TIMEOUT_SECONDS} seconds"
-                    ),
+            for attempt in range(1 + _PLATFORM_RETRY_ATTEMPTS):
+                result, captcha_involved = await _guest_join_attempt(
+                    page, request, signals, polling, init_scripts
                 )
-            if isinstance(failure, JoinResult):
-                return failure
-            if failure is not None:
-                return JoinResult(status="failed", detail=failure)
-            return replace(await _await_admission(page, request, signals, polling), knocked=True)
+                knocked = knocked or result.knocked
+                if result.status != "blocked" or captcha_involved:
+                    return replace(result, knocked=knocked)
+                if result.knocked:
+                    if post_knock_blocked is None:
+                        post_knock_blocked = result
+                elif attempt == 0:
+                    return result
+                if attempt < _PLATFORM_RETRY_ATTEMPTS:
+                    await polling.sleep(request.poll_interval_seconds)
+            return post_knock_blocked or replace(result, knocked=knocked)
     except TimeoutError:
         return JoinResult(
             status="timeout",
