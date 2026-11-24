@@ -12,6 +12,7 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page
 
 from fakeyou.meet.meet import (
+    _CAPTCHA_PROBE,
     ACCESSIBLE_NAME_PROBE,
     MIC_DISABLED_SELECTOR,
     MIC_ENABLED_SELECTOR,
@@ -545,6 +546,8 @@ class FakePage(Page):
         if not self._evaluates:
             if "enumerateDevices" in expression:
                 return ["audioinput", "videoinput", "audiooutput"]
+            if expression == _CAPTCHA_PROBE:
+                return NO_CAPTCHA
             raise AssertionError("page evaluate called more times than scripted")
         result = self._evaluates.pop(0)
         if isinstance(result, Exception):
