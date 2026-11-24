@@ -33,14 +33,17 @@ LEAVE_AND_WAITING = IN_CALL + "<div>Asking to be let in...</div>"
 
 DIALOG_SELECTOR = "text=Continue without microphone"
 NAME_SELECTOR = "placeholder:Your name"
+ENTER_NAME_SELECTOR = "placeholder:Enter your name"
 ASK_SELECTOR = control_selector("Ask to join")
 JOIN_NOW_SELECTOR = control_selector("Join now")
 GUEST_MODE_SELECTOR = control_selector("Join as guest")
+CONTINUE_GUEST_MODE_SELECTOR = control_selector("Continue as guest")
 ASK_WITHOUT_CAMERA_SELECTOR = control_selector("Ask to join without camera")
 CONTROL_NAMES = {
     ASK_SELECTOR: "Ask to join",
     JOIN_NOW_SELECTOR: "Join now",
     GUEST_MODE_SELECTOR: "Join as guest",
+    CONTINUE_GUEST_MODE_SELECTOR: "Continue as guest",
     ASK_WITHOUT_CAMERA_SELECTOR: "Ask to join without camera",
 }
 LEAVE_SELECTOR = 'button[aria-label="Leave call"]'
@@ -685,8 +688,10 @@ def meet_page(
         DIALOG_SELECTOR: [0],
         WATCHDOG_DIALOG_SELECTOR: [0],
         NAME_SELECTOR: [1],
+        ENTER_NAME_SELECTOR: [0],
         ASK_SELECTOR: [1],
         GUEST_MODE_SELECTOR: [0],
+        CONTINUE_GUEST_MODE_SELECTOR: [0],
         ASK_WITHOUT_CAMERA_SELECTOR: [0],
     }
     counts.update(script.get("counts", {}))
