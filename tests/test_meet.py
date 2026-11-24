@@ -1388,6 +1388,58 @@ def test_a_heading_is_reported_only_as_a_known_category(heading: str, category: 
     assert meet_module.heading_category(heading) == category
 
 
+OTHER_ROOM = "https://meet.google.com/xyz-wxyz-xyz"
+ELSEWHERE_HOME = "https://workspace.google.com/products/meet/"
+
+
+@pytest.mark.parametrize(
+    ("target", "captchas", "flaky", "flip_at", "request_overrides"),
+    [
+        (OTHER_ROOM, [NO_CAPTCHA] * 16, 1, 1, {}),
+        (ELSEWHERE_HOME, [NO_CAPTCHA] * 16, 1, 1, {}),
+        (
+            OTHER_ROOM,
+            [LIVE_CAPTCHA, LIVE_CAPTCHA, NO_CAPTCHA, NO_CAPTCHA, LIVE_CAPTCHA] + [NO_CAPTCHA] * 40,
+            0,
+            3,
+            {"captcha_grace_seconds": 6.0, "poll_interval_seconds": 2.0},
+        ),
+    ],
+    ids=["same-host-room", "other-host", "captcha-grace"],
+)
+async def test_a_move_while_the_name_field_has_focus_types_nothing(
+    target: str, captchas: list[Any], flaky: int, flip_at: int, request_overrides: dict[str, Any]
+) -> None:
+    page = meet_page(
+        [LOBBY],
+        evaluates=captchas,
+        counts={NAME_SELECTOR: [1]},
+        wait_flaky={NAME_SELECTOR: flaky},
+    )
+    clock = FakeClock()
+    moved = False
+
+    async def sleep_then_leave(seconds: float) -> None:
+        nonlocal moved
+        await clock.sleep(seconds)
+        if not moved and len(clock.sleeps) >= flip_at:
+            moved = True
+            page.visited.append(target)
+
+    result = await request_guest_join(
+        page,
+        _request(**request_overrides),
+        polling=JoinPolling(sleep_then_leave, clock.monotonic),
+    )
+
+    assert moved, "the redirect must land while the form is being filled"
+    assert page.typed == []
+    assert page.clicked == [NAME_SELECTOR]
+    assert ASK_SELECTOR not in page.clicked
+    assert (result.status, result.knocked) == ("failed", False)
+    assert result.detail.startswith("navigation landed on")
+
+
 async def test_a_redirect_while_the_name_field_is_sought_is_a_navigation_failure() -> None:
     page = _RedirectingPage(
         [f"{LINK}?hl=en", f"{LINK}?hl=en", "https://meet.google.com/"],

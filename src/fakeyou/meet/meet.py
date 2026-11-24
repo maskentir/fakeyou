@@ -768,6 +768,9 @@ async def _type_twin_name(
     refusal = await watch.settled()
     if refusal is not None:
         return refusal
+    failure = await _destination_failure(page, request.link)
+    if failure is not None:
+        return failure
     try:
         await page.keyboard.type(request.twin_name, delay=TYPE_DELAY_MS)
     except PlaywrightError as error:
