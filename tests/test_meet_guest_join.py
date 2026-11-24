@@ -16,6 +16,7 @@ from tests._fakes_common import LINK, FakeClock
 from tests._meet_browser_fakes import (
     ASK_SELECTOR,
     ASK_WITHOUT_CAMERA_SELECTOR,
+    CONTINUE_GUEST_MODE_SELECTOR,
     GUEST_MODE_SELECTOR,
     IN_CALL,
     JOIN_NOW_SELECTOR,
@@ -86,10 +87,10 @@ const cover = (target, onHover) => {
   });
   document.body.appendChild(shield);
 };
-const chooser = (disabled) => {
+const chooser = (disabled, label = 'Join as guest') => {
   const button = document.createElement('button');
   button.id = 'chooser';
-  button.textContent = 'Join as guest';
+  button.textContent = label;
   button.disabled = !!disabled;
   button.onclick = () => {
     effect('guest_mode');
@@ -120,6 +121,23 @@ GUEST_MODE = Layout(
     "<script>field('Enter your name', true);"
     "const sign = document.createElement('button'); sign.textContent = 'Sign in';"
     "document.body.appendChild(sign); chooser(false);</script>"
+)
+CONTINUE_GUEST_MODE = Layout(
+    "<script>field('Enter your name', true);"
+    "const sign = document.createElement('button'); sign.textContent = 'Sign in';"
+    "document.body.appendChild(sign); chooser(false, 'Continue as guest');</script>"
+)
+FRAME_GUEST_MODE = Layout(
+    "<script>const b = document.createElement('button'); b.id = 'chooser';"
+    "b.textContent = 'Continue as guest';"
+    "b.onclick = () => { effect('guest_mode');"
+    "const f = document.createElement('iframe');"
+    "f.srcdoc = \"<input placeholder='Enter your name' style='width:220px;height:48px' "
+    "onfocus=\\\"parent.__effects.push({kind:'name_focus'})\\\" "
+    'oninput=\\"parent.__effects.push({kind:\'typed\', names:[this.value]})\\">";'
+    "document.body.appendChild(f);"
+    "submit('Ask to join without camera', 'Ask to join'); };"
+    "document.body.appendChild(b);</script>"
 )
 HIDDEN_DUPLICATE = Layout(
     "<script>field('Your name', true); field('Your name', false);"
@@ -286,14 +304,31 @@ async def test_a_submit_named_ask_to_join_without_camera_knocks_after_the_name()
 
 
 @pytest.mark.browser
-async def test_the_guest_mode_layout_chooses_the_mode_then_fills_then_submits_in_order() -> None:
-    async with _meeting(GUEST_MODE) as page:
+@pytest.mark.parametrize(
+    "layout", [GUEST_MODE, CONTINUE_GUEST_MODE], ids=["join-as-guest", "continue-as-guest"]
+)
+async def test_the_guest_mode_layout_chooses_the_mode_then_fills_then_submits_in_order(
+    layout: Layout,
+) -> None:
+    async with _meeting(layout) as page:
         result = await _join(page)
         effects = await _effects(page)
 
     assert (result.status, result.knocked) == ("admitted", True)
     assert _kinds(effects) == ["guest_mode", "name_focus", "submit"]
     assert _submitted_names(effects) == [[TWIN]]
+
+
+@pytest.mark.browser
+async def test_a_name_field_inside_a_frame_is_filled_after_continue_as_guest() -> None:
+    async with _meeting(FRAME_GUEST_MODE) as page:
+        result = await _join(page)
+        effects = await _effects(page)
+
+    assert (result.status, result.knocked) == ("admitted", True)
+    assert _kinds(effects)[0] == "guest_mode"
+    assert "name_focus" in _kinds(effects)
+    assert [TWIN] in [entry.get("names") for entry in effects if entry.get("kind") == "typed"]
 
 
 @pytest.mark.browser
@@ -492,6 +527,34 @@ async def test_guest_mode_is_chosen_once_before_the_name_and_the_submit() -> Non
 
     assert result.status == "admitted"
     assert page.clicked == [GUEST_MODE_SELECTOR, NAME_SELECTOR, ASK_SELECTOR]
+    assert page.typed == [TWIN]
+
+
+async def test_continue_as_guest_is_chosen_once_before_the_name_and_the_submit() -> None:
+    page = meet_page(
+        [IN_CALL],
+        counts={CONTINUE_GUEST_MODE_SELECTOR: [1]},
+        visible={NAME_SELECTOR: False},
+        reveal_on_click={CONTINUE_GUEST_MODE_SELECTOR: NAME_SELECTOR},
+    )
+
+    result, _clock = await _fake_join(page)
+
+    assert result.status == "admitted"
+    assert page.clicked == [CONTINUE_GUEST_MODE_SELECTOR, NAME_SELECTOR, ASK_SELECTOR]
+    assert page.typed == [TWIN]
+
+
+async def test_an_enter_your_name_placeholder_is_typed_into() -> None:
+    page = meet_page(
+        [IN_CALL],
+        counts={NAME_SELECTOR: [0], "placeholder:Enter your name": [1]},
+    )
+
+    result, _clock = await _fake_join(page)
+
+    assert result.status == "admitted"
+    assert page.clicked == ["placeholder:Enter your name", ASK_SELECTOR]
     assert page.typed == [TWIN]
 
 
