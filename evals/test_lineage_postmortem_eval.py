@@ -262,18 +262,38 @@ def test_the_adjudication_packet_is_blind_and_complete(pilot: Pilot) -> None:
             assert all(quote.quote in quote.source_line for quote in claim.quotes)
 
 
-def test_adjudication_records_disagreements_without_touching_gold(pilot: Pilot) -> None:
-    _, key = adjudication_packet(pilot)
-    target = next(entry for entry in key.entries if entry.pair_id == "pair-001")
-    response = AdjudicationResponse(
-        item=target.item,
-        adjudicator="reviewer-a",
-        label="potential_supersession",
-        revision_evidence=(),
-        rationale="The later claim reads as reversing the earlier plan for billing.",
-    )
+def _complete_responses(
+    pilot: Pilot, adjudicator: str, overrides: dict[str, Label] | None = None
+) -> list[AdjudicationResponse]:
+    packet, key = adjudication_packet(pilot)
+    items = {item.item: item for item in packet.items}
+    responses = []
+    for entry in key.entries:
+        label: Label = (overrides or {}).get(entry.pair_id or "", "abstain")
+        evidence: tuple[str, ...] = ()
+        if label == "potential_supersession":
+            evidence = (items[entry.item].later.quotes[0].entry_id,)
+        responses.append(
+            AdjudicationResponse(
+                item=entry.item,
+                adjudicator=adjudicator,
+                label=label,
+                revision_evidence=evidence,
+                rationale="Judged from the quoted claims shown for this item alone.",
+            )
+        )
+    return responses
 
-    result: Any = compare(key, [response])
+
+def test_adjudication_records_disagreements_without_touching_gold(pilot: Pilot) -> None:
+    packet, key = adjudication_packet(pilot)
+    target = next(entry for entry in key.entries if entry.pair_id == "pair-001")
+
+    result: Any = compare(
+        packet,
+        key,
+        _complete_responses(pilot, "reviewer-a", {"pair-001": "potential_supersession"}),
+    )
 
     assert result["gold_changes_applied"] is False
     assert result["second_independent_annotator"] == "pending"
@@ -283,7 +303,88 @@ def test_adjudication_records_disagreements_without_touching_gold(pilot: Pilot) 
             item=target.item, adjudicator="a", label="abstain", revision_evidence=(), rationale="x"
         )
     with pytest.raises(ValueError, match="unknown items"):
-        compare(key, [response.model_copy(update={"item": "item-99"})])
+        compare(
+            packet,
+            key,
+            [
+                response.model_copy(update={"item": "item-99"})
+                for response in _complete_responses(pilot, "reviewer-a")
+            ],
+        )
+
+
+def test_compare_rejects_duplicate_and_incomplete_answers(pilot: Pilot) -> None:
+    packet, key = adjudication_packet(pilot)
+    complete = _complete_responses(pilot, "reviewer-a")
+
+    with pytest.raises(ValueError, match="answered more than once"):
+        compare(packet, key, [*complete, complete[0]])
+    with pytest.raises(ValueError, match="did not answer every item"):
+        compare(packet, key, complete[:-1])
+
+
+def test_compare_requires_later_revision_evidence_for_supersession(pilot: Pilot) -> None:
+    packet, key = adjudication_packet(pilot)
+    target = next(entry for entry in key.entries if entry.pair_id == "pair-053")
+    item = next(item for item in packet.items if item.item == target.item)
+    complete = _complete_responses(pilot, "reviewer-a", {"pair-053": "potential_supersession"})
+    superseded = next(response for response in complete if response.item == target.item)
+
+    def swap(evidence: tuple[str, ...]) -> list[AdjudicationResponse]:
+        return [
+            response.model_copy(update={"revision_evidence": evidence})
+            if response.item == target.item
+            else response
+            for response in complete
+        ]
+
+    with pytest.raises(ValueError, match="revision evidence"):
+        compare(packet, key, swap(()))
+    with pytest.raises(ValueError, match="later claim"):
+        compare(packet, key, swap((item.earlier.quotes[0].entry_id,)))
+
+    result: Any = compare(packet, key, complete)
+
+    row = next(row for row in result["rows"] if row["item"] == target.item)
+    assert row["revision_evidence"] == [item.later.quotes[0].entry_id]
+    assert superseded.revision_evidence == (item.later.quotes[0].entry_id,)
+    assert row["revision_evidence_quotes"] == [item.later.quotes[0].quote]
+
+
+def test_compare_resolves_shared_entry_id_to_later_quote_text(pilot: Pilot) -> None:
+    packet, key = adjudication_packet(pilot)
+    target = next(entry for entry in key.entries if entry.pair_id == "pair-001")
+    item = next(item for item in packet.items if item.item == target.item)
+    assert item.earlier.quotes[0].entry_id == item.later.quotes[0].entry_id
+    assert item.earlier.quotes[0].quote != item.later.quotes[0].quote
+
+    result: Any = compare(
+        packet,
+        key,
+        _complete_responses(pilot, "reviewer-a", {"pair-001": "potential_supersession"}),
+    )
+
+    row = next(row for row in result["rows"] if row["item"] == target.item)
+    assert row["revision_evidence_quotes"] == [item.later.quotes[0].quote]
+
+
+def test_compare_agreement_counts_only_overlapping_items(pilot: Pilot) -> None:
+    packet, key = adjudication_packet(pilot)
+    first = _complete_responses(pilot, "reviewer-a", {"pair-001": "potential_supersession"})
+    second = _complete_responses(pilot, "reviewer-b")
+
+    alone: Any = compare(packet, key, first)
+    assert alone["second_independent_annotator"] == "pending"
+    assert alone["inter_annotator_agreement"]["status"] == "unavailable"
+    assert alone["gold_agreement"]["by_adjudicator"]["reviewer-a"]["total"] == 4
+    assert len(alone["first_annotations"]) == 6
+
+    both: Any = compare(packet, key, [*first, *second])
+    assert both["second_independent_annotator"] == "present"
+    agreement = both["inter_annotator_agreement"]
+    assert agreement["status"] == "available"
+    assert agreement["overlapping_items"] == [entry.item for entry in key.entries]
+    assert agreement["pairs"][0]["matches"] == 9
 
 
 def test_the_component_suite_forces_each_case_and_stays_in_development(pilot: Pilot) -> None:

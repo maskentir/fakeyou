@@ -6,7 +6,7 @@ from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, StringConstraints, ValidationError
 
@@ -581,11 +581,110 @@ def packet_leaks(packet: AdjudicationPacket, key: AdjudicationKey) -> list[str]:
     return leaks
 
 
-def compare(key: AdjudicationKey, responses: Sequence[AdjudicationResponse]) -> dict[str, object]:
-    entries = {entry.item: entry for entry in key.entries}
+def _check_coverage(
+    entries: Mapping[str, KeyEntry], responses: Sequence[AdjudicationResponse]
+) -> list[str]:
+    if not responses:
+        raise ValueError("no responses")
     unknown = sorted({response.item for response in responses} - set(entries))
     if unknown:
         raise ValueError(f"responses for unknown items: {unknown}")
+    seen: set[tuple[str, str]] = set()
+    for response in responses:
+        marker = (response.item, response.adjudicator)
+        if marker in seen:
+            raise ValueError(
+                f"item {response.item} answered more than once by {response.adjudicator}"
+            )
+        seen.add(marker)
+    adjudicators = sorted({response.adjudicator for response in responses})
+    for adjudicator in adjudicators:
+        answered = {r.item for r in responses if r.adjudicator == adjudicator}
+        if answered != set(entries):
+            raise ValueError(
+                f"adjudicator {adjudicator} did not answer every item: "
+                f"missing {sorted(set(entries) - answered)}"
+            )
+    return adjudicators
+
+
+def _revision_quotes(
+    items: Mapping[str, PacketItem], responses: Sequence[AdjudicationResponse]
+) -> dict[tuple[str, str], list[str]]:
+    quotes: dict[tuple[str, str], list[str]] = {}
+    for response in responses:
+        item = items[response.item]
+        later_ids = {quote.entry_id for quote in item.later.quotes}
+        evidence = response.revision_evidence
+        if response.label == "potential_supersession":
+            if not evidence:
+                raise ValueError(f"{response.item}: supersession requires revision evidence")
+            if len(set(evidence)) != len(evidence) or not set(evidence) <= later_ids:
+                raise ValueError(
+                    f"{response.item}: revision evidence must cite the later claim: "
+                    f"{sorted(set(evidence) - later_ids)}"
+                )
+        elif evidence:
+            raise ValueError(
+                f"{response.item}: revision evidence is only for potential_supersession"
+            )
+        by_id = {quote.entry_id: quote.quote for quote in item.later.quotes}
+        quotes[(response.item, response.adjudicator)] = [by_id[entry_id] for entry_id in evidence]
+    return quotes
+
+
+def _validate_responses(
+    packet: AdjudicationPacket,
+    key: AdjudicationKey,
+    responses: Sequence[AdjudicationResponse],
+) -> dict[str, Any]:
+    entries = {entry.item: entry for entry in key.entries}
+    items = {item.item: item for item in packet.items}
+    if set(items) != set(entries):
+        raise ValueError("packet items do not match the coordinator key")
+    adjudicators = _check_coverage(entries, responses)
+    quotes = _revision_quotes(items, responses)
+    return {"entries": entries, "adjudicators": adjudicators, "quotes": quotes}
+
+
+def _inter_annotator_agreement(
+    responses: Sequence[AdjudicationResponse], adjudicators: Sequence[str]
+) -> dict[str, object]:
+    by_item: dict[str, dict[str, Label]] = {}
+    for response in responses:
+        by_item.setdefault(response.item, {})[response.adjudicator] = response.label
+    overlapping = sorted(item for item, labels in by_item.items() if len(labels) >= 2)
+    pairs = []
+    for index, first in enumerate(adjudicators):
+        for second in adjudicators[index + 1 :]:
+            shared = [
+                item for item in overlapping if first in by_item[item] and second in by_item[item]
+            ]
+            matches = sum(by_item[item][first] == by_item[item][second] for item in shared)
+            pairs.append(
+                {
+                    "annotators": [first, second],
+                    "items": len(shared),
+                    "matches": matches,
+                    "rate": matches / len(shared) if shared else None,
+                }
+            )
+    return {
+        "status": "available" if pairs else "unavailable",
+        "overlapping_items": overlapping,
+        "pairs": pairs,
+    }
+
+
+def compare(
+    packet: AdjudicationPacket,
+    key: AdjudicationKey,
+    responses: Sequence[AdjudicationResponse],
+) -> dict[str, object]:
+    validated = _validate_responses(packet, key, responses)
+    entries = validated["entries"]
+    adjudicators = validated["adjudicators"]
+    quotes = validated["quotes"]
     rows = []
     for response in sorted(responses, key=lambda item: (item.item, item.adjudicator)):
         entry = entries[response.item]
@@ -601,18 +700,61 @@ def compare(key: AdjudicationKey, responses: Sequence[AdjudicationResponse]) -> 
                 "agrees_with_gold": None if entry.gold is None else response.label == entry.gold,
                 "agrees_with_model": response.label == entry.classifier_raw,
                 "revision_evidence": list(response.revision_evidence),
+                "revision_evidence_quotes": quotes[(response.item, response.adjudicator)],
                 "rationale": response.rationale,
             }
         )
-    adjudicators = sorted({response.adjudicator for response in responses})
+    labeled = [entry for entry in entries.values() if entry.gold is not None]
+    gold_agreement = {
+        "labeled_items": len(labeled),
+        "by_adjudicator": {
+            name: {
+                "matched": sum(
+                    response.label == entries[response.item].gold
+                    for response in responses
+                    if response.adjudicator == name and entries[response.item].gold is not None
+                ),
+                "total": len(labeled),
+            }
+            for name in adjudicators
+        },
+    }
+    first_annotations = [
+        {
+            "item": row["item"],
+            "earlier_record_id": entries[row["item"]].earlier_record_id,
+            "later_record_id": entries[row["item"]].later_record_id,
+            "adjudicator": row["adjudicator"],
+            "human": row["human"],
+            "classifier_raw": row["classifier_raw"],
+            "revision_evidence": row["revision_evidence"],
+            "revision_evidence_quotes": row["revision_evidence_quotes"],
+            "rationale": row["rationale"],
+        }
+        for row in rows
+        if row["source"] == "unlabeled_candidate"
+    ]
+    agreement = _inter_annotator_agreement(responses, adjudicators)
     return {
         "adjudicators": adjudicators,
+        "annotator_coverage": {
+            name: {
+                "answered": len(
+                    {response.item for response in responses if response.adjudicator == name}
+                ),
+                "complete": True,
+            }
+            for name in adjudicators
+        },
         "items_answered": len({response.item for response in responses}),
         "items_total": len(entries),
+        "gold_agreement": gold_agreement,
         "disagreements_with_gold": [row for row in rows if row["agrees_with_gold"] is False],
+        "first_annotations": first_annotations,
+        "inter_annotator_agreement": agreement,
         "rows": rows,
         "gold_changes_applied": False,
-        "second_independent_annotator": "pending" if len(adjudicators) < 2 else "present",
+        "second_independent_annotator": ("present" if agreement["pairs"] else "pending"),
     }
 
 
@@ -744,10 +886,18 @@ def _packet_command(arguments: argparse.Namespace) -> int:
 
 
 def _compare_command(arguments: argparse.Namespace) -> int:
-    key = AdjudicationKey.model_validate_json(arguments.key.read_text(encoding="utf-8"))
-    raw = json.loads(arguments.responses.read_text(encoding="utf-8"))
-    responses = [AdjudicationResponse.model_validate(item) for item in raw]
-    _write(compare(key, responses))
+    try:
+        packet = AdjudicationPacket.model_validate_json(
+            arguments.packet.read_text(encoding="utf-8")
+        )
+        key = AdjudicationKey.model_validate_json(arguments.key.read_text(encoding="utf-8"))
+        raw = json.loads(arguments.responses.read_text(encoding="utf-8"))
+        responses = [AdjudicationResponse.model_validate(item) for item in raw]
+        report = compare(packet, key, responses)
+    except (OSError, ValueError, ValidationError) as error:
+        _write({"refused": str(error)})
+        return 2
+    _write(report)
     return 0
 
 
@@ -772,6 +922,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     packet.add_argument("--key-out", type=Path, required=True)
     packet.set_defaults(run=_packet_command)
     comparing = commands.add_parser("compare", help="Record disagreements; never edits gold")
+    comparing.add_argument("--packet", type=Path, required=True)
     comparing.add_argument("--key", type=Path, required=True)
     comparing.add_argument("--responses", type=Path, required=True)
     comparing.set_defaults(run=_compare_command)
