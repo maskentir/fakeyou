@@ -1,5 +1,5 @@
 FROM ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a AS uv
-FROM cloakhq/cloakbrowser@sha256:aed89b504a57fdba0173d4e4cd81100206c3426c759acfe3786dfc861185eb35 AS base
+FROM cloakhq/cloakbrowser@sha256:77bdb67e5c139ed8e08982f45128d83490bbb83128fe0d1e7bc6054d0f43cf5c AS base
 
 FROM base AS builder
 USER root
