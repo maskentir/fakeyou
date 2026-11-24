@@ -303,6 +303,7 @@ class FakeLocator:
             if node is not None:
                 return node.name
             return self._page.names.get(self.selector, CONTROL_NAMES.get(self.selector, ""))
+        del expression
         self._page.locator_evaluated.append(self.selector)
         scripted = self._page.locator_evaluates.get(self.selector, [""])
         if len(scripted) > 1:
@@ -372,6 +373,8 @@ class PageScript(TypedDict, total=False):
     goto_failures: int
     final_url: str
     visible: dict[str, bool | Exception]
+    names: dict[str, str]
+    disabled: Iterable[str]
     reveal_on_click: dict[str, str]
     wait_failures: Iterable[str]
     read_only: Iterable[str]
@@ -402,6 +405,8 @@ class FakePage(Page):
         self.click_flaky = dict(script.get("click_flaky", {}))
         self.wait_flaky = dict(script.get("wait_flaky", {}))
         self.visible = dict(script.get("visible", {}))
+        self.names = dict(script.get("names", {}))
+        self.disabled = set(script.get("disabled", ()))
         self.labels = dict(script.get("labels", {}))
         self.label_script = {
             key: [list(value) for value in values]

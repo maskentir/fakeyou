@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Sequence
 from typing import Any, cast, override
 
 import pytest
@@ -56,7 +56,7 @@ def _request(**overrides: Any) -> GuestJoinRequest:
 
 
 async def test_request_guest_join_admits_happy_path() -> None:
-    page = meet_page([IN_CALL])
+    page = meet_page([IN_CALL], evaluates=[NO_CAPTCHA] * 8)
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -87,7 +87,11 @@ async def test_request_guest_join_fails_when_navigation_lands_on_another_host() 
 
 
 async def test_request_guest_join_accepts_join_now_button() -> None:
-    page = meet_page([IN_CALL], counts={ASK_SELECTOR: [0], JOIN_NOW_SELECTOR: [1]})
+    page = meet_page(
+        [IN_CALL],
+        evaluates=[NO_CAPTCHA] * 8,
+        counts={ASK_SELECTOR: [0], JOIN_NOW_SELECTOR: [1]},
+    )
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -101,7 +105,7 @@ async def test_request_guest_join_accepts_join_now_button() -> None:
 
 
 async def test_request_guest_join_reports_denial() -> None:
-    page = meet_page([EXPLICIT_DENIED])
+    page = meet_page([EXPLICIT_DENIED], evaluates=[NO_CAPTCHA] * 8)
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -112,11 +116,12 @@ async def test_request_guest_join_reports_denial() -> None:
 
     assert result.status == "denied"
     assert "denied" in result.detail
-    assert page.evaluate_calls == []
+    assert len(page.evaluate_calls) == 5
+    assert all("recaptcha" in call for call in page.evaluate_calls)
 
 
 async def test_request_guest_join_reports_platform_block() -> None:
-    page = meet_page([DENIED], evaluates=[NO_CAPTCHA])
+    page = meet_page([DENIED], evaluates=[NO_CAPTCHA] * 8)
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -131,7 +136,7 @@ async def test_request_guest_join_reports_platform_block() -> None:
 
 
 async def test_request_guest_join_reports_a_meeting_that_ended_in_the_lobby() -> None:
-    page = meet_page([ENDED])
+    page = meet_page([ENDED], evaluates=[NO_CAPTCHA] * 8)
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -146,7 +151,7 @@ async def test_request_guest_join_reports_a_meeting_that_ended_in_the_lobby() ->
 
 
 async def test_access_refusal_with_call_ended_button_does_not_mean_meeting_ended() -> None:
-    page = meet_page([CALL_ENDED], evaluates=[NO_CAPTCHA])
+    page = meet_page([CALL_ENDED], evaluates=[NO_CAPTCHA] * 8)
     clock = FakeClock()
     result = await request_guest_join(
         page, _request(), polling=JoinPolling(clock.sleep, clock.monotonic)
@@ -224,7 +229,18 @@ async def test_request_guest_join_bounds_a_hung_join_attempt() -> None:
 
 
 async def test_request_guest_join_proceeds_when_captcha_is_solved() -> None:
-    page = meet_page([DENIED, IN_CALL], evaluates=[LIVE_CAPTCHA])
+    page = meet_page(
+        [DENIED, IN_CALL],
+        evaluates=[
+            LIVE_CAPTCHA,
+            NO_CAPTCHA,
+            NO_CAPTCHA,
+            NO_CAPTCHA,
+            NO_CAPTCHA,
+            NO_CAPTCHA,
+            LIVE_CAPTCHA,
+        ],
+    )
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -237,7 +253,7 @@ async def test_request_guest_join_proceeds_when_captcha_is_solved() -> None:
 
 
 async def test_request_guest_join_times_out_in_lobby() -> None:
-    page = meet_page([LOBBY, LOBBY, LOBBY, LOBBY, LOBBY])
+    page = meet_page([LOBBY, LOBBY, LOBBY, LOBBY, LOBBY], evaluates=[NO_CAPTCHA] * 8)
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -252,7 +268,7 @@ async def test_request_guest_join_times_out_in_lobby() -> None:
 
 
 async def test_request_guest_join_timeout_names_waiting_room() -> None:
-    page = meet_page([WAITING, WAITING, WAITING, WAITING, WAITING])
+    page = meet_page([WAITING, WAITING, WAITING, WAITING, WAITING], evaluates=[NO_CAPTCHA] * 8)
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -266,7 +282,10 @@ async def test_request_guest_join_timeout_names_waiting_room() -> None:
 
 
 async def test_request_guest_join_fails_when_lobby_content_keeps_failing() -> None:
-    page = meet_page([PlaywrightError("lobby gone")] * LOBBY_READ_FAILURE_LIMIT)
+    page = meet_page(
+        [PlaywrightError("lobby gone")] * LOBBY_READ_FAILURE_LIMIT,
+        evaluates=[NO_CAPTCHA] * 8,
+    )
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -282,7 +301,7 @@ async def test_request_guest_join_fails_when_lobby_content_keeps_failing() -> No
 
 
 async def test_a_single_unreadable_lobby_poll_keeps_waiting() -> None:
-    page = meet_page([PlaywrightError("blip"), WAITING, IN_CALL])
+    page = meet_page([PlaywrightError("blip"), WAITING, IN_CALL], evaluates=[NO_CAPTCHA] * 8)
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -293,7 +312,7 @@ async def test_a_single_unreadable_lobby_poll_keeps_waiting() -> None:
 
 
 async def test_the_protocol_admits_before_the_page_is_read() -> None:
-    page = meet_page([])
+    page = meet_page([], evaluates=[NO_CAPTCHA] * 8)
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -307,7 +326,7 @@ async def test_the_protocol_admits_before_the_page_is_read() -> None:
 
 
 async def test_a_failure_before_the_knock_is_not_marked_knocked() -> None:
-    page = meet_page([], counts={NAME_SELECTOR: [0]})
+    page = meet_page([], evaluates=[NO_CAPTCHA] * 8, counts={NAME_SELECTOR: [0]})
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -318,7 +337,7 @@ async def test_a_failure_before_the_knock_is_not_marked_knocked() -> None:
 
 
 async def test_request_guest_join_ignores_leave_marker_while_waiting() -> None:
-    page = meet_page([LEAVE_AND_WAITING, EXPLICIT_DENIED])
+    page = meet_page([LEAVE_AND_WAITING, EXPLICIT_DENIED], evaluates=[NO_CAPTCHA] * 8)
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -331,7 +350,7 @@ async def test_request_guest_join_ignores_leave_marker_while_waiting() -> None:
 
 
 async def test_request_guest_join_aborts_when_stop_requested() -> None:
-    page = meet_page()
+    page = meet_page(evaluates=[NO_CAPTCHA] * 8)
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -342,7 +361,21 @@ async def test_request_guest_join_aborts_when_stop_requested() -> None:
 
 
 async def test_request_guest_join_accepts_loaded_page_after_navigation_error() -> None:
-    page = meet_page([IN_CALL], evaluates=[LINK], goto_failures=1)
+    page = meet_page(
+        [IN_CALL],
+        evaluates=[
+            LINK,
+            NO_CAPTCHA,
+            NO_CAPTCHA,
+            NO_CAPTCHA,
+            NO_CAPTCHA,
+            NO_CAPTCHA,
+            NO_CAPTCHA,
+            NO_CAPTCHA,
+            NO_CAPTCHA,
+        ],
+        goto_failures=1,
+    )
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -352,11 +385,27 @@ async def test_request_guest_join_accepts_loaded_page_after_navigation_error() -
     )
 
     assert result.status == "admitted"
-    assert page.evaluate_calls == ["(() => location.href)()"]
+    assert page.evaluate_calls[0] == "(() => location.href)()"
+    assert len(page.evaluate_calls) == 6
+    assert all("recaptcha" in call for call in page.evaluate_calls[1:])
 
 
 async def test_request_guest_join_fails_when_page_is_not_on_meeting_host() -> None:
-    page = meet_page([], evaluates=["https://example.com/"], goto_failures=1)
+    page = meet_page(
+        [],
+        evaluates=[
+            "https://example.com/",
+            NO_CAPTCHA,
+            NO_CAPTCHA,
+            NO_CAPTCHA,
+            NO_CAPTCHA,
+            NO_CAPTCHA,
+            NO_CAPTCHA,
+            NO_CAPTCHA,
+            NO_CAPTCHA,
+        ],
+        goto_failures=1,
+    )
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -370,7 +419,7 @@ async def test_request_guest_join_fails_when_page_is_not_on_meeting_host() -> No
 
 
 async def test_request_guest_join_fails_without_name_field() -> None:
-    page = meet_page([], counts={NAME_SELECTOR: [0]})
+    page = meet_page([], evaluates=[NO_CAPTCHA] * 8, counts={NAME_SELECTOR: [0]})
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -386,6 +435,7 @@ async def test_request_guest_join_fails_without_name_field() -> None:
 async def test_a_missing_name_field_names_the_controls_the_page_showed() -> None:
     page = meet_page(
         [],
+        evaluates=[NO_CAPTCHA] * 8,
         counts={NAME_SELECTOR: [0]},
         labels={"button[aria-label]": ["Return to home screen", "Submit feedback"]},
     )
@@ -402,7 +452,7 @@ async def test_a_missing_name_field_names_the_controls_the_page_showed() -> None
 
 
 async def test_request_guest_join_waits_out_meet_getting_ready() -> None:
-    page = meet_page([IN_CALL], wait_flaky={NAME_SELECTOR: 6})
+    page = meet_page([IN_CALL], evaluates=[NO_CAPTCHA] * 16, wait_flaky={NAME_SELECTOR: 6})
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -416,7 +466,7 @@ async def test_request_guest_join_waits_out_meet_getting_ready() -> None:
 
 
 async def test_request_guest_join_still_finds_a_late_name_field() -> None:
-    page = meet_page([IN_CALL], wait_flaky={NAME_SELECTOR: 20})
+    page = meet_page([IN_CALL], evaluates=[NO_CAPTCHA] * 32, wait_flaky={NAME_SELECTOR: 20})
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -429,7 +479,9 @@ async def test_request_guest_join_still_finds_a_late_name_field() -> None:
 
 
 async def test_request_guest_join_fails_without_join_button() -> None:
-    page = meet_page([], counts={ASK_SELECTOR: [0], JOIN_NOW_SELECTOR: [0]})
+    page = meet_page(
+        [], evaluates=[NO_CAPTCHA] * 8, counts={ASK_SELECTOR: [0], JOIN_NOW_SELECTOR: [0]}
+    )
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -443,7 +495,11 @@ async def test_request_guest_join_fails_without_join_button() -> None:
 
 
 async def test_request_guest_join_waits_for_join_button_to_enable() -> None:
-    page = meet_page([IN_CALL], counts={ASK_SELECTOR: [0, 1], JOIN_NOW_SELECTOR: [0]})
+    page = meet_page(
+        [IN_CALL],
+        evaluates=[NO_CAPTCHA] * 8,
+        counts={ASK_SELECTOR: [0, 1], JOIN_NOW_SELECTOR: [0]},
+    )
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -458,7 +514,7 @@ async def test_request_guest_join_waits_for_join_button_to_enable() -> None:
 
 
 async def test_request_guest_join_dismisses_media_dialog_first() -> None:
-    page = meet_page([IN_CALL], counts={DIALOG_SELECTOR: [1]})
+    page = meet_page([IN_CALL], evaluates=[NO_CAPTCHA] * 8, counts={DIALOG_SELECTOR: [1]})
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -472,7 +528,7 @@ async def test_request_guest_join_dismisses_media_dialog_first() -> None:
 
 
 async def test_request_guest_join_fails_when_typing_returns_error() -> None:
-    page = meet_page([], type_failures={"Twin"})
+    page = meet_page([], evaluates=[NO_CAPTCHA] * 8, type_failures={"Twin"})
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -486,7 +542,7 @@ async def test_request_guest_join_fails_when_typing_returns_error() -> None:
 
 
 async def test_request_guest_join_fails_when_click_returns_error() -> None:
-    page = meet_page([LOBBY], click_failures={ASK_SELECTOR})
+    page = meet_page([LOBBY], evaluates=[NO_CAPTCHA] * 8, click_failures={ASK_SELECTOR})
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -500,7 +556,9 @@ async def test_request_guest_join_fails_when_click_returns_error() -> None:
 
 
 async def test_a_knock_that_landed_despite_a_click_error_keeps_waiting() -> None:
-    page = meet_page([WAITING, WAITING, IN_CALL], click_failures={ASK_SELECTOR})
+    page = meet_page(
+        [WAITING, WAITING, IN_CALL], evaluates=[NO_CAPTCHA] * 8, click_failures={ASK_SELECTOR}
+    )
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -511,7 +569,7 @@ async def test_a_knock_that_landed_despite_a_click_error_keeps_waiting() -> None
 
 
 async def test_an_unreadable_lobby_at_the_deadline_times_out() -> None:
-    page = meet_page([WAITING, PlaywrightError("blip")])
+    page = meet_page([WAITING, PlaywrightError("blip")], evaluates=[NO_CAPTCHA] * 8)
     clock = FakeClock()
 
     async def sleep(seconds: float) -> None:
@@ -527,7 +585,7 @@ async def test_an_unreadable_lobby_at_the_deadline_times_out() -> None:
 
 
 async def test_request_guest_join_retries_transient_name_click() -> None:
-    page = meet_page([IN_CALL], click_flaky={NAME_SELECTOR: 2})
+    page = meet_page([IN_CALL], evaluates=[NO_CAPTCHA] * 16, click_flaky={NAME_SELECTOR: 2})
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -542,7 +600,7 @@ async def test_request_guest_join_retries_transient_name_click() -> None:
 
 
 async def test_request_guest_join_gives_up_name_click_after_retries() -> None:
-    page = meet_page([], click_failures={NAME_SELECTOR})
+    page = meet_page([], evaluates=[NO_CAPTCHA] * 40, click_failures={NAME_SELECTOR})
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -556,7 +614,7 @@ async def test_request_guest_join_gives_up_name_click_after_retries() -> None:
 
 
 async def test_request_guest_join_retries_transient_join_click() -> None:
-    page = meet_page([IN_CALL], click_flaky={ASK_SELECTOR: 1})
+    page = meet_page([IN_CALL], evaluates=[NO_CAPTCHA] * 8, click_flaky={ASK_SELECTOR: 1})
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -572,6 +630,7 @@ async def test_request_guest_join_retries_transient_join_click() -> None:
 async def test_request_guest_join_retries_transient_dialog_click() -> None:
     page = meet_page(
         [IN_CALL],
+        evaluates=[NO_CAPTCHA] * 8,
         counts={DIALOG_SELECTOR: [1]},
         click_flaky={DIALOG_SELECTOR: 1},
     )
@@ -884,7 +943,11 @@ async def test_a_camera_device_is_toggled_off_when_the_host_has_one() -> None:
 
 async def test_request_guest_join_admits_on_deadline_recheck() -> None:
     reads: list[int] = []
-    page = meet_page([LOBBY, LOBBY, LOBBY, LOBBY, IN_CALL], on_content=reads.append)
+    page = meet_page(
+        [LOBBY, LOBBY, LOBBY, LOBBY, IN_CALL],
+        evaluates=[NO_CAPTCHA] * 8,
+        on_content=reads.append,
+    )
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -900,7 +963,9 @@ async def test_request_guest_join_admits_on_deadline_recheck() -> None:
 async def test_request_guest_join_deadline_recheck_failure_keeps_timeout() -> None:
     reads: list[int] = []
     page = meet_page(
-        [LOBBY, LOBBY, LOBBY, LOBBY, PlaywrightError("lobby gone")], on_content=reads.append
+        [LOBBY, LOBBY, LOBBY, LOBBY, PlaywrightError("lobby gone")],
+        evaluates=[NO_CAPTCHA] * 8,
+        on_content=reads.append,
     )
     clock = FakeClock()
 
@@ -915,7 +980,7 @@ async def test_request_guest_join_deadline_recheck_failure_keeps_timeout() -> No
 
 
 async def test_request_guest_join_propagates_unexpected_content_error() -> None:
-    page = meet_page([ValueError("bug")])
+    page = meet_page([ValueError("bug")], evaluates=[NO_CAPTCHA] * 8)
     clock = FakeClock()
 
     with pytest.raises(ValueError, match="bug"):
@@ -1147,7 +1212,7 @@ async def test_a_redirect_to_another_meeting_is_not_the_requested_meeting() -> N
     ids=["pinned_locale", "extra_query", "trailing_slash", "authuser", "meet_prefix", "case"],
 )
 async def test_a_normalised_meeting_url_is_the_requested_meeting(link: str, landed: str) -> None:
-    page = meet_page([IN_CALL], final_url=landed)
+    page = meet_page([IN_CALL], evaluates=[NO_CAPTCHA] * 8, final_url=landed)
 
     result = await _join(page, link)
 
@@ -1155,8 +1220,8 @@ async def test_a_normalised_meeting_url_is_the_requested_meeting(link: str, land
 
 
 class _RedirectingPage(FakePage):
-    def __init__(self, urls: list[str], **script: Any) -> None:
-        super().__init__([], [], **script)
+    def __init__(self, urls: list[str], evaluates: Sequence[Any] = (), **script: Any) -> None:
+        super().__init__([], evaluates, **script)
         self.urls = urls
 
     @property
@@ -1185,6 +1250,7 @@ async def test_a_late_redirect_to_the_home_page_is_a_navigation_failure_not_a_mi
 async def test_a_missing_name_field_on_the_meeting_page_names_its_destination_and_heading() -> None:
     page = meet_page(
         [],
+        evaluates=[NO_CAPTCHA] * 8,
         counts={NAME_SELECTOR: [0]},
         labels={"h1, h2": ["Getting ready..."]},
         final_url=f"{LINK}?hl=en",
@@ -1248,6 +1314,7 @@ async def test_a_redirect_to_another_meeting_before_the_name_is_entered_is_never
 async def test_a_redirect_after_the_name_is_entered_never_submits_the_join_request() -> None:
     page = _RedirectingPage(
         [f"{LINK}?hl=en", f"{LINK}?hl=en", "https://meet.google.com/xyz-wxyz-xyz?hl=en"],
+        evaluates=[NO_CAPTCHA] * 8,
         counts={NAME_SELECTOR: [1], ASK_SELECTOR: [1], DIALOG_SELECTOR: [0]},
     )
 
@@ -1296,6 +1363,7 @@ async def test_navigation_evidence_never_repeats_a_sensitive_heading(
 ) -> None:
     page = meet_page(
         [],
+        evaluates=[NO_CAPTCHA] * 8,
         counts={NAME_SELECTOR: [name_fields]},
         labels={"h1, h2": [SENSITIVE_HEADING, "You can't join this video call"]},
         final_url=landed,
@@ -1331,6 +1399,7 @@ def test_a_heading_is_reported_only_as_a_known_category(heading: str, category: 
 async def test_a_redirect_while_the_name_field_is_sought_is_a_navigation_failure() -> None:
     page = _RedirectingPage(
         [f"{LINK}?hl=en", f"{LINK}?hl=en", "https://meet.google.com/"],
+        evaluates=[NO_CAPTCHA] * 8,
         counts={NAME_SELECTOR: [0], DIALOG_SELECTOR: [0]},
         labels={"h1, h2": ["Video calls and meetings for everyone"]},
     )

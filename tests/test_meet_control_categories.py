@@ -61,7 +61,7 @@ def _request() -> GuestJoinRequest:
 
 
 async def test_a_missing_name_field_reports_control_categories_without_raw_labels() -> None:
-    page = meet_page([], counts={NAME_SELECTOR: [0]}, labels=LABELS)
+    page = meet_page([], evaluates=[NO_CAPTCHA] * 8, counts={NAME_SELECTOR: [0]}, labels=LABELS)
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -77,7 +77,7 @@ async def test_a_missing_name_field_reports_control_categories_without_raw_label
 
 
 async def test_a_platform_block_reports_control_categories_without_raw_labels() -> None:
-    page = meet_page([DENIED], evaluates=[NO_CAPTCHA], labels=LABELS)
+    page = meet_page([DENIED], evaluates=[NO_CAPTCHA] * 8, labels=LABELS)
     clock = FakeClock()
 
     result = await request_guest_join(
@@ -174,7 +174,13 @@ async def test_a_missing_leave_button_reports_control_categories_without_raw_lab
 
 async def test_a_session_join_failure_never_journals_or_returns_raw_labels() -> None:
     browser = FakePageSession(
-        meet_page([], final_url=f"{LINK}?hl=en", counts={NAME_SELECTOR: [0]}, labels=LABELS)
+        meet_page(
+            [],
+            evaluates=[NO_CAPTCHA] * 8,
+            final_url=f"{LINK}?hl=en",
+            counts={NAME_SELECTOR: [0]},
+            labels=LABELS,
+        )
     )
     journal = RecordingJournal()
     clock = FakeClock()

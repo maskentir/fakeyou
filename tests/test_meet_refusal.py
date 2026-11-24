@@ -23,6 +23,7 @@ from tests._meet_browser_fakes import (
     ASK_SELECTOR,
     EXPLICIT_DENIED,
     IN_CALL,
+    JOIN_NOW_SELECTOR,
     LIVE_CAPTCHA,
     LOBBY,
     NAME_SELECTOR,
@@ -82,7 +83,7 @@ async def _join(
 async def test_a_refusal_after_the_knock_blocks_for_every_apostrophe(
     spelling: str, layout: Any
 ) -> None:
-    page = meet_page([layout(spelling)], evaluates=[NO_CAPTCHA])
+    page = meet_page([layout(spelling)], evaluates=[NO_CAPTCHA] * 8)
 
     result = await _join(page)
 
@@ -95,7 +96,7 @@ async def test_a_refusal_after_the_knock_blocks_for_every_apostrophe(
 async def test_a_refusal_after_the_knock_ends_the_session_blocked_by_platform(
     spelling: str,
 ) -> None:
-    page = meet_page([LOBBY, LOBBY, _heading(spelling)], evaluates=[NO_CAPTCHA])
+    page = meet_page([LOBBY, LOBBY, _heading(spelling)], evaluates=[NO_CAPTCHA] * 8)
     browser = FakePageSession(page)
     journal = RecordingJournal()
     clock = FakeClock()
@@ -146,7 +147,10 @@ async def test_incidental_refusal_text_on_a_normal_page_never_blocks(content: st
 
 
 async def test_a_quoted_refusal_in_the_call_is_still_admitted() -> None:
-    page = meet_page([IN_CALL + "<p>Someone wrote: you can’t join this video call?</p>"])
+    page = meet_page(
+        [IN_CALL + "<p>Someone wrote: you can’t join this video call?</p>"],
+        evaluates=[NO_CAPTCHA] * 8,
+    )
 
     result = await _join(page)
 
@@ -154,7 +158,7 @@ async def test_a_quoted_refusal_in_the_call_is_still_admitted() -> None:
 
 
 async def test_a_host_denial_keeps_priority_over_a_generic_refusal() -> None:
-    page = meet_page([EXPLICIT_DENIED + _heading("can’t")])
+    page = meet_page([EXPLICIT_DENIED + _heading("can’t")], evaluates=[NO_CAPTCHA] * 8)
 
     result = await _join(page)
 
@@ -171,8 +175,8 @@ async def test_a_live_captcha_keeps_its_grace_before_a_curly_refusal_blocks() ->
 
 
 async def test_configured_signals_decide_what_a_refusal_is() -> None:
-    page = meet_page(["<h1>Access is not possible here</h1>" + HOME], evaluates=[NO_CAPTCHA])
-    default_page = meet_page([_heading("can’t")] * 8, evaluates=[NO_CAPTCHA] * 8)
+    page = meet_page(["<h1>Access is not possible here</h1>" + HOME], evaluates=[NO_CAPTCHA] * 8)
+    default_page = meet_page([_heading("can’t")] * 8, evaluates=[NO_CAPTCHA] * 16)
 
     custom = await _join(page, signals=MeetSignals(denied="access is not possible"))
     ignored = await _join(default_page, signals=MeetSignals(denied="access is not possible"))
@@ -190,7 +194,7 @@ def _refusal_before_the_knock(spelling: str, **script: Any) -> Any:
     labels.update(script.pop("labels", {}))
     return meet_page(
         [_heading(spelling)],
-        evaluates=[NO_CAPTCHA],
+        evaluates=[NO_CAPTCHA] * 40,
         counts={NAME_SELECTOR: [1]},
         wait_flaky={NAME_SELECTOR: 100},
         labels=labels,
@@ -376,7 +380,7 @@ async def test_a_help_quote_on_the_waiting_page_keeps_waiting() -> None:
 
 async def test_a_hidden_stale_join_button_does_not_cancel_a_shown_refusal() -> None:
     page = meet_page(
-        [CURLY_REFUSAL + "<button hidden>Ask to join</button>"], evaluates=[NO_CAPTCHA]
+        [CURLY_REFUSAL + "<button hidden>Ask to join</button>"], evaluates=[NO_CAPTCHA] * 8
     )
 
     result = await _join(page)
@@ -388,7 +392,7 @@ async def test_a_hidden_stale_join_button_does_not_cancel_a_shown_refusal() -> N
 async def test_a_refusal_beside_an_ended_heading_keeps_the_ascii_priority(spelling: str) -> None:
     page = meet_page(
         [f"<h1>You {spelling} join this video call</h1><h2>The meeting has ended</h2>"],
-        evaluates=[NO_CAPTCHA],
+        evaluates=[NO_CAPTCHA] * 8,
     )
 
     result = await _join(page)
@@ -449,8 +453,8 @@ async def test_a_lasting_captcha_before_the_knock_is_never_retried() -> None:
 async def test_a_captcha_that_clears_lets_the_form_continue_to_one_knock() -> None:
     page = meet_page(
         [IN_CALL],
-        evaluates=[LIVE_CAPTCHA],
-        counts={NAME_SELECTOR: [0, 1]},
+        evaluates=[LIVE_CAPTCHA, NO_CAPTCHA, NO_CAPTCHA, NO_CAPTCHA, NO_CAPTCHA, NO_CAPTCHA],
+        counts={NAME_SELECTOR: [1]},
         label_script={
             VISIBLE_BODY_SELECTOR: [["You can’t join this video call"], ["Your name\nAsk to join"]],
             VISIBLE_CONTROLS_SELECTOR: [["Return to home screen"], ["Ask to join"]],
@@ -528,7 +532,7 @@ INLINE_HELP = "<p>If <strong>you can’t join this video call</strong>, ask the 
 
 
 async def test_a_refusal_split_by_inline_markup_after_the_knock_is_blocked() -> None:
-    page = meet_page([INLINE_REFUSAL + HOME], evaluates=[NO_CAPTCHA])
+    page = meet_page([INLINE_REFUSAL + HOME], evaluates=[NO_CAPTCHA] * 8)
 
     result = await _join(page)
 
@@ -545,7 +549,7 @@ async def test_an_inline_emphasised_help_sentence_after_the_knock_keeps_waiting(
 
 async def test_a_help_control_named_like_ask_to_join_does_not_cancel_a_refusal() -> None:
     page = meet_page(
-        [_plain("can’t") + "<button>Ask to join instructions</button>"], evaluates=[NO_CAPTCHA]
+        [_plain("can’t") + "<button>Ask to join instructions</button>"], evaluates=[NO_CAPTCHA] * 8
     )
 
     result = await _join(page)
@@ -554,7 +558,7 @@ async def test_a_help_control_named_like_ask_to_join_does_not_cancel_a_refusal()
 
 
 async def test_a_full_sentence_signal_recognises_the_same_refusal() -> None:
-    page = meet_page([_heading("can’t")], evaluates=[NO_CAPTCHA])
+    page = meet_page([_heading("can’t")], evaluates=[NO_CAPTCHA] * 8)
 
     result = await _join(page, signals=MeetSignals(denied="You can't join this video call"))
 
@@ -580,10 +584,60 @@ async def test_a_lasting_captcha_refusal_never_types_and_ends_at_the_grace(field
     assert clock.monotonic() >= 120.0
 
 
+async def test_a_captcha_refusal_with_disabled_submit_holds_to_the_grace() -> None:
+    page = meet_page(
+        [_heading("can’t")] * 8,
+        evaluates=[LIVE_CAPTCHA] * 8,
+        counts={NAME_SELECTOR: [1]},
+        labels={
+            VISIBLE_BODY_SELECTOR: ["You can’t join this video call\nReturn to home screen"],
+            VISIBLE_CONTROLS_SELECTOR: ["Ask to join\nReturn to home screen"],
+        },
+        disabled={ASK_SELECTOR},
+    )
+    clock = FakeClock()
+
+    result = await request_guest_join(
+        page,
+        _request(captcha_grace_seconds=6.0, poll_interval_seconds=2.0),
+        polling=JoinPolling(clock.sleep, clock.monotonic),
+    )
+
+    assert (result.status, result.knocked) == ("blocked", False)
+    assert result.detail.startswith("captcha challenge went unsolved")
+    assert page.typed == []
+    assert page.clicked == []
+    assert clock.sleeps == [2.0, 2.0, 2.0]
+
+
+async def test_a_refusal_surfacing_while_waiting_for_the_submit_button_blocks_without_submits() -> (
+    None
+):
+    page = meet_page(
+        [_heading("can’t")] * 4,
+        evaluates=[NO_CAPTCHA] * 16,
+        counts={NAME_SELECTOR: [1]},
+        label_script={
+            VISIBLE_BODY_SELECTOR: [["Your name\nAsk to join"]] * 4
+            + [["You can’t join this video call\nReturn to home screen"]] * 4,
+            VISIBLE_CONTROLS_SELECTOR: [["Ask to join"]] * 4 + [["Return to home screen"]] * 4,
+        },
+    )
+
+    result = await _join(page)
+
+    assert (result.status, result.knocked) == ("blocked", False)
+    assert result.detail.startswith("platform refused the guest before the knock")
+    assert page.typed == ["Twin"]
+    assert page.clicked == [NAME_SELECTOR]
+    assert ASK_SELECTOR not in page.clicked
+    assert JOIN_NOW_SELECTOR not in page.clicked
+
+
 async def test_a_captcha_that_clears_beside_an_editable_field_types_once_and_knocks_once() -> None:
     page = meet_page(
         [IN_CALL],
-        evaluates=[LIVE_CAPTCHA],
+        evaluates=[LIVE_CAPTCHA, NO_CAPTCHA, NO_CAPTCHA, NO_CAPTCHA, NO_CAPTCHA, NO_CAPTCHA],
         counts={NAME_SELECTOR: [1]},
         label_script={
             VISIBLE_BODY_SELECTOR: [["You can’t join this video call"], ["Ask to join"]],
