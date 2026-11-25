@@ -456,10 +456,10 @@ class AdjudicationResponse(BaseModel):
     model_config = _STRICT
 
     item: str
-    adjudicator: Annotated[str, StringConstraints(min_length=1)]
+    adjudicator: Annotated[str, StringConstraints(min_length=1, strip_whitespace=True)]
     label: Label
     revision_evidence: tuple[str, ...]
-    rationale: Annotated[str, StringConstraints(min_length=40)]
+    rationale: Annotated[str, StringConstraints(min_length=40, strip_whitespace=True)]
 
 
 ADJUDICATION_INSTRUCTIONS = (
@@ -633,18 +633,73 @@ def _revision_quotes(
     return quotes
 
 
+def _canonical_pairing() -> tuple[dict[str, PacketItem], dict[str, KeyEntry]]:
+    packet, key = adjudication_packet(load_pilot())
+    return (
+        {item.item: item for item in packet.items},
+        {entry.item: entry for entry in key.entries},
+    )
+
+
+def _check_pairing(
+    packet: AdjudicationPacket,
+    key: AdjudicationKey,
+) -> tuple[dict[str, PacketItem], dict[str, KeyEntry]]:
+    for name, count in Counter(item.item for item in packet.items).items():
+        if count > 1:
+            raise ValueError(f"duplicate item {name} in the packet")
+    for name, count in Counter(entry.item for entry in key.entries).items():
+        if count > 1:
+            raise ValueError(f"duplicate item {name} in the coordinator key")
+    items = {item.item: item for item in packet.items}
+    entries = {entry.item: entry for entry in key.entries}
+    if set(items) != set(entries):
+        raise ValueError("packet items do not match the coordinator key")
+    canonical_items, canonical_entries = _canonical_pairing()
+    for name, item in items.items():
+        if canonical_items.get(name) != item:
+            raise ValueError(f"packet item {name} does not match the canonical packet")
+    for name, entry in entries.items():
+        if canonical_entries.get(name) != entry:
+            raise ValueError(f"key entry {name} does not match the canonical key")
+    return items, entries
+
+
+def _normalize_responses(
+    responses: Sequence[AdjudicationResponse],
+) -> list[AdjudicationResponse]:
+    normalized = []
+    for response in responses:
+        adjudicator = response.adjudicator.strip()
+        rationale = response.rationale.strip()
+        if not adjudicator:
+            raise ValueError(f"item {response.item} has a blank adjudicator")
+        if len(rationale) < 40:
+            raise ValueError(f"item {response.item} rationale is shorter than 40 characters")
+        if (adjudicator, rationale) == (response.adjudicator, response.rationale):
+            normalized.append(response)
+        else:
+            normalized.append(
+                response.model_copy(update={"adjudicator": adjudicator, "rationale": rationale})
+            )
+    return normalized
+
+
 def _validate_responses(
     packet: AdjudicationPacket,
     key: AdjudicationKey,
     responses: Sequence[AdjudicationResponse],
 ) -> dict[str, Any]:
-    entries = {entry.item: entry for entry in key.entries}
-    items = {item.item: item for item in packet.items}
-    if set(items) != set(entries):
-        raise ValueError("packet items do not match the coordinator key")
-    adjudicators = _check_coverage(entries, responses)
-    quotes = _revision_quotes(items, responses)
-    return {"entries": entries, "adjudicators": adjudicators, "quotes": quotes}
+    items, entries = _check_pairing(packet, key)
+    cleaned = _normalize_responses(responses)
+    adjudicators = _check_coverage(entries, cleaned)
+    quotes = _revision_quotes(items, cleaned)
+    return {
+        "entries": entries,
+        "adjudicators": adjudicators,
+        "quotes": quotes,
+        "responses": cleaned,
+    }
 
 
 def _inter_annotator_agreement(
@@ -685,6 +740,7 @@ def compare(
     entries = validated["entries"]
     adjudicators = validated["adjudicators"]
     quotes = validated["quotes"]
+    responses = validated["responses"]
     rows = []
     for response in sorted(responses, key=lambda item: (item.item, item.adjudicator)):
         entry = entries[response.item]
@@ -892,9 +948,11 @@ def _compare_command(arguments: argparse.Namespace) -> int:
         )
         key = AdjudicationKey.model_validate_json(arguments.key.read_text(encoding="utf-8"))
         raw = json.loads(arguments.responses.read_text(encoding="utf-8"))
+        if not isinstance(raw, list):
+            raise TypeError("responses must be a JSON array")
         responses = [AdjudicationResponse.model_validate(item) for item in raw]
         report = compare(packet, key, responses)
-    except (OSError, ValueError, ValidationError) as error:
+    except (OSError, ValueError, ValidationError, TypeError) as error:
         _write({"refused": str(error)})
         return 2
     _write(report)

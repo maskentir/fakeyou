@@ -176,9 +176,9 @@ folder.
 - **What it leaves out:** pair ids, record ids, gold labels and model output.
 - **Labelling rule:** the instructions define supersession by explicit evidence
   of revision in the later claim, not by time order or a different value.
-- **Recording results:** `compare --key FILE --responses FILE` records each
-  label, the revision evidence, the rationale and disagreements. It never edits
-  gold labels.
+- **Recording results:** `compare --packet FILE --key FILE --responses FILE`
+  records each label, the revision evidence, the rationale and disagreements.
+  It never edits gold labels.
 
 **Status:** not started. An independent second annotator is still required
 before any benchmark-based activation decision.

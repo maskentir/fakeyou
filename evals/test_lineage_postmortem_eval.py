@@ -387,6 +387,122 @@ def test_compare_agreement_counts_only_overlapping_items(pilot: Pilot) -> None:
     assert agreement["pairs"][0]["matches"] == 9
 
 
+def test_compare_rejects_a_swapped_key_mapping(pilot: Pilot) -> None:
+    packet, key = adjudication_packet(pilot)
+    first, second = key.entries[0], key.entries[1]
+    assert first.pair_id != second.pair_id
+    swapped = [
+        entry.model_copy(update={"item": second.item})
+        if entry.item == first.item
+        else (entry.model_copy(update={"item": first.item}) if entry.item == second.item else entry)
+        for entry in key.entries
+    ]
+    swapped_key = key.model_copy(update={"entries": tuple(swapped)})
+    answers = [
+        AdjudicationResponse(
+            item=entry.item,
+            adjudicator="reviewer-a",
+            label="abstain",
+            revision_evidence=(),
+            rationale="Judged from the quoted claims shown for this item alone.",
+        )
+        for entry in swapped_key.entries
+    ]
+
+    with pytest.raises(ValueError, match="canonical key"):
+        compare(packet, swapped_key, answers)
+
+
+def test_compare_rejects_duplicate_item_ids(pilot: Pilot) -> None:
+    packet, key = adjudication_packet(pilot)
+    complete = _complete_responses(pilot, "reviewer-a")
+    doubled_packet = packet.model_copy(update={"items": (*packet.items, packet.items[0])})
+    doubled_key = key.model_copy(update={"entries": (*key.entries, key.entries[0])})
+
+    with pytest.raises(ValueError, match="duplicate item"):
+        compare(doubled_packet, key, complete)
+    with pytest.raises(ValueError, match="duplicate item"):
+        compare(packet, doubled_key, complete)
+
+
+def test_compare_trims_annotator_names_before_deduplication(pilot: Pilot) -> None:
+    packet, key = adjudication_packet(pilot)
+    first = _complete_responses(pilot, "reviewer-a")
+    padded = [response.model_copy(update={"adjudicator": "reviewer-a "}) for response in first]
+
+    with pytest.raises(ValueError, match="answered more than once"):
+        compare(packet, key, [*first, *padded])
+
+    blank = [first[0].model_copy(update={"adjudicator": " "}), *first[1:]]
+    with pytest.raises(ValueError, match="blank adjudicator"):
+        compare(packet, key, blank)
+
+    with pytest.raises(ValidationError, match="adjudicator"):
+        AdjudicationResponse(
+            item="item-01",
+            adjudicator=" ",
+            label="abstain",
+            revision_evidence=(),
+            rationale="Judged from the quoted claims shown for this item alone.",
+        )
+    with pytest.raises(ValidationError, match="rationale"):
+        AdjudicationResponse(
+            item="item-01",
+            adjudicator="reviewer-a",
+            label="abstain",
+            revision_evidence=(),
+            rationale=" " * 40,
+        )
+
+
+def test_compare_two_annotators_with_one_disagreement_scores_nine_of_ten(
+    pilot: Pilot,
+) -> None:
+    packet, key = adjudication_packet(pilot)
+    first = _complete_responses(pilot, "reviewer-a")
+    second = _complete_responses(pilot, "reviewer-b")
+    changed = [
+        response.model_copy(update={"label": "potential_contradiction"})
+        if response.item == second[0].item
+        else response
+        for response in second
+    ]
+
+    result: Any = compare(packet, key, [*first, *changed])
+
+    pair = result["inter_annotator_agreement"]["pairs"][0]
+    assert pair["items"] == 10
+    assert pair["matches"] == 9
+
+
+@pytest.mark.parametrize("payload", ["null", "true"])
+def test_compare_cli_refuses_non_array_responses(
+    pilot: Pilot, tmp_path: Path, capsys: pytest.CaptureFixture[str], payload: str
+) -> None:
+    packet, key = adjudication_packet(pilot)
+    packet_path = tmp_path / "packet.json"
+    key_path = tmp_path / "key.json"
+    responses_path = tmp_path / "responses.json"
+    packet_path.write_text(packet.model_dump_json(), encoding="utf-8")
+    key_path.write_text(key.model_dump_json(), encoding="utf-8")
+    responses_path.write_text(payload, encoding="utf-8")
+
+    code = postmortem.main(
+        [
+            "compare",
+            "--packet",
+            str(packet_path),
+            "--key",
+            str(key_path),
+            "--responses",
+            str(responses_path),
+        ]
+    )
+
+    assert code == 2
+    assert "array" in json.loads(capsys.readouterr().out)["refused"]
+
+
 def test_the_component_suite_forces_each_case_and_stays_in_development(pilot: Pilot) -> None:
     suite: Any = component_suite(pilot)
     development = partition_claims(load_split(), "development")
