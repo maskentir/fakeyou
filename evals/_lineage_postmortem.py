@@ -633,17 +633,8 @@ def _revision_quotes(
     return quotes
 
 
-def _canonical_pairing() -> tuple[dict[str, PacketItem], dict[str, KeyEntry]]:
-    packet, key = adjudication_packet(load_pilot())
-    return (
-        {item.item: item for item in packet.items},
-        {entry.item: entry for entry in key.entries},
-    )
-
-
-def _check_pairing(
-    packet: AdjudicationPacket,
-    key: AdjudicationKey,
+def _reject_duplicate_items(
+    packet: AdjudicationPacket, key: AdjudicationKey
 ) -> tuple[dict[str, PacketItem], dict[str, KeyEntry]]:
     for name, count in Counter(item.item for item in packet.items).items():
         if count > 1:
@@ -651,17 +642,43 @@ def _check_pairing(
     for name, count in Counter(entry.item for entry in key.entries).items():
         if count > 1:
             raise ValueError(f"duplicate item {name} in the coordinator key")
-    items = {item.item: item for item in packet.items}
-    entries = {entry.item: entry for entry in key.entries}
-    if set(items) != set(entries):
-        raise ValueError("packet items do not match the coordinator key")
-    canonical_items, canonical_entries = _canonical_pairing()
+    return (
+        {item.item: item for item in packet.items},
+        {entry.item: entry for entry in key.entries},
+    )
+
+
+def _match_canonical_content(
+    items: Mapping[str, PacketItem], entries: Mapping[str, KeyEntry]
+) -> None:
+    canonical_packet, canonical_key = adjudication_packet(load_pilot())
+    canonical_items = {item.item: item for item in canonical_packet.items}
+    canonical_entries = {entry.item: entry for entry in canonical_key.entries}
+    if set(items) != set(canonical_items) or set(entries) != set(canonical_entries):
+        raise ValueError("packet and key must contain every canonical item")
     for name, item in items.items():
-        if canonical_items.get(name) != item:
+        if canonical_items[name] != item:
             raise ValueError(f"packet item {name} does not match the canonical packet")
     for name, entry in entries.items():
-        if canonical_entries.get(name) != entry:
+        if canonical_entries[name] != entry:
             raise ValueError(f"key entry {name} does not match the canonical key")
+
+
+def _match_canonical_header(packet: AdjudicationPacket) -> None:
+    canonical_packet, _ = adjudication_packet(load_pilot())
+    if packet.instructions != canonical_packet.instructions:
+        raise ValueError("packet instructions do not match the canonical instructions")
+    if tuple(packet.labels) != tuple(canonical_packet.labels):
+        raise ValueError("packet labels do not match the canonical labels")
+
+
+def _check_pairing(
+    packet: AdjudicationPacket,
+    key: AdjudicationKey,
+) -> tuple[dict[str, PacketItem], dict[str, KeyEntry]]:
+    items, entries = _reject_duplicate_items(packet, key)
+    _match_canonical_content(items, entries)
+    _match_canonical_header(packet)
     return items, entries
 
 

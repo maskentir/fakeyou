@@ -475,6 +475,58 @@ def test_compare_two_annotators_with_one_disagreement_scores_nine_of_ten(
     assert pair["matches"] == 9
 
 
+def test_compare_rejects_a_packet_missing_a_labeled_item(pilot: Pilot) -> None:
+    packet, key = adjudication_packet(pilot)
+    labeled = next(entry for entry in key.entries if entry.gold is not None)
+    short_packet = packet.model_copy(
+        update={"items": tuple(item for item in packet.items if item.item != labeled.item)}
+    )
+    short_key = key.model_copy(
+        update={"entries": tuple(entry for entry in key.entries if entry.item != labeled.item)}
+    )
+    answers = [
+        response
+        for response in _complete_responses(pilot, "reviewer-a")
+        if response.item != labeled.item
+    ]
+
+    with pytest.raises(ValueError, match="canonical"):
+        compare(short_packet, short_key, answers)
+
+
+def test_compare_rejects_a_packet_missing_an_unlabeled_candidate(pilot: Pilot) -> None:
+    packet, key = adjudication_packet(pilot)
+    candidate = next(entry for entry in key.entries if entry.gold is None)
+    short_packet = packet.model_copy(
+        update={"items": tuple(item for item in packet.items if item.item != candidate.item)}
+    )
+    short_key = key.model_copy(
+        update={"entries": tuple(entry for entry in key.entries if entry.item != candidate.item)}
+    )
+    answers = [
+        response
+        for response in _complete_responses(pilot, "reviewer-a")
+        if response.item != candidate.item
+    ]
+
+    with pytest.raises(ValueError, match="canonical"):
+        compare(short_packet, short_key, answers)
+
+
+def test_compare_rejects_non_canonical_instructions_and_labels(pilot: Pilot) -> None:
+    packet, key = adjudication_packet(pilot)
+    complete = _complete_responses(pilot, "reviewer-a")
+    blank_instructions = packet.model_copy(update={"instructions": ""})
+    trimmed_labels = packet.model_copy(
+        update={"labels": tuple(label for label in packet.labels if label != "abstain")}
+    )
+
+    with pytest.raises(ValueError, match="canonical"):
+        compare(blank_instructions, key, complete)
+    with pytest.raises(ValueError, match="canonical"):
+        compare(trimmed_labels, key, complete)
+
+
 @pytest.mark.parametrize("payload", ["null", "true"])
 def test_compare_cli_refuses_non_array_responses(
     pilot: Pilot, tmp_path: Path, capsys: pytest.CaptureFixture[str], payload: str
