@@ -262,18 +262,38 @@ def test_the_adjudication_packet_is_blind_and_complete(pilot: Pilot) -> None:
             assert all(quote.quote in quote.source_line for quote in claim.quotes)
 
 
-def test_adjudication_records_disagreements_without_touching_gold(pilot: Pilot) -> None:
-    _, key = adjudication_packet(pilot)
-    target = next(entry for entry in key.entries if entry.pair_id == "pair-001")
-    response = AdjudicationResponse(
-        item=target.item,
-        adjudicator="reviewer-a",
-        label="potential_supersession",
-        revision_evidence=(),
-        rationale="The later claim reads as reversing the earlier plan for billing.",
-    )
+def _complete_responses(
+    pilot: Pilot, adjudicator: str, overrides: dict[str, Label] | None = None
+) -> list[AdjudicationResponse]:
+    packet, key = adjudication_packet(pilot)
+    items = {item.item: item for item in packet.items}
+    responses = []
+    for entry in key.entries:
+        label: Label = (overrides or {}).get(entry.pair_id or "", "abstain")
+        evidence: tuple[str, ...] = ()
+        if label == "potential_supersession":
+            evidence = (items[entry.item].later.quotes[0].entry_id,)
+        responses.append(
+            AdjudicationResponse(
+                item=entry.item,
+                adjudicator=adjudicator,
+                label=label,
+                revision_evidence=evidence,
+                rationale="Judged from the quoted claims shown for this item alone.",
+            )
+        )
+    return responses
 
-    result: Any = compare(key, [response])
+
+def test_adjudication_records_disagreements_without_touching_gold(pilot: Pilot) -> None:
+    packet, key = adjudication_packet(pilot)
+    target = next(entry for entry in key.entries if entry.pair_id == "pair-001")
+
+    result: Any = compare(
+        packet,
+        key,
+        _complete_responses(pilot, "reviewer-a", {"pair-001": "potential_supersession"}),
+    )
 
     assert result["gold_changes_applied"] is False
     assert result["second_independent_annotator"] == "pending"
@@ -283,7 +303,256 @@ def test_adjudication_records_disagreements_without_touching_gold(pilot: Pilot) 
             item=target.item, adjudicator="a", label="abstain", revision_evidence=(), rationale="x"
         )
     with pytest.raises(ValueError, match="unknown items"):
-        compare(key, [response.model_copy(update={"item": "item-99"})])
+        compare(
+            packet,
+            key,
+            [
+                response.model_copy(update={"item": "item-99"})
+                for response in _complete_responses(pilot, "reviewer-a")
+            ],
+        )
+
+
+def test_compare_rejects_duplicate_and_incomplete_answers(pilot: Pilot) -> None:
+    packet, key = adjudication_packet(pilot)
+    complete = _complete_responses(pilot, "reviewer-a")
+
+    with pytest.raises(ValueError, match="answered more than once"):
+        compare(packet, key, [*complete, complete[0]])
+    with pytest.raises(ValueError, match="did not answer every item"):
+        compare(packet, key, complete[:-1])
+
+
+def test_compare_requires_later_revision_evidence_for_supersession(pilot: Pilot) -> None:
+    packet, key = adjudication_packet(pilot)
+    target = next(entry for entry in key.entries if entry.pair_id == "pair-053")
+    item = next(item for item in packet.items if item.item == target.item)
+    complete = _complete_responses(pilot, "reviewer-a", {"pair-053": "potential_supersession"})
+    superseded = next(response for response in complete if response.item == target.item)
+
+    def swap(evidence: tuple[str, ...]) -> list[AdjudicationResponse]:
+        return [
+            response.model_copy(update={"revision_evidence": evidence})
+            if response.item == target.item
+            else response
+            for response in complete
+        ]
+
+    with pytest.raises(ValueError, match="revision evidence"):
+        compare(packet, key, swap(()))
+    with pytest.raises(ValueError, match="later claim"):
+        compare(packet, key, swap((item.earlier.quotes[0].entry_id,)))
+
+    result: Any = compare(packet, key, complete)
+
+    row = next(row for row in result["rows"] if row["item"] == target.item)
+    assert row["revision_evidence"] == [item.later.quotes[0].entry_id]
+    assert superseded.revision_evidence == (item.later.quotes[0].entry_id,)
+    assert row["revision_evidence_quotes"] == [item.later.quotes[0].quote]
+
+
+def test_compare_resolves_shared_entry_id_to_later_quote_text(pilot: Pilot) -> None:
+    packet, key = adjudication_packet(pilot)
+    target = next(entry for entry in key.entries if entry.pair_id == "pair-001")
+    item = next(item for item in packet.items if item.item == target.item)
+    assert item.earlier.quotes[0].entry_id == item.later.quotes[0].entry_id
+    assert item.earlier.quotes[0].quote != item.later.quotes[0].quote
+
+    result: Any = compare(
+        packet,
+        key,
+        _complete_responses(pilot, "reviewer-a", {"pair-001": "potential_supersession"}),
+    )
+
+    row = next(row for row in result["rows"] if row["item"] == target.item)
+    assert row["revision_evidence_quotes"] == [item.later.quotes[0].quote]
+
+
+def test_compare_agreement_counts_only_overlapping_items(pilot: Pilot) -> None:
+    packet, key = adjudication_packet(pilot)
+    first = _complete_responses(pilot, "reviewer-a", {"pair-001": "potential_supersession"})
+    second = _complete_responses(pilot, "reviewer-b")
+
+    alone: Any = compare(packet, key, first)
+    assert alone["second_independent_annotator"] == "pending"
+    assert alone["inter_annotator_agreement"]["status"] == "unavailable"
+    assert alone["gold_agreement"]["by_adjudicator"]["reviewer-a"]["total"] == 4
+    assert len(alone["first_annotations"]) == 6
+
+    both: Any = compare(packet, key, [*first, *second])
+    assert both["second_independent_annotator"] == "present"
+    agreement = both["inter_annotator_agreement"]
+    assert agreement["status"] == "available"
+    assert agreement["overlapping_items"] == [entry.item for entry in key.entries]
+    assert agreement["pairs"][0]["matches"] == 9
+
+
+def test_compare_rejects_a_swapped_key_mapping(pilot: Pilot) -> None:
+    packet, key = adjudication_packet(pilot)
+    first, second = key.entries[0], key.entries[1]
+    assert first.pair_id != second.pair_id
+    swapped = [
+        entry.model_copy(update={"item": second.item})
+        if entry.item == first.item
+        else (entry.model_copy(update={"item": first.item}) if entry.item == second.item else entry)
+        for entry in key.entries
+    ]
+    swapped_key = key.model_copy(update={"entries": tuple(swapped)})
+    answers = [
+        AdjudicationResponse(
+            item=entry.item,
+            adjudicator="reviewer-a",
+            label="abstain",
+            revision_evidence=(),
+            rationale="Judged from the quoted claims shown for this item alone.",
+        )
+        for entry in swapped_key.entries
+    ]
+
+    with pytest.raises(ValueError, match="canonical key"):
+        compare(packet, swapped_key, answers)
+
+
+def test_compare_rejects_duplicate_item_ids(pilot: Pilot) -> None:
+    packet, key = adjudication_packet(pilot)
+    complete = _complete_responses(pilot, "reviewer-a")
+    doubled_packet = packet.model_copy(update={"items": (*packet.items, packet.items[0])})
+    doubled_key = key.model_copy(update={"entries": (*key.entries, key.entries[0])})
+
+    with pytest.raises(ValueError, match="duplicate item"):
+        compare(doubled_packet, key, complete)
+    with pytest.raises(ValueError, match="duplicate item"):
+        compare(packet, doubled_key, complete)
+
+
+def test_compare_trims_annotator_names_before_deduplication(pilot: Pilot) -> None:
+    packet, key = adjudication_packet(pilot)
+    first = _complete_responses(pilot, "reviewer-a")
+    padded = [response.model_copy(update={"adjudicator": "reviewer-a "}) for response in first]
+
+    with pytest.raises(ValueError, match="answered more than once"):
+        compare(packet, key, [*first, *padded])
+
+    blank = [first[0].model_copy(update={"adjudicator": " "}), *first[1:]]
+    with pytest.raises(ValueError, match="blank adjudicator"):
+        compare(packet, key, blank)
+
+    with pytest.raises(ValidationError, match="adjudicator"):
+        AdjudicationResponse(
+            item="item-01",
+            adjudicator=" ",
+            label="abstain",
+            revision_evidence=(),
+            rationale="Judged from the quoted claims shown for this item alone.",
+        )
+    with pytest.raises(ValidationError, match="rationale"):
+        AdjudicationResponse(
+            item="item-01",
+            adjudicator="reviewer-a",
+            label="abstain",
+            revision_evidence=(),
+            rationale=" " * 40,
+        )
+
+
+def test_compare_two_annotators_with_one_disagreement_scores_nine_of_ten(
+    pilot: Pilot,
+) -> None:
+    packet, key = adjudication_packet(pilot)
+    first = _complete_responses(pilot, "reviewer-a")
+    second = _complete_responses(pilot, "reviewer-b")
+    changed = [
+        response.model_copy(update={"label": "potential_contradiction"})
+        if response.item == second[0].item
+        else response
+        for response in second
+    ]
+
+    result: Any = compare(packet, key, [*first, *changed])
+
+    pair = result["inter_annotator_agreement"]["pairs"][0]
+    assert pair["items"] == 10
+    assert pair["matches"] == 9
+
+
+def test_compare_rejects_a_packet_missing_a_labeled_item(pilot: Pilot) -> None:
+    packet, key = adjudication_packet(pilot)
+    labeled = next(entry for entry in key.entries if entry.gold is not None)
+    short_packet = packet.model_copy(
+        update={"items": tuple(item for item in packet.items if item.item != labeled.item)}
+    )
+    short_key = key.model_copy(
+        update={"entries": tuple(entry for entry in key.entries if entry.item != labeled.item)}
+    )
+    answers = [
+        response
+        for response in _complete_responses(pilot, "reviewer-a")
+        if response.item != labeled.item
+    ]
+
+    with pytest.raises(ValueError, match="canonical"):
+        compare(short_packet, short_key, answers)
+
+
+def test_compare_rejects_a_packet_missing_an_unlabeled_candidate(pilot: Pilot) -> None:
+    packet, key = adjudication_packet(pilot)
+    candidate = next(entry for entry in key.entries if entry.gold is None)
+    short_packet = packet.model_copy(
+        update={"items": tuple(item for item in packet.items if item.item != candidate.item)}
+    )
+    short_key = key.model_copy(
+        update={"entries": tuple(entry for entry in key.entries if entry.item != candidate.item)}
+    )
+    answers = [
+        response
+        for response in _complete_responses(pilot, "reviewer-a")
+        if response.item != candidate.item
+    ]
+
+    with pytest.raises(ValueError, match="canonical"):
+        compare(short_packet, short_key, answers)
+
+
+def test_compare_rejects_non_canonical_instructions_and_labels(pilot: Pilot) -> None:
+    packet, key = adjudication_packet(pilot)
+    complete = _complete_responses(pilot, "reviewer-a")
+    blank_instructions = packet.model_copy(update={"instructions": ""})
+    trimmed_labels = packet.model_copy(
+        update={"labels": tuple(label for label in packet.labels if label != "abstain")}
+    )
+
+    with pytest.raises(ValueError, match="canonical"):
+        compare(blank_instructions, key, complete)
+    with pytest.raises(ValueError, match="canonical"):
+        compare(trimmed_labels, key, complete)
+
+
+@pytest.mark.parametrize("payload", ["null", "true"])
+def test_compare_cli_refuses_non_array_responses(
+    pilot: Pilot, tmp_path: Path, capsys: pytest.CaptureFixture[str], payload: str
+) -> None:
+    packet, key = adjudication_packet(pilot)
+    packet_path = tmp_path / "packet.json"
+    key_path = tmp_path / "key.json"
+    responses_path = tmp_path / "responses.json"
+    packet_path.write_text(packet.model_dump_json(), encoding="utf-8")
+    key_path.write_text(key.model_dump_json(), encoding="utf-8")
+    responses_path.write_text(payload, encoding="utf-8")
+
+    code = postmortem.main(
+        [
+            "compare",
+            "--packet",
+            str(packet_path),
+            "--key",
+            str(key_path),
+            "--responses",
+            str(responses_path),
+        ]
+    )
+
+    assert code == 2
+    assert "array" in json.loads(capsys.readouterr().out)["refused"]
 
 
 def test_the_component_suite_forces_each_case_and_stays_in_development(pilot: Pilot) -> None:
